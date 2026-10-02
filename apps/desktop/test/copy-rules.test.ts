@@ -167,11 +167,7 @@ const BANNED_JARGON: Array<{ label: string; pattern: RegExp }> = [
 
 /** Pieces that may keep a banned term. Every entry needs a reason. */
 const JARGON_ALLOWLIST: AllowEntry[] = [
-  // The app-wide runtime banner and its startup error are being rewritten in a separate change.
-  // Remove these three entries when that lands.
-  { file: 'src/App.tsx', includes: 'Connecting to local daemon', why: 'Banner owned by the runtime banner rewrite' },
-  { file: 'src/App.tsx', includes: 'Daemon unavailable', why: 'Banner owned by the runtime banner rewrite' },
-  { file: 'src/App.tsx', includes: 'waiting for the local daemon', why: 'Startup error owned by the runtime banner rewrite' },
+  // Empty on purpose: add an entry only with a reason a user would accept.
 ];
 
 describe('copy rules: pipeline jargon', () => {

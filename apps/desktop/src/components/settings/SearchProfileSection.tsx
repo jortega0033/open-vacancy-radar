@@ -48,6 +48,9 @@ export interface SearchProfileSectionProps {
    * forms on the same tab each popping their own toast in the same corner can overlap. */
   onSaved: () => void;
   onSaveError: (message: string) => void;
+  /** Opened from "Fill search profile" (#480): scroll here and focus the first field once the
+   * profile has loaded, or the heading if it could not be loaded, so the reason is in view. */
+  focusOnOpen?: boolean;
 }
 
 /**
@@ -61,13 +64,27 @@ export interface SearchProfileSectionProps {
  * a fresh profile ships empty (see `config/candidate-profile-v1.json`), and this section only ever
  * writes back what the user actually typed.
  */
-export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchProfileSectionProps) {
+export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOpen }: SearchProfileSectionProps) {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadError, setLoadError] = useState<string>();
   const [defaultCvName, setDefaultCvName] = useState<string | null | undefined>();
 
   const saveSeq = useRef(0);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const focusedRef = useRef(false);
+
+  // Waits out the loading state, then lands once: on the first field when the form is there, on the
+  // heading when the load failed (the error alert sits right under it).
+  useEffect(() => {
+    if (!focusOnOpen || focusedRef.current) return;
+    const target = draft ? nameInputRef.current : loadError ? headingRef.current : null;
+    if (!target) return;
+    focusedRef.current = true;
+    target.focus();
+    target.scrollIntoView?.({ block: 'center' });
+  }, [focusOnOpen, draft, loadError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,7 +175,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
 
   if (loadError) {
     return (
-      <SettingsSection title="Search profile">
+      <SettingsSection title="Search profile" headingRef={headingRef}>
         <div className="alert alert-error alert-soft mt-2 text-sm">{loadError}</div>
       </SettingsSection>
     );
@@ -166,7 +183,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
 
   if (!profile || !draft) {
     return (
-      <SettingsSection title="Search profile">
+      <SettingsSection title="Search profile" headingRef={headingRef}>
         <div className="alert alert-info mt-2 text-sm">Loading search profile…</div>
       </SettingsSection>
     );
@@ -215,7 +232,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
   };
 
   return (
-    <SettingsSection title="Search profile">
+    <SettingsSection title="Search profile" headingRef={headingRef}>
       <p className="mt-1 text-sm text-base-content/60">
         The worldwide pipeline scores every result's deterministic match percentage against this
         profile. Leave a field empty to skip that dimension entirely, rather than scoring against a
@@ -249,6 +266,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
       <SettingsRow label="Name" htmlFor="profile-candidate-name">
         <input
           id="profile-candidate-name"
+          ref={nameInputRef}
           type="text"
           className="input input-sm w-64"
           {...field('candidateName')}

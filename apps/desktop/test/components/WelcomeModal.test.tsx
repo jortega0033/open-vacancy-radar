@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from '@agent-dock/shared';
+import type { AgentEvent, ProviderStatus } from '@agent-dock/shared';
+import type { AtsRosterImportResult } from '@open-vacancy-radar/vacancy-engine';
 import { App } from '../../src/App.js';
 import type { AgentDockBridge, CvBridge, CvDocumentRecord } from '../../src/window.js';
 import {
+  DEFAULT_CANDIDATE_PROFILE,
   DEFAULT_COUNTS,
   DEFAULT_SETTINGS,
   installVacancyRadarBridge,
@@ -39,6 +41,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
 function installAgentDockBridge(): void {
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([]),
     createSession: vi.fn(),
@@ -57,6 +60,7 @@ function installDrivableAgentDockBridge(): { agentDock: AgentDockBridge; emit: (
   const listeners: ((sessionId: string, event: AgentEvent) => void)[] = [];
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([]),
     createSession: vi.fn().mockResolvedValue({
@@ -137,7 +141,15 @@ describe('first-launch welcome modal', () => {
     render(<App />);
 
     const dialog = await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
-    expect(dialog).toHaveTextContent(/upload a cv to get started/i);
+    // All three checklist items are there, each with its own live status and its own skip.
+    const checklist = within(dialog).getByRole('list', { name: 'Setup checklist' });
+    expect(within(checklist).getByText('Add a CV')).toBeInTheDocument();
+    expect(within(checklist).getByText('Check the AI runtime')).toBeInTheDocument();
+    expect(within(checklist).getByText('Download the company list')).toBeInTheDocument();
+    expect(within(checklist).getAllByText('To do').length).toBeGreaterThanOrEqual(2);
+    expect(within(checklist).getByRole('button', { name: 'Skip adding a CV' })).toBeInTheDocument();
+    expect(within(checklist).getByRole('button', { name: 'Skip checking the AI runtime' })).toBeInTheDocument();
+    expect(within(checklist).getByRole('button', { name: 'Skip downloading the company list' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip for now' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /upload cv/i })).toBeInTheDocument();
     // Still open: nothing is marked seen until the user actually leaves the modal.
@@ -243,7 +255,7 @@ describe('first-launch welcome modal', () => {
     await waitFor(() => expect(screen.getByLabelText('Current role')).toHaveValue('Senior Frontend Engineer'));
   });
 
-  it('saving the auto-started profile review closes the whole welcome flow and persists the flag', async () => {
+  it('saving the auto-started profile review returns to the checklist with the CV marked done, and Skip for now then persists the flag', async () => {
     const savedCv = makeCv({ id: 'cv-new', isDefault: true, text: 'Angular. TypeScript. 8 years.' });
     const workspace = installWorkspaceBridge({
       getSettings: vi.fn().mockResolvedValue(UNSEEN_SETTINGS),
@@ -267,11 +279,18 @@ describe('first-launch welcome modal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save to profile' }));
 
     await waitFor(() => expect(vacancyRadar.saveSearchProfile).toHaveBeenCalledTimes(1));
+    // Back on the checklist: the CV is done and the other two items are still on offer.
+    const checklist = await screen.findByRole('list', { name: 'Setup checklist' });
+    expect(within(checklist).getByText('CV saved to your library.')).toBeInTheDocument();
+    expect(within(checklist).queryByRole('button', { name: /upload cv/i })).not.toBeInTheDocument();
+    expect(workspace.updateSettings).not.toHaveBeenCalledWith({ welcomeSeen: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
   });
 
-  it('cancelling out of the auto-started profile review still finishes the welcome flow, since the CV is already saved', async () => {
+  it('cancelling out of the auto-started profile review returns to the checklist, since the CV is already saved', async () => {
     const savedCv = makeCv({ id: 'cv-new', isDefault: true, text: 'Angular. TypeScript. 8 years.' });
     const workspace = installWorkspaceBridge({
       getSettings: vi.fn().mockResolvedValue(UNSEEN_SETTINGS),
@@ -298,9 +317,272 @@ describe('first-launch welcome modal', () => {
     await waitFor(() => expect(within(drawer).getByRole('button', { name: 'Cancel' })).toBeEnabled());
     fireEvent.click(within(drawer).getByRole('button', { name: 'Cancel' }));
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
+    const checklist = await screen.findByRole('list', { name: 'Setup checklist' });
+    expect(within(checklist).getByText('CV saved to your library.')).toBeInTheDocument();
     // Never reached review, so nothing was ever sent to the profile -- only the CV upload happened.
     expect(vacancyRadar.saveSearchProfile).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
+  });
+});
+
+function claudeStatus(overrides: Partial<ProviderStatus> = {}): ProviderStatus {
+  return {
+    id: 'claude',
+    name: 'Claude Code',
+    installed: true,
+    authenticated: 'authenticated',
+    capabilities: { resume: true },
+    version: '2.4.1',
+    ...overrides,
+  };
+}
+
+function rosterResult(totalEntries = 1234): AtsRosterImportResult {
+  return {
+    file: 'ats-roster-v1.json',
+    importedAt: '2026-09-11T00:00:00.000Z',
+    totalEntries,
+    providers: [
+      {
+        provider: 'greenhouse',
+        status: 'success',
+        rawRowCount: totalEntries,
+        importedCount: totalEntries,
+        invalidRowCount: 0,
+        duplicateRowCount: 0,
+        error: null,
+      },
+    ],
+  };
+}
+
+async function openWelcome(workspaceOverrides: Parameters<typeof installWorkspaceBridge>[0] = {}) {
+  const workspace = installWorkspaceBridge({
+    getSettings: vi.fn().mockResolvedValue(UNSEEN_SETTINGS),
+    listCvDocuments: vi.fn().mockResolvedValue([]),
+    ...workspaceOverrides,
+  });
+  render(<App />);
+  const dialog = await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
+  return { workspace, dialog };
+}
+
+describe('first-launch checklist: AI runtime item', () => {
+  it('shows the live status of the default provider', async () => {
+    const agentDock = installDrivableAgentDockBridge().agentDock;
+    agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus()]);
+
+    const { dialog } = await openWelcome();
+
+    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+    expect(within(dialog).queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+  });
+
+  it('says what is missing and offers Check again, which re-reads the status', async () => {
+    // Stateful rather than "first call, then the rest": the shell's own sidebar also reads the list.
+    let current = claudeStatus({ installed: false, authenticated: 'unknown' });
+    const agentDock = installDrivableAgentDockBridge().agentDock;
+    agentDock.listProviders = vi.fn(async () => [current]);
+
+    const { dialog } = await openWelcome();
+
+    await waitFor(() => expect(within(dialog).getByText('Claude Code is not installed on this computer.')).toBeInTheDocument());
+    const callsBefore = (agentDock.listProviders as ReturnType<typeof vi.fn>).mock.calls.length;
+    current = claudeStatus();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check again' }));
+
+    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+    expect((agentDock.listProviders as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('reports a helper that has not responded instead of a false not-installed', async () => {
+    const agentDock = installDrivableAgentDockBridge().agentDock;
+    agentDock.listProviders = vi.fn().mockRejectedValue(new Error('daemon is not ready yet'));
+
+    const { dialog } = await openWelcome();
+
+    await waitFor(() => expect(within(dialog).getByText(/The AI helper has not responded yet/)).toBeInTheDocument());
+  });
+
+  it('re-checks on its own once the AI helper reports ready', async () => {
+    const { agentDock } = installDrivableAgentDockBridge();
+    let notifyStatus: ((status: { state: 'ready' }) => void) | undefined;
+    agentDock.onDaemonStatus = vi.fn((cb) => {
+      notifyStatus = cb as typeof notifyStatus;
+      return () => {};
+    });
+    let helperUp = false;
+    agentDock.listProviders = vi.fn(async () => {
+      if (!helperUp) throw new Error('daemon is not ready yet');
+      return [claudeStatus()];
+    });
+
+    const { dialog } = await openWelcome();
+    await waitFor(() => expect(within(dialog).getByText(/has not responded yet/)).toBeInTheDocument());
+
+    helperUp = true;
+    notifyStatus?.({ state: 'ready' });
+
+    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+  });
+
+  it('skipping marks the item skipped without touching the provider list again', async () => {
+    const agentDock = installDrivableAgentDockBridge().agentDock;
+    agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus({ installed: false })]);
+
+    const { dialog } = await openWelcome();
+    await waitFor(() => expect(within(dialog).getByText(/not installed on this computer/)).toBeInTheDocument());
+    const callsBefore = (agentDock.listProviders as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Skip checking the AI runtime' }));
+
+    expect(within(dialog).getByText('Skipped')).toBeInTheDocument();
+    expect(agentDock.listProviders).toHaveBeenCalledTimes(callsBefore);
+  });
+
+  it('Open AI runtime closes the modal, persists the flag and opens that page', async () => {
+    const agentDock = installDrivableAgentDockBridge().agentDock;
+    agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus({ installed: false })]);
+
+    const { workspace, dialog } = await openWelcome();
+    await waitFor(() => expect(within(dialog).getByText(/not installed on this computer/)).toBeInTheDocument());
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open AI runtime' }));
+
+    await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
+    expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
+    expect(await screen.findByRole('heading', { level: 1, name: 'AI runtime' })).toBeInTheDocument();
+  });
+});
+
+describe('first-launch checklist: company list item', () => {
+  it('downloads the list from the welcome modal and shows the result', async () => {
+    const refreshAtsRoster = vi.fn().mockResolvedValue(rosterResult(1234));
+    installVacancyRadarBridge({ getAtsRosterStatus: vi.fn().mockResolvedValue(null), refreshAtsRoster });
+    const { dialog } = await openWelcome();
+
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Download company list' }));
+
+    await waitFor(() => expect(refreshAtsRoster).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(within(dialog).getByText(/1,234 companies across Greenhouse, Lever, Ashby, Recruitee and Personio/)).toBeInTheDocument(),
+    );
+    expect(within(dialog).queryByRole('button', { name: 'Download company list' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer the download again when a list was already imported', async () => {
+    const refreshAtsRoster = vi.fn();
+    installVacancyRadarBridge({
+      getAtsRosterStatus: vi
+        .fn()
+        .mockResolvedValue({ importedAt: '2026-09-01T00:00:00.000Z', totalEntries: 987, sourceCounts: { greenhouse: 987 } }),
+      refreshAtsRoster,
+    });
+    const { dialog } = await openWelcome();
+
+    await waitFor(() => expect(within(dialog).getByText(/987 companies across/)).toBeInTheDocument());
+    expect(within(dialog).queryByRole('button', { name: /download company list/i })).not.toBeInTheDocument();
+    expect(refreshAtsRoster).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed download in view and lets the user retry', async () => {
+    const refreshAtsRoster = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('the roster source could not be reached'))
+      .mockResolvedValue(rosterResult(50));
+    installVacancyRadarBridge({ getAtsRosterStatus: vi.fn().mockResolvedValue(null), refreshAtsRoster });
+    const { dialog } = await openWelcome();
+
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Download company list' }));
+
+    expect(await within(dialog).findByText('the roster source could not be reached')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try download again' }));
+
+    await waitFor(() => expect(within(dialog).getByText(/50 companies across/)).toBeInTheDocument());
+    expect(within(dialog).queryByText('the roster source could not be reached')).not.toBeInTheDocument();
+  });
+
+  it('skipping marks it skipped, and Done replaces Skip for now once every item is addressed', async () => {
+    installDrivableAgentDockBridge().agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus()]);
+    const { dialog } = await openWelcome();
+    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Skip downloading the company list' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Skip adding a CV' }));
+
+    expect(within(dialog).getAllByText('Skipped')).toHaveLength(2);
+    expect(within(dialog).getByRole('button', { name: 'Done' })).toBeInTheDocument();
+  });
+});
+
+describe('first-launch checklist: search profile could not be loaded', () => {
+  /** `profileLoads.ok` flips the profile read from failing to working; the shell's Search page also reads it. */
+  async function uploadWithBrokenProfile(profileLoads: { ok: boolean }) {
+    const getSearchProfile = vi.fn(async () => {
+      if (!profileLoads.ok) throw new Error('profile file unreadable');
+      return { ...DEFAULT_CANDIDATE_PROFILE };
+    });
+    const savedCv = makeCv({ id: 'cv-new', isDefault: true });
+    installVacancyRadarBridge({ getSearchProfile });
+    installCvBridge();
+    installDrivableAgentDockBridge();
+    const { workspace, dialog } = await openWelcome({
+      listCvDocuments: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([savedCv]),
+      createCvDocument: vi.fn().mockResolvedValue(savedCv),
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /upload cv/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
+    return { workspace, dialog, getSearchProfile };
+  }
+
+  it('keeps the modal open and says the CV is saved and the profile can be filled in Settings', async () => {
+    const { workspace } = await uploadWithBrokenProfile({ ok: false });
+
+    const alert = await screen.findByText(
+      'Your CV is saved. The search profile could not be filled automatically. You can fill it in Settings.',
+    );
+    expect(alert).toBeInTheDocument();
+    // Still open, and not yet marked seen: the message has to be readable before anything closes.
+    expect(welcomeDialog()).toBeInTheDocument();
+    expect(workspace.updateSettings).not.toHaveBeenCalledWith({ welcomeSeen: true });
+    expect(screen.getByText('CV saved to your library.')).toBeInTheDocument();
+  });
+
+  it('Try again reloads the profile and goes on to the review', async () => {
+    const profileLoads = { ok: false };
+    await uploadWithBrokenProfile(profileLoads);
+    await screen.findByText(/The search profile could not be filled automatically/);
+
+    profileLoads.ok = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    await screen.findByRole('dialog', { name: 'Fill search profile from CV' });
+  });
+
+  it('Open Settings closes the modal and lands on the Search tab with the profile focused', async () => {
+    const profileLoads = { ok: false };
+    const { workspace } = await uploadWithBrokenProfile(profileLoads);
+    await screen.findByText(/The search profile could not be filled automatically/);
+
+    profileLoads.ok = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
+
+    await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
+    expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+  });
+
+  it('Dismiss clears the message', async () => {
+    await uploadWithBrokenProfile({ ok: false });
+    await screen.findByText(/The search profile could not be filled automatically/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(screen.queryByText(/The search profile could not be filled automatically/)).not.toBeInTheDocument();
+    expect(welcomeDialog()).toBeInTheDocument();
   });
 });
