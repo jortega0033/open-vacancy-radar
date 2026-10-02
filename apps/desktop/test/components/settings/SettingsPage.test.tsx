@@ -82,6 +82,19 @@ describe('SettingsPage', () => {
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
+  it('links the settings panel to the active tab and switches with the arrow keys', async () => {
+    setup();
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    expect(screen.getByRole('tabpanel', { name: 'General' })).toContainElement(screen.getByLabelText('Start page'));
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'General' }), { key: 'ArrowRight' });
+
+    expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel', { name: 'Search' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Start page')).not.toBeInTheDocument();
+  });
+
   it('renders exactly these sections across its four tabs, no fake per-source discovery toggles', async () => {
     setup();
     render(<SettingsPage />);

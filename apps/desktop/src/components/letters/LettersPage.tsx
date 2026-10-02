@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LetterRecord } from '../../window.js';
+import { TabPanel, Tabs } from '../shell/index.js';
 import { LetterGenerator } from './LetterGenerator.js';
 import { LettersLibrary } from './LettersLibrary.js';
 import type { SelectedVacancy } from './types.js';
@@ -134,26 +135,17 @@ export function LettersPage({
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div role="tablist" className="tabs tabs-box" aria-label="Letters views">
-          <button
-            role="tab"
-            type="button"
-            className={`tab ${view.tab === 'generator' ? 'tab-active' : ''}`}
-            aria-selected={view.tab === 'generator'}
-            onClick={() => handleTab('generator')}
-          >
-            Generator
-          </button>
-          <button
-            role="tab"
-            type="button"
-            className={`tab ${view.tab === 'library' ? 'tab-active' : ''}`}
-            aria-selected={view.tab === 'library'}
-            onClick={() => handleTab('library')}
-          >
-            Library
-          </button>
-        </div>
+        <Tabs
+          label="Letters views"
+          idPrefix="letters"
+          className="tabs tabs-box"
+          value={view.tab}
+          onChange={handleTab}
+          tabs={[
+            { id: 'generator', label: 'Generator' },
+            { id: 'library', label: 'Library' },
+          ]}
+        />
         {view.tab === 'generator' && (
           <button className="btn btn-ghost btn-sm" type="button" onClick={() => openGenerator(null)}>
             New letter
@@ -161,7 +153,7 @@ export function LettersPage({
         )}
       </div>
 
-      <div className="mt-5">
+      <TabPanel idPrefix="letters" id={view.tab} className="mt-5">
         {view.tab === 'library' ? (
           <LettersLibrary
             refreshToken={refreshToken}
@@ -182,7 +174,7 @@ export function LettersPage({
               : {})}
           />
         )}
-      </div>
+      </TabPanel>
     </div>
   );
 }

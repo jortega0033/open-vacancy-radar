@@ -6,7 +6,7 @@ import type {
 } from '../../window.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { applyDensity, applyTheme } from '../../theme.js';
-import { ConfirmDialog, ErrorBanner, PageLoading } from '../shell/index.js';
+import { ConfirmDialog, ErrorBanner, PageLoading, TabPanel, Tabs } from '../shell/index.js';
 import { AboutSection } from './AboutSection.js';
 import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
@@ -366,21 +366,16 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
         Changes are saved automatically as you make them.
       </p>
 
-      <div role="tablist" className="tabs tabs-box mt-4 w-fit" aria-label="Settings sections">
-        {SETTINGS_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            role="tab"
-            type="button"
-            className={`tab ${activeTab === tab.id ? 'tab-active' : ''}`}
-            aria-selected={activeTab === tab.id}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        label="Settings sections"
+        idPrefix="settings"
+        className="tabs tabs-box mt-4 w-fit"
+        value={activeTab}
+        onChange={setActiveTab}
+        tabs={SETTINGS_TABS}
+      />
 
+      <TabPanel idPrefix="settings" id={activeTab}>
       {activeTab === 'general' && (
         <>
           <SettingsSection title="Startup">
@@ -622,6 +617,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           <AboutSection />
         </>
       )}
+      </TabPanel>
 
       {confirmTarget === 'settings' && (
         <ConfirmDialog
