@@ -356,7 +356,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
 
     function bridge(initial: CvEvidenceOverlayRecord, plan: Partial<import('../src/window.js').CvRebasePlan> = {}) {
       let current = initial;
-      let currentPlan = { baselineKnown: true, inputsChanged: false, changes: [], keptVariantIds: [], droppedVariants: [], orphanedFactIds: [], requirementIdsToReview: [], ...plan };
+      let currentPlan = { baselineKnown: true, inputsChanged: false, changes: [], keptVariantIds: [], droppedVariants: [], orphanedFactIds: [], staleFacts: [], requirementIdsToReview: [], ...plan };
       const workspace = installWorkspaceBridge({
         getCvEvidenceOverlay: vi.fn().mockImplementation(async () => current),
         previewCvEvidenceRebase: vi.fn().mockImplementation(async () => currentPlan),

@@ -121,6 +121,7 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
       keptVariantIds: [],
       droppedVariants: [],
       orphanedFactIds: [],
+      staleFacts: [],
       requirementIdsToReview: [],
     }),
     rebaseCvEvidenceOverlay: vi.fn(),

@@ -119,11 +119,6 @@ const wordingProposalShape = {
   factIds: z.array(z.string()).max(CV_PROPOSAL_LIMITS.factIdsPerProposal).default([]),
 };
 
-const selectionProposalShape = {
-  caseId: z.string().min(1),
-  includedEntryIds: z.array(z.string()).max(CV_PROPOSAL_LIMITS.includedEntryIdsPerProposal).default([]),
-};
-
 /**
  * Registers one `propose_*` tool. Every proposal write and its audit entry happen in the same
  * transaction (#421: "a failed audit write blocks a mutating call") -- `createCvTailoringProposal`
@@ -288,7 +283,6 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
   registerProposalTool(server, db, grant, 'propose_clarification_question', 'clarification_question', clarificationQuestionProposalShape, 'Propose a question for the candidate to answer about a requirement.');
   registerProposalTool(server, db, grant, 'propose_fact', 'fact', factProposalShape, 'Propose a claimed fact about the candidate\'s own work, for the candidate to confirm.');
   registerProposalTool(server, db, grant, 'propose_wording', 'wording', wordingProposalShape, 'Propose exact CV wording grounded in existing facts, for the candidate to approve.');
-  registerProposalTool(server, db, grant, 'propose_selection', 'selection', selectionProposalShape, 'Propose which reviewed roles or projects this case should draw from.');
 
   server.registerTool(
     'get_tailoring_status',

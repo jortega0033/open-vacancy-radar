@@ -179,7 +179,6 @@ describe('local MCP endpoint transport and auth gate (#421)', () => {
         'propose_clarification_question',
         'propose_fact',
         'propose_wording',
-        'propose_selection',
         'get_tailoring_status',
         'read_approved_resume',
       ].sort(),
@@ -311,7 +310,7 @@ describe('local MCP endpoint tool surface (#421)', () => {
     await client.close();
   });
 
-  it('propose_fact accepted later becomes a real self_reported fact, never from the client\'s own claim alone', async () => {
+  it('propose_fact accepted later becomes an unreviewed fact, never the candidate\'s testimony from the client\'s own claim', async () => {
     const { credential } = createGrant({ withSource: true });
     const client = await connectedClient(credential);
     const { caseId } = toolJson<{ caseId: string }>(
@@ -324,7 +323,7 @@ describe('local MCP endpoint tool surface (#421)', () => {
 
     // Acceptance is the app's own action, never the MCP tool's -- there is no "approve" tool.
     const { overlay } = workspace.acceptCvTailoringProposal(db, proposed.proposalId);
-    expect(overlay.facts[0]).toMatchObject({ activity: 'Shipped the redesign', verification: 'self_reported' });
+    expect(overlay.facts[0]).toMatchObject({ activity: 'Shipped the redesign', verification: 'unreviewed', sourceKind: 'mcp_proposal', approval: 'proposed' });
   });
 
   it('read_approved_resume refuses without the separate final-snapshot permission, even within scope', async () => {
