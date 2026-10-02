@@ -99,16 +99,26 @@ test.describe('Letters', () => {
         dialog.showSaveDialog = async () => ({ canceled: false, filePath });
       }, exportPath);
 
-      // The export menu is a daisyUI CSS-`:focus`-driven dropdown, not a React-managed open flag
-      // (LetterGenerator.tsx's `dropdown dropdown-end`), so the menu item must be waited on
-      // explicitly rather than clicked immediately after the toggle: a click dispatched while the
-      // dropdown's focus state hasn't settled yet would otherwise be a flaky "not visible" timeout
-      // instead of a deterministic pass.
+      // The export menu is the shared `Menu` (role menu, items are role menuitem), opened by the
+      // trigger button.
       await window.getByRole('button', { name: /^export$/i }).click();
-      const markdownOption = window.getByRole('button', { name: /markdown \(\.md\)/i });
+      const markdownOption = window.getByRole('menuitem', { name: /markdown \(\.md\)/i });
       await expect(markdownOption).toBeVisible();
       await markdownOption.click();
       await expect(window.getByText('Exported.')).toBeVisible();
+
+      // Keyboard path: Enter opens the menu on its first item, ArrowDown moves to the next one, and
+      // Escape closes it and returns focus to the trigger.
+      const exportTrigger = window.getByRole('button', { name: /^export$/i });
+      await expect(exportTrigger).toBeFocused();
+      await exportTrigger.press('Enter');
+      await expect(exportTrigger).toHaveAttribute('aria-expanded', 'true');
+      await expect(window.getByRole('menuitem', { name: /markdown \(\.md\)/i })).toBeFocused();
+      await window.keyboard.press('ArrowDown');
+      await expect(window.getByRole('menuitem', { name: /word \(\.docx\)/i })).toBeFocused();
+      await window.keyboard.press('Escape');
+      await expect(exportTrigger).toHaveAttribute('aria-expanded', 'false');
+      await expect(exportTrigger).toBeFocused();
     } finally {
       rmSync(exportDir, { recursive: true, force: true });
     }

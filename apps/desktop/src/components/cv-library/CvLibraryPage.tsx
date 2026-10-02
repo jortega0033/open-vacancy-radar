@@ -308,7 +308,7 @@ export function CvLibraryPage() {
             onEdit={openEditDrawer}
             onSetDefault={(doc) => void handleSetDefault(doc)}
             onDelete={(doc) => void requestDelete(doc)}
-            onExport={(doc, format) => void handleExport(doc, format)}
+            onExport={handleExport}
             exportingId={exportingId}
             exportedId={exportedId}
           />
