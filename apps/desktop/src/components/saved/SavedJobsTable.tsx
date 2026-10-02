@@ -125,7 +125,7 @@ export function SavedJobsTable({
               <td data-label="Actions" className="saved-job-actions-cell text-right">
                 <div className="saved-job-actions">
                   <button
-                    className="btn btn-outline btn-xs"
+                    className="btn btn-outline btn-sm"
                     type="button"
                     disabled={preparingJobId !== null}
                     onClick={() => onPrepareApplication(job)}
@@ -137,14 +137,14 @@ export function SavedJobsTable({
                     )}
                   </button>
                   <button
-                    className="btn btn-ghost btn-xs"
+                    className="btn btn-ghost btn-sm"
                     type="button"
                     onClick={() => onEdit(job)}
                   >
                     Edit
                   </button>
                   <button
-                    className="btn btn-ghost btn-xs text-error"
+                    className="btn btn-ghost btn-sm text-error"
                     type="button"
                     onClick={() => onDelete(job)}
                   >

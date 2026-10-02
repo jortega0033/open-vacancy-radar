@@ -75,7 +75,7 @@ export const SearchResultRow = memo(function SearchResultRow({
             {badges.map((badge) => (
               <span
                 key={badge.text}
-                className={`badge badge-xs font-normal ${
+                className={`badge badge-sm font-normal ${
                   badge.tone === 'success'
                     ? 'badge-success badge-soft'
                     : badge.tone === 'warning'

@@ -114,7 +114,7 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
                       <td className="text-right">
                         <button
                           type="button"
-                          className="btn btn-outline btn-xs"
+                          className="btn btn-outline btn-sm"
                           aria-label={`Open ${label}`}
                           onClick={() => onOpen(vacancyFromCase(tailoringCase), cv.id)}
                         >

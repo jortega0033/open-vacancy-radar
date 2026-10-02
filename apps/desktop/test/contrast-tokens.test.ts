@@ -94,3 +94,14 @@ describe('ovr-row-selected', () => {
     expect(rule?.[1]).toMatch(/box-shadow:\s*inset 3px 0 0 var\(--color-base-content\)/);
   });
 });
+
+describe('reduced motion (issue #497)', () => {
+  it('shortens transitions and animations under prefers-reduced-motion: reduce', () => {
+    const start = css.indexOf('@media (prefers-reduced-motion: reduce)');
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start);
+    expect(block).toMatch(/animation-duration:\s*0\.01ms\s*!important/);
+    expect(block).toMatch(/transition-duration:\s*0\.01ms\s*!important/);
+    expect(block).toMatch(/scroll-behavior:\s*auto\s*!important/);
+  });
+});

@@ -104,7 +104,7 @@ export function ApplicationsTable({
                 {onPrepareInterview && INTERVIEW_PREPARABLE_STATUSES.has(application.status) && (
                   <button
                     type="button"
-                    className="btn btn-ghost btn-xs"
+                    className="btn btn-ghost btn-sm"
                     onClick={() => onPrepareInterview(application)}
                   >
                     Prepare interview
@@ -112,21 +112,21 @@ export function ApplicationsTable({
                 )}
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs"
+                  className="btn btn-ghost btn-sm"
                   onClick={() => onEdit(application)}
                 >
                   Edit
                 </button>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs"
+                  className="btn btn-ghost btn-sm"
                   onClick={() => onToggleArchive(application)}
                 >
                   {application.archived ? 'Restore' : 'Archive'}
                 </button>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs text-error"
+                  className="btn btn-ghost btn-sm text-error"
                   onClick={() => onDelete(application)}
                 >
                   Delete

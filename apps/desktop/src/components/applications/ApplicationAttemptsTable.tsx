@@ -61,7 +61,7 @@ export function ApplicationAttemptsTable({ attempts, onOpen, onCancelScheduledAu
                       <span className="badge badge-warning badge-soft">Submitting automatically at {formatScheduledTime(scheduled)}</span>
                       <button
                         type="button"
-                        className="btn btn-outline btn-xs"
+                        className="btn btn-outline btn-sm"
                         onClick={(e) => {
                           e.stopPropagation();
                           onCancelScheduledAutomaticSubmission(attempt);
