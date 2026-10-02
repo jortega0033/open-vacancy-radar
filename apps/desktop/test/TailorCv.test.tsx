@@ -24,7 +24,9 @@ describe('TailorCv', () => {
     stubClipboard();
     render(<TailorCv cv={CV} vacancy={TEST_VACANCY} />);
 
-    expect(screen.getByText('Draft', { selector: '.badge' })).toBeInTheDocument();
+    expect(screen.getByText('Quick draft to read')).toBeInTheDocument();
+    expect(screen.getByText('Unchecked', { selector: '.badge' })).toBeInTheDocument();
+    expect(screen.queryByText('Approved', { exact: false, selector: '.badge' })).not.toBeInTheDocument();
     expect(screen.getByText(/never approved, and copying it does not approve it/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /draft tailored cv/i }));
@@ -185,5 +187,63 @@ describe('TailorCv', () => {
     rerender(<TailorCv cv={CV} vacancy={null} />);
     expect(screen.getByText(/select a vacancy to tailor your cv for/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /draft tailored cv/i })).toBeDisabled();
+  });
+});
+
+describe('TailorCv as a quick draft to read (#472)', () => {
+  const WARNING = 'This draft is unchecked. Read every line against your own record before you use any of it.';
+
+  async function draftOne(bridges: ReturnType<typeof installBridges>, text = 'Angular architect, tailored.') {
+    fireEvent.click(screen.getByRole('button', { name: /draft tailored cv/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+    await screen.findByRole('log', { name: /tailored cv draft/i });
+  }
+
+  it('is collapsed until opened, and its actions are secondary buttons', () => {
+    installBridges();
+    stubClipboard();
+    const { container } = render(<TailorCv cv={CV} vacancy={TEST_VACANCY} />);
+
+    const section = container.querySelector('details');
+    expect(section).not.toBeNull();
+    expect(section).not.toHaveAttribute('open');
+    expect(section?.querySelector('summary')).toHaveTextContent('Quick draft to read');
+    expect(screen.getByRole('button', { name: /draft tailored cv/i })).toHaveClass('btn-outline');
+    expect(screen.getByRole('button', { name: /draft tailored cv/i })).not.toHaveClass('btn-primary');
+  });
+
+  it('shows the unchecked warning after a copy and keeps it after "Copied" fades', async () => {
+    const bridges = installBridges();
+    stubClipboard();
+    render(<TailorCv cv={CV} vacancy={TEST_VACANCY} />);
+    await draftOne(bridges);
+
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /copy to clipboard/i }));
+    expect(await screen.findByText(WARNING)).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.queryByText('Copied')).not.toBeInTheDocument(), { timeout: 4000 });
+    expect(screen.getByText(WARNING)).toBeInTheDocument();
+  });
+
+  it('shows no unchecked warning when the copy failed, and drops it when a new draft replaces the copied one', async () => {
+    const bridges = installBridges();
+    const writeText = stubClipboard(vi.fn().mockRejectedValueOnce(new Error('denied')).mockResolvedValue(undefined));
+    render(<TailorCv cv={CV} vacancy={TEST_VACANCY} />);
+    await draftOne(bridges);
+
+    fireEvent.click(screen.getByRole('button', { name: /copy to clipboard/i }));
+    await screen.findByRole('alert');
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /copy to clipboard/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(WARNING)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /regenerate/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
   });
 });

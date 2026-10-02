@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { CV_JD_UNWAIVABLE_REASONS } from '../../../electron/workspace/cv-evidence-schema.js';
 import { assessJdCompleteness, jobDescriptionBody } from '../../../electron/generation-input.js';
 import type { CvEvidenceOverlayRecord, CvJdOrigin, CvSourceDocument } from '../../window.js';
+import { ConfirmDialog } from '../shell/ConfirmDialog.js';
 import { sha256Hex, sha256HexOfSource } from './content-hash.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
@@ -26,6 +27,24 @@ const ORIGIN_LABEL: Record<CvJdOrigin, string> = {
   manual: 'Text you entered for this job',
 };
 
+interface PendingReplace {
+  text: string;
+  origin: CvJdOrigin;
+  requisition: string;
+  /** True when the text came from the paste box, which is emptied and closed once it is used. */
+  fromPaste: boolean;
+}
+
+/** Reviewed requirements or an approval: what a new JD revision clears. */
+function hasReviewsToLose(overlay: CvEvidenceOverlayRecord | null): boolean {
+  if (!overlay) return false;
+  return (
+    overlay.state === 'candidate_approved' ||
+    overlay.state === 'artifact_approved' ||
+    overlay.requirements.some((requirement) => requirement.reviewed)
+  );
+}
+
 function formatCapturedAt(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('en-GB');
@@ -45,6 +64,8 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
   const [pasteOpen, setPasteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  /** A replacement waiting for the candidate to confirm it will clear reviews (#450). */
+  const [pendingReplace, setPendingReplace] = useState<PendingReplace | null>(null);
 
   const caseKey = caseKeyFor(vacancy);
   // The latest stored revision is the source of truth once the case has one (#419). The vacancy's own
@@ -118,15 +139,37 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
     [cvId, caseKey, vacancy.url, sourceCv, onSaved],
   );
 
+  const commitReplace = useCallback(
+    (change: PendingReplace) => {
+      if (change.fromPaste) {
+        onReplaceText(change.text, change.requisition);
+        setDraft('');
+        setPasteOpen(false);
+      }
+      void save(change.text, change.origin, change.requisition);
+    },
+    [onReplaceText, save],
+  );
+
+  // A new revision clears the requirement reviews and the approval (#419), so when there are any the
+  // candidate confirms first. With nothing to lose, or text that matches what is saved, it goes straight through.
+  const requestReplace = useCallback(
+    (change: PendingReplace) => {
+      if (overlay && hasReviewsToLose(overlay) && change.text.trim() !== overlay.jdSnapshot.trim()) {
+        setPendingReplace(change);
+        return;
+      }
+      commitReplace(change);
+    },
+    [overlay, commitReplace],
+  );
+
   const handleUseDraft = useCallback(() => {
     const next = draft.trim();
     if (!next) return;
     const nextOrigin: CvJdOrigin = origin === 'manual' ? 'manual' : 'pasted';
-    onReplaceText(next, draftRequisition.trim());
-    setDraft('');
-    setPasteOpen(false);
-    void save(next, nextOrigin, draftRequisition.trim());
-  }, [draft, draftRequisition, origin, onReplaceText, save]);
+    requestReplace({ text: next, origin: nextOrigin, requisition: draftRequisition.trim(), fromPaste: true });
+  }, [draft, draftRequisition, origin, requestReplace]);
 
   const handleConfirm = useCallback(
     async (confirmed: boolean) => {
@@ -213,7 +256,7 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
             type="button"
             className="btn btn-primary btn-sm"
             disabled={!cvId || !hasText || busy || savedMatchesText}
-            onClick={() => void save(text, origin, shownRequisition)}
+            onClick={() => requestReplace({ text, origin, requisition: shownRequisition, fromPaste: false })}
           >
             {overlay ? 'Save as new revision' : 'Save job description'}
           </button>
@@ -275,6 +318,30 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
           </div>
         )}
       </div>
+      {pendingReplace && (
+        <ConfirmDialog
+          title="Replace the job description?"
+          message={
+            <>
+              <p className="font-medium text-base-content">
+                {[vacancy.title, vacancy.company].filter(Boolean).join(' at ') || 'This job'}
+              </p>
+              <p className="mt-1">
+                Your requirement reviews and the CV approval for this job are cleared. You will review the
+                requirements again.
+              </p>
+            </>
+          }
+          confirmLabel="Replace and clear reviews"
+          cancelLabel="Keep current text"
+          onConfirm={() => {
+            const change = pendingReplace;
+            setPendingReplace(null);
+            commitReplace(change);
+          }}
+          onCancel={() => setPendingReplace(null)}
+        />
+      )}
     </div>
   );
 }
