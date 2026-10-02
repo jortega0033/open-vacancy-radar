@@ -41,7 +41,7 @@ test.describe('app shell', () => {
     // it must never be literal initials with no real data behind them. The footer itself is the
     // AI runtime status, not an account/profile (this app has no login or online profile concept).
     await expect(window.getByText('JO', { exact: true })).toHaveCount(0);
-    await expect(window.getByText('AI runtime', { exact: true })).toBeVisible();
+    await expect(window.getByText('AI runtime', { exact: true }).first()).toBeVisible();
   });
 
   test('Search and Settings page visual baselines', async ({ window }) => {

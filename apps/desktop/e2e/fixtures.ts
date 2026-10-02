@@ -119,7 +119,7 @@ export { expect } from '@playwright/test';
 export async function goto(window: Page, label: string): Promise<void> {
   // AppSidebar.tsx renders a plain <aside aria-label="Main">, whose implicit ARIA role is
   // "complementary" (an <aside> is not a <nav>), not "navigation".
-  await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: label, exact: true }).click();
+  await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: label, exact: true }).first().click();
 }
 
 /**
