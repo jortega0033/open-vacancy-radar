@@ -18,6 +18,8 @@ const RESUME: TailoredResume = {
   education: [],
 };
 
+const FAITHFUL_LINES = ['Jamie Rivera', 'Frontend engineer.', 'Senior Frontend Engineer, Redwood Software', 'Built the booking screens'];
+
 function printerFor(lines: string[]): (html: string) => Promise<Buffer> {
   return async () => {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -32,7 +34,7 @@ function printerFor(lines: string[]): (html: string) => Promise<Buffer> {
 
 describe('renderApprovedSnapshot', () => {
   it('renders a PDF from the snapshot, with the hash of its bytes, its page count and the checks', async () => {
-    const rendered = await renderApprovedSnapshot(RESUME, 'pdf', printerFor(['Jamie Rivera', 'Senior Frontend Engineer, Redwood Software']));
+    const rendered = await renderApprovedSnapshot(RESUME, 'pdf', printerFor(FAITHFUL_LINES));
     expect(rendered.validation).toEqual({ ok: true, reasons: [], pageCount: 1 });
     expect(rendered.contentHash).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -41,6 +43,12 @@ describe('renderApprovedSnapshot', () => {
     const rendered = await renderApprovedSnapshot(RESUME, 'pdf', printerFor(['Someone Else']));
     expect(rendered.validation.ok).toBe(false);
     expect(rendered.validation.reasons.length).toBeGreaterThan(0);
+  });
+
+  it('records a PDF that dropped an approved bullet as failed, naming the bullet', async () => {
+    const rendered = await renderApprovedSnapshot(RESUME, 'pdf', printerFor(FAITHFUL_LINES.filter((line) => line !== 'Built the booking screens')));
+    expect(rendered.validation.ok).toBe(false);
+    expect(rendered.validation.reasons.join(' ')).toMatch(/bullet "Built the booking screens" is missing/);
   });
 
   it('renders and checks a Word file from the same snapshot, with no page count', async () => {
@@ -52,7 +60,7 @@ describe('renderApprovedSnapshot', () => {
   });
 
   it('gives different hashes for different formats of the same snapshot', async () => {
-    const pdf = await renderApprovedSnapshot(RESUME, 'pdf', printerFor(['Jamie Rivera', 'Senior Frontend Engineer, Redwood Software']));
+    const pdf = await renderApprovedSnapshot(RESUME, 'pdf', printerFor(FAITHFUL_LINES));
     const docx = await renderApprovedSnapshot(RESUME, 'docx', async () => Buffer.alloc(0));
     expect(pdf.contentHash).not.toBe(docx.contentHash);
   });
