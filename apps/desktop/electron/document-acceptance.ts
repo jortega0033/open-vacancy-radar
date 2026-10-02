@@ -212,7 +212,7 @@ export function squashForMatch(value: string): string {
     .replace(/[‘’‛]/g, "'")
     .replace(/[“”]/g, '"')
     .replace(/[­‐-―−-]/g, '')
-    .replace(/[\s​-‍﻿]/g, '')
+    .replace(/[\s\u200b-\u200d\ufeff]/g, '')
     .toLowerCase();
 }
 
