@@ -598,7 +598,7 @@ describe('App', () => {
       // is actually exercising the create's own refresh rather than riding that earlier call.
       await waitFor(() => expect(getCounts).toHaveBeenCalledTimes(2));
 
-      fireEvent.click(screen.getByRole('button', { name: /^add application$/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /^add your first application$/i }));
       const dialog = await screen.findByRole('dialog');
       fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'New Role' } });
       fireEvent.change(within(dialog).getByLabelText('Company *'), { target: { value: 'New Co' } });

@@ -55,10 +55,10 @@ describe('LettersLibrary', () => {
     await waitFor(() => expect(screen.getByText(/no letters yet/i)).toBeInTheDocument());
     expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain('empty-letters');
 
-    // One in the toolbar, one under the empty-state copy: the prototype offers both.
+    // Exactly one "New letter" while the list is empty: the empty state's own button.
     const newButtons = screen.getAllByRole('button', { name: /new letter/i });
-    expect(newButtons).toHaveLength(2);
-    fireEvent.click(newButtons[1] as HTMLElement);
+    expect(newButtons).toHaveLength(1);
+    fireEvent.click(newButtons[0] as HTMLElement);
     expect(onNew).toHaveBeenCalledTimes(1);
   });
 
@@ -169,5 +169,95 @@ describe('LettersLibrary', () => {
 
     expect(await screen.findByText('Second letter')).toBeInTheDocument();
     expect(listLetters).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a single "New letter" button on screen, in the toolbar once there are rows', async () => {
+    installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
+
+    render(<LettersLibrary onOpen={vi.fn()} onNew={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+
+    expect(screen.getAllByRole('button', { name: /new letter/i })).toHaveLength(1);
+  });
+
+  describe('delete with undo', () => {
+    it('offers Undo after a delete, and Undo writes the same letter back', async () => {
+      const letter = makeLetter({
+        id: 'del-1',
+        title: 'Cover letter, Synthetic Co',
+        company: 'Synthetic Co',
+        role: 'Data Analyst',
+        type: 'cover_letter',
+        tone: 'formal',
+        length: 'short',
+        status: 'sent',
+        vacancyKey: 'vk-1',
+        cvId: 'cv-1',
+        body: 'Dear team, synthetic body.',
+      });
+      const deleteLetter = vi.fn().mockResolvedValue({ deleted: true });
+      const createLetter = vi.fn().mockResolvedValue({ ...letter, id: 'new-id' });
+      const onCountChanged = vi.fn();
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([letter]), deleteLetter, createLetter });
+
+      render(<LettersLibrary onOpen={vi.fn()} onCountChanged={onCountChanged} />);
+      await waitFor(() => expect(screen.getByText(letter.title)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText(/you can undo this/i)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+
+      const toast = await screen.findByRole('status');
+      expect(toast).toHaveTextContent('Deleted "Cover letter, Synthetic Co".');
+      expect(screen.queryByRole('cell', { name: letter.title })).not.toBeInTheDocument();
+
+      fireEvent.click(within(toast).getByRole('button', { name: /^undo$/i }));
+
+      await waitFor(() =>
+        expect(createLetter).toHaveBeenCalledWith({
+          title: letter.title,
+          company: 'Synthetic Co',
+          role: 'Data Analyst',
+          type: 'cover_letter',
+          tone: 'formal',
+          length: 'short',
+          status: 'sent',
+          vacancyKey: 'vk-1',
+          cvId: 'cv-1',
+          body: 'Dear team, synthetic body.',
+        }),
+      );
+      expect(await screen.findByRole('cell', { name: letter.title })).toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(onCountChanged).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows no Undo when the letter had already been deleted', async () => {
+      const deleteLetter = vi.fn().mockResolvedValue({ deleted: false });
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]), deleteLetter });
+
+      render(<LettersLibrary onOpen={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^delete$/i }));
+
+      expect(await screen.findByText(/already been deleted/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^undo$/i })).not.toBeInTheDocument();
+    });
+
+    it('reports a failed Undo instead of silently losing the letter', async () => {
+      const deleteLetter = vi.fn().mockResolvedValue({ deleted: true });
+      const createLetter = vi.fn().mockRejectedValue(new Error('database is locked'));
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]), deleteLetter, createLetter });
+
+      render(<LettersLibrary onOpen={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /^undo$/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('database is locked');
+    });
   });
 });

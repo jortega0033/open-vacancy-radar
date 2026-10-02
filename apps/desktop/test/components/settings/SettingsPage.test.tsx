@@ -222,6 +222,24 @@ describe('SettingsPage', () => {
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   });
 
+  it('keeps the save error until it is closed, and the close button works from the keyboard', async () => {
+    const updateSettings = vi.fn().mockRejectedValue(new Error('database unreachable'));
+    setup({ updateSettings });
+
+    render(<SettingsPage />);
+    await screen.findByLabelText('Start page');
+    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
+
+    const alert = await screen.findByRole('alert');
+    const close = within(alert).getByRole('button', { name: /dismiss error/i });
+    expect(close.tagName).toBe('BUTTON');
+    close.focus();
+    expect(close).toHaveFocus();
+    fireEvent.click(close);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('persists launch-at-login and mirrors it into the OS via window.system', async () => {
     const { bridge, system } = setup();
     render(<SettingsPage />);
