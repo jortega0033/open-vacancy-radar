@@ -408,7 +408,19 @@ export function App() {
 
       {/* Overlays whichever page happens to be showing, the way FillProfileFromCvDrawer overlays
           Settings: the gate above decides *whether* it appears, never which page it appears over. */}
-      {showWelcome && <WelcomeModal onClose={handleWelcomeClosed} />}
+      {showWelcome && (
+        <WelcomeModal
+          onClose={handleWelcomeClosed}
+          onOpenSettings={() => {
+            handleWelcomeClosed();
+            handleOpenSearchProfile();
+          }}
+          onOpenRuntime={() => {
+            handleWelcomeClosed();
+            handleNavigate('runtime');
+          }}
+        />
+      )}
     </div>
   );
 }
