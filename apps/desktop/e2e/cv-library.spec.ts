@@ -28,7 +28,7 @@ test.describe('CV library', () => {
     await expect(window.getByText('Frontend CV — Netherlands')).toBeVisible();
 
     const row = window.getByRole('row', { name: /Frontend CV — Netherlands/ });
-    await row.getByRole('button', { name: /^edit$/i }).click();
+    await row.getByRole('button', { name: /^edit /i }).click();
     const editDialog = window.getByRole('dialog', { name: /edit cv/i });
     await expect(editDialog.getByLabel(/^name/i)).toHaveValue('Frontend CV — Netherlands');
     await editDialog.getByLabel(/^name/i).fill('Frontend CV — Renamed');
@@ -37,7 +37,7 @@ test.describe('CV library', () => {
     await expect(window.getByText('Frontend CV — Renamed')).toBeVisible();
 
     // Delete: confirmation dialog says it cannot be undone (no undo for CV documents), then it's gone.
-    await window.getByRole('row', { name: /Frontend CV — Renamed/ }).getByRole('button', { name: /^delete$/i }).click();
+    await window.getByRole('row', { name: /Frontend CV — Renamed/ }).getByRole('button', { name: /^delete /i }).click();
     const confirm = window.getByRole('alertdialog');
     await expect(confirm).toContainText(/cannot be undone/i);
     await confirm.getByRole('button', { name: /^delete$/i }).click();
@@ -187,7 +187,7 @@ test.describe('CV library', () => {
       // waited on explicitly rather than clicked immediately after the toggle, since a click
       // dispatched before the dropdown's focus state has settled would otherwise be a flaky
       // "not visible" timeout instead of a deterministic pass.
-      await row.getByRole('button', { name: /^export$/i }).click();
+      await row.getByRole('button', { name: /^export /i }).click();
       const pdfOption = row.getByRole('button', { name: /pdf \(\.pdf\)/i });
       await expect(pdfOption).toBeVisible();
       await pdfOption.click();
@@ -209,7 +209,7 @@ test.describe('CV library', () => {
         dialog.showSaveDialog = async () => ({ canceled: false, filePath });
       }, docxPath);
 
-      await row.getByRole('button', { name: /^export$/i }).click();
+      await row.getByRole('button', { name: /^export /i }).click();
       const docxOption = row.getByRole('button', { name: /word \(\.docx\)/i });
       await expect(docxOption).toBeVisible();
       await docxOption.click();

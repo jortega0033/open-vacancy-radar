@@ -219,7 +219,7 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>{hasAnyJobs && <p className="text-sm text-base-content/60">{jobs?.length} saved</p>}</div>
+        <div />
         <div className="flex items-center gap-2">
           <SavedJobFilterBox value={query} onChange={setQuery} disabled={isLoading} />
           <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>

@@ -78,7 +78,7 @@ test.describe('Escape and outside-click dismissal', () => {
 
     await window
       .getByRole('row', { name: /Escape Regression Co/ })
-      .getByRole('button', { name: /^delete$/i })
+      .getByRole('button', { name: /^delete /i })
       .click();
     const confirm = window.getByRole('alertdialog');
     await expect(confirm).toBeVisible();
