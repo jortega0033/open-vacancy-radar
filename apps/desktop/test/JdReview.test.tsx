@@ -300,3 +300,111 @@ describe('CvAssistant job description handoff (#419, steps 1 and 4)', () => {
     expect(await screen.findByText(/no reviewed structured source yet/i)).toBeInTheDocument();
   });
 });
+
+describe('JdReview confirms before a replacement clears reviews (#450)', () => {
+  const REVIEWED = {
+    requirementId: 'req-1',
+    text: 'Owns the GraphQL gateway',
+    jdAnchor: 'GraphQL',
+    classification: 'required' as const,
+    evidenceClass: 'direct' as const,
+    anchorParentId: '',
+    candidateAdded: false,
+    reviewed: true,
+    quoteStart: 0,
+    quoteEnd: 7,
+    jdRevisionId: 'rev-1',
+    excluded: false,
+    exclusionReason: '',
+    sourceIds: [],
+    factIds: [],
+  };
+
+  function openPaste(text: string) {
+    fireEvent.click(screen.getByRole('button', { name: /replace job description/i }));
+    fireEvent.change(screen.getByLabelText('Job description text'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: /use this text/i }));
+  }
+
+  it('asks first when requirements were reviewed, and writes nothing until the candidate confirms', async () => {
+    const reviewed = overlay({ requirements: [REVIEWED] });
+    const updateCvEvidenceOverlay = vi.fn().mockResolvedValue(overlay({ jdSnapshot: 'New posting text.' }));
+    installWorkspaceBridge({ getCvEvidenceOverlay: vi.fn().mockResolvedValue(reviewed), updateCvEvidenceOverlay });
+    const onReplaceText = vi.fn();
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={onReplaceText} onSaved={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText('Full job description text')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /replace job description/i })).toBeEnabled());
+    await screen.findByText(/Saved as revision 1/);
+
+    openPaste('New posting text.');
+
+    const dialog = await screen.findByRole('alertdialog', { name: 'Replace the job description?' });
+    expect(dialog).toHaveTextContent('Logistics Platform Engineer at Northwind Freight');
+    expect(dialog).toHaveTextContent(
+      'Your requirement reviews and the CV approval for this job are cleared. You will review the requirements again.',
+    );
+    expect(updateCvEvidenceOverlay).not.toHaveBeenCalled();
+    expect(onReplaceText).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Replace and clear reviews' }));
+
+    await waitFor(() => expect(updateCvEvidenceOverlay).toHaveBeenCalledTimes(1));
+    expect(updateCvEvidenceOverlay).toHaveBeenCalledWith(
+      'overlay-1',
+      expect.objectContaining({ jdSnapshot: 'New posting text.', jdOrigin: 'pasted' }),
+    );
+    expect(onReplaceText).toHaveBeenCalledWith('New posting text.', '');
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('asks first for an approved case, and Keep current text leaves the case and the pasted draft alone', async () => {
+    const updateCvEvidenceOverlay = vi.fn();
+    installWorkspaceBridge({
+      getCvEvidenceOverlay: vi.fn().mockResolvedValue(overlay({ state: 'candidate_approved' })),
+      updateCvEvidenceOverlay,
+    });
+    const onReplaceText = vi.fn();
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={onReplaceText} onSaved={vi.fn()} />);
+    await screen.findByText(/Saved as revision 1/);
+
+    openPaste('Draft I want to keep.');
+    await screen.findByRole('alertdialog', { name: 'Replace the job description?' });
+    fireEvent.click(screen.getByRole('button', { name: 'Keep current text' }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(updateCvEvidenceOverlay).not.toHaveBeenCalled();
+    expect(onReplaceText).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Job description text')).toHaveValue('Draft I want to keep.');
+    expect(screen.getByLabelText('Full job description text')).toHaveTextContent('Northwind Freight is hiring');
+  });
+
+  it('keeps the one-click path when nothing has been reviewed or approved', async () => {
+    const updateCvEvidenceOverlay = vi.fn().mockResolvedValue(overlay({ jdSnapshot: 'Pasted text.' }));
+    installWorkspaceBridge({
+      getCvEvidenceOverlay: vi.fn().mockResolvedValue(overlay({ requirements: [{ ...REVIEWED, reviewed: false }] })),
+      updateCvEvidenceOverlay,
+    });
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+    await screen.findByText(/Saved as revision 1/);
+
+    openPaste('Pasted text.');
+
+    await waitFor(() => expect(updateCvEvidenceOverlay).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('does not ask when the pasted text is the text already saved', async () => {
+    const updateCvEvidenceOverlay = vi.fn().mockResolvedValue(overlay({ requirements: [REVIEWED] }));
+    installWorkspaceBridge({
+      getCvEvidenceOverlay: vi.fn().mockResolvedValue(overlay({ requirements: [REVIEWED] })),
+      updateCvEvidenceOverlay,
+    });
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+    await screen.findByText(/Saved as revision 1/);
+
+    openPaste(`  ${FULL_JD}  `);
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    await waitFor(() => expect(updateCvEvidenceOverlay).toHaveBeenCalledTimes(1));
+  });
+});
