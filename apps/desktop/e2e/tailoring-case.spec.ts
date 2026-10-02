@@ -127,12 +127,16 @@ test('opens an approved case, exports both formats, reviews each file, and marks
       expect.objectContaining({ title: 'Export approved CV', defaultPath: `${SEEDED_CV_NAME}.pdf` }),
     ]);
 
-    // A PDF cannot be accepted before it has been opened.
+    // A PDF cannot be accepted before its pages were shown in the app. Opening the system viewer
+    // is a second way to look and does not unlock confirming.
     const confirmPdf = pdf.getByRole('button', { name: 'I read every page and it looks right' });
     await expect(confirmPdf).toBeDisabled();
-    await pdf.getByRole('button', { name: 'Open the PDF to read every page' }).click();
+    await pdf.getByRole('button', { name: 'Open in my PDF viewer' }).click();
+    await expect.poll(async () => (await nativeRecord(electronApp)).opened).toEqual([pdfPath]);
+    await expect(confirmPdf).toBeDisabled();
+    await pdf.getByRole('button', { name: 'Show the pages here' }).click();
+    await expect(pdf.getByRole('region', { name: 'PDF pages' })).toBeVisible();
     await expect(confirmPdf).toBeEnabled();
-    expect((await nativeRecord(electronApp)).opened).toEqual([pdfPath]);
     await confirmPdf.click();
     await expect(pdf.getByRole('status')).toHaveText('Accepted');
 
