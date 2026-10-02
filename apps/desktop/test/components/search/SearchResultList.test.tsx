@@ -81,6 +81,29 @@ describe('SearchResultList', () => {
     expect(screen.queryByText(/official review candidate/i)).not.toBeInTheDocument();
   });
 
+  // Issue #484: a background step alone was 1.04:1, so the selected row also carries the marker utility.
+  it('marks only the selected row with the ovr-row-selected indicator', () => {
+    render(
+      <SearchResultList
+        results={[worldwideResult('1', 'First Role'), worldwideResult('2', 'Second Role')]}
+        totalCount={2}
+        selectedKey="2"
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="2 vacancies"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    const selected = screen.getByText('Second Role').closest('button');
+    const other = screen.getByText('First Role').closest('button');
+    expect(selected).toHaveClass('ovr-row-selected');
+    expect(selected).toHaveAttribute('aria-current', 'true');
+    expect(other).not.toHaveClass('ovr-row-selected');
+  });
+
   // UX audit finding: cards showed title/company/location/chips/date but zero role-content, so
   // scanning a list of results meant opening each one individually to judge fit.
   it('shows a clamped description excerpt between the company/location line and the chip row', () => {

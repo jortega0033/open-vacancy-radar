@@ -45,8 +45,8 @@ export const SearchResultRow = memo(function SearchResultRow({
       type="button"
       aria-current={selected}
       onClick={() => onSelect(result)}
-      className={`ovr-row flex w-full gap-2.5 border-b border-base-300 px-4 text-left hover:bg-base-200 ${
-        selected ? 'bg-base-200' : ''
+      className={`ovr-row flex w-full gap-2.5 border-b border-base-300 px-4 text-left ${
+        selected ? 'ovr-row-selected' : 'hover:bg-base-200'
       }`}
     >
       <div className="avatar avatar-placeholder flex-none pt-0.5" aria-hidden="true">
