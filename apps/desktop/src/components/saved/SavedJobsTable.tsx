@@ -126,7 +126,7 @@ export function SavedJobsTable({
               <td data-label="Actions" className="saved-job-actions-cell text-right">
                 <div className="saved-job-actions">
                   <button
-                    className="btn btn-outline btn-xs"
+                    className="btn btn-outline btn-sm px-1.5"
                     type="button"
                     disabled={preparingJobId !== null}
                     onClick={() => onPrepareApplication(job)}
@@ -139,7 +139,7 @@ export function SavedJobsTable({
                     )}
                   </button>
                   <button
-                    className="btn btn-ghost btn-xs"
+                    className="btn btn-ghost btn-sm px-1.5"
                     type="button"
                     onClick={() => onEdit(job)}
                     aria-label={`Edit ${job.role} at ${job.company}`}
@@ -147,7 +147,7 @@ export function SavedJobsTable({
                     Edit
                   </button>
                   <button
-                    className="btn btn-ghost btn-xs text-error"
+                    className="btn btn-ghost btn-sm px-1.5 text-error"
                     type="button"
                     onClick={() => onDelete(job)}
                     aria-label={`Delete ${job.role} at ${job.company}`}

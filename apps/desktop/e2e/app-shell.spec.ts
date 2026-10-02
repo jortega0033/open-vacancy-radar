@@ -63,11 +63,25 @@ test.describe('app shell', () => {
     await expect(window).toHaveScreenshot('search-page.png');
   });
 
-  test('has no native application menu', async ({ electronApp }) => {
+  test('has no visible menu bar and keeps the zoom shortcuts', async ({ electronApp }) => {
     // Regression guard: Electron's default File/Edit/View/Window menu is boilerplate this app
-    // never wired any items into. `Menu.setApplicationMenu(null)` in main.ts removes it entirely.
-    const menu = await electronApp.evaluate(({ Menu }) => Menu.getApplicationMenu());
-    expect(menu).toBeNull();
+    // never wired any items into. main.ts installs a View menu holding only the zoom roles (so
+    // Ctrl+=, Ctrl+- and Ctrl+0 keep working, WCAG 1.4.4) and auto-hides the menu bar.
+    const state = await electronApp.evaluate(({ BrowserWindow, Menu }) => {
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      if (!mainWindow) throw new Error('Main window was not created');
+      const menu = Menu.getApplicationMenu();
+      return {
+        topLevel: menu?.items.map((item) => item.label) ?? [],
+        roles: menu?.items.flatMap((item) => item.submenu?.items.map((sub) => String(sub.role).toLowerCase()) ?? []) ?? [],
+        autoHide: mainWindow.autoHideMenuBar,
+        visible: mainWindow.isMenuBarVisible(),
+      };
+    });
+    expect(state.topLevel).toEqual(['View']);
+    expect(state.roles).toEqual(expect.arrayContaining(['zoomin', 'zoomout', 'resetzoom']));
+    expect(state.autoHide).toBe(true);
+    expect(state.visible).toBe(false);
   });
 
   test('enforces the minimum supported window size', async ({ electronApp, window }) => {

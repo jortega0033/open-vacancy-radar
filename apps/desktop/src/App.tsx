@@ -15,6 +15,7 @@ import {
   AI_HELPER_NOTICE_PAGES,
   AiHelperNotice,
   AppSidebar,
+  LiveAnnouncerProvider,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
@@ -296,6 +297,7 @@ export function App() {
   const { title, subtitle } = headerCopy(nav, counts);
 
   return (
+    <LiveAnnouncerProvider>
     <div className="flex h-screen overflow-hidden font-sans text-base text-base-content">
       <AppSidebar
         active={nav}
@@ -410,5 +412,6 @@ export function App() {
         />
       )}
     </div>
+    </LiveAnnouncerProvider>
   );
 }
