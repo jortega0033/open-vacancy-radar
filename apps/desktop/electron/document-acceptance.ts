@@ -98,6 +98,11 @@ export interface DocumentAcceptanceContract {
   kind: DocumentArtifactKind;
   identity: DocumentIdentity;
   requiredContent: readonly RequiredContentItem[];
+  /** The rest of what the approved document says (bullets, summary, skills, dates and so on, #434).
+   * Each item must be somewhere in the extracted text, matched through `squashForMatch` so that line
+   * wraps, hyphenation, ligatures and spacing in the extraction never fail a correct render. Absent
+   * for contracts that only check the structural items above. */
+  requiredClaims?: readonly RequiredContentItem[];
   /** Absolute http(s)/mailto URLs the template turned into real anchors, each of which must survive
    * into the PDF as a resolvable link annotation. */
   requiredLinks: readonly string[];
@@ -192,6 +197,44 @@ function normalizeForMatch(value: string): string {
 function containsText(haystack: string, needle: string): boolean {
   if (needle.trim().length === 0) return true;
   return normalizeForMatch(haystack).includes(normalizeForMatch(needle));
+}
+
+/**
+ * A form of the text that survives what PDF text extraction does to it: compatibility characters
+ * and ligatures are folded (NFKC), typographic quotes and dashes are flattened, soft hyphens, hyphens
+ * and every kind of whitespace are dropped (a wrapped word comes back with a hyphen or a space the
+ * source never had, and runs from separate boxes are joined without one), and case is ignored
+ * (headings are printed in capitals by the template).
+ */
+export function squashForMatch(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/[‘’‛]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[­‐-―−-]/g, '')
+    .replace(/[\s​-‍﻿]/g, '')
+    .toLowerCase();
+}
+
+/**
+ * Finds every claim in the text, each consuming the occurrence it matched so two identical claims
+ * need two occurrences. Longest first, so a short claim cannot use up the text of a longer one that
+ * contains it. Order is not judged: extraction order is a layout detail, not a claim.
+ */
+function findMissingClaims(text: string, claims: readonly RequiredContentItem[]): RequiredContentItem[] {
+  let remaining = squashForMatch(text);
+  const missing: RequiredContentItem[] = [];
+  const keyed = claims
+    .map((claim) => ({ claim, key: squashForMatch(claim.text) }))
+    .filter(({ key }) => key.length > 0)
+    .sort((a, b) => b.key.length - a.key.length);
+  for (const { claim, key } of keyed) {
+    const at = remaining.indexOf(key);
+    if (at < 0) missing.push(claim);
+    else remaining = remaining.slice(0, at) + remaining.slice(at + key.length);
+  }
+  const order = new Map(claims.map((claim, index) => [claim, index]));
+  return missing.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
 }
 
 function containsCaseInsensitive(haystack: string, needle: string): boolean {
@@ -501,6 +544,10 @@ export async function acceptRenderedDocument(
     if (!containsText(rendered.text, required.text)) {
       findings.push({ code: 'required_content_missing', detail: `${required.label} "${required.text}" is missing from the rendered document` });
     }
+  }
+
+  for (const claim of findMissingClaims(rendered.text, contract.requiredClaims ?? [])) {
+    findings.push({ code: 'required_content_missing', detail: `${claim.label} "${claim.text}" is missing from the rendered document` });
   }
 
   checkLinks(rendered, contract, findings);
