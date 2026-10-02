@@ -5,6 +5,7 @@ import {
   latestArtifactOfFormat,
 } from '../../../electron/workspace/cv-artifact-status.js';
 import type { CvArtifactRecord, CvEvidenceOverlayRecord, CvExportFormat } from '../../window.js';
+import { formatCvDateTime } from '../cv-library/cv-profile.js';
 import { CvPdfPageReview } from './CvPdfPageReview.js';
 import { describeError } from './useAgentRun.js';
 
@@ -35,12 +36,22 @@ const STATUS_NOTE = {
   awaiting_review: 'Look at the file before you accept it.',
   qa_failed: 'The file was not saved. Fix what is listed, then export it again. Your approved facts are unchanged.',
   accepted: 'You confirmed this file. The record covers the bytes saved at export. If you edit or replace the file afterwards, it is not checked again.',
-  stale: 'Your CV, job description, facts, wording, projects or the document format changed after this file was made. It stays on disk with its recorded hash and no longer counts as the current CV.',
-  legacy_unverified: 'An earlier version of the app recorded this export without a hash or any checks. Export it again to get a verified file.',
+  stale: 'Your CV, job description, facts, wording, projects or the document format changed after this file was made. It stays on disk and no longer counts as the current CV.',
+  legacy_unverified: 'An earlier version of the app recorded this export without checking the file. Export it again to get a verified file.',
 } as const;
 
 function shortHash(hash: string): string {
   return hash.slice(0, 12);
+}
+
+/** The recorded fingerprint of a saved file, kept out of the default view. */
+function FileDetails({ artifact }: { artifact: CvArtifactRecord }) {
+  return (
+    <details className="mt-1">
+      <summary className="cursor-pointer">File details</summary>
+      <p>Hash {shortHash(artifact.contentHash)}</p>
+    </details>
+  );
 }
 
 /**
@@ -157,15 +168,17 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
             {STATUS_NOTE[status] && <p className="text-base-content/70">{STATUS_NOTE[status]}</p>}
 
             {status === 'stale' && latest && (
-              <p className="text-xs text-base-content/60">
-                Last file: {latest.savedPath || 'not saved'}, hash {shortHash(latest.contentHash)}, exported {latest.exportedAt}.
-              </p>
+              <div className="text-xs text-base-content/60">
+                Last file: {latest.savedPath || 'not saved'}, exported {formatCvDateTime(latest.exportedAt)}.
+                <FileDetails artifact={latest} />
+              </div>
             )}
 
             {current && (
               <div className="text-xs text-base-content/60">
-                {current.savedPath ? `Saved to ${current.savedPath}. ` : ''}Hash {shortHash(current.contentHash)}, exported {current.exportedAt}
+                {current.savedPath ? `Saved to ${current.savedPath}. ` : ''}Exported {formatCvDateTime(current.exportedAt)}
                 {current.validation.pageCount !== undefined ? `, ${current.validation.pageCount} page(s)` : ''}.
+                <FileDetails artifact={current} />
               </div>
             )}
 
@@ -227,9 +240,10 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
           <ul className="mt-2 list-disc pl-5 text-xs text-base-content/60">
             {earlier.map((artifact) => (
               <li key={artifact.artifactId}>
-                {artifact.format.toUpperCase()}, hash {shortHash(artifact.contentHash)}, exported {artifact.exportedAt}
+                {artifact.format.toUpperCase()}, exported {formatCvDateTime(artifact.exportedAt)}
                 {artifact.validation.ok ? '' : ', failed its checks'}
                 {artifact.savedPath ? `, ${artifact.savedPath}` : ''}
+                <FileDetails artifact={artifact} />
               </li>
             ))}
           </ul>
