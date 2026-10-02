@@ -6,6 +6,8 @@ import { useEffect } from 'react';
  * Escape, leaving the drawer underneath open -- see open-vacancy-radar#386.
  */
 const closeStack: Array<() => void> = [];
+/** Every mounted overlay, including ones whose Escape handling is currently `disabled`. */
+let mountedOverlays = 0;
 let listenerAttached = false;
 
 function handleGlobalKeyDown(event: KeyboardEvent) {
@@ -14,6 +16,16 @@ function handleGlobalKeyDown(event: KeyboardEvent) {
   if (!topmost) return;
   event.stopPropagation();
   topmost();
+}
+
+/**
+ * Whether any overlay that uses `useEscapeToClose` is mounted right now, read-only. Counts an
+ * overlay whose close is `disabled` too (a review dialog mid-submit is still on screen), so
+ * "is something else open" never reads false while a request is running. Used by the Support
+ * prompt (#503) to wait for a quiet moment.
+ */
+export function hasOpenOverlay(): boolean {
+  return mountedOverlays > 0;
 }
 
 /**
@@ -28,6 +40,12 @@ function handleGlobalKeyDown(event: KeyboardEvent) {
  * through to whatever is beneath it (or does nothing, if nothing is).
  */
 export function useEscapeToClose(onClose: () => void, disabled = false): void {
+  useEffect(() => {
+    mountedOverlays += 1;
+    return () => {
+      mountedOverlays -= 1;
+    };
+  }, []);
   useEffect(() => {
     if (disabled) return;
     if (!listenerAttached) {

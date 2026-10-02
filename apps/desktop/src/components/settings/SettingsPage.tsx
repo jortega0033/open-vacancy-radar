@@ -15,6 +15,7 @@ import { DataManagement } from './DataManagement.js';
 import { McpEndpointSection } from './McpEndpointSection.js';
 import { SavedAnswersSection } from './SavedAnswersSection.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
+import { SupportSection } from './SupportSection.js';
 import { ALL_COUNTRIES } from '../search/countries.js';
 
 /**
@@ -471,6 +472,8 @@ export function SettingsPage({
               />
             </SettingsRow>
           </SettingsSection>
+
+          <SupportSection />
         </>
       )}
 

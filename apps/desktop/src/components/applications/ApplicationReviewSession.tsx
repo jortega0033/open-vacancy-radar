@@ -4,6 +4,7 @@ import type { OpenApplicationReviewResult } from '../../../electron/application-
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import type { SelectedVacancy } from '../letters/types.js';
 import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
 import { WarningBanner } from '../shell/index.js';
@@ -74,6 +75,7 @@ function openEmployerPage(url: string) {
 export function ApplicationReviewSession({ attempt, position, total, onClose, onGenerateLetter, onSkipped }: ApplicationReviewSessionProps) {
   const [state, setState] = useState<SessionState>({ phase: 'resolving' });
   const wide = useWideReviewLayout();
+  const { recordSuccessMoment } = useSupportPrompt();
   /** Bumped by Try again to run the whole open sequence again against the same attempt. */
   const [retryNonce, setRetryNonce] = useState(0);
   // Loaded independently of the browser review, and always scoped to this attempt's own id (#272).
@@ -247,6 +249,9 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         setState(errorState(describeSubmitRefusal(result)));
         return;
       }
+      // The application went out. Recorded before the close so a failure while closing the review
+      // cannot lose it; the Support ask itself waits for this dialog to be gone (#503).
+      recordSuccessMoment();
       openedRef.current = false;
       await window.applicationExecutor.closeReview(attempt.id);
       onClose('resolved');
@@ -255,7 +260,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
       // reported as "not sent".
       setState(errorState(unconfirmedFailure(errorText(err))));
     }
-  }, [attempt.id, onClose, state]);
+  }, [attempt.id, onClose, recordSuccessMoment, state]);
 
   const handleSkip = useCallback(async () => {
     if (state.phase !== 'ready' && state.phase !== 'ineligible' && state.phase !== 'preparation_blocked' && state.phase !== 'error') return;
@@ -310,6 +315,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     try {
       const result = await window.applicationExecutor.recordUserReportedSubmission(attempt.id);
       if (result.ok) {
+        recordSuccessMoment();
         onClose('resolved');
         return;
       }
@@ -317,7 +323,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     } catch (err) {
       setState(errorState(unconfirmedFailure(errorText(err))));
     }
-  }, [attempt.id, onClose, state]);
+  }, [attempt.id, onClose, recordSuccessMoment, state]);
 
   const handleManualContinue = useCallback(() => {
     if (state.phase !== 'ineligible' || state.busy) return;
@@ -336,12 +342,13 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         setState(errorState(notSentFailure('We could not record this application.', result.detail)));
         return;
       }
+      recordSuccessMoment();
       onClose('resolved');
     } catch (err) {
       manualDecisionRef.current = false;
       setState(errorState(notSentFailure('We could not record this application.', errorText(err))));
     }
-  }, [attempt.id, onClose, state]);
+  }, [attempt.id, onClose, recordSuccessMoment, state]);
 
   const handleSaveArtifact = useCallback(async (artifactId: string) => {
     try {

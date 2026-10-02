@@ -139,7 +139,7 @@ describe('SettingsPage', () => {
     expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Advanced']);
 
     const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headingsNow()).toEqual(['Startup', 'Appearance']);
+    expect(headingsNow()).toEqual(['Startup', 'Appearance', 'Support']);
 
     openTab('Search');
     await waitFor(() =>
