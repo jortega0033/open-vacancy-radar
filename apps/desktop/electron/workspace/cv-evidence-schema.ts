@@ -44,14 +44,17 @@ import type { CvSourceDocument } from './cv-source-schema.js';
  */
 export const CV_RENDER_CONTRACT_VERSION = 1;
 
-/** Whether a candidate's testimony has been independently corroborated. `self_reported` is the
+/** Whether a candidate's testimony has been independently corroborated. `unreviewed` is what an
+ * accepted MCP proposal carries until the candidate approves it: nobody has said yet that the claim
+ * is true, so it is not testimony of any kind. `self_reported` is the
  * default and the common case; upgrading it is a deliberate, separate action, never implicit in
  * giving an answer. `candidate_confirmed_gap` is not a lesser verification state -- it is the
  * candidate explicitly saying "I did not do this", which is itself a fact worth recording so the
  * same question is never asked again as if unanswered. */
-export type CvFactVerification = 'self_reported' | 'candidate_confirmed_gap' | 'corroborated';
+export type CvFactVerification = 'unreviewed' | 'self_reported' | 'candidate_confirmed_gap' | 'corroborated';
 
 export const CV_FACT_VERIFICATIONS: readonly CvFactVerification[] = [
+  'unreviewed',
   'self_reported',
   'candidate_confirmed_gap',
   'corroborated',
@@ -64,13 +67,16 @@ export type CvFactOwnership = 'sole' | 'shared' | 'unknown';
 
 export const CV_FACT_OWNERSHIPS: readonly CvFactOwnership[] = ['sole', 'shared', 'unknown'];
 
-/** Where a fact's content came from. `repository_inspection` can corroborate implementation
+/** Where a fact's content came from. `mcp_proposal` is a claim an MCP client proposed that the
+ * candidate accepted into the case but has not reviewed; approving it re-stamps it as
+ * `candidate_testimony`. `repository_inspection` can corroborate implementation
  * details given a pinned revision and a relevant call path -- it cannot by itself establish
  * authorship or that the code ran in production, which is why `verification` and `sourceKind`
  * are separate fields rather than one implying the other. */
-export type CvFactSourceKind = 'candidate_testimony' | 'repository_inspection';
+export type CvFactSourceKind = 'mcp_proposal' | 'candidate_testimony' | 'repository_inspection';
 
 export const CV_FACT_SOURCE_KINDS: readonly CvFactSourceKind[] = [
+  'mcp_proposal',
   'candidate_testimony',
   'repository_inspection',
 ];
@@ -82,6 +88,40 @@ export const CV_FACT_SOURCE_KINDS: readonly CvFactSourceKind[] = [
 export type CvFactApproval = 'proposed' | 'approved' | 'rejected' | 'superseded';
 
 export const CV_FACT_APPROVALS: readonly CvFactApproval[] = ['proposed', 'approved', 'rejected', 'superseded'];
+
+/** The reviewed source field a fact is anchored to: a role's bullets or a project's description. */
+export type CvFactAnchorField = 'experience_bullets' | 'project_description';
+
+export const CV_FACT_ANCHOR_FIELDS: readonly CvFactAnchorField[] = ['experience_bullets', 'project_description'];
+
+/** One profile skill a fact backs (through a `skill` wording that cites it), as it stood in the
+ * reviewed `CvProfile.skills` list when the fact was anchored. */
+export interface CvFactSkillAnchor {
+  skill: string;
+  /** SHA-256 hex of the skill's normalized name. */
+  digest: string;
+}
+
+/**
+ * Which part of the reviewed source a fact was reviewed against (#436). Stamped and compared only in
+ * the main process, never accepted from a caller: a renderer or MCP client cannot supply an anchor,
+ * and the digest is always computed from `text`. Editing or removing an anchored role bullet, changing
+ * an anchored project description, or removing an anchored profile skill marks the fact stale, so it
+ * goes back to the candidate for review instead of the whole case being treated as changed. A fact
+ * with no anchor (one stored before this existed) is simply not checked this way, and is never given
+ * an invented one.
+ */
+export interface CvFactAnchor {
+  /** The role or project id, equal to the fact's own `parentId` when stamped. */
+  parentId: string;
+  field: CvFactAnchorField;
+  /** The exact reviewed source text of `field` at the time it was anchored. */
+  text: string;
+  /** SHA-256 hex of `field` and `text`. */
+  digest: string;
+  /** Profile skills the fact backs (the profile field is `CvProfile.skills`). Empty for most facts. */
+  profileSkills: CvFactSkillAnchor[];
+}
 
 export interface CvEvidenceFact {
   /** Stable across edits, the same guarantee every other id in this module makes. Assigned by the
@@ -126,6 +166,9 @@ export interface CvEvidenceFact {
    * year", "current"). Empty means the candidate has not said. Two facts about one role only
    * contradict each other when they describe the same phase, so contradiction detection reads this. */
   timePhase: string;
+  /** See `CvFactAnchor`. Absent on a fact stored before anchors existed, and on a fact whose
+   * role or project is not in the reviewed source. */
+  anchor?: CvFactAnchor | null;
 }
 
 export type CvClaimField = 'summary' | 'skill' | 'experience_bullet' | 'project_description';
@@ -829,7 +872,7 @@ function conflictedFactIdSet(facts: readonly CvEvidenceFact[]): Set<string> {
 /** A fact may back wording only while the candidate has approved it and no unresolved
  * contradiction involves it. */
 export function isCvFactUsable(fact: CvEvidenceFact, conflictedFactIds: ReadonlySet<string>): boolean {
-  return fact.approval === 'approved' && !conflictedFactIds.has(fact.factId);
+  return fact.approval === 'approved' && fact.verification !== 'unreviewed' && !conflictedFactIds.has(fact.factId);
 }
 
 /** The parts of a fact a candidate's approval was about. Changing any of them makes the old
@@ -966,11 +1009,36 @@ export function upgradeStoredFacts(
   variants: readonly Pick<CvApprovedWording, 'status' | 'factIds'>[],
 ): CvEvidenceFact[] {
   const backing = new Set(variants.filter((variant) => variant.status === 'candidate_approved').flatMap((variant) => variant.factIds));
-  return rows.map((row) => ({
-    ...row,
-    timePhase: row.timePhase ?? '',
-    approval: row.approval ?? (row.verification === 'candidate_confirmed_gap' || backing.has(row.factId) ? 'approved' : 'proposed'),
-  }));
+  return rows.map((row) => {
+    const { anchor: storedAnchor, ...rest } = row;
+    const anchor = readStoredFactAnchor(storedAnchor);
+    return {
+      ...rest,
+      timePhase: row.timePhase ?? '',
+      approval: row.approval ?? (row.verification === 'candidate_confirmed_gap' || backing.has(row.factId) ? 'approved' : 'proposed'),
+      // A fact stored before anchors existed (or with a malformed one) stays unanchored, never given
+      // an invented anchor.
+      ...(anchor ? { anchor } : {}),
+    };
+  });
+}
+
+/** Reads a stored anchor defensively: anything that is not a complete anchor reads as none. */
+export function readStoredFactAnchor(value: unknown): CvFactAnchor | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.parentId !== 'string' || typeof raw.text !== 'string' || typeof raw.digest !== 'string') return null;
+  if (!CV_FACT_ANCHOR_FIELDS.includes(raw.field as CvFactAnchorField)) return null;
+  const skills = Array.isArray(raw.profileSkills) ? (raw.profileSkills as unknown[]) : [];
+  return {
+    parentId: raw.parentId,
+    field: raw.field as CvFactAnchorField,
+    text: raw.text,
+    digest: raw.digest,
+    profileSkills: skills
+      .filter((entry): entry is CvFactSkillAnchor => !!entry && typeof (entry as CvFactSkillAnchor).skill === 'string' && typeof (entry as CvFactSkillAnchor).digest === 'string')
+      .map((entry) => ({ skill: entry.skill, digest: entry.digest })),
+  };
 }
 
 export function upgradeStoredVariants(
@@ -1011,8 +1079,14 @@ export function reconcileCvEvidence(
   const previousFacts = new Map(previous.facts.map((fact) => [fact.factId, fact]));
   const previousVariants = new Map(previous.wordingVariants.map((variant) => [variant.variantId, variant]));
 
-  const facts = next.facts.map((fact) => {
-    const before = previousFacts.get(fact.factId);
+  const facts = next.facts.map((incoming) => {
+    const before = previousFacts.get(incoming.factId);
+    // The candidate approving a fact an MCP client proposed is the act that makes it their
+    // testimony (#436). Stamped here, never taken from the caller.
+    const fact =
+      incoming.approval === 'approved' && before?.approval !== 'approved' && incoming.verification === 'unreviewed'
+        ? { ...incoming, verification: 'self_reported' as const, sourceKind: incoming.sourceKind === 'mcp_proposal' ? ('candidate_testimony' as const) : incoming.sourceKind }
+        : incoming;
     if (!before) return fact;
     if ((before.approval === 'rejected' || before.approval === 'superseded') && fact.approval !== before.approval) {
       throw new Error('a rejected or replaced fact cannot be reused: add a corrected fact instead');

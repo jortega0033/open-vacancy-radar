@@ -282,6 +282,18 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
                 cannot back a bullet until you decide what they belong to.
               </p>
             )}
+            {rebasePlan.staleFacts.length > 0 && (
+              <div className="mt-2">
+                <div className="font-medium">Facts that need your review again</div>
+                <ul className="list-disc pl-5">
+                  {rebasePlan.staleFacts.map((stale) => (
+                    <li key={stale.factId}>
+                      {stale.activity || 'A fact'} ({stale.reason})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {rebasePlan.requirementIdsToReview.length > 0 && (
               <p className="mt-2">
                 {rebasePlan.requirementIdsToReview.length} requirement(s) pointed at a role or project that is gone and

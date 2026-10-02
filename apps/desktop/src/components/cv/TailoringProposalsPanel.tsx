@@ -36,12 +36,8 @@ function describeProposal(payload: CvProposalPayload, source: CvSourceDocument |
       return `Claims you did: "${payload.data.activity}" on ${entryLabel(source, payload.data.parentId)}`;
     case 'wording':
       return `Proposed wording for ${entryLabel(source, payload.data.parentId)}: "${payload.data.text}"`;
-    case 'selection': {
-      const labels = payload.data.includedEntryIds.map((id) => entryLabel(source, id));
-      return `Include in this CV: ${labels.length > 0 ? labels.join(', ') : '(nothing selected)'}`;
-    }
     default: {
-      // Exhaustiveness check: a sixth `CvProposalKind` added without a branch here is a compile
+      // Exhaustiveness check: another `CvProposalKind` added without a branch here is a compile
       // error, not a silently blank summary.
       const exhaustive: never = payload;
       throw new Error(`describeProposal: unhandled payload kind "${(exhaustive as CvProposalPayload).kind}"`);

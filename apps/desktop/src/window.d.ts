@@ -311,7 +311,6 @@ export type {
   CvProposalPayload,
   CvProposalStatus,
   CvRequirementProposalPayload,
-  CvSelectionProposalPayload,
   CvWordingProposalPayload,
   CvWordingApprovalStatus,
   DeleteResult,

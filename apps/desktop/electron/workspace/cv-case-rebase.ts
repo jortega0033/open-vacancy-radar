@@ -10,8 +10,90 @@
  * Same "no runtime imports" discipline as the rest of `electron/workspace`'s shared schema files.
  */
 
-import type { CvApprovedWording, CvEvidenceOverlay, CvSourceBaseline } from './cv-evidence-schema.js';
+import type {
+  CvApprovedWording,
+  CvEvidenceFact,
+  CvEvidenceOverlay,
+  CvFactAnchor,
+  CvFactAnchorField,
+  CvSourceBaseline,
+} from './cv-evidence-schema.js';
 import type { CvSourceDocument } from './cv-source-schema.js';
+
+/** SHA-256 hex (or any stable digest) of a string. Supplied by the caller: this file has no runtime
+ * imports by design, and anchors are only ever stamped and compared in the main process. */
+export type CvDigest = (text: string) => string;
+
+/** The reviewed source field a fact about `parentId` is anchored to, its current text and the parts
+ * that text is made of (a role's bullets, or a project's one description). `null` when `parentId`
+ * is empty or names nothing in `source`. */
+export function readCvAnchorField(
+  source: CvSourceDocument | null,
+  parentId: string,
+): { field: CvFactAnchorField; text: string; parts: string[] } | null {
+  if (!source || !parentId) return null;
+  const role = source.experience.find((entry) => entry.id === parentId);
+  if (role) return { field: 'experience_bullets', text: role.bullets.join('\n'), parts: role.bullets };
+  const project = source.projects.find((entry) => entry.id === parentId);
+  if (project) return { field: 'project_description', text: project.description, parts: [project.description] };
+  return null;
+}
+
+function skillKey(skill: string): string {
+  return skill.trim().toLowerCase();
+}
+
+function anchorFieldDigest(field: CvFactAnchorField, text: string, digest: CvDigest): string {
+  return digest(`${field}\n${text}`);
+}
+
+/** Stamps an anchor for a fact about `parentId` from the reviewed source as it reads now. `skills`
+ * are the profile skills the fact backs; only those present in `profileSkills` are anchored. */
+export function buildCvFactAnchor(
+  source: CvSourceDocument | null,
+  parentId: string,
+  backedSkills: readonly string[],
+  profileSkills: readonly string[],
+  digest: CvDigest,
+): CvFactAnchor | null {
+  const read = readCvAnchorField(source, parentId);
+  if (!read) return null;
+  const inProfile = new Set(profileSkills.map(skillKey));
+  const seen = new Set<string>();
+  const anchored: CvFactAnchor['profileSkills'] = [];
+  for (const skill of backedSkills) {
+    const key = skillKey(skill);
+    if (!key || seen.has(key) || !inProfile.has(key)) continue;
+    seen.add(key);
+    anchored.push({ skill, digest: digest(key) });
+  }
+  return { parentId, field: read.field, text: read.text, digest: anchorFieldDigest(read.field, read.text, digest), profileSkills: anchored };
+}
+
+/** Why an anchored fact no longer matches the reviewed source, or `null` when it still does (or has
+ * no anchor to check). A fact whose role or project is gone is reported as orphaned elsewhere. */
+export function describeStaleFactAnchor(
+  fact: Pick<CvEvidenceFact, 'parentId' | 'anchor'>,
+  current: Pick<CvCurrentInputs, 'source' | 'skills'>,
+  digest: CvDigest,
+): string | null {
+  const anchor = fact.anchor;
+  if (!anchor) return null;
+  const read = readCvAnchorField(current.source, fact.parentId);
+  if (!read) return null;
+  if (read.field !== anchor.field) return 'the role or project it was reviewed against changed kind';
+  if (anchorFieldDigest(read.field, read.text, digest) !== anchor.digest) {
+    if (read.field === 'project_description') return 'the project description it was reviewed against changed';
+    // A role gaining another bullet does not touch the bullets a fact was reviewed against; editing
+    // or removing one of them does.
+    const now = new Set(read.parts);
+    if (anchor.text.split('\n').some((bullet) => bullet !== '' && !now.has(bullet))) return 'a role bullet it was reviewed against changed';
+  }
+  const inProfile = new Set(current.skills.map((skill) => digest(skillKey(skill))));
+  const missing = anchor.profileSkills.find((entry) => !inProfile.has(entry.digest));
+  if (missing) return `the profile skill "${missing.skill}" it backs was removed`;
+  return null;
+}
 
 /** The CV inputs a case depends on, as they are right now. */
 export interface CvCurrentInputs {
@@ -127,6 +209,13 @@ export interface CvDroppedWording {
   reason: string;
 }
 
+export interface CvStaleFact {
+  factId: string;
+  /** The fact's own `activity`, so the candidate can tell which fact it is. */
+  activity: string;
+  reason: string;
+}
+
 export interface CvRebasePlan {
   /** False for a case created before baselines existed: there is nothing to list, but the case can
    * still be rebased and its wording is checked against the current source. */
@@ -141,6 +230,10 @@ export interface CvRebasePlan {
   /** Facts whose role or project is gone. They are kept, and cannot back a bullet until the
    * candidate decides what they belong to. */
   orphanedFactIds: string[];
+  /** Approved facts whose anchored source text (or anchored profile skill) changed. A rebase puts
+   * them back to `proposed` and withdraws the wording that cites them; facts whose anchored text
+   * did not change stay approved. Facts with no anchor are never listed. */
+  staleFacts: CvStaleFact[];
   /** Requirements that linked a role or project that no longer exists. Their dead links are removed
    * and they need review again. */
   requirementIdsToReview: string[];
@@ -184,6 +277,7 @@ function describeStaleVariant(
 export function planCvEvidenceRebase(
   overlay: Pick<CvEvidenceOverlay, 'facts' | 'wordingVariants' | 'requirements' | 'sourceBaseline'>,
   current: CvCurrentInputs,
+  digest?: CvDigest,
 ): CvRebasePlan {
   const baseline = overlay.sourceBaseline;
   const keptVariantIds: string[] = [];
@@ -199,6 +293,15 @@ export function planCvEvidenceRebase(
   const orphanedFactIds = overlay.facts
     .filter((fact) => (fact.approval === 'approved' || fact.approval === 'proposed') && !exists(fact.parentId))
     .map((fact) => fact.factId);
+  // Without a digest function nothing can be compared, so no fact is called stale.
+  const staleFacts: CvStaleFact[] = [];
+  if (digest) {
+    for (const fact of overlay.facts) {
+      if (fact.approval !== 'approved' || !exists(fact.parentId)) continue;
+      const reason = describeStaleFactAnchor(fact, current, digest);
+      if (reason) staleFacts.push({ factId: fact.factId, activity: fact.activity, reason });
+    }
+  }
   const requirementIdsToReview = overlay.requirements
     .filter((requirement) => !requirement.excluded)
     .filter((requirement) => (requirement.anchorParentId && !exists(requirement.anchorParentId)) || requirement.sourceIds.some((id) => !exists(id)))
@@ -213,6 +316,7 @@ export function planCvEvidenceRebase(
     keptVariantIds,
     droppedVariants,
     orphanedFactIds,
+    staleFacts,
     requirementIdsToReview,
   };
 }

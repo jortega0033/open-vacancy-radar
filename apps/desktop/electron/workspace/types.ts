@@ -129,7 +129,6 @@ export type {
   CvProposalPayload,
   CvProposalStatus,
   CvRequirementProposalPayload,
-  CvSelectionProposalPayload,
   CvWordingProposalPayload,
 } from './cv-proposal-schema.js';
 

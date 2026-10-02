@@ -1,7 +1,9 @@
 /**
  * #421: the staging layer for anything an MCP client proposes -- a requirement, a link from a
  * requirement to existing source evidence, a fact (claimed candidate testimony), a piece of CV
- * wording, or a role/project scope selection.
+ * wording. There is deliberately no "selection" kind: which projects a CV shows comes from the
+ * source's pins and project limit and is approved by the candidate (`approveCvProjectSelection`),
+ * so a client-proposed scope had nothing to attach to (#436).
  *
  * Deliberately never the same structures #419's `cv-evidence-schema.ts` owns. #421's own words:
  * "every submitted item remains 'proposed' until the candidate reviews it" and "a model-supplied
@@ -23,7 +25,7 @@
 
 import type { CvClaimField, CvEvidenceClass, CvFactOwnership, CvRequirementClassification } from './cv-evidence-schema.js';
 
-export type CvProposalKind = 'requirement' | 'evidence_link' | 'clarification_question' | 'fact' | 'wording' | 'selection';
+export type CvProposalKind = 'requirement' | 'evidence_link' | 'clarification_question' | 'fact' | 'wording';
 
 export const CV_PROPOSAL_KINDS: readonly CvProposalKind[] = [
   'requirement',
@@ -31,7 +33,6 @@ export const CV_PROPOSAL_KINDS: readonly CvProposalKind[] = [
   'clarification_question',
   'fact',
   'wording',
-  'selection',
 ];
 
 export type CvProposalStatus = 'pending' | 'accepted' | 'rejected';
@@ -41,7 +42,6 @@ export const CV_PROPOSAL_STATUSES: readonly CvProposalStatus[] = ['pending', 'ac
 export const CV_PROPOSAL_LIMITS = {
   question: 2_000,
   factIdsPerProposal: 20,
-  includedEntryIdsPerProposal: 100,
 } as const;
 
 /** Promotes into a `CvRequirementMapping` on acceptance; the app assigns `requirementId`, sets
@@ -74,11 +74,12 @@ export interface CvClarificationQuestionProposalPayload {
   question: string;
 }
 
-/** Promotes into a `CvEvidenceFact` only once a person reviews and accepts it here -- the act of
- * acceptance through this app's own UI is what makes it `verification: 'self_reported'`, never the
- * client's own claim about what the candidate said (#421: "new self-reported facts require the
- * candidate to answer in OVR"). `sourceKind` is always `'candidate_testimony'`: a client cannot
- * propose a `repository_inspection` fact, which has no client-facing proposal shape at all. */
+/** Promotes into a `CvEvidenceFact` only once a person reviews and accepts it here, and arrives
+ * `approval: 'proposed'`, `verification: 'unreviewed'`, `sourceKind: 'mcp_proposal'` (#436). Only
+ * the candidate approving the fact in the evidence review makes it `self_reported` testimony, never
+ * the client's own claim about what the candidate said (#421: "new self-reported facts require the
+ * candidate to answer in OVR"). A client cannot propose a `repository_inspection` fact, which has
+ * no client-facing proposal shape at all. */
 export interface CvFactProposalPayload {
   parentId: string;
   parentType: 'experience' | 'project';
@@ -93,11 +94,11 @@ export interface CvFactProposalPayload {
   metricBasis: string;
 }
 
-/** Promotes into a `CvApprovedWording` with `status: 'candidate_approved'` on acceptance --
- * accepting *is* the approval for this one variant (the same "propose and approve are the same
- * action" precedent `proposeWordingFromFacts` already sets), distinct from the whole case's own
- * `state`, which still only `approveCvEvidenceOverlay` may move to `'candidate_approved'`. Every
- * `factIds` entry must already exist on the case at proposal-creation time. */
+/** Promotes into a `CvApprovedWording` with `status: 'draft'` on acceptance: accepting puts the
+ * wording in front of the candidate, and approving its exact text is a separate per-variant step
+ * (#419 step 7). The whole case's own `state` still only moves to `'candidate_approved'` through
+ * `approveCvEvidenceOverlay`. Every `factIds` entry must already exist on the case at
+ * proposal-creation time. */
 export interface CvWordingProposalPayload {
   targetField: CvClaimField;
   parentId: string;
@@ -105,23 +106,12 @@ export interface CvWordingProposalPayload {
   factIds: string[];
 }
 
-/** Which source entries this case should draw from. Recorded on acceptance for this case alone,
- * never on the shared `CvSourceDocument` itself -- a per-vacancy choice must never leak into a
- * different vacancy's tailoring. Not yet wired into composition (`composeApprovedTailoredResume`
- * still reads every source entry, same as before #421); this proposal kind's data model is ready,
- * acceptance records the choice, and wiring it into composition is deliberately left for later
- * rather than guessed at here. */
-export interface CvSelectionProposalPayload {
-  includedEntryIds: string[];
-}
-
 export type CvProposalPayload =
   | { kind: 'requirement'; data: CvRequirementProposalPayload }
   | { kind: 'evidence_link'; data: CvEvidenceLinkProposalPayload }
   | { kind: 'clarification_question'; data: CvClarificationQuestionProposalPayload }
   | { kind: 'fact'; data: CvFactProposalPayload }
-  | { kind: 'wording'; data: CvWordingProposalPayload }
-  | { kind: 'selection'; data: CvSelectionProposalPayload };
+  | { kind: 'wording'; data: CvWordingProposalPayload };
 
 export interface CvTailoringProposal {
   id: string;

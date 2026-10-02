@@ -32,6 +32,7 @@ const OWNERSHIP_LABEL: Record<CvFactOwnership, string> = {
 
 function provenanceLabel(fact: CvEvidenceFact): string {
   if (fact.verification === 'candidate_confirmed_gap') return 'Your statement that this was not your work';
+  if (fact.verification === 'unreviewed') return 'Proposed by a connected app. You have not confirmed it yet.';
   if (fact.sourceKind === 'repository_inspection') {
     return 'Repository inspection. It can corroborate how something was built, but not that you wrote it or that it ran in production.';
   }
