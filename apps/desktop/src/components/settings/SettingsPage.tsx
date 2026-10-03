@@ -119,12 +119,17 @@ const APPLICATION_STATUS_OPTIONS = [
   { value: 'withdrawn', label: 'Withdrawn' },
 ] as const;
 
-type SaveStatus = { kind: 'saved'; message: string } | { kind: 'error'; message: string };
+type SaveStatus = { kind: 'saved'; message: string } | { kind: 'error'; message: string; details?: string };
 
 type ResetTarget = 'settings' | 'data';
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+/** An error toast: one plain sentence, with the raw message (when there is one) behind "Details". */
+function failure(err: unknown, message: string): SaveStatus {
+  return err instanceof Error && err.message ? { kind: 'error', message, details: err.message } : { kind: 'error', message };
 }
 
 interface SettingsSelectProps<T extends string> {
@@ -209,7 +214,7 @@ export function SettingsPage({
         if (cancelled) return;
         setSettings(loaded);
       } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load settings'));
+        if (!cancelled) setLoadError(describeError(err, 'unknown error'));
       }
     })();
     void (async () => {
@@ -217,7 +222,7 @@ export function SettingsPage({
         const docs = await window.workspace.listCvDocuments();
         if (!cancelled) setCvDocuments(docs);
       } catch (err) {
-        if (!cancelled) setCvListError(describeError(err, 'could not load the CV library'));
+        if (!cancelled) setCvListError(describeError(err, 'unknown error'));
       }
     })();
     return () => {
@@ -259,7 +264,7 @@ export function SettingsPage({
           setSettings(previous);
           applyTheme(previous.theme);
           applyDensity(previous.density);
-          flash({ kind: 'error', message: describeError(err, 'could not save this setting') });
+          flash(failure(err, 'Could not save this setting.'));
         }
       })();
     },
@@ -285,7 +290,7 @@ export function SettingsPage({
         } catch (err) {
           if (seq !== saveSeq.current) return;
           setSettings(previous);
-          flash({ kind: 'error', message: describeError(err, 'could not save this setting') });
+          flash(failure(err, 'Could not save this setting.'));
           return;
         }
         if (seq === saveSeq.current) setSettings(updated);
@@ -294,10 +299,7 @@ export function SettingsPage({
           if (seq === saveSeq.current) flash({ kind: 'saved', message: 'Saved' });
         } catch (err) {
           if (seq === saveSeq.current) {
-            flash({
-              kind: 'error',
-              message: `Preference saved, but the system login item could not be updated: ${describeError(err, 'unknown error')}`,
-            });
+            flash(failure(err, 'Saved, but your computer would not update the startup entry.'));
           }
         }
       })();
@@ -343,13 +345,7 @@ export function SettingsPage({
             message: target === 'data' ? 'Application data reset' : 'Settings reset',
           });
         } catch (err) {
-          flash({
-            kind: 'error',
-            message: describeError(
-              err,
-              target === 'data' ? 'could not reset application data' : 'could not reset settings',
-            ),
-          });
+          flash(failure(err, target === 'data' ? 'Could not delete your data.' : 'Could not reset your settings.'));
         } finally {
           setBusy(false);
         }
@@ -361,7 +357,9 @@ export function SettingsPage({
   if (loadError) {
     return (
       <div>
-        <ErrorBanner className="mt-4">{loadError}</ErrorBanner>
+        <ErrorBanner className="mt-4" details={loadError}>
+          Could not load your settings.
+        </ErrorBanner>
       </div>
     );
   }
@@ -393,7 +391,7 @@ export function SettingsPage({
           <SettingsSection title="Startup">
             <SettingsRow
               label="Launch at login"
-              description="Start Open Vacancy Radar automatically when you sign in to this computer."
+              description="Starts the app when you sign in to this computer."
             >
               <ToggleSwitch
                 label="Launch at login"
@@ -404,7 +402,7 @@ export function SettingsPage({
             </SettingsRow>
             <SettingsRow
               label="Keep running in the background when closed"
-              description="Closing the window minimizes to the system tray instead of quitting. Use Quit from the tray icon to fully exit."
+              description="Closing the window keeps the app running in the tray."
             >
               <ToggleSwitch
                 label="Keep running in the background when closed"
@@ -415,11 +413,7 @@ export function SettingsPage({
             </SettingsRow>
             <SettingsRow
               label="Automatically check for new vacancies while running in the background"
-              description={
-                settings.minimizeToTrayOnClose
-                  ? 'Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app.'
-                  : 'Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app. Turn on Keep running in the background first.'
-              }
+              description="Looks for new jobs while the app is in the tray. Needs the setting above."
             >
               <ToggleSwitch
                 label="Automatically check for new vacancies while running in the background"
@@ -440,7 +434,7 @@ export function SettingsPage({
           </SettingsSection>
 
           <SettingsSection title="Appearance">
-            <SettingsRow label="Theme" description="System follows the operating system's light/dark preference, live.">
+            <SettingsRow label="Theme" description="System matches your computer's light or dark mode.">
               <SegmentedControl
                 label="Theme"
                 value={settings.theme}
@@ -499,15 +493,15 @@ export function SettingsPage({
             disabled={disabled}
             focusOnOpen={focusSection === 'search-profile'}
             onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
-            onSaveError={(message) => flash({ kind: 'error', message })}
+            onSaveError={(message, details) => flash({ kind: 'error', message, ...(details ? { details } : {}) })}
           />
 
           <AtsRosterSection
             disabled={disabled}
             onRefreshed={(result) =>
-              flash({ kind: 'saved', message: `Company roster refreshed: ${result.totalEntries.toLocaleString()} companies` })
+              flash({ kind: 'saved', message: `Company list updated (${result.totalEntries.toLocaleString()} companies)` })
             }
-            onRefreshError={(message) => flash({ kind: 'error', message })}
+            onRefreshError={(message, details) => flash({ kind: 'error', message, ...(details ? { details } : {}) })}
           />
         </>
       )}
@@ -519,7 +513,7 @@ export function SettingsPage({
               label="Default CV"
               description={
                 cvListError
-                  ? `The CV library could not be loaded: ${cvListError}`
+                  ? 'Could not load your CVs.'
                   : cvDocuments.length === 0
                     ? 'No CVs in the library yet. Add one on the CV page first.'
                     : 'Pre-selected CV for gap analysis and letter generation.'
@@ -610,12 +604,9 @@ export function SettingsPage({
       {activeTab === 'advanced' && (
         <>
           <SettingsSection title="AI runtime">
-            <SettingsRow
-              label="Runtime provider"
-              description={`${PROVIDER_LABEL[settings.defaultProvider]} · CLI default model · AgentDock local runtime`}
-            >
+            <SettingsRow label="AI tool" description={PROVIDER_LABEL[settings.defaultProvider]}>
               <button type="button" className="btn btn-sm btn-outline" onClick={onNavigateToRuntime}>
-                Manage in AI runtime
+                Manage
               </button>
             </SettingsRow>
           </SettingsSection>
@@ -644,7 +635,7 @@ export function SettingsPage({
       {confirmTarget === 'settings' && (
         <ConfirmDialog
           title="Reset settings?"
-          message="Every preference on this page returns to its default. Saved jobs, applications, CVs and letters are not touched."
+          message="Every setting returns to its default. Your saved jobs, applications, CVs and letters stay."
           confirmLabel="Reset settings"
           onConfirm={() => runReset('settings')}
           onCancel={() => setConfirmTarget(null)}
@@ -653,7 +644,7 @@ export function SettingsPage({
       {confirmTarget === 'data' && (
         <ConfirmDialog
           title="Reset application data?"
-          message="This permanently deletes saved jobs, applications, attempts, CVs, letters, submission receipts, automation grants, MCP client grants, generated application files and the search profile. It also restores default settings. The public vacancy cache stays available. This cannot be undone."
+          message="This permanently deletes your saved jobs, applications, CVs, letters, generated files and search profile, and resets settings. This cannot be undone."
           confirmLabel="Delete everything"
           onConfirm={() => runReset('data')}
           onCancel={() => setConfirmTarget(null)}
@@ -668,7 +659,15 @@ export function SettingsPage({
             </div>
           ) : (
             <div role="alert" className="alert alert-error py-2 text-sm">
-              <span>{status.message}</span>
+              <div className="min-w-0">
+                <span>{status.message}</span>
+                {status.details && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-xs font-medium">Details</summary>
+                    <pre className="mt-1 max-h-40 max-w-xs overflow-auto text-xs break-words whitespace-pre-wrap">{status.details}</pre>
+                  </details>
+                )}
+              </div>
               <button
                 type="button"
                 className="btn btn-ghost btn-xs"

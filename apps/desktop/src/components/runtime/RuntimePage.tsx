@@ -1,18 +1,22 @@
-import { Check } from '@phosphor-icons/react';
 import { useCallback, useEffect, useState } from 'react';
 import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { AiHelperNotice, ErrorBanner, PageLoading } from '../shell/index.js';
 import { ProviderCard, type ProviderCheckState } from './ProviderCard.js';
-import { detectPlatform, providerGuidance } from './provider-guidance.js';
 
-type VerifyResult =
-  | { kind: 'ok'; executablePath: string; version: string }
-  | { kind: 'failed'; reason: string };
+type VerifyResult = { kind: 'ok' } | { kind: 'failed'; reason: string; details?: string };
 
-function describeError(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
+/** A failure shown as one plain sentence, with the raw message (when there is one) behind "Details". */
+interface Problem {
+  message: string;
+  details?: string;
 }
+
+function problem(err: unknown, message: string): Problem {
+  return err instanceof Error && err.message ? { message, details: err.message } : { message };
+}
+
+const HELPER_NOT_RESPONDING = 'The AI helper is not responding. Try again in a moment.';
 
 export interface RuntimePageProps {
   /** App-wide daemon connectivity, computed once in App.tsx: every page would otherwise need its
@@ -29,7 +33,7 @@ export interface RuntimePageProps {
 }
 
 /**
- * The real "AI Runtime" screen from the prototype: which CLIs are available, their capabilities,
+ * The real "AI Runtime" screen from the prototype: which CLIs are available,
  * which one AI features run through, and a way to verify a CLI without spending a model call.
  * Replaces the AgentDock template's generic "pick a provider, type a prompt, watch raw events"
  * tester. That panel tested the daemon during development; it was never a feature a job-seeker
@@ -45,10 +49,10 @@ export function RuntimePage({
   onDefaultProviderChanged,
 }: RuntimePageProps) {
   const [providers, setProviders] = useState<ProviderStatus[]>();
-  const [providersError, setProvidersError] = useState<string>();
+  const [providersError, setProvidersError] = useState<Problem>();
   const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
   const [savingDefault, setSavingDefault] = useState(false);
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<Problem>();
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult>();
   const [checkStates, setCheckStates] = useState<Partial<Record<ProviderId, ProviderCheckState>>>({});
@@ -59,7 +63,7 @@ export function RuntimePage({
       setProviders(list);
       setProvidersError(undefined);
     } catch (err) {
-      setProvidersError(describeError(err, 'could not reach the local runtime'));
+      setProvidersError(problem(err, HELPER_NOT_RESPONDING));
     }
   }, []);
 
@@ -93,7 +97,7 @@ export function RuntimePage({
         setVerifyResult(undefined);
         onDefaultProviderChanged?.(updated.defaultProvider);
       } catch (err) {
-        setActionError(describeError(err, 'could not save the default runtime'));
+        setActionError(problem(err, 'Could not save your choice.'));
       } finally {
         setSavingDefault(false);
       }
@@ -113,7 +117,7 @@ export function RuntimePage({
       const ready = status?.installed === true && status.authenticated === 'authenticated';
       setCheckStates((current) => ({ ...current, [provider]: ready ? 'ready' : 'blocked' }));
     } catch (err) {
-      setProvidersError(describeError(err, 'could not reach the local runtime'));
+      setProvidersError(problem(err, HELPER_NOT_RESPONDING));
       setCheckStates((current) => ({ ...current, [provider]: 'blocked' }));
     }
   }, []);
@@ -130,19 +134,14 @@ export function RuntimePage({
       } else if (status.authenticated !== 'authenticated') {
         setVerifyResult({
           kind: 'failed',
-          reason: `${PROVIDER_LABEL[defaultProvider]} is installed but not authenticated. Open a terminal and run ${
-            providerGuidance(defaultProvider, detectPlatform(navigator.userAgent)).loginCommand
-          }, then sign in and verify again.`,
+          reason: `${PROVIDER_LABEL[defaultProvider]} is installed but not signed in. Sign in, then check again.`,
         });
       } else {
-        setVerifyResult({
-          kind: 'ok',
-          executablePath: status.executablePath ?? 'detected, path not reported',
-          version: status.version ?? 'detected, version not reported',
-        });
+        setVerifyResult({ kind: 'ok' });
       }
     } catch (err) {
-      setVerifyResult({ kind: 'failed', reason: describeError(err, 'verification failed') });
+      const { message, details } = problem(err, HELPER_NOT_RESPONDING);
+      setVerifyResult({ kind: 'failed', reason: message, ...(details ? { details } : {}) });
     } finally {
       setVerifying(false);
     }
@@ -161,20 +160,30 @@ export function RuntimePage({
     );
   }
 
+  const installed = providers?.filter((p) => p.installed) ?? [];
+  // Choosing only matters with a real choice. With one tool installed there is nothing to pick,
+  // unless the saved choice points at a tool that is missing.
+  const showPicker =
+    installed.length >= 2 || (installed.length === 1 && installed[0]?.id !== defaultProvider);
+
   return (
     <div className="max-w-3xl">
       <p className="text-sm text-base-content/70">
-        Open Vacancy Radar uses an AI CLI already installed and authenticated on this computer,
-        through the local AgentDock runtime.
-      </p>
-      <p className="mt-1 text-xs text-base-content/60">
-        AgentDock does not read or store your Claude Code or Codex login credentials.
-        Authentication remains managed by the installed CLI.
+        The AI features run through Claude Code or Codex, already signed in on this computer. Your
+        login details are never read or stored by this app.
       </p>
 
       {daemonState === 'connecting' && <PageLoading label="Starting the AI helper…" />}
-      {providersError && <ErrorBanner className="mt-4">{providersError}</ErrorBanner>}
-      {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
+      {providersError && (
+        <ErrorBanner className="mt-4" {...(providersError.details ? { details: providersError.details } : {})}>
+          {providersError.message}
+        </ErrorBanner>
+      )}
+      {actionError && (
+        <ErrorBanner className="mt-4" {...(actionError.details ? { details: actionError.details } : {})}>
+          {actionError.message}
+        </ErrorBanner>
+      )}
 
       {providers && (
         <div className="mt-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2">
@@ -184,6 +193,7 @@ export function RuntimePage({
               status={status}
               isDefault={status.id === defaultProvider}
               saving={savingDefault}
+              showPicker={showPicker}
               onUseAsDefault={() => void useAsDefault(status.id)}
               onCheckAgain={() => void checkAgain(status.id)}
               {...(checkStates[status.id] ? { checkState: checkStates[status.id] } : {})}
@@ -192,41 +202,31 @@ export function RuntimePage({
         </div>
       )}
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-box border border-base-300 p-4">
-        <div>
-          <div className="ovr-eyebrow">
-            Default runtime
+      <details className="mt-5 rounded-box border border-base-300 p-4">
+        <summary className="cursor-pointer text-sm font-medium">Advanced check</summary>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="ovr-eyebrow">AI tool in use</div>
+            <div className="mt-1 text-sm font-semibold">{PROVIDER_LABEL[defaultProvider]}</div>
           </div>
-          <div className="mt-1 text-sm font-semibold">{PROVIDER_LABEL[defaultProvider]}</div>
-          <div className="mt-0.5 text-xs text-base-content/60">
-            Model: CLI default. Open Vacancy Radar uses the model configured by the selected CLI.
-          </div>
+          <button type="button" className="btn btn-sm" onClick={() => void verify()} disabled={verifying}>
+            {verifying ? 'Checking…' : 'Check'}
+          </button>
         </div>
-        <button type="button" className="btn btn-sm" onClick={() => void verify()} disabled={verifying}>
-          {verifying ? 'Verifying…' : 'Verify'}
-        </button>
-      </div>
 
-      {verifyResult?.kind === 'ok' && (
-        <div className="mt-2.5 rounded-box border border-base-300 bg-base-200 p-3.5 text-xs leading-loose">
-          <div>
-            <Check size={14} weight="bold" aria-hidden="true" className="mr-1 inline text-success" /> Executable detected:{' '}
-            <span className="font-mono">{verifyResult.executablePath}</span>
-          </div>
-          <div>
-            <Check size={14} weight="bold" aria-hidden="true" className="mr-1 inline text-success" /> Version check passed: {verifyResult.version}
-          </div>
-          <div>
-            <Check size={14} weight="bold" aria-hidden="true" className="mr-1 inline text-success" /> Authentication status available: Authenticated
-          </div>
-        </div>
-      )}
-      {verifyResult?.kind === 'failed' && <ErrorBanner className="mt-2.5">{verifyResult.reason}</ErrorBanner>}
+        {verifyResult?.kind === 'ok' && (
+          <p className="mt-2.5 text-sm" role="status">
+            {PROVIDER_LABEL[defaultProvider]} is working.
+          </p>
+        )}
+        {verifyResult?.kind === 'failed' && (
+          <ErrorBanner className="mt-2.5" {...(verifyResult.details ? { details: verifyResult.details } : {})}>
+            {verifyResult.reason}
+          </ErrorBanner>
+        )}
 
-      <p className="mt-5 max-w-xl text-xs text-base-content/60">
-        Verification checks that the executable exists, responds to a version query, and reports
-        its authentication status. It does not run a model request and does not consume usage.
-      </p>
+        <p className="mt-3 text-xs text-base-content/60">This check does not use your AI quota.</p>
+      </details>
     </div>
   );
 }

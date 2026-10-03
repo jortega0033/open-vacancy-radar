@@ -123,7 +123,7 @@ test.describe('Settings', () => {
     await window.getByRole('tab', { name: 'Advanced' }).click();
     await window.getByRole('button', { name: 'Reset application data' }).click();
     const confirm = window.getByRole('alertdialog');
-    await expect(confirm).toContainText(/public vacancy cache stays available/i);
+    await expect(confirm).toContainText(/search profile, and resets settings\. This cannot be undone/i);
     await confirm.getByRole('button', { name: 'Delete everything' }).click();
     await expect(window.getByRole('status').filter({ hasText: 'Application data reset' })).toBeVisible();
 

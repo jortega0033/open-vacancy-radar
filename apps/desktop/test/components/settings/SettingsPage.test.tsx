@@ -143,14 +143,14 @@ describe('SettingsPage', () => {
 
     openTab('Search');
     await waitFor(() =>
-      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company roster']),
+      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company list']),
     );
 
     openTab('Workspace');
     expect(headingsNow()).toEqual(['Documents', 'Applications', 'Saved application answers']);
 
     openTab('Advanced');
-    expect(headingsNow()).toEqual(['AI runtime', 'Local AI assistant access (MCP)', 'Data management', 'About']);
+    expect(headingsNow()).toEqual(['AI runtime', 'Connect other AI apps', 'Data management', 'About']);
   });
 
   it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {
@@ -275,8 +275,9 @@ describe('SettingsPage', () => {
     fireEvent.click(toggle);
 
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(/login item could not be updated.*registry denied/i),
+      expect(screen.getByRole('alert')).toHaveTextContent(/would not update the startup entry/i),
     );
+    expect(screen.getByText('registry denied')).not.toBeVisible(); // raw text stays under Details
     // The preference row itself did save; the toggle stays on rather than silently reverting.
     expect(bridge.updateSettings).toHaveBeenCalledWith({ launchAtLogin: true });
     expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();

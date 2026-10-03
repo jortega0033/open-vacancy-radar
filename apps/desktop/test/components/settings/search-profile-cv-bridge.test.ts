@@ -65,7 +65,7 @@ describe('search-profile CV bridge: the nine-field contract', () => {
 
   it('throws a user-facing message rather than crashing on a non-JSON response', () => {
     expect(() => parseSearchProfileCvResponse('I could not read that CV, sorry.')).toThrow(
-      /not valid JSON/,
+      /Could not read your CV this time/,
     );
   });
 

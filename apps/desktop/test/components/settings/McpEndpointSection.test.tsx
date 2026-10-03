@@ -50,7 +50,7 @@ describe('McpEndpointSection (#421)', () => {
         onToggled={onToggled}
       />,
     );
-    fireEvent.click(screen.getByRole('switch', { name: /allow local ai clients/i }));
+    fireEvent.click(screen.getByRole('switch', { name: /let other ai apps help tailor cvs/i }));
     expect(onToggled).toHaveBeenCalledWith({ mcpEndpointEnabled: true });
   });
 
@@ -67,6 +67,7 @@ describe('McpEndpointSection (#421)', () => {
       />,
     );
     await waitFor(() => expect(screen.getByText('http://127.0.0.1:54321')).toBeInTheDocument());
+    expect(screen.getByText('http://127.0.0.1:54321')).not.toBeVisible(); // address sits under Technical details
     expect(await screen.findByText('My Claude Desktop')).toBeInTheDocument();
     expect(screen.getByText(/can tailor: my resume/i)).toBeInTheDocument();
   });
@@ -90,11 +91,11 @@ describe('McpEndpointSection (#421)', () => {
         onToggled={vi.fn()}
       />,
     );
-    await screen.findByText(/no clients authorized yet/i);
+    await screen.findByText(/no apps connected/i);
 
-    fireEvent.change(screen.getByLabelText('Client name'), { target: { value: 'New Client' } });
-    fireEvent.change(screen.getByLabelText('CV this client may tailor'), { target: { value: 'cv-1' } });
-    fireEvent.click(screen.getByRole('button', { name: /authorize client/i }));
+    fireEvent.change(screen.getByLabelText('App name'), { target: { value: 'New Client' } });
+    fireEvent.change(screen.getByLabelText('CV this app may tailor'), { target: { value: 'cv-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /allow app/i }));
 
     await waitFor(() => expect(createMcpClientGrant).toHaveBeenCalledWith({
       name: 'New Client',
@@ -118,9 +119,9 @@ describe('McpEndpointSection (#421)', () => {
         onToggled={vi.fn()}
       />,
     );
-    await screen.findByText(/no clients authorized yet/i);
-    fireEvent.change(screen.getByLabelText('Client name'), { target: { value: 'New Client' } });
-    fireEvent.click(screen.getByRole('button', { name: /authorize client/i }));
+    await screen.findByText(/no apps connected/i);
+    fireEvent.change(screen.getByLabelText('App name'), { target: { value: 'New Client' } });
+    fireEvent.click(screen.getByRole('button', { name: /allow app/i }));
     expect(await screen.findByText(/choose which cv/i)).toBeInTheDocument();
     expect(createMcpClientGrant).not.toHaveBeenCalled();
   });
@@ -138,9 +139,9 @@ describe('McpEndpointSection (#421)', () => {
         onToggled={vi.fn()}
       />,
     );
-    fireEvent.click(await screen.findByRole('button', { name: /revoke/i }));
-    fireEvent.click(screen.getByRole('button', { name: /revoke access/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: /remove access/i }));
     await waitFor(() => expect(revokeMcpClientGrant).toHaveBeenCalledWith('grant-1'));
-    expect(await screen.findByText(/revoked/i)).toBeInTheDocument();
+    expect(await screen.findByText('Removed')).toBeInTheDocument();
   });
 });

@@ -195,7 +195,7 @@ export function parseSearchProfileCvResponse(raw: string): Partial<SearchProfile
   try {
     value = JSON.parse(extractAiJsonPayload(raw));
   } catch {
-    throw new Error('the AI response was not valid JSON: try again or fill the fields in manually');
+    throw new Error('Could not read your CV this time. Try again or fill the fields yourself.');
   }
   return toPartialSearchProfileCvFields(value);
 }
