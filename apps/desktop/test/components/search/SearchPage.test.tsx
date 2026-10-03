@@ -1817,22 +1817,82 @@ describe('SearchPage', () => {
     expect(screen.queryByText('workspace database is locked')).not.toBeInTheDocument();
   });
 
-  it('an engine-unavailable Retry button rechecks status and recovers once the engine reports ready', async () => {
+  it('an engine-unavailable Check again button rechecks status and recovers once the engine reports ready', async () => {
     const getStatus = vi
       .fn()
-      .mockResolvedValueOnce({ ready: false, error: 'engine binary missing' } satisfies VacancyEngineStatus)
+      .mockResolvedValueOnce({
+        ready: false,
+        error: 'The local job cache could not be started.',
+        category: 'unknown',
+        canRebuild: false,
+      } satisfies VacancyEngineStatus)
       .mockResolvedValueOnce({ ready: true } satisfies VacancyEngineStatus);
     installAllBridges({ getStatus });
 
     render(<SearchPage />);
-    await waitFor(() => expect(screen.getByText(/vacancy engine unavailable: engine binary missing/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/the local job cache could not be started/i)).toBeInTheDocument());
+    // An unclassified failure is never offered a destructive-looking fix.
+    expect(screen.queryByRole('button', { name: /rebuild job cache/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check again/i }));
 
     await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
     await waitFor(() =>
-      expect(screen.queryByText(/vacancy engine unavailable/i)).not.toBeInTheDocument(),
+      expect(screen.queryByText(/the local job cache could not be started/i)).not.toBeInTheDocument(),
     );
+  });
+
+  describe('damaged job cache (#441)', () => {
+    const CORRUPT: VacancyEngineStatus = {
+      ready: false,
+      error:
+        'The local job cache is damaged and cannot be opened. It only holds downloaded vacancies and the sponsor register. Your CVs, applications and letters are stored separately and are safe.',
+      category: 'corrupt',
+      canRebuild: true,
+      details: 'Failed to run the query CREATE INDEX discovery_runs_generated_at_idx ON <data folder>/vacancy-engine.db',
+    };
+
+    it('explains the damage in plain words, hides SQL behind technical details, and disables scanning', async () => {
+      installAllBridges({ getStatus: vi.fn().mockResolvedValue(CORRUPT) });
+      render(<SearchPage />);
+
+      await waitFor(() => expect(screen.getByText(/the local job cache is damaged/i)).toBeInTheDocument());
+      expect(screen.getByText(/your cvs, applications and letters are stored separately and are safe/i)).toBeInTheDocument();
+      // The raw text is in the DOM only inside the closed disclosure.
+      const disclosure = screen.getByText('Show technical details').closest('details');
+      expect(disclosure).not.toHaveAttribute('open');
+      expect(screen.getByRole('button', { name: /run scan/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /browse all vacancies/i })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: /run the first scan/i })).not.toBeInTheDocument();
+    });
+
+    it('rebuilds with one click and returns to a scannable state without a restart', async () => {
+      const getStatus = vi.fn().mockResolvedValueOnce(CORRUPT).mockResolvedValue({ ready: true } satisfies VacancyEngineStatus);
+      const rebuildCache = vi.fn().mockResolvedValue({ ok: true, retainedFileName: 'vacancy-engine.db.damaged-1', sponsorRefresh: 'ok' });
+      installAllBridges({ getStatus, rebuildCache });
+      render(<SearchPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /rebuild job cache/i }));
+
+      await waitFor(() => expect(rebuildCache).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText(/the damaged copy was kept as vacancy-engine\.db\.damaged-1/i)).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText(/the local job cache is damaged/i)).not.toBeInTheDocument());
+    });
+
+    it('offers no rebuild for a locked cache', async () => {
+      installAllBridges({
+        getStatus: vi.fn().mockResolvedValue({
+          ready: false,
+          error: 'The local job cache is in use by another process.',
+          category: 'locked',
+          canRebuild: false,
+        } satisfies VacancyEngineStatus),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/in use by another process/i)).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /rebuild job cache/i })).not.toBeInTheDocument();
+    });
   });
 
   it('saves the selected vacancy through the workspace IPC', async () => {

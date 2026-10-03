@@ -36,6 +36,7 @@ import {
   readGlobalRemoteReport,
   runAtsRosterImport,
   runGlobalRemoteScan,
+  runSponsorSync,
   workableJobReferenceFromUrl,
   type AtsRosterImportResult,
   type AtsRosterStatus,
@@ -118,6 +119,14 @@ import {
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
+import {
+  describeVacancyEngineFailure,
+  rebuildVacancyEngineDatabase,
+  type VacancyCacheRebuildResult,
+  type VacancyEngineFailure,
+  type VacancyEngineFailureStage,
+  type VacancyEngineStatus,
+} from './vacancy-engine-recovery.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
 import { createDaemonRestart } from './daemon-restart.js';
 import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
@@ -300,6 +309,8 @@ let daemonInstanceId: string | undefined;
 let vacancyDb: Database | undefined;
 let vacancyEngineInit: Promise<Database> | undefined;
 let vacancyScanLock: ScanLock | undefined;
+/** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
+let vacancyEngineFailure: VacancyEngineFailure | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
 
 /**
@@ -400,12 +411,28 @@ async function ensureVacancyEngine(): Promise<Database> {
   // against the same SQLite file.
   vacancyEngineInit ??= (async () => {
     const config = vacancyEngineConfig();
-    const { db } = createDatabaseClient(config.databasePath);
-    // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
-    // resolves when the process cwd happens to be `packages/vacancy-engine`, never true once
-    // Electron actually launches. Resolve it explicitly instead of relying on cwd.
-    await migrateDatabase(db, vacancyEngineMigrationsFolder());
+    let stage: VacancyEngineFailureStage = 'open';
+    let client: ReturnType<typeof createDatabaseClient> | undefined;
+    try {
+      client = createDatabaseClient(config.databasePath);
+      // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
+      // resolves when the process cwd happens to be `packages/vacancy-engine`, never true once
+      // Electron actually launches. Resolve it explicitly instead of relying on cwd.
+      stage = 'migrate';
+      await migrateDatabase(client.db, vacancyEngineMigrationsFolder());
+    } catch (error) {
+      // Release the file handle so a rebuild can move the file aside and a retry can reopen it.
+      try {
+        client?.close();
+      } catch {
+        // Closing a handle on a damaged file can itself throw; the original error is the one to report.
+      }
+      vacancyEngineFailure = describeVacancyEngineFailure(error, stage, [app.getPath('userData')]);
+      throw error;
+    }
+    const { db } = client;
     vacancyDb = db;
+    vacancyEngineFailure = undefined;
     // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
     // sidecar SQLite file keyed to this database path, so it is meaningful across processes
     // (a `pnpm vacancies:scan` run against the same userData database, a second app instance
@@ -2397,13 +2424,71 @@ guardedIpc.handle('system:save-file', async (_event, input: unknown): Promise<{ 
  * panel's existing "Checking vacancy engine status…" state, and `{ ready: false }` now means only
  * what the renderer already assumes it means: initialization actually failed.
  */
-guardedIpc.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?: string }> => {
+guardedIpc.handle('vacancy:get-status', async (): Promise<VacancyEngineStatus> => {
   try {
     await ensureVacancyEngine();
     return { ready: true };
   } catch (error) {
-    return { ready: false, error: (error as Error).message };
+    // A category and a plain sentence, never the raw message: that is SQL and file paths. The raw
+    // text travels separately as `details` for the "Show technical details" disclosure only.
+    const failure = vacancyEngineFailure ?? describeVacancyEngineFailure(error, 'open', [app.getPath('userData')]);
+    return {
+      ready: false,
+      error: failure.message,
+      category: failure.category,
+      canRebuild: failure.canRebuild,
+      details: failure.details,
+    };
   }
+});
+
+/**
+ * "Rebuild job cache" (#441, reused by #442). Allowed only when the engine database is confirmed
+ * corrupt *right now*: the open is retried first, so a cache that has healed (a second app instance
+ * released a lock, say) is never moved aside, and locked / migration / unknown failures get no
+ * rebuild at all. Touches only the vacancy engine's file family; the workspace database is neither
+ * opened nor named here.
+ */
+guardedIpc.handle('vacancy:rebuild-cache', async (): Promise<VacancyCacheRebuildResult> => {
+  if (isScanInFlight()) return { ok: false, reason: 'scan_running', detail: 'A scan is running. Wait for it to finish, then try again.' };
+  if (vacancyDb) {
+    return { ok: false, reason: 'not_damaged', detail: 'The job cache opens normally, so there is nothing to rebuild.' };
+  }
+  try {
+    await ensureVacancyEngine();
+    return { ok: false, reason: 'not_damaged', detail: 'The job cache opens normally, so there is nothing to rebuild.' };
+  } catch {
+    if (vacancyEngineFailure?.category !== 'corrupt') {
+      return { ok: false, reason: 'not_corrupt', detail: 'The job cache problem is not a damaged file, so it cannot be fixed by rebuilding.' };
+    }
+  }
+
+  const config = vacancyEngineConfig();
+  const outcome = await rebuildVacancyEngineDatabase({
+    databasePath: config.databasePath,
+    now: () => new Date(),
+    createFresh: async () => {
+      await ensureVacancyEngine();
+    },
+    discardFresh: async () => {
+      // Only the half-built replacement: close it and remove its files. The damaged file was
+      // renamed away before this ran and is put back by the caller.
+      vacancyDb = undefined;
+      vacancyEngineInit = undefined;
+      vacancyScanLock = undefined;
+      for (const tail of ['', '-wal', '-shm']) await rm(`${config.databasePath}${tail}`, { force: true });
+    },
+    refreshSponsors: async () => {
+      await runSponsorSync(await ensureVacancyEngine(), config, createLogger(config));
+    },
+  });
+  if (!outcome.ok) return { ok: false, reason: 'rebuild_failed', detail: outcome.detail };
+  return {
+    ok: true,
+    retainedFileName: outcome.retainedFileName,
+    sponsorRefresh: outcome.sponsorRefresh,
+    ...(outcome.sponsorError ? { sponsorError: outcome.sponsorError } : {}),
+  };
 });
 
 guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);

@@ -3,7 +3,7 @@ import { Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
-import type { SavedJobInput } from '../../window.js';
+import type { SavedJobInput, VacancyEngineStatus } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
@@ -190,6 +190,11 @@ export function SearchPage({
   const setSession = onSessionChange ?? setLocalSession;
   const [engineState, setEngineState] = useState<EngineState>('checking');
   const [engineError, setEngineError] = useState<string>();
+  /** What the main process knows about an engine failure (#441): never SQL, never a path. */
+  const [engineFailure, setEngineFailure] = useState<Partial<Pick<VacancyEngineStatus, 'category' | 'canRebuild' | 'details'>>>();
+  const [rebuildingCache, setRebuildingCache] = useState(false);
+  const [cacheNotice, setCacheNotice] = useState<string>();
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
 
   const [worldwideReport, setWorldwideReport] = useSearchSessionField(session, setSession, 'report');
   const [reportHydrated, setReportHydrated] = useSearchSessionField(session, setSession, 'reportHydrated');
@@ -295,10 +300,17 @@ export function SearchPage({
       try {
         const status = await window.vacancyRadar.getStatus();
         if (cancelled) return;
-        if (status.ready) setEngineState('ready');
-        else {
+        if (status.ready) {
+          setEngineState('ready');
+          setEngineFailure(undefined);
+        } else {
           setEngineState('unavailable');
-          setEngineError(status.error ?? 'vacancy engine is not ready');
+          setEngineError(status.error ?? 'The local job cache is not ready.');
+          setEngineFailure({
+            ...(status.category ? { category: status.category } : {}),
+            ...(status.canRebuild !== undefined ? { canRebuild: status.canRebuild } : {}),
+            ...(status.details ? { details: status.details } : {}),
+          });
         }
       } catch (error) {
         if (cancelled) return;
@@ -314,6 +326,44 @@ export function SearchPage({
   }, [engineCheckTick]);
 
   const retryEngineCheck = useCallback(() => setEngineCheckTick((tick) => tick + 1), []);
+
+  const rebuildJobCache = useCallback(async () => {
+    setRebuildingCache(true);
+    setCacheNotice(undefined);
+    try {
+      const result = await window.vacancyRadar.rebuildCache();
+      if (!result.ok) {
+        setCacheNotice(result.detail);
+        return;
+      }
+      setCacheNotice(
+        result.sponsorRefresh === 'ok'
+          ? `The job cache was rebuilt. The damaged copy was kept as ${result.retainedFileName}.`
+          : `The job cache was rebuilt and the damaged copy was kept as ${result.retainedFileName}. The sponsor register could not be refreshed yet, so sponsor checks stay limited until it is.`,
+      );
+      setEngineCheckTick((tick) => tick + 1);
+    } catch (error) {
+      setCacheNotice(describeError(error, 'could not rebuild the job cache'));
+    } finally {
+      setRebuildingCache(false);
+    }
+  }, []);
+
+  const copyEngineDiagnostics = useCallback(async () => {
+    const lines = [
+      'Open Vacancy Radar job cache diagnostics',
+      `Time: ${new Date().toISOString()}`,
+      `Category: ${engineFailure?.category ?? 'unknown'}`,
+      `Message: ${engineError ?? ''}`,
+      `Details: ${engineFailure?.details ?? ''}`,
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      setDiagnosticsCopied(true);
+    } catch {
+      setDiagnosticsCopied(false);
+    }
+  }, [engineError, engineFailure]);
 
   // Bumped by `retryLoad` to force the hydration effect below to re-run even though nothing else
   // changed: clearing `hasHydrated.current` alone doesn't, since ref mutations don't trigger
@@ -719,6 +769,7 @@ export function SearchPage({
   const busy = hydrating || scanning;
 
   const runScan = useCallback(async (queryOverride?: string) => {
+    if (engineState === 'unavailable') return;
     const scanFilters = queryOverride === undefined ? filters : { ...filters, query: queryOverride };
     const query = scanFilters.query.trim();
     if (!query) {
@@ -807,7 +858,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, engineState, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const runBrowseAllScan = useCallback(async () => {
     const requestGeneration = ++reportRequestGenerationRef.current;
@@ -875,8 +926,9 @@ export function SearchPage({
   }, [runScan]);
 
   const handleBrowseAll = useCallback(() => {
+    if (engineState === 'unavailable') return;
     setConfirmBrowseAll(true);
-  }, []);
+  }, [engineState]);
 
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
@@ -1017,6 +1069,7 @@ export function SearchPage({
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
+          scanUnavailable={engineState === 'unavailable'}
         />
       </div>
 
@@ -1024,21 +1077,46 @@ export function SearchPage({
         {engineState === 'unavailable' && (
           <ErrorBanner
             className="mt-3"
+            details={engineFailure?.details}
+            detailsLabel="Show technical details"
             action={
-              <button
-                type="button"
-                className="btn btn-outline btn-xs ml-auto flex-none"
-                onClick={retryEngineCheck}
-                disabled={checkingEngine}
-              >
-                {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-                Retry
-              </button>
+              <div className="ml-auto flex flex-none flex-wrap gap-2">
+                {engineFailure?.canRebuild && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-xs"
+                    onClick={() => void rebuildJobCache()}
+                    disabled={rebuildingCache}
+                  >
+                    {rebuildingCache && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                    Rebuild job cache
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={retryEngineCheck}
+                  disabled={checkingEngine || rebuildingCache}
+                >
+                  {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                  Check again
+                </button>
+                <button type="button" className="btn btn-ghost btn-xs" onClick={() => void copyEngineDiagnostics()}>
+                  {diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}
+                </button>
+              </div>
             }
           >
-            Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still be
-            shown, but no new scan can run.
+            {engineError ?? 'The local job cache is not ready.'}{' '}
+            {engineFailure?.canRebuild
+              ? 'Rebuilding keeps the damaged file, set aside under a new name, and starts a fresh cache. Scans are paused until then.'
+              : 'Stored reports may still be shown, but no new scan can run.'}
           </ErrorBanner>
+        )}
+        {cacheNotice && (
+          <div className="alert alert-info alert-soft mt-3 text-sm" role="status">
+            {cacheNotice}
+          </div>
         )}
         {scanning && (
           // A named group, not role="status": a status region mounted together with its text is
@@ -1142,11 +1220,17 @@ export function SearchPage({
           <EmptyState
             illustration={emptySearchIllustration}
             title="No search yet"
-            description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
+            description={
+              engineState === 'unavailable'
+                ? 'Scans are paused until the local job cache works again. See the message above.'
+                : 'No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds.'
+            }
             action={
-              <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
-                Run the first scan
-              </button>
+              engineState === 'unavailable' ? undefined : (
+                <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
+                  Run the first scan
+                </button>
+              )
             }
           />
         </div>

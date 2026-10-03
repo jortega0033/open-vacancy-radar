@@ -39,6 +39,8 @@ export interface SearchFilterBarProps {
    * checkbox stays visible either way -- so it is discoverable even before a profile exists -- but
    * is disabled with an explanatory note until one is. */
   aiWebDiscoveryAvailable: boolean;
+  /** The vacancy engine cannot run (#441): scanning and browsing are disabled, not merely failing. */
+  scanUnavailable?: boolean;
 }
 
 /**
@@ -65,6 +67,7 @@ export function SearchFilterBar({
   aiWebDiscovery,
   onAiWebDiscoveryChange,
   aiWebDiscoveryAvailable,
+  scanUnavailable = false,
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
   const draftQuery = filters.query.trim();
@@ -105,7 +108,7 @@ export function SearchFilterBar({
     // Enter always means "Run new scan"; an empty keyword still reaches the page's own guard message
     // rather than starting anything. Ignored while busy so a repeated Enter cannot start a second run,
     // and while an IME composition is still being confirmed.
-    if (event.key !== 'Enter' || event.nativeEvent.isComposing || busy) return;
+    if (event.key !== 'Enter' || event.nativeEvent.isComposing || busy || scanUnavailable) return;
     onSearch();
   }
 
@@ -215,13 +218,13 @@ export function SearchFilterBar({
           Include AI web search
         </label>
 
-        <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || !hasQuery}>
+        <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || scanUnavailable || !hasQuery}>
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
           {hasReport ? 'Run new scan' : 'Run scan'}
         </button>
 
         {!hasQuery && (
-          <button className="btn btn-outline btn-sm" type="button" onClick={onBrowseAll} disabled={busy}>
+          <button className="btn btn-outline btn-sm" type="button" onClick={onBrowseAll} disabled={busy || scanUnavailable}>
             Browse all vacancies
           </button>
         )}

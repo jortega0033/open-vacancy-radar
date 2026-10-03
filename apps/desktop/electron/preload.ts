@@ -91,7 +91,8 @@ export interface AgentDockBridge {
   selectDirectory(): Promise<string | null>;
 }
 
-export type VacancyEngineStatus = { ready: boolean; error?: string };
+export type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-engine-recovery.js';
+import type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-engine-recovery.js';
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
 export type VacancyScanRequest =
   | string
@@ -115,6 +116,8 @@ export type VacancyScanRequest =
  */
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
+  /** "Rebuild job cache" (#441): sets a confirmed-corrupt vacancy database aside and builds a fresh one. */
+  rebuildCache(): Promise<VacancyCacheRebuildResult>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
   getReportSummary(): Promise<VacancyReportSummary | null>;
@@ -283,6 +286,9 @@ contextBridge.exposeInMainWorld('agentDock', api);
 const vacancyApi: VacancyRadarBridge = {
   getStatus() {
     return ipcRenderer.invoke('vacancy:get-status');
+  },
+  rebuildCache() {
+    return ipcRenderer.invoke('vacancy:rebuild-cache');
   },
   getReport() {
     return ipcRenderer.invoke('vacancy:get-report');

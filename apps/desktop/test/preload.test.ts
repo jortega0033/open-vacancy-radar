@@ -172,7 +172,7 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the ten documented capability functions and nothing else', async () => {
+  it('exposes exactly the eleven documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -185,6 +185,7 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
         'getSearchProfile',
         'saveSearchProfile',
         'getAtsRosterStatus',
+        'rebuildCache',
         'refreshAtsRoster',
       ].sort(),
     );
@@ -713,6 +714,7 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'getSearchProfile',
     'saveSearchProfile',
     'getAtsRosterStatus',
+    'rebuildCache',
     'refreshAtsRoster',
   ],
   workspace: [
