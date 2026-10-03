@@ -88,7 +88,7 @@ describe('ApplicationReviewSession under the auto-apply kill switch', () => {
 
     render(<ApplicationReviewSession attempt={ATTEMPT} onClose={vi.fn()} />);
 
-    expect(await screen.findByRole('button', { name: 'Continue on employer site' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Open employer site' })).toBeInTheDocument();
     expect(screen.getByTestId('manual-application-swipe-card')).toBeInTheDocument();
     expect(screen.queryByTestId('application-swipe-card')).not.toBeInTheDocument();
     // Nothing opened a browser view either: with no policy there is no target to open one against.

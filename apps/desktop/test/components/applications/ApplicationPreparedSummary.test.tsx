@@ -83,9 +83,10 @@ describe('ApplicationPreparedSummary', () => {
     render(<ApplicationPreparedSummary attempt={attempt()} documents={[artifact(), artifact({ id: 'artifact-2', kind: 'cover_letter_pdf', fileName: 'cover-letter.pdf' })]} />);
 
     expect(screen.getByText('CV')).toBeInTheDocument();
-    expect(screen.getByText('resume.pdf')).toBeInTheDocument();
     expect(screen.getByText('Cover letter')).toBeInTheDocument();
-    expect(screen.getByText('cover-letter.pdf')).toBeInTheDocument();
+    // The generated file names are not shown: the kind label is enough.
+    expect(screen.queryByText('resume.pdf')).not.toBeInTheDocument();
+    expect(screen.queryByText('cover-letter.pdf')).not.toBeInTheDocument();
   });
 
   it('shows the tailoring change and dropped-content summary before submission', () => {
@@ -96,7 +97,7 @@ describe('ApplicationPreparedSummary', () => {
       />,
     );
 
-    expect(screen.getByText('Tailoring and preparation')).toBeInTheDocument();
+    expect(screen.getByText('CV and documents')).toBeInTheDocument();
     expect(screen.getByText(/1 skill from this vacancy is not in your CV, so they were left out/)).toBeInTheDocument();
     expect(screen.getByText(/Show which skill/)).toBeInTheDocument();
   });
@@ -133,7 +134,7 @@ describe('ApplicationPreparedSummary', () => {
     render(<ApplicationPreparedSummary attempt={attempt({ preparedFields: null })} documents={[]} />);
 
     expect(screen.getByText(/no record of filling this form/)).toBeInTheDocument();
-    expect(screen.getByText('No documents were prepared for this attempt.')).toBeInTheDocument();
+    expect(screen.getByText('No documents were prepared for this application.')).toBeInTheDocument();
   });
 
   describe('reusable answers (#372)', () => {
@@ -332,7 +333,8 @@ describe('ApplicationPreparedSummary', () => {
       fireEvent.change(screen.getByRole('textbox', { name: 'Why do you want to work here?' }), { target: { value: 'A typed answer.' } });
       fireEvent.click(screen.getByRole('button', { name: /fill this field/i }));
 
-      expect(await screen.findByText('the page did not confirm the value afterwards')).toBeInTheDocument();
+      expect(await screen.findByText('That answer was not accepted. Fill it in on the live page.')).toBeInTheDocument();
+      expect(screen.queryByText(/did not confirm the value/)).not.toBeInTheDocument();
       expect(onSaveAnswer).not.toHaveBeenCalled();
     });
   });

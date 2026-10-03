@@ -256,12 +256,12 @@ export async function startApplicationAttempt(
 ): Promise<StartApplicationAttemptResult> {
   const { vacancy } = input;
   if (vacancy.applyUrl.trim().length === 0) {
-    return { ok: false, reason: 'no_apply_url', detail: 'this vacancy has no application URL recorded, so there is nothing to apply through' };
+    return { ok: false, reason: 'no_apply_url', detail: 'This job has no application link.' };
   }
 
   const cv = resolveSourceCv(deps.db, input.cvId ?? null);
   if (!cv) {
-    return { ok: false, reason: 'no_cv_available', detail: 'add a CV to your library before preparing an application' };
+    return { ok: false, reason: 'no_cv_available', detail: 'Add a CV first.' };
   }
 
   const jdSnapshot = vacancy.description ?? '';
@@ -289,7 +289,7 @@ export async function startApplicationAttempt(
         ok: false,
         reason: 'attempt_already_in_progress',
         attemptId: err.existingAttemptId,
-        detail: 'an application for this vacancy is already in progress',
+        detail: 'You already started this one.',
       };
     }
     throw err;

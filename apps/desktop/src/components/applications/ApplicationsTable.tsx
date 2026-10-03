@@ -27,7 +27,7 @@ function formatAppliedDate(iso: string | null): string | null {
 }
 
 /**
- * Pipeline table. Columns: role, company, location, verification, status (inline `<select>`, no
+ * Pipeline table. Columns: role, company, location, sponsor check, status (inline `<select>`, no
  * drawer round-trip needed just to move a card), applied date, next step, contact, actions.
  */
 export function ApplicationsTable({
@@ -49,7 +49,7 @@ export function ApplicationsTable({
             <th>Role</th>
             <th>Company</th>
             <th>Location</th>
-            <th>Verification</th>
+            <th className="whitespace-normal">Sponsor check</th>
             <th>Status</th>
             <th>Applied</th>
             <th>Next step</th>
@@ -72,7 +72,7 @@ export function ApplicationsTable({
               <td className="ovr-responsive-table__cell" data-label="Location">
                 {application.location || <NotSet />}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Verification">
+              <td className="ovr-responsive-table__cell" data-label="Sponsor check">
                 {application.verification || <NotSet label="Not checked" />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Status">

@@ -15,17 +15,17 @@ import type { ApplicationAttemptCheckpoint, ApplicationAttemptRecord } from '../
  */
 export const ATTEMPT_CHECKPOINT_LABEL: Record<ApplicationAttemptCheckpoint, string> = {
   queued: 'Queued',
-  reading_jd: 'Reading job description',
+  reading_jd: 'Reading the job',
   tailoring: 'Tailoring CV',
-  rendering: 'Rendering documents',
-  filling: 'Filling application',
+  rendering: 'Making documents',
+  filling: 'Filling the form',
   ready: 'Ready to submit',
   submitting: 'Submitting',
   submitted: 'Submitted',
   needs_user: 'Needs your input',
   skipped: 'Skipped',
   failed: 'Failed',
-  submission_unknown: 'Submission unknown',
+  submission_unknown: 'Check the employer site',
   user_reported: 'Reported as applied',
 };
 

@@ -129,12 +129,11 @@ test('Search opens a compact manual swipe review with equivalent controls', asyn
       const card = dialog.getByTestId('manual-application-swipe-card');
       const backs = dialog.getByTestId('manual-swipe-card-back');
       const skipButton = dialog.getByRole('button', { name: 'Skip', exact: true });
-      const continueButton = dialog.getByRole('button', { name: 'Continue on employer site' });
+      const continueButton = dialog.getByRole('button', { name: 'Open employer site' });
       await expect(card).toBeVisible();
       await expect(backs).toHaveCount(2);
       await expect(skipButton).toBeEnabled();
       await expect(continueButton).toBeEnabled();
-      await expect(dialog.getByTestId('manual-swipe-guidance').getByText('Continue', { exact: true })).toBeVisible();
       await expect(dialog.getByText('Submit', { exact: true })).toHaveCount(0);
 
       for (const bounds of [

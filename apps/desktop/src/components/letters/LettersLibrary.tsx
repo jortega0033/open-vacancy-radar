@@ -154,17 +154,14 @@ export function LettersLibrary({
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="min-w-0 flex-1 text-sm text-base-content/60">
-          Generated and saved application documents. Open a letter to edit or regenerate it.
-        </p>
-        {/* The empty state carries its own New letter button, so the toolbar one waits for rows. */}
-        {onNew && rows.length > 0 && (
+      {/* The empty state carries its own New letter button, so the toolbar one waits for rows. */}
+      {onNew && rows.length > 0 && (
+        <div className="flex justify-end">
           <button className="btn btn-primary btn-sm" type="button" onClick={onNew}>
             New letter
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
       {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
@@ -175,7 +172,7 @@ export function LettersLibrary({
         <EmptyState
           illustration={emptyLettersIllustration}
           title="No letters yet"
-          description="Generate a motivation or cover letter from a vacancy and your CV. Saved letters stay on this computer."
+          description="Write a motivation or cover letter from a job and your CV."
           action={
             onNew && (
               <button className="btn btn-primary btn-sm" type="button" onClick={onNew}>

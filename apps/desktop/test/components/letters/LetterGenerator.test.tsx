@@ -115,7 +115,8 @@ describe('LetterGenerator', () => {
     bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Dear hiring team, I am the ideal candidate.' });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('returned invalid JSON');
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not write the letter this time. Try again.');
+    expect(screen.getByText(/returned invalid JSON/)).toBeInTheDocument();
     // The prose the run actually produced is nowhere on screen, in a textbox or otherwise.
     expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/I am the ideal candidate/)).not.toBeInTheDocument();
@@ -131,9 +132,8 @@ describe('LetterGenerator', () => {
     bridges.emit('sess-cv-1', { type: 'assistant.message', text: '{"factIds":["certification-cissp"]}' });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'unsupported source facts: certification-cissp',
-    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not write the letter this time. Try again.');
+    expect(screen.getByText(/unsupported source facts: certification-cissp/)).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
   });
 
@@ -150,9 +150,8 @@ describe('LetterGenerator', () => {
     });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'candidate claims outside the source-fact selection',
-    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not write the letter this time. Try again.');
+    expect(screen.getByText(/candidate claims outside the source-fact selection/)).toBeInTheDocument();
     expect(screen.queryByText(/CISSP/)).not.toBeInTheDocument();
   });
 
@@ -177,7 +176,8 @@ describe('LetterGenerator', () => {
 
     bridges.emit('sess-cv-1', { type: 'session.failed', message: 'provider CLI is not authenticated' });
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('provider CLI is not authenticated');
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not write the letter this time. Try again.');
+    expect(screen.getByText('provider CLI is not authenticated')).toBeInTheDocument();
     // The document the user already had is untouched.
     expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue(makeLetter().body);
   });
@@ -189,7 +189,8 @@ describe('LetterGenerator', () => {
 
     fireEvent.click(await waitForGenerateEnabled());
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('AgentDock daemon is not running');
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not write the letter this time. Try again.');
+    expect(screen.getByText('AgentDock daemon is not running')).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
   });
 
@@ -380,8 +381,8 @@ describe('LetterGenerator', () => {
     });
     render(<LetterGenerator vacancy={LETTER_VACANCY} />);
 
-    expect(await screen.findByText(/Your own Codex CLI picks which of your facts to cite/)).toBeInTheDocument();
-    expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/sent to Codex to write this letter/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code/)).not.toBeInTheDocument();
 
     fireEvent.click(await waitForGenerateEnabled());
     expect(await screen.findByText(/^Getting started…$/)).toBeInTheDocument();

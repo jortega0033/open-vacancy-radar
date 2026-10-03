@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ManualApplicationReviewCard } from '../../../src/components/applications/ManualApplicationReviewCard.js';
 import type { ApplicationAttemptRecord } from '../../../src/window.js';
@@ -49,32 +49,28 @@ function renderCard(
 describe('ManualApplicationReviewCard', () => {
   it('offers the same Continue and Skip decisions without requiring a swipe', () => {
     const actions = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: 'Continue on employer site' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open employer site' }));
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     expect(actions.onContinue).toHaveBeenCalledTimes(1);
     expect(actions.onSkip).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: /submit/i })).not.toBeInTheDocument();
   });
 
-  it('looks and reads as a swipe decision before dragging begins', () => {
+  it('looks like a swipe deck without a hint row', () => {
     renderCard();
 
     expect(screen.getAllByTestId('manual-swipe-card-back')).toHaveLength(2);
     expect(screen.getByTestId('manual-application-swipe-card')).toHaveClass('cursor-grab');
-    expect(screen.getByRole('group', { name: /application decision card/i })).toHaveAttribute(
-      'title',
-      'Drag left to skip or right to continue',
-    );
-    const guidance = within(screen.getByTestId('manual-swipe-guidance'));
-    expect(guidance.getByText('Skip')).toBeInTheDocument();
-    expect(guidance.getByText('Continue')).toBeInTheDocument();
+    // The hint row is gone: the two buttons below say the same thing.
+    expect(screen.queryByTestId('manual-swipe-guidance')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Manual application/)).not.toBeInTheDocument();
     expect(screen.queryByText('Submit', { exact: true })).not.toBeInTheDocument();
   });
 
   it('offers user-reported completion after the external handoff', () => {
     const actions = renderCard({ continued: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Mark as applied externally' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Still in progress' }));
+    fireEvent.click(screen.getByRole('button', { name: 'I applied' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Not yet' }));
     expect(actions.onMarkApplied).toHaveBeenCalledTimes(1);
     expect(actions.onStillInProgress).toHaveBeenCalledTimes(1);
   });
@@ -103,16 +99,17 @@ describe('ManualApplicationReviewCard', () => {
     });
 
     expect(
-      screen.getByText(/tailored CV is ready, but the letter still needs attention/i),
+      screen.getByText(/Your CV is ready\. The cover letter still needs attention/i),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
     expect(onGenerateLetter).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('resume.pdf')).toBeInTheDocument();
+    expect(screen.getByText('Tailored CV')).toBeInTheDocument();
+    expect(screen.queryByText('resume.pdf')).not.toBeInTheDocument();
   });
 
   it('maps right and left drags to the same visible decisions', () => {
     const actions = renderCard();
-    const card = screen.getByText('Manual application').closest('div[class*="select-none"]');
+    const card = screen.getByText('You send this one yourself. Your documents are ready.').closest('div[class*="select-none"]');
     expect(card).not.toBeNull();
 
     function drag(type: string, clientX: number, pointerId: number) {
@@ -139,7 +136,7 @@ describe('ManualApplicationReviewCard', () => {
     const actions = renderCard({ busy: true });
     const card = screen.getByTestId('manual-application-swipe-card');
     const skip = screen.getByRole('button', { name: 'Skip' });
-    const proceed = screen.getByRole('button', { name: 'Continue on employer site' });
+    const proceed = screen.getByRole('button', { name: 'Open employer site' });
 
     expect(skip).toBeDisabled();
     expect(proceed).toBeDisabled();

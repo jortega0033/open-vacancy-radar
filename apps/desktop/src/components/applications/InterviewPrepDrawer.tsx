@@ -68,7 +68,6 @@ export function InterviewPrepDrawer({
   const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
   const [attemptsError, setAttemptsError] = useState<string>();
   const { provider, providerStatus } = useEffectiveProvider();
-  const [model, setModel] = useState('');
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [copyError, setCopyError] = useState<string>();
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -147,7 +146,6 @@ export function InterviewPrepDrawer({
   const attemptsLoaded = attempts !== null;
   const providerUnavailable = providerStatus && !providerStatus.installed;
   const providerLabel = PROVIDER_LABEL[provider];
-  const availableModels = providerStatus?.availableModels ?? [];
   const canRun = !!context && attemptsLoaded && !providerUnavailable && !run.isBusy;
   const hasResult = run.text.trim().length > 0;
 
@@ -158,9 +156,8 @@ export function InterviewPrepDrawer({
     const prompt = buildInterviewPrepPrompt(context);
     void run.start(prompt, {
       provider,
-      ...(model ? { model } : {}),
     });
-  }, [context, provider, model, run]);
+  }, [context, provider, run]);
 
   const handleCopy = useCallback(async () => {
     if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);
@@ -190,7 +187,7 @@ export function InterviewPrepDrawer({
 
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
           <p className="text-sm text-base-content/60">
-            Runs on your own authenticated {providerLabel} CLI. Review-only: nothing here is saved
+            Made with {providerLabel} on this computer. Copy what you want to keep. Nothing is saved
             automatically.
           </p>
 
@@ -205,9 +202,7 @@ export function InterviewPrepDrawer({
             <>
               {providerUnavailable && (
                 <ErrorBanner>
-                  {providerLabel} is not installed or not detected, so this cannot run. Install and
-                  authenticate the CLI, or choose a different default in AI runtime, then reopen
-                  this drawer.
+                  {providerLabel} is not set up yet. Set it up in Settings, then reopen this.
                 </ErrorBanner>
               )}
 
@@ -215,20 +210,6 @@ export function InterviewPrepDrawer({
                 <ErrorBanner>
                   {attemptsError}
                 </ErrorBanner>
-              )}
-
-              {availableModels.length > 0 && (
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium">Model</span>
-                  <select className="select w-full" value={model} onChange={(e) => setModel(e.target.value)}>
-                    <option value="">Provider default</option>
-                    {availableModels.map((id) => (
-                      <option key={id} value={id}>
-                        {id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
               )}
 
               <div className="flex flex-wrap items-center gap-2">

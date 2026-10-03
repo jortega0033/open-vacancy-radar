@@ -44,8 +44,8 @@ const NOT_SENT_REASONS: Partial<Record<RefusalReason, string>> = {
   captcha_detected: 'The employer page is showing a CAPTCHA.',
   form_not_ready: 'The form still has checks to finish.',
   handoff_in_progress: 'The live page is still open.',
-  unresolved_submit_control: 'The app could not find the submit button on the employer page.',
-  submit_refused: 'The app is not allowed to press the submit button on this page.',
+  unresolved_submit_control: 'We could not find the submit button.',
+  submit_refused: 'This site needs you to submit it yourself.',
   submission_rejected: 'The employer page rejected the application.',
 };
 
