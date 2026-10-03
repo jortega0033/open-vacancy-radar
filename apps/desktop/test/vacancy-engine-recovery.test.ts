@@ -146,12 +146,17 @@ describe('against a real damaged SQLite file (#441)', () => {
 
       let failure: unknown;
       let stage: 'open' | 'migrate' = 'open';
+      let failedClient: { close: () => void } | undefined;
       try {
         const client = createDatabaseClient(databasePath);
+        failedClient = client;
         stage = 'migrate';
         await migrateDatabase(client.db, migrations);
       } catch (error) {
         failure = error;
+      } finally {
+        // Windows will not rename or delete a database file that is still open.
+        failedClient?.close();
       }
       expect(failure).toBeDefined();
       const described = describeVacancyEngineFailure(failure, stage, [dir]);
