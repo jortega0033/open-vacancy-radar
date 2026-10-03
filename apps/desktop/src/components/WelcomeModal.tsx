@@ -144,7 +144,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
         if (cancelled) return;
         // The CV is already saved by this point. Stay open and say so: closing here unmounted the
         // message before anyone could read it.
-        setProfileError('Your CV is saved. The search profile could not be filled automatically. You can fill it in Settings.');
+        setProfileError('CV saved. Could not fill your profile automatically. You can do it in Settings.');
         setStep('invite');
       });
     return () => {
@@ -175,13 +175,13 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
       case 'checking':
         return 'Checking…';
       case 'ready':
-        return `${PROVIDER_LABEL[check.provider]}: ready`;
+        return `${PROVIDER_LABEL[check.provider]} is ready.`;
       case 'not-installed':
-        return `${PROVIDER_LABEL[check.provider]} is not installed on this computer.`;
+        return `${PROVIDER_LABEL[check.provider]} is not installed yet.`;
       case 'not-authenticated':
-        return `${PROVIDER_LABEL[check.provider]} is installed but not signed in.`;
+        return `${PROVIDER_LABEL[check.provider]} needs you to sign in.`;
       case 'unreachable':
-        return 'The AI helper has not responded yet. It may still be starting.';
+        return 'Still starting. Check again in a moment.';
     }
   })();
 
@@ -202,8 +202,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
 
         <div className="flex-1 px-5 py-4">
           <p className="text-sm">
-            Three things get the app working well. Do them in any order, or skip them and come back
-            later.
+            {runtimeDone ? 'Two' : 'Three'} quick steps. Skip any and come back later.
           </p>
 
           <ul className="mt-2" aria-label="Setup checklist">
@@ -214,7 +213,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
               detail={
                 cvDone
                   ? 'CV saved to your library.'
-                  : 'With a CV in your library, results are scored against your experience and your search profile can be filled from it. Only the extracted text is stored, on this machine.'
+                  : 'Used to rank jobs for you and fill in your search profile. Stays on this computer.'
               }
               skipLabel="Skip adding a CV"
               {...(!cvDone && !skipped.cv && !busy ? { onSkip: () => skip('cv') } : {})}
@@ -230,8 +229,8 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
               )}
               {busy && (
                 <p className="w-full text-xs text-base-content/60" role="status">
-                  <span className="loading loading-spinner loading-xs" aria-hidden="true" /> Saved. Reading your CV to
-                  fill in your search profile next...
+                  <span className="loading loading-spinner loading-xs" aria-hidden="true" /> CV saved. Filling in your
+                  profile...
                 </p>
               )}
               {profileError && (
@@ -254,12 +253,13 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
               )}
             </ChecklistItem>
 
+            {!runtimeDone && (
             <ChecklistItem
-              title="Check the AI runtime"
+              title="Connect your AI tool"
               status={runtimeDone ? 'Ready' : skipped.runtime ? 'Skipped' : check.kind === 'checking' ? 'Checking' : 'To do'}
               done={runtimeDone}
               detail={runtimeDetail}
-              skipLabel="Skip checking the AI runtime"
+              skipLabel="Skip connecting your AI tool"
               {...(!runtimeDone && !skipped.runtime ? { onSkip: () => skip('runtime') } : {})}
             >
               {!runtimeDone && (
@@ -268,11 +268,12 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
                     Check again
                   </button>
                   <button type="button" className="btn btn-sm btn-ghost" onClick={onOpenRuntime}>
-                    Open AI runtime
+                    Set up
                   </button>
                 </>
               )}
             </ChecklistItem>
+            )}
 
             <ChecklistItem
               title="Download the company list"
@@ -282,8 +283,8 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
                 !roster.loaded
                   ? 'Checking…'
                   : roster.status
-                  ? `${roster.status.totalEntries.toLocaleString()} companies across Greenhouse, Lever, Ashby, Recruitee and Personio.`
-                  : 'Greenhouse, Lever, Ashby, Recruitee and Personio searches find no companies until this list is downloaded once.'
+                  ? `${roster.status.totalEntries.toLocaleString()} companies ready.`
+                  : 'Needed once so searches can find companies that hire directly.'
               }
               skipLabel="Skip downloading the company list"
               {...(!rosterDone && !skipped.roster && !roster.refreshing ? { onSkip: () => skip('roster') } : {})}

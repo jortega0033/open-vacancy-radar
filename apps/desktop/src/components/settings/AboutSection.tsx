@@ -159,30 +159,29 @@ export function AboutSection({ currentPage, previousPage }: AboutSectionProps = 
         <dd className="ovr-row border-b border-base-300 text-sm font-medium">
           Open Vacancy Radar{version ? ` v${version}` : ''}
         </dd>
-        <dt className="ovr-row border-b border-base-300 text-sm text-base-content/60">License</dt>
-        <dd className="ovr-row border-b border-base-300 text-sm font-medium">Open source · Apache-2.0</dd>
-        <dt className="ovr-row border-b border-base-300 text-sm text-base-content/60">AI runtime</dt>
-        <dd className="ovr-row border-b border-base-300 text-sm font-medium">AgentDock (local)</dd>
-        <dt className="ovr-row border-b border-base-300 text-sm text-base-content/60">Repository</dt>
+        <dt className="ovr-row border-b border-base-300 text-sm text-base-content/60">Open source (Apache-2.0)</dt>
         <dd className="ovr-row border-b border-base-300 text-sm font-medium">
           <a href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" className="link">
             {REPOSITORY_URL.replace('https://', '')}
           </a>
         </dd>
       </dl>
-      <details className="ovr-row" open>
-        <summary className="cursor-pointer text-sm font-medium">Diagnostics preview</summary>
+      <details className="ovr-row">
+        <summary className="cursor-pointer text-sm font-medium">What a bug report includes</summary>
         <p className="mt-2 text-sm text-base-content/60">
-          This is the exact text that Copy diagnostics copies and Open GitHub issue puts in the draft. Paths, tokens
-          and web addresses are removed. Nothing is sent until you submit the issue on GitHub.
+          This is exactly what gets copied. Personal paths and tokens are removed. Nothing is sent until you submit on
+          GitHub.
         </p>
         <textarea
-          aria-label="Diagnostics text"
+          aria-label="Bug report text"
           readOnly
           rows={12}
           className="textarea textarea-bordered mt-2 w-full font-mono text-xs"
           value={preview ?? 'Collecting diagnostics'}
         />
+        <button type="button" className="btn btn-sm btn-outline mt-2" onClick={() => void refreshPreview()}>
+          Refresh preview
+        </button>
       </details>
       <div className="ovr-row flex items-center gap-2">
         <button
@@ -191,10 +190,7 @@ export function AboutSection({ currentPage, previousPage }: AboutSectionProps = 
           disabled={preview === undefined}
           onClick={() => void copyDiagnostics()}
         >
-          Copy diagnostics
-        </button>
-        <button type="button" className="btn btn-sm btn-outline" onClick={() => void refreshPreview()}>
-          Refresh preview
+          Copy report
         </button>
         {diagnosticIssueUrl ? (
           <a className="btn btn-sm btn-outline" href={diagnosticIssueUrl} target="_blank" rel="noopener noreferrer">
