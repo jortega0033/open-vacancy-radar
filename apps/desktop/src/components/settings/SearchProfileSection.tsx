@@ -47,7 +47,7 @@ export interface SearchProfileSectionProps {
    * toast instance, instead of this section rendering a second, independent one: two autosaving
    * forms on the same tab each popping their own toast in the same corner can overlap. */
   onSaved: () => void;
-  onSaveError: (message: string) => void;
+  onSaveError: (message: string, details?: string) => void;
   /** Opened from "Fill search profile" (#480): scroll here and focus the first field once the
    * profile has loaded, or the heading if it could not be loaded, so the reason is in view. */
   focusOnOpen?: boolean;
@@ -139,7 +139,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
             setProfile(profile);
             setDraft(toDraft(profile));
           }
-          onSaveError(describeError(err, 'could not save the search profile'));
+          onSaveError('Could not save your search profile.', ...(err instanceof Error && err.message ? [err.message] : []));
         }
       })();
     },
@@ -194,18 +194,6 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
   // package here would pull the whole Node-only engine (fs, node:crypto, drizzle-orm) into the
   // Vite-bundled renderer build.
   const unconfigured = profile.targetRoles.length === 0 && profile.strongestSkills.length === 0;
-  const completionFields = [
-    profile.candidateName,
-    profile.currentRole,
-    profile.location,
-    profile.experienceYears > 0 ? profile.experienceYears : '',
-    profile.strongestSkills.length > 0 ? profile.strongestSkills : '',
-    profile.additionalSkills.length > 0 ? profile.additionalSkills : '',
-    profile.targetRoles.length > 0 ? profile.targetRoles : '',
-    profile.consideredRoles.length > 0 ? profile.consideredRoles : '',
-    profile.excludedRoleFamilies.length > 0 ? profile.excludedRoleFamilies : '',
-    profile.constraints.professionalLanguage,
-  ].filter(Boolean).length;
 
   const field = <K extends keyof Draft>(key: K) => ({
     value: draft[key],
@@ -234,15 +222,10 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
   return (
     <SettingsSection title="Search profile" headingRef={headingRef}>
       <p className="mt-1 text-sm text-base-content/60">
-        The worldwide pipeline scores every result's deterministic match percentage against this
-        profile. Leave a field empty to skip that dimension entirely, rather than scoring against a
-        made-up default.
+        Used to rank jobs for you. Leave a field empty to ignore it.
       </p>
 
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm" aria-label="Profile status">
-        <span>
-          <strong>Profile completion:</strong> {completionFields} of 10 fields
-        </span>
         <span>
           <strong>Default CV:</strong>{' '}
           {defaultCvName === undefined ? 'Loading…' : defaultCvName ?? 'No default CV selected'}
@@ -251,15 +234,14 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
 
       {unconfigured && (
         <div className="alert alert-warning alert-soft mt-2 text-sm">
-          No target roles or strongest skills are set yet, so search results are not scored against
-          anything. Fill in at least one of the two below to see ranked matches.
+          Add a target role or a skill to see ranked matches.
         </div>
       )}
 
       <SettingsSubheading>Identity</SettingsSubheading>
       <SettingsRow
         label="Fill from CV"
-        description="Reads a CV from your library and prefills current role, years, location, professional language, skills, target roles, considered roles and country for you to review. Excluded role families and minimum salary are never filled in from a CV: a CV has no signal for either."
+        description="Fills in your profile from a CV for you to review."
       >
         <FillProfileFromCv profile={profile} disabled={disabled} onApply={applyFromCv} />
       </SettingsRow>
@@ -324,11 +306,6 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
         />
       </SettingsRow>
       <SettingsSubheading>Role matching</SettingsSubheading>
-      <p className="mb-2 text-xs text-base-content/60">
-        Skills describe your experience. Target and considered roles describe what you want next.
-        CV fill only suggests experience fields for your review; it never changes this profile by
-        itself.
-      </p>
       <SettingsRow
         label="Strongest skills"
         description="Comma-separated. Used to score matching vacancies."

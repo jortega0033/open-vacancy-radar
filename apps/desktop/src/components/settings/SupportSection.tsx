@@ -14,7 +14,7 @@ export function SupportSection() {
   };
   return (
     <SettingsSection title="Support">
-      <SettingsRow label="OVR is free and open source. These links open in your browser.">
+      <SettingsRow label="OVR is free and open source.">
         <div className="flex gap-2">
           <a
             className="btn btn-outline btn-sm"

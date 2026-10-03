@@ -52,7 +52,7 @@ describe('SearchProfileSection', () => {
     render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.getByText(/not scored against anything/)).toBeInTheDocument();
+    expect(screen.getByText(/Add a target role or a skill to see ranked matches/)).toBeInTheDocument();
   });
 
   it('hides the unconfigured warning once target roles or strongest skills are set', async () => {
@@ -63,7 +63,7 @@ describe('SearchProfileSection', () => {
     render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.queryByText(/not scored against anything/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Add a target role or a skill to see ranked matches/)).not.toBeInTheDocument();
   });
 
   it('saves a text field on blur, sending only that field, and reports success through the shared toast callback', async () => {
@@ -162,7 +162,7 @@ describe('SearchProfileSection', () => {
     render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.getByLabelText('Profile status')).toHaveTextContent('Profile completion: 4 of 10 fields');
+    expect(screen.getByLabelText('Profile status')).not.toHaveTextContent('Profile completion');
     expect(screen.getByLabelText('Profile status')).toHaveTextContent('Default CV: Jane CV');
   });
 

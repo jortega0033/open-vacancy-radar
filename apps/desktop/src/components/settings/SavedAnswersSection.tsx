@@ -7,11 +7,6 @@ function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
-const CONTROL_TYPE_LABEL: Record<ApplicationAnswerRecord['controlType'], string> = {
-  text: 'Text field',
-  textarea: 'Text area',
-};
-
 /** The backend already returns these most-recently-updated-first (see the bridge's own doc comment
  * on `listApplicationAnswers`), but this sorts again defensively rather than trusting that order
  * blindly -- cheap insurance against it ever drifting. */
@@ -80,7 +75,6 @@ function AnswerRow({ record, onSaved, onRequestDelete }: AnswerRowProps) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{record.label}</span>
-            <span className="badge badge-ghost badge-sm">{CONTROL_TYPE_LABEL[record.controlType]}</span>
           </div>
           {record.originCompany && (
             <p className="mt-0.5 text-xs text-base-content/60">Used at {record.originCompany}</p>
@@ -199,8 +193,7 @@ export function SavedAnswersSection() {
   return (
     <SettingsSection title="Saved application answers">
       <p className="ovr-row border-b border-base-300 text-sm text-base-content/70">
-        Answers you chose to save while reviewing an application, so a recurring question can be
-        reused instead of retyped.
+        Answers you saved for reuse in other applications.
       </p>
 
       {loadError && <ErrorBanner className="mt-3">{loadError}</ErrorBanner>}

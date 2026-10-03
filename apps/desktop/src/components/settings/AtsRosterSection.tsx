@@ -14,7 +14,7 @@ export interface AtsRosterSectionProps {
    * toast instance, the same reason `SearchProfileSection` reports through `onSaved` rather than
    * rendering a second toast of its own. */
   onRefreshed: (result: AtsRosterImportResult) => void;
-  onRefreshError: (message: string) => void;
+  onRefreshError: (message: string, details?: string) => void;
 }
 
 /**
@@ -34,13 +34,13 @@ export function AtsRosterSection({ disabled, onRefreshed, onRefreshError }: AtsR
   const description = loadError
     ? loadError
     : status
-      ? `Last refreshed ${formatImportedAt(status.importedAt)} · ${status.totalEntries.toLocaleString()} companies across Greenhouse, Lever, Ashby, Recruitee and Personio.`
-      : 'Not yet imported. Vacancy scans will find zero companies on these five providers until this runs at least once.';
+      ? `Updated ${formatImportedAt(status.importedAt)}, ${status.totalEntries.toLocaleString()} companies.`
+      : 'Download the company list once so searches can find these companies.';
 
   return (
-    <SettingsSection title="Company roster">
+    <SettingsSection title="Company list">
       <SettingsRow
-        label="Greenhouse / Lever / Ashby / Recruitee / Personio companies"
+        label="Companies to search"
         description={description}
       >
         <button
@@ -49,7 +49,7 @@ export function AtsRosterSection({ disabled, onRefreshed, onRefreshError }: AtsR
           disabled={disabled || refreshing}
           onClick={refresh}
         >
-          {refreshing ? 'Refreshing…' : 'Refresh company roster'}
+          {refreshing ? 'Updating…' : 'Update company list'}
         </button>
       </SettingsRow>
     </SettingsSection>
