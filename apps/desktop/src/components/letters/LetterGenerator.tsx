@@ -733,8 +733,8 @@ export function LetterGenerator({
               <p className="text-xs text-base-content/60">{GROUNDED_LETTER_UNAVAILABLE}</p>
             )}
             <p className="text-xs text-base-content/60">
-              Generated on your own {PROVIDER_LABEL[provider]} CLI through AgentDock. Nothing is
-              sent to a letter-writing service.
+              Your own {PROVIDER_LABEL[provider]} CLI picks which of your facts to cite, through
+              AgentDock. Nothing is sent to a letter-writing service.
             </p>
           </div>
         </div>

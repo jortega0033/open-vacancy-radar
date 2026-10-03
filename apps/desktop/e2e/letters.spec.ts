@@ -6,7 +6,7 @@ import { expect, goto, test } from './fixtures.js';
 /**
  * Letter GENERATION is deliberately out of scope for this suite: `LetterGenerator`'s "Generate"
  * button starts a real AgentDock session on the user's own Claude/Codex CLI (see its docstring:
- * "Generated on your own Claude Code CLI through AgentDock"), which is not reliably available or
+ * "Your own Claude Code CLI picks which of your facts to cite, through AgentDock"), which is not reliably available or
  * authenticated on a CI runner. This is the same boundary `packages/agent-runtime/test/` draws for
  * its own CLI-detection tests ("end-to-end failure paths (mocked exec, no real CLI)") — a real CLI
  * invocation is never part of the automated suite.
