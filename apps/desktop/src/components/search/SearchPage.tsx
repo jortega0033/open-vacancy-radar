@@ -18,6 +18,7 @@ import {
   scanFinishedAnnouncement,
 } from './scan-announcements.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
+import { ScanProgressPanel, useScanStatus } from './ScanProgressPanel.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
@@ -246,6 +247,10 @@ export function SearchPage({
   const [hydrating, setHydrating] = useState(true);
   const [loadError, setLoadError] = useState<string>();
   const [scanning, setScanning] = useState(false);
+  /** A stop was requested for the running scan and it has not wound down yet (#459). */
+  const [stopping, setStopping] = useState(false);
+  const stopRequestedRef = useRef(false);
+  const [stopNotice, setStopNotice] = useState<string>();
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
   const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
@@ -435,6 +440,8 @@ export function SearchPage({
    */
   useEffect(() => {
     return window.vacancyRadar.onScanProgress((event) => {
+      // After a stop, anything still in flight belongs to a run the page has already left.
+      if (stopRequestedRef.current) return;
       setPartialVacancies((current) => {
         const seen = new Set(current.map((vacancy) => vacancy.key));
         const additions = event.vacancies.filter((vacancy) => !seen.has(vacancy.key));
@@ -452,6 +459,12 @@ export function SearchPage({
    * only way the page can ever stop looking idle/failed while a scan it knows nothing else about
    * is genuinely still running.
    */
+  const noteStoppedScan = useCallback(() => {
+    stopRequestedRef.current = false;
+    setStopping(false);
+    setStopNotice('Scan stopped. Your previous report is unchanged.');
+  }, []);
+
   const waitForScanToFinish = useCallback((requestedGeneration?: number) => {
     const requestGeneration = requestedGeneration ?? ++reportRequestGenerationRef.current;
     const poll = (): void => {
@@ -493,6 +506,7 @@ export function SearchPage({
           // rows from this run have served their purpose and stop being retained.
           setPartialVacancies([]);
           setScanning(false);
+          if (stopRequestedRef.current) noteStoppedScan();
         } catch {
           // A failed status check just stops reattaching; it does not invent a scan failure for a
           // scan this page never itself started and has no error message for.
@@ -501,7 +515,7 @@ export function SearchPage({
       })();
     };
     poll();
-  }, [setPartialVacancies, setSession]);
+  }, [noteStoppedScan, setPartialVacancies, setSession]);
 
   // Reattaches to a scan already running when this page mounts (see `waitForScanToFinish` above).
   useEffect(() => {
@@ -786,6 +800,9 @@ export function SearchPage({
       return;
     }
     const requestGeneration = ++reportRequestGenerationRef.current;
+    stopRequestedRef.current = false;
+    setStopping(false);
+    setStopNotice(undefined);
     setScanning(true);
     setScanError(undefined);
     setScanGuard(undefined);
@@ -847,6 +864,12 @@ export function SearchPage({
         // rows by this attempt's unrelated, stale query while `waitForScanToFinish` catches up.
         setPendingScanFilters(null);
         waitForScanToFinish(requestGeneration);
+      } else if (stopRequestedRef.current || message.includes('The scan was stopped')) {
+        // The person stopped it: the saved report is still the report, and this is not a failure.
+        setPendingScanFilters(null);
+        setPartialVacancies([]);
+        setScanning(false);
+        noteStoppedScan();
       } else {
         setPendingScanFilters(null);
         // This attempt's own criteria are gone (line above), but rows it already streamed into
@@ -858,11 +881,14 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [aiWebDiscovery, engineState, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, engineState, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const runBrowseAllScan = useCallback(async () => {
     const requestGeneration = ++reportRequestGenerationRef.current;
     setConfirmBrowseAll(false);
+    stopRequestedRef.current = false;
+    setStopping(false);
+    setStopNotice(undefined);
     setScanning(true);
     setScanError(undefined);
     setScanGuard(undefined);
@@ -899,6 +925,12 @@ export function SearchPage({
         // rows by this attempt's unrelated, stale query while `waitForScanToFinish` catches up.
         setPendingScanFilters(null);
         waitForScanToFinish(requestGeneration);
+      } else if (stopRequestedRef.current || message.includes('The scan was stopped')) {
+        // The person stopped it: the saved report is still the report, and this is not a failure.
+        setPendingScanFilters(null);
+        setPartialVacancies([]);
+        setScanning(false);
+        noteStoppedScan();
       } else {
         setPendingScanFilters(null);
         // This attempt's own criteria are gone (line above), but rows it already streamed into
@@ -910,7 +942,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const handleRescore = useCallback(() => {
     const query = currentProfileScanQuery;
@@ -921,6 +953,26 @@ export function SearchPage({
   }, [currentProfileScanQuery, filters, runScan, setFilters]);
 
   // Commits the current draft only when the upstream refresh succeeds and installs its report.
+  const { status: scanStatus, now: scanNow } = useScanStatus(scanning);
+
+  const handleStopScan = useCallback(async () => {
+    const scanId = scanStatus?.scanId;
+    if (!scanId) return;
+    stopRequestedRef.current = true;
+    setStopping(true);
+    try {
+      const { cancelled } = await window.vacancyRadar.cancelScan(scanId);
+      if (!cancelled) {
+        // It finished (or another run started) before the stop landed: nothing was stopped.
+        stopRequestedRef.current = false;
+        setStopping(false);
+      }
+    } catch {
+      stopRequestedRef.current = false;
+      setStopping(false);
+    }
+  }, [scanStatus?.scanId]);
+
   const handleSearch = useCallback(() => {
     void runScan();
   }, [runScan]);
@@ -1123,13 +1175,16 @@ export function SearchPage({
           // often not spoken, and the always-mounted app announcer already speaks start/progress/finish.
           <div className="alert alert-info mt-3 flex items-center gap-3 text-sm" role="group" aria-label="Scan progress">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            <span className="flex-1">
-              {showLiveResults
-                ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
-                : hasReport
-                ? `Scanning live sources in the background. The list below is your saved report filtered locally${hasLiveRows ? `; ${liveProgressCount.toLocaleString()} live ${liveProgressCount === 1 ? 'vacancy has' : 'vacancies have'} arrived so far` : ''}. It will switch when you choose to view them, or when the scan finishes.`
-                : 'Scanning live sources: this hits real external APIs and feeds, and can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.'}
-            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <span>
+                {showLiveResults
+                  ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
+                  : hasReport
+                  ? `Scanning live sources in the background. The list below is your saved report filtered locally${hasLiveRows ? `; ${liveProgressCount.toLocaleString()} live ${liveProgressCount === 1 ? 'vacancy has' : 'vacancies have'} arrived so far` : ''}. It switches when you choose to view them, or when the scan finishes.`
+                  : 'Scanning live sources: this hits real external APIs and feeds. The app is not frozen.'}
+              </span>
+              <ScanProgressPanel status={scanStatus} now={scanNow} stopping={stopping} onStop={() => void handleStopScan()} />
+            </div>
             {hasReport && hasLiveRows && (
               <button
                 type="button"
@@ -1139,6 +1194,14 @@ export function SearchPage({
                 {showLiveResults ? 'View saved report' : `View live results (${liveProgressCount.toLocaleString()})`}
               </button>
             )}
+          </div>
+        )}
+        {stopNotice && !scanning && (
+          <div className="alert alert-info alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+            <span>{stopNotice}</span>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setStopNotice(undefined)}>
+              Dismiss
+            </button>
           </div>
         )}
         {scanError && (

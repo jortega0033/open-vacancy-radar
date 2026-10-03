@@ -322,6 +322,73 @@ describe('SearchPage', () => {
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
+  describe('scan progress and Stop (#459)', () => {
+    it('shows source groups finished, elapsed time and rows found from the main process, with an honest time range', async () => {
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise((resolve) => { resolveScan = resolve; })),
+        getScanProgress: vi.fn().mockResolvedValue({
+          scanning: true, scanId: 'scan-1', startedAt: Date.now() - 102_000, sourcesDone: 4, sourcesTotal: 11, vacanciesSoFar: 212,
+        }),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+
+      expect(await screen.findByText('Checked 4 of 11 source groups')).toBeInTheDocument();
+      expect(screen.getByText('212 vacancies so far')).toBeInTheDocument();
+      expect(screen.getByText(/1:4\d elapsed|1:5\d elapsed/)).toBeInTheDocument();
+      expect(screen.getByText(/usually takes 2 to 5 minutes/i)).toBeInTheDocument();
+      expect(screen.getByRole('progressbar', { name: 'Scan progress' })).toHaveAttribute('value', '36');
+      expect(screen.queryByText(/about ten seconds/i)).not.toBeInTheDocument();
+      resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
+    });
+
+    it('stops the exact run, keeps the previous report, and says so instead of reporting a failure', async () => {
+      let rejectScan: (error: Error) => void = () => {};
+      const cancelScan = vi.fn().mockImplementation(async () => {
+        rejectScan(new Error("Error invoking remote method 'vacancy:run-scan': ScanCancelledError: The scan was stopped."));
+        return { cancelled: true };
+      });
+      const bridge = installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise((_resolve, reject) => { rejectScan = reject; })),
+        getScanProgress: vi.fn().mockResolvedValue({ scanning: true, scanId: 'scan-42', startedAt: Date.now(), sourcesDone: 1, sourcesTotal: 11, vacanciesSoFar: 3 }),
+        cancelScan,
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Stop scan' }));
+
+      await waitFor(() => expect(cancelScan).toHaveBeenCalledWith('scan-42'));
+      expect(await screen.findByText('Scan stopped. Your previous report is unchanged.')).toBeInTheDocument();
+      expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      // The saved report is still on screen.
+      expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
+      expect(bridge.getReport).toHaveBeenCalled();
+    });
+
+    it('does not offer Stop until the main process has named the run', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise(() => {})),
+        getScanProgress: vi.fn().mockResolvedValue({ scanning: true }),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      expect(await screen.findByRole('button', { name: 'Stop scan' })).toBeDisabled();
+    });
+  });
+
   it('reattaches to a scan already running on mount, instead of looking idle', async () => {
     // Real regression: the Search page's own `scanning` state is component-local, so it used to
     // reset to false every time this page (re)mounted -- including after the user navigated away

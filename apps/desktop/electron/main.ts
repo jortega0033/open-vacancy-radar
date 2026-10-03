@@ -37,6 +37,9 @@ import {
   runAtsRosterImport,
   runGlobalRemoteScan,
   runSponsorSync,
+  isScanCancelledError,
+  SCAN_PROGRESS_SOURCE_IDS,
+  ScanCancelledError,
   workableJobReferenceFromUrl,
   type AtsRosterImportResult,
   type AtsRosterStatus,
@@ -119,6 +122,7 @@ import {
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
+import type { VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 import {
   describeVacancyEngineFailure,
   rebuildVacancyEngineDatabase,
@@ -2549,7 +2553,45 @@ guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt
  * process and is never tied to any renderer window's lifetime, so this is the only way the
  * renderer can tell "idle" and "already running, just not the one I started" apart.
  */
+/** The vacancy scan this process is running right now, with the progress its engine events have
+ * reported so far (#459). Held here, not in the renderer, so a page that remounts mid-scan still
+ * shows the true source count, start time and run id. */
+interface ActiveVacancyScan {
+  id: string;
+  startedAt: number;
+  controller: AbortController;
+  doneSources: Set<string>;
+  total: number;
+  vacancies: number;
+}
+let activeVacancyScan: ActiveVacancyScan | undefined;
+
 guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
+
+/** The same question as `vacancy:get-scan-status`, with the run's id, start time and source counts.
+ * A separate channel so the plain status keeps its one-field shape for every existing caller. */
+guardedIpc.handle('vacancy:get-scan-progress', (): VacancyScanStatus => {
+  const scan = activeVacancyScan;
+  if (!scan) return { scanning: isScanInFlight() };
+  return {
+    scanning: true,
+    scanId: scan.id,
+    startedAt: scan.startedAt,
+    sourcesDone: scan.doneSources.size,
+    sourcesTotal: scan.total,
+    vacanciesSoFar: scan.vacancies,
+    ...(scan.controller.signal.aborted ? { stopping: true } : {}),
+  };
+});
+
+/** Stops the run named by `scanId`. Idempotent, and a stale id (the run already finished, or a newer
+ * one started) cancels nothing rather than the wrong scan. */
+guardedIpc.handle('vacancy:cancel-scan', (_event, scanId: unknown): VacancyScanCancelResult => {
+  const scan = activeVacancyScan;
+  if (!scan || typeof scanId !== 'string' || scan.id !== scanId) return { cancelled: false };
+  scan.controller.abort();
+  return { cancelled: true };
+});
 
 /**
  * Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
@@ -2605,6 +2647,16 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
       async () => {
         const config = vacancyEngineConfig();
         const logger = createLogger(config);
+        const scan: ActiveVacancyScan = {
+          id: randomUUID(),
+          startedAt: Date.now(),
+          controller: new AbortController(),
+          doneSources: new Set(),
+          total: SCAN_PROGRESS_SOURCE_IDS.length,
+          vacancies: 0,
+        };
+        activeVacancyScan = scan;
+        try {
         // Issue #398 Phase 1: an additional, on-demand AI-web-search discovery pass, entirely
         // inline here inside the `runExclusiveScan` guard this closure already runs under.
         // `runAiWebDiscovery` itself never acquires `ScanGuard` (see its own doc comment) -- this
@@ -2637,11 +2689,25 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
             logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
           }
         }
+        if (scan.controller.signal.aborted) throw new ScanCancelledError();
         const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
+          signal: scan.controller.signal,
           ...(request.mode === 'query'
             ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
             : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
-          onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
+          onProgress: (event: ScanProgressEvent) => {
+            // A stopped run's late events must not reach the page: it has already gone back to the
+            // previous report.
+            if (scan.controller.signal.aborted) return;
+            scan.doneSources.add(event.sourceId);
+            scan.vacancies += event.vacancies.length;
+            sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, {
+              ...event,
+              scanId: scan.id,
+              sourcesDone: scan.doneSources.size,
+              sourcesTotal: scan.total,
+            });
+          },
           ...(aiWebDiscovery
             ? {
                 aiWebDiscoveryVacancies: aiWebDiscovery.vacancies,
@@ -2651,6 +2717,9 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         });
         latestVacancyReport = result.report;
         return result.report;
+        } finally {
+          if (activeVacancyScan === scan) activeVacancyScan = undefined;
+        }
       },
       { takeAdvisoryLock: true },
     );
@@ -2662,7 +2731,8 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
     );
     return report;
   } catch (error) {
-    if (!isExpectedScanBusyError(error)) {
+    // A stop the person asked for is neither a failure nor worth a notification.
+    if (!isExpectedScanBusyError(error) && !isScanCancelledError(error)) {
       notifyScanOutcome(() =>
         notifyVacancyScanFailed({ detail: error instanceof Error ? error.message : 'unknown error' }),
       );

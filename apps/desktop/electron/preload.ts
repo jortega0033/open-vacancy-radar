@@ -93,6 +93,8 @@ export interface AgentDockBridge {
 
 export type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-engine-recovery.js';
 import type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-engine-recovery.js';
+import type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from './vacancy-scan-progress-types.js';
+export type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
 export type VacancyScanRequest =
   | string
@@ -131,6 +133,10 @@ export interface VacancyRadarBridge {
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
+  /** The running scan's id, start time and source counts (#459). */
+  getScanProgress(): Promise<VacancyScanStatus>;
+  /** Stops the scan named by `scanId` (from `getScanStatus`), keeping the previous report (#459). */
+  cancelScan(scanId: string): Promise<VacancyScanCancelResult>;
   /**
    * Subscribes to `vacancy:scan-progress` (issue #252): each event is one discovery sub-source's
    * own freshly discovered rows, pushed the moment that source resolves rather than only once the
@@ -140,7 +146,7 @@ export interface VacancyRadarBridge {
    * remounted Search page (navigate away and back) ends up with exactly one live listener, never
    * zero or two.
    */
-  onScanProgress(callback: (event: ScanProgressEvent) => void): () => void;
+  onScanProgress(callback: (event: VacancyScanProgressEvent) => void): () => void;
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
@@ -302,11 +308,29 @@ const vacancyApi: VacancyRadarBridge = {
   getScanStatus() {
     return ipcRenderer.invoke('vacancy:get-scan-status');
   },
+  getScanProgress() {
+    return ipcRenderer.invoke('vacancy:get-scan-progress');
+  },
+  cancelScan(scanId) {
+    return ipcRenderer.invoke('vacancy:cancel-scan', scanId);
+  },
   onScanProgress(callback) {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
-      const p = payload as { sourceId?: unknown; vacancies?: unknown } | null;
+      const p = payload as {
+        sourceId?: unknown;
+        vacancies?: unknown;
+        scanId?: unknown;
+        sourcesDone?: unknown;
+        sourcesTotal?: unknown;
+      } | null;
       if (p && typeof p.sourceId === 'string' && Array.isArray(p.vacancies)) {
-        callback({ sourceId: p.sourceId, vacancies: p.vacancies as ScanProgressEvent['vacancies'] });
+        callback({
+          sourceId: p.sourceId,
+          vacancies: p.vacancies as ScanProgressEvent['vacancies'],
+          ...(typeof p.scanId === 'string' ? { scanId: p.scanId } : {}),
+          ...(typeof p.sourcesDone === 'number' ? { sourcesDone: p.sourcesDone } : {}),
+          ...(typeof p.sourcesTotal === 'number' ? { sourcesTotal: p.sourcesTotal } : {}),
+        });
       }
     };
     ipcRenderer.on('vacancy:scan-progress', listener);
