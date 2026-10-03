@@ -82,7 +82,7 @@ async function exportPdf(window: Page, electronApp: ElectronApplication, saveDir
   await stubNativeSurfaces(electronApp, saveDir);
   await pdf.getByRole('button', { name: 'Export as PDF' }).click();
   await expect(pdf.getByRole('status').first()).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
-  const text = (await pdf.innerText()).match(/(\d+) page\(s\)/);
+  const text = (await pdf.innerText()).match(/(\d+) pages?\b/);
   expect(text, 'the saved PDF reports its page count').not.toBeNull();
   const pages = Number(text![1]);
   return { pdf, pdfPath: `${saveDir}/${PDF_REVIEW_CV_NAME}.pdf`, pages };
