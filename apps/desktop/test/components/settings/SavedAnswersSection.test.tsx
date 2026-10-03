@@ -35,7 +35,7 @@ describe('SavedAnswersSection', () => {
     expect(screen.getByRole('status')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText('Why do you want to work here?')).toBeInTheDocument());
-    expect(screen.getByText('Text area')).toBeInTheDocument();
+    expect(screen.queryByText('Text area')).not.toBeInTheDocument();
     expect(screen.getByText('Used at Northwind Freight')).toBeInTheDocument();
     expect(screen.getByText('Because the mission matches what I want to build next.')).toBeInTheDocument();
   });

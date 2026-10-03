@@ -225,7 +225,7 @@ describe('App', () => {
       emit({ state: 'unavailable', error: RAW_ERROR });
 
       await waitFor(() => expect(screen.getByText('AI features cannot start.')).toBeInTheDocument());
-      expect(screen.getByText(/The local helper that runs Claude Code or Codex did not respond\. Your saved data is fine\./)).toBeInTheDocument();
+      expect(screen.getByText(/The AI part of the app did not start\. Your saved data is safe\./)).toBeInTheDocument();
       expect(screen.queryByText(/daemon/i)).not.toBeInTheDocument();
 
       // The raw text sits inside a closed <details>, so it is not visible, and it is redacted.
@@ -243,7 +243,7 @@ describe('App', () => {
 
       render(<App />);
       emit({ state: 'unavailable', error: RAW_ERROR });
-      fireEvent.click(await screen.findByRole('button', { name: 'Copy diagnostics' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Copy report' }));
 
       await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
       const copied = writeText.mock.calls[0]![0] as string;
@@ -313,7 +313,7 @@ describe('App', () => {
 
     // "Claude Code" also appears in the sidebar footer and header, so assert on card-specific
     // content instead of the ambiguous name text.
-    await waitFor(() => expect(screen.getByText('Installed')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Sign-in')).toBeInTheDocument());
     expect(screen.getByRole('heading', { level: 1, name: 'AI runtime' })).toBeInTheDocument();
     // The old boilerplate's prompt-runner is gone: no cwd input, no free-text prompt box.
     expect(screen.queryByPlaceholderText('/path/to/project')).not.toBeInTheDocument();

@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AtsRosterImportResult, AtsRosterStatus } from '@open-vacancy-radar/vacancy-engine';
 
-function describeError(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
+function rawMessage(err: unknown): string | undefined {
+  return err instanceof Error && err.message ? err.message : undefined;
 }
 
 export interface UseAtsRosterOptions {
   /** A successful download, with the import result. */
   onRefreshed: (result: AtsRosterImportResult) => void;
-  /** A failed download, already turned into a message. */
-  onRefreshError: (message: string) => void;
+  /** A failed download: a plain message, plus the raw error text when there is one. */
+  onRefreshError: (message: string, details?: string) => void;
 }
 
 /**
@@ -30,8 +30,8 @@ export function useAtsRoster({ onRefreshed, onRefreshError }: UseAtsRosterOption
       try {
         const current = await window.vacancyRadar.getAtsRosterStatus();
         if (!cancelled) setStatus(current);
-      } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load the company roster status'));
+      } catch {
+        if (!cancelled) setLoadError('Could not load the company list.');
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -56,7 +56,8 @@ export function useAtsRoster({ onRefreshed, onRefreshError }: UseAtsRosterOption
         });
         onRefreshed(result);
       } catch (err) {
-        onRefreshError(describeError(err, 'could not refresh the company roster'));
+        const details = rawMessage(err);
+        onRefreshError('Could not update the company list.', ...(details ? [details] : []));
       } finally {
         setRefreshing(false);
       }

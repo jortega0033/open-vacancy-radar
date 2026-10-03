@@ -8,44 +8,19 @@ export interface DataManagementProps {
 }
 
 /**
- * The data-management section. Two actions are real today (reset settings and application data);
- * export/import are
- * shown disabled with an explanation, because doing them properly needs native save/open dialogs
- * that the fixed-capability bridge does not expose yet. Per the page's one rule, a control either
- * works or visibly says it doesn't. These say it.
+ * The data-management section: reset settings and reset application data. Export and import are
+ * not shown until they work, since they need native save/open dialogs the bridge does not expose.
  */
 export function DataManagement({ busy, onRequestResetSettings, onRequestResetData }: DataManagementProps) {
   return (
     <SettingsSection title="Data management">
       <p className="ovr-row border-b border-base-300 text-sm text-base-content/70">
-        Saved jobs, applications, CVs, letters and settings are stored locally on this computer.
-        Sponsor checks query the public IND register. There is no cloud sync and no account.
+        Your data stays on this computer. Sponsor checks use the public IND register.
       </p>
 
       <SettingsRow
-        label="Export / import"
-        description={
-          <>
-            <span className="badge badge-ghost badge-sm mr-1.5 align-middle">Not yet available</span>
-            Backing up and restoring your data as JSON needs the native save/open dialogs, which
-            this build does not expose to the interface yet. The buttons are disabled rather than
-            pretending to work.
-          </>
-        }
-      >
-        <div className="flex gap-2">
-          <button type="button" className="btn btn-sm btn-outline" disabled>
-            Export data (JSON)
-          </button>
-          <button type="button" className="btn btn-sm btn-outline" disabled>
-            Import data
-          </button>
-        </div>
-      </SettingsRow>
-
-      <SettingsRow
         label="Reset settings"
-        description="Restore every preference on this page to its default. Saved jobs, applications, CVs and letters are not touched."
+        description="Puts every setting back to its default. Your saved jobs, applications, CVs and letters stay."
       >
         <button
           type="button"
@@ -59,7 +34,7 @@ export function DataManagement({ busy, onRequestResetSettings, onRequestResetDat
 
       <SettingsRow
         label="Reset application data"
-        description="Delete personal application records, generated files and the search profile. Restore default settings. Public vacancy data stays cached."
+        description="Delete your saved jobs, applications, CVs, letters and search profile. Public vacancy data is kept."
       >
         <button
           type="button"

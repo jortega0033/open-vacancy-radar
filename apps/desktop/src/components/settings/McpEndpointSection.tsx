@@ -55,7 +55,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
   const refreshGrants = useCallback(() => {
     void window.workspace.listMcpClientGrants().then(
       (list) => setGrants(list),
-      (err) => setListError(describeError(err, 'could not load MCP client grants')),
+      (err) => setListError(describeError(err, 'Could not load the connected apps.')),
     );
   }, []);
 
@@ -75,11 +75,11 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
   const createGrant = useCallback(() => {
     const name = grantName.trim();
     if (!name) {
-      setCreateError('Give this client a name.');
+      setCreateError('Give this app a name.');
       return;
     }
     if (!grantCvId) {
-      setCreateError('Choose which CV this client may tailor.');
+      setCreateError('Choose which CV this app may tailor.');
       return;
     }
     setCreating(true);
@@ -92,7 +92,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
         setCreating(false);
       },
       (err) => {
-        setCreateError(describeError(err, 'could not create this grant'));
+        setCreateError(describeError(err, 'Could not allow this app.'));
         setCreating(false);
       },
     );
@@ -108,7 +108,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
         setRevoking(false);
       },
       (err) => {
-        setListError(describeError(err, 'could not revoke this grant'));
+        setListError(describeError(err, 'Could not remove this app.'));
         setRevoking(false);
         setRevokeTarget(null);
       },
@@ -118,13 +118,13 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
   const cvName = useCallback((cvId: string) => cvDocuments.find((cv) => cv.id === cvId)?.name ?? '(deleted CV)', [cvDocuments]);
 
   return (
-    <SettingsSection title="Local AI assistant access (MCP)">
+    <SettingsSection title="Connect other AI apps">
       <SettingsRow
-        label="Allow local AI clients to help tailor CVs"
-        description="Opens a local endpoint (127.0.0.1 only, never your network) that a client you explicitly authorize below can use to propose CV tailoring for a vacancy. Every proposal still needs your review and approval in this app before it becomes part of an exported CV. A connected client can never approve or export anything by itself."
+        label="Let other AI apps help tailor CVs"
+        description="Lets an app you approve below suggest changes to your CV. Nothing changes until you approve it here, and nothing leaves this computer."
       >
         <ToggleSwitch
-          label="Allow local AI clients to help tailor CVs"
+          label="Let other AI apps help tailor CVs"
           checked={settings.mcpEndpointEnabled}
           disabled={disabled}
           onChange={(mcpEndpointEnabled) => onToggled({ mcpEndpointEnabled })}
@@ -132,25 +132,27 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
       </SettingsRow>
 
       {settings.mcpEndpointEnabled && (
-        <SettingsRow label="Endpoint address">
-          <span className="text-sm text-base-content/70" role="status">
-            {status?.running && status.port
-              ? `http://127.0.0.1:${status.port}`
-              : 'starting…'}
-          </span>
-        </SettingsRow>
+        <details className="ovr-row border-b border-base-300">
+          <summary className="cursor-pointer text-sm font-medium">Technical details</summary>
+          <p className="mt-2 text-sm text-base-content/70">
+            Address:{' '}
+            <span role="status">
+              {status?.running && status.port ? `http://127.0.0.1:${status.port}` : 'starting…'}
+            </span>
+          </p>
+        </details>
       )}
 
       {settings.mcpEndpointEnabled && (
         <div className="mt-4">
-          <SettingsSubheading>Authorized clients</SettingsSubheading>
+          <SettingsSubheading>Allowed apps</SettingsSubheading>
 
           {listError && <ErrorBanner className="mt-2">{listError}</ErrorBanner>}
 
           <div className="ovr-row flex flex-wrap items-end gap-2 border-b border-base-300">
             <div>
               <label htmlFor="mcp-grant-name" className="mb-1 block text-xs text-base-content/60">
-                Client name
+                App name
               </label>
               <input
                 id="mcp-grant-name"
@@ -164,7 +166,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
             </div>
             <div>
               <label htmlFor="mcp-grant-cv" className="mb-1 block text-xs text-base-content/60">
-                CV this client may tailor
+                CV this app may tailor
               </label>
               <select
                 id="mcp-grant-cv"
@@ -183,7 +185,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
             </div>
             <button type="button" className="btn btn-sm btn-primary" disabled={disabled || creating} onClick={createGrant}>
               {creating && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-              Authorize client
+              Allow app
             </button>
           </div>
           {createError && <ErrorBanner className="mt-2">{createError}</ErrorBanner>}
@@ -191,7 +193,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
           {grants === null ? (
             <p className="mt-2 text-sm text-base-content/60">Loading…</p>
           ) : grants.length === 0 ? (
-            <p className="mt-2 text-sm text-base-content/60">No clients authorized yet.</p>
+            <p className="mt-2 text-sm text-base-content/60">No apps connected.</p>
           ) : (
             <ul className="mt-2">
               {grants.map((grant) => (
@@ -199,17 +201,17 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium">{grant.name}</span>
-                      {!isActive(grant) && <span className="badge badge-ghost badge-sm">{grant.revokedAt ? 'Revoked' : 'Expired'}</span>}
+                      {!isActive(grant) && <span className="badge badge-ghost badge-sm">{grant.revokedAt ? 'Removed' : 'Expired'}</span>}
                     </div>
                     <p className="mt-0.5 text-xs text-base-content/60">
-                      {grant.scopeType === 'source_cv' ? `Can tailor: ${cvName(grant.sourceCvId)}` : `${grant.caseIds.length} named case(s)`}
-                      {' · expires '}
+                      {grant.scopeType === 'source_cv' ? `Can tailor: ${cvName(grant.sourceCvId)} · ` : ''}
+                      {'Expires '}
                       {new Date(grant.expiresAt).toLocaleDateString()}
                     </p>
                   </div>
                   {isActive(grant) && (
                     <button type="button" className="btn btn-sm btn-outline flex-none" onClick={() => setRevokeTarget(grant)}>
-                      Revoke
+                      Remove
                     </button>
                   )}
                 </li>
@@ -221,9 +223,9 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
 
       {revokeTarget && (
         <ConfirmDialog
-          title="Revoke this client's access?"
-          message={`"${revokeTarget.name}" will immediately lose access. This cannot be undone; a new grant would need a new credential.`}
-          confirmLabel="Revoke access"
+          title="Remove this app's access?"
+          message={`"${revokeTarget.name}" loses access right away. You can allow it again later.`}
+          confirmLabel="Remove access"
           onConfirm={confirmRevoke}
           onCancel={() => setRevokeTarget(null)}
         />

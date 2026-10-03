@@ -36,18 +36,18 @@ export function AiHelperNotice({ error, retrying, retryFailed, onRetry, classNam
       <div className="min-w-0 flex-1">
         <div className="font-semibold">AI features cannot start.</div>
         <p className="mt-0.5">
-          The local helper that runs Claude Code or Codex did not respond. Your saved data is fine.
+          The AI part of the app did not start. Your saved data is safe.
         </p>
         {retryFailed && !retrying && (
           <p className="mt-1" data-testid="ai-helper-retry-failed">
-            The helper still did not respond. You can try again or copy the diagnostics for a bug report.
+            Still not working. Try again or copy the report for a bug report.
           </p>
         )}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button type="button" className="btn btn-sm" onClick={onRetry} disabled={retrying}>
             {retrying ? 'Trying again…' : 'Try again'}
           </button>
-          <CopyButton text={diagnostics} label="Copy diagnostics" className="btn btn-sm btn-outline" />
+          <CopyButton text={diagnostics} label="Copy report" className="btn btn-sm btn-outline" />
         </div>
         <details className="mt-2">
           <summary className="cursor-pointer text-xs font-medium">Details</summary>

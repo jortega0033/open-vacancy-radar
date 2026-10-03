@@ -43,7 +43,7 @@ describe('Settings Support section (#503)', () => {
     render(<SettingsPage />);
 
     expect(await screen.findByRole('heading', { name: 'Support' })).toBeInTheDocument();
-    expect(screen.getByText('OVR is free and open source. These links open in your browser.')).toBeInTheDocument();
+    expect(screen.getByText('OVR is free and open source.')).toBeInTheDocument();
 
     const star = screen.getByRole('link', { name: 'Star on GitHub' });
     const coffee = screen.getByRole('link', { name: 'Buy me a coffee' });

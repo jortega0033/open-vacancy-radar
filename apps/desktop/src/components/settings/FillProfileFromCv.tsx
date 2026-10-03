@@ -248,7 +248,10 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
     }
   }
 
-  const runError = parseError ?? (run.status === 'failed' ? run.error : undefined);
+  // A failed run keeps its raw message out of sight: plain sentence first, raw text under "Details".
+  const runFailure = run.status === 'failed' ? run.error : undefined;
+  const runError = parseError ?? (runFailure ? 'Could not read your CV this time. Try again or fill the fields yourself.' : undefined);
+  const runErrorDetails = parseError ? undefined : runFailure;
 
   return (
     <div className="modal modal-open modal-end" role="dialog" aria-modal="true" aria-label="Fill search profile from CV">
@@ -269,9 +272,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
         <div className="flex flex-1 flex-col overflow-y-auto">
           <div className="flex-1 space-y-3 px-5 py-4">
             <p className="text-xs text-base-content/60">
-              Reads one CV and fills in the fields it can state or reasonably infer, including target
-              roles, considered roles and country. Excluded role families and minimum salary are never
-              filled in from a CV: a CV has no signal for either, so those stay yours to type.
+              Reads one CV and suggests your details. You review everything before it is saved.
             </p>
 
             {listError && (
@@ -324,7 +325,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                       disabled={busy}
                       onClick={() => setForm(parsedCvReviewForm(selected!.profile, profile))}
                     >
-                      Use parsed values
+                      Use saved CV details
                     </button>
                   )}
                   {run.isBusy && (
@@ -337,9 +338,15 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
             )}
 
             {runError && (
-              <p className="text-sm text-error" role="alert">
-                {runError}
-              </p>
+              <div className="text-sm text-error" role="alert">
+                <p>{runError}</p>
+                {runErrorDetails && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-xs font-medium">Details</summary>
+                    <pre className="mt-1 max-h-40 overflow-auto text-xs break-words whitespace-pre-wrap">{runErrorDetails}</pre>
+                  </details>
+                )}
+              </div>
             )}
 
             {form && (

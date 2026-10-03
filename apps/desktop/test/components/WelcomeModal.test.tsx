@@ -144,11 +144,11 @@ describe('first-launch welcome modal', () => {
     // All three checklist items are there, each with its own live status and its own skip.
     const checklist = within(dialog).getByRole('list', { name: 'Setup checklist' });
     expect(within(checklist).getByText('Add a CV')).toBeInTheDocument();
-    expect(within(checklist).getByText('Check the AI runtime')).toBeInTheDocument();
+    expect(within(checklist).getByText('Connect your AI tool')).toBeInTheDocument();
     expect(within(checklist).getByText('Download the company list')).toBeInTheDocument();
     expect(within(checklist).getAllByText('To do').length).toBeGreaterThanOrEqual(2);
     expect(within(checklist).getByRole('button', { name: 'Skip adding a CV' })).toBeInTheDocument();
-    expect(within(checklist).getByRole('button', { name: 'Skip checking the AI runtime' })).toBeInTheDocument();
+    expect(within(checklist).getByRole('button', { name: 'Skip connecting your AI tool' })).toBeInTheDocument();
     expect(within(checklist).getByRole('button', { name: 'Skip downloading the company list' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip for now' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /upload cv/i })).toBeInTheDocument();
@@ -377,7 +377,9 @@ describe('first-launch checklist: AI runtime item', () => {
 
     const { dialog } = await openWelcome();
 
-    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+    // A ready tool needs nothing from the user, so the item goes away and the intro counts two steps.
+    await waitFor(() => expect(within(dialog).queryByText('Connect your AI tool')).not.toBeInTheDocument());
+    expect(within(dialog).getByText('Two quick steps. Skip any and come back later.')).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
   });
 
@@ -389,12 +391,12 @@ describe('first-launch checklist: AI runtime item', () => {
 
     const { dialog } = await openWelcome();
 
-    await waitFor(() => expect(within(dialog).getByText('Claude Code is not installed on this computer.')).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText('Claude Code is not installed yet.')).toBeInTheDocument());
     const callsBefore = (agentDock.listProviders as ReturnType<typeof vi.fn>).mock.calls.length;
     current = claudeStatus();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Check again' }));
 
-    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).queryByText('Connect your AI tool')).not.toBeInTheDocument());
     expect((agentDock.listProviders as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
@@ -404,7 +406,7 @@ describe('first-launch checklist: AI runtime item', () => {
 
     const { dialog } = await openWelcome();
 
-    await waitFor(() => expect(within(dialog).getByText(/The AI helper has not responded yet/)).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText(/Still starting\. Check again in a moment/)).toBeInTheDocument());
   });
 
   it('re-checks on its own once the AI helper reports ready', async () => {
@@ -421,12 +423,12 @@ describe('first-launch checklist: AI runtime item', () => {
     });
 
     const { dialog } = await openWelcome();
-    await waitFor(() => expect(within(dialog).getByText(/has not responded yet/)).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText(/Still starting/)).toBeInTheDocument());
 
     helperUp = true;
     notifyStatus?.({ state: 'ready' });
 
-    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).queryByText('Connect your AI tool')).not.toBeInTheDocument());
   });
 
   it('skipping marks the item skipped without touching the provider list again', async () => {
@@ -434,23 +436,23 @@ describe('first-launch checklist: AI runtime item', () => {
     agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus({ installed: false })]);
 
     const { dialog } = await openWelcome();
-    await waitFor(() => expect(within(dialog).getByText(/not installed on this computer/)).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText('Claude Code is not installed yet.')).toBeInTheDocument());
     const callsBefore = (agentDock.listProviders as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Skip checking the AI runtime' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Skip connecting your AI tool' }));
 
     expect(within(dialog).getByText('Skipped')).toBeInTheDocument();
     expect(agentDock.listProviders).toHaveBeenCalledTimes(callsBefore);
   });
 
-  it('Open AI runtime closes the modal, persists the flag and opens that page', async () => {
+  it('Set up closes the modal, persists the flag and opens that page', async () => {
     const agentDock = installDrivableAgentDockBridge().agentDock;
     agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus({ installed: false })]);
 
     const { workspace, dialog } = await openWelcome();
-    await waitFor(() => expect(within(dialog).getByText(/not installed on this computer/)).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText('Claude Code is not installed yet.')).toBeInTheDocument());
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Open AI runtime' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Set up' }));
 
     await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
     expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
@@ -468,7 +470,7 @@ describe('first-launch checklist: company list item', () => {
 
     await waitFor(() => expect(refreshAtsRoster).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(within(dialog).getByText(/1,234 companies across Greenhouse, Lever, Ashby, Recruitee and Personio/)).toBeInTheDocument(),
+      expect(within(dialog).getByText(/1,234 companies ready/)).toBeInTheDocument(),
     );
     expect(within(dialog).queryByRole('button', { name: 'Download company list' })).not.toBeInTheDocument();
   });
@@ -483,7 +485,7 @@ describe('first-launch checklist: company list item', () => {
     });
     const { dialog } = await openWelcome();
 
-    await waitFor(() => expect(within(dialog).getByText(/987 companies across/)).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText('987 companies ready.')).toBeInTheDocument());
     expect(within(dialog).queryByRole('button', { name: /download company list/i })).not.toBeInTheDocument();
     expect(refreshAtsRoster).not.toHaveBeenCalled();
   });
@@ -498,17 +500,17 @@ describe('first-launch checklist: company list item', () => {
 
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Download company list' }));
 
-    expect(await within(dialog).findByText('the roster source could not be reached')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Could not update the company list.')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Try download again' }));
 
-    await waitFor(() => expect(within(dialog).getByText(/50 companies across/)).toBeInTheDocument());
-    expect(within(dialog).queryByText('the roster source could not be reached')).not.toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByText('50 companies ready.')).toBeInTheDocument());
+    expect(within(dialog).queryByText('Could not update the company list.')).not.toBeInTheDocument();
   });
 
   it('skipping marks it skipped, and Done replaces Skip for now once every item is addressed', async () => {
     installDrivableAgentDockBridge().agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus()]);
     const { dialog } = await openWelcome();
-    await waitFor(() => expect(within(dialog).getByText('Claude Code: ready')).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).queryByText('Connect your AI tool')).not.toBeInTheDocument());
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Skip downloading the company list' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Skip adding a CV' }));
@@ -542,7 +544,7 @@ describe('first-launch checklist: search profile could not be loaded', () => {
     const { workspace } = await uploadWithBrokenProfile({ ok: false });
 
     const alert = await screen.findByText(
-      'Your CV is saved. The search profile could not be filled automatically. You can fill it in Settings.',
+      'CV saved. Could not fill your profile automatically. You can do it in Settings.',
     );
     expect(alert).toBeInTheDocument();
     // Still open, and not yet marked seen: the message has to be readable before anything closes.
@@ -554,7 +556,7 @@ describe('first-launch checklist: search profile could not be loaded', () => {
   it('Try again reloads the profile and goes on to the review', async () => {
     const profileLoads = { ok: false };
     await uploadWithBrokenProfile(profileLoads);
-    await screen.findByText(/The search profile could not be filled automatically/);
+    await screen.findByText(/Could not fill your profile automatically/);
 
     profileLoads.ok = true;
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
@@ -565,7 +567,7 @@ describe('first-launch checklist: search profile could not be loaded', () => {
   it('Open Settings closes the modal and lands on the Search tab with the profile focused', async () => {
     const profileLoads = { ok: false };
     const { workspace } = await uploadWithBrokenProfile(profileLoads);
-    await screen.findByText(/The search profile could not be filled automatically/);
+    await screen.findByText(/Could not fill your profile automatically/);
 
     profileLoads.ok = true;
     fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
@@ -578,11 +580,11 @@ describe('first-launch checklist: search profile could not be loaded', () => {
 
   it('Dismiss clears the message', async () => {
     await uploadWithBrokenProfile({ ok: false });
-    await screen.findByText(/The search profile could not be filled automatically/);
+    await screen.findByText(/Could not fill your profile automatically/);
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
-    expect(screen.queryByText(/The search profile could not be filled automatically/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Could not fill your profile automatically/)).not.toBeInTheDocument();
     expect(welcomeDialog()).toBeInTheDocument();
   });
 });
