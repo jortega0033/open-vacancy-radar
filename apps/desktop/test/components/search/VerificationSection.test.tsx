@@ -62,7 +62,7 @@ describe('VerificationSection', () => {
     expect(screen.queryByText(/you can still compare this vacancy/i)).not.toBeInTheDocument();
     // What it does own: the vacancy-level official source check.
     expect(screen.getByRole('heading', { name: 'Sources' })).toBeInTheDocument();
-    expect(screen.getByText('Official vacancy check')).toBeInTheDocument();
+    expect(screen.getByText('Not confirmed on the employer')).toBeInTheDocument();
   });
 
   it('stays silent about a sponsor match too, leaving the label and note to the summary card', () => {

@@ -20,9 +20,9 @@ test.describe('Search', () => {
     // the results list.
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
     await expect(
-      window.getByText(/No scan has been run yet, so there is nothing to filter/i),
+      window.getByText(/Enter a role and search to find jobs/i),
     ).toBeVisible();
-    await expect(window.getByRole('button', { name: /run the first scan/i })).toBeVisible();
+    await expect(window.getByRole('button', { name: /search/i })).toBeVisible();
     await expect(window.getByText('Salary shown only where advertised')).toBeVisible();
 
     // The plain country selector is always offered -- there is no separate pipeline switch any
