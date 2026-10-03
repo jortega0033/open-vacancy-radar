@@ -84,6 +84,26 @@ function applyProfileFields(prev: FormState, parsed: Partial<CvProfile>): FormSt
   };
 }
 
+/**
+ * Like `applyProfileFields`, but only into fields that are still empty. The deterministic fill has
+ * already placed values the candidate can see (title, years, ...); the AI pass that follows exists
+ * only for what the source records cannot supply (skills, languages, work authorization), so it
+ * must never overwrite them.
+ */
+function applyMissingProfileFields(prev: FormState, parsed: Partial<CvProfile>): FormState {
+  const blank = (value: string) => value.trim().length === 0;
+  return {
+    ...prev,
+    title: blank(prev.title) ? (parsed.title ?? prev.title) : prev.title,
+    years: blank(prev.years) ? (parsed.years ?? prev.years) : prev.years,
+    location: blank(prev.location) ? (parsed.location ?? prev.location) : prev.location,
+    languages: blank(prev.languages) ? (parsed.languages ?? prev.languages) : prev.languages,
+    skillsText: blank(prev.skillsText) && parsed.skills ? skillsToText(parsed.skills) : prev.skillsText,
+    summary: blank(prev.summary) ? (parsed.summary ?? prev.summary) : prev.summary,
+    auth: blank(prev.auth) ? (parsed.auth ?? prev.auth) : prev.auth,
+  };
+}
+
 /** How each derivable field is named to the user in the "filled from your source CV" status, in the
  * form's own label wording rather than the schema's field names. */
 const DERIVED_FIELD_LABELS: Partial<Record<keyof CvProfile, string>> = {
@@ -141,7 +161,12 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
   const parseRun = useAgentRun({ chunkSeparator: '' });
   const parseAppliedRef = useRef(false);
+  /** True while the running parse only completes what the source-CV fill could not (#521): it then
+   * fills empty fields and leaves the derived ones alone. */
+  const parseGapsOnlyRef = useRef(false);
   const parseSucceeded = parseRun.status === 'completed' && !parseError;
+  // A finished fill that still left Skills empty (#521): say so instead of leaving a silent blank.
+  const noSkillsFound = parseSucceeded && textToSkills(form.skillsText).length === 0;
 
   // A second, separate run for #274's full source-CV extraction. Deliberately not folded into the
   // one above: they answer different questions (seven summary fields vs. the whole document as
@@ -182,7 +207,8 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     parseAppliedRef.current = true;
     try {
       const parsed = parseCvAiResponse(parseRun.text);
-      setForm((prev) => applyProfileFields(prev, parsed));
+      const gapsOnly = parseGapsOnlyRef.current;
+      setForm((prev) => (gapsOnly ? applyMissingProfileFields(prev, parsed) : applyProfileFields(prev, parsed)));
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'could not read the AI response');
     }
@@ -244,10 +270,20 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
           .map((key) => DERIVED_FIELD_LABELS[key])
           .filter((label): label is string => label !== undefined),
       );
+      // The source records have no skills section, so the derivation can never fill Skills,
+      // Languages or Work authorization. Leaving them empty made tailoring strip every skill (#521):
+      // when any of them is still blank, one AI pass completes just those.
+      const needsGapFill =
+        textToSkills(form.skillsText).length === 0 || form.languages.trim().length === 0 || form.auth.trim().length === 0;
+      if (!needsGapFill) return;
+      parseGapsOnlyRef.current = true;
+      parseAppliedRef.current = false;
+      void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
       return;
     }
 
     setDerivedFields(null);
+    parseGapsOnlyRef.current = false;
     parseAppliedRef.current = false;
     void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
   }
@@ -350,14 +386,19 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                   )}
                   <span className="text-xs text-base-content/60">
                     {canDeriveFromSource
-                      ? 'Fills in the fields below from the CV records you already have, with no second AI run.'
+                      ? 'Fills in the fields below from the CV records you already have; skills and languages come from one short AI read.'
                       : 'Reads the extracted text and fills in the fields below for you to review.'}
                   </span>
                 </div>
                 {derivedFields && (
                   <p className="mt-2 text-xs text-success" role="status">
-                    Filled in from your source CV records, no AI run needed: {derivedFields.join(', ')}. Review
-                    before saving.
+                    Filled in from your source CV records: {derivedFields.join(', ')}. Review before saving.
+                  </p>
+                )}
+                {noSkillsFound && (
+                  <p className="mt-2 text-xs text-warning" role="status">
+                    No skills found in this CV. Add them in the Skills field, or tailoring cannot match any vacancy to
+                    your profile.
                   </p>
                 )}
                 {parseSucceeded && !derivedFields && (

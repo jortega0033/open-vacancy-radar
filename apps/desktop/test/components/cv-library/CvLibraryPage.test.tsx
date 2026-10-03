@@ -270,10 +270,10 @@ describe('CvLibraryPage', () => {
     expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript');
   });
 
-  it('fills the summary fields from the reviewed source CV instead of firing a second AI run', async () => {
-    // The two extractions read the same document: once the source CV records exist, the title, the
-    // years and the location are arithmetic over data the candidate has already reviewed, so asking
-    // a model for them again costs a wait and a second chance to come back unparseable for nothing.
+  it('fills the core fields from the reviewed source CV, then completes skills with one AI read (#521)', async () => {
+    // Title, years and location are arithmetic over records the candidate has reviewed, so they land
+    // at once. The source records have no skills section, so Skills used to stay empty and tailoring
+    // then stripped every skill: one AI pass now fills only what is still blank.
     // The date range is closed on both ends so the expected years figure cannot drift with the
     // calendar; the open-ended arithmetic is covered in `cv-profile-from-source.test.ts`.
     const record = makeCv({
@@ -285,6 +285,7 @@ describe('CvLibraryPage', () => {
     });
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
     installCvBridge();
+    const emit = installAgentDockBridge();
 
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
@@ -294,7 +295,7 @@ describe('CvLibraryPage', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
 
-    expect(await within(dialog).findByText(/no ai run needed/i)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/filled in from your source cv records/i)).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
     expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
     // The source-CV review panel sitting above the form has a "Location" input of its own, so the
@@ -303,7 +304,57 @@ describe('CvLibraryPage', () => {
     expect(profileLocation).toHaveValue('Amsterdam, Netherlands');
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
-    expect(bridge.createSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+    emit('sess-cv-parse-1', {
+      type: 'assistant.message',
+      text: JSON.stringify({
+        title: 'Some Other Title',
+        years: '99 years',
+        location: 'Elsewhere',
+        languages: 'English, Dutch',
+        skills: ['React', 'TypeScript'],
+        summary: '',
+        auth: '',
+      }),
+    });
+    emit('sess-cv-parse-1', { type: 'session.completed' });
+
+    await waitFor(() => expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript'));
+    expect(within(dialog).getByLabelText(/languages/i)).toHaveValue('English, Dutch');
+    // The AI pass completes blanks only; it never overwrites what the records already supplied.
+    expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
+    expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
+    expect(within(dialog).queryByText(/no skills found/i)).not.toBeInTheDocument();
+  });
+
+  it('says so when the profile fill finds no skills (#521)', async () => {
+    const record = makeCv({
+      id: 'derive-3',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. Amsterdam.',
+      source: makeSource(),
+    });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+    const emit = installAgentDockBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+    emit('sess-cv-parse-1', {
+      type: 'assistant.message',
+      text: JSON.stringify({ title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' }),
+    });
+    emit('sess-cv-parse-1', { type: 'session.completed' });
+
+    expect(await within(dialog).findByText(/no skills found/i)).toBeInTheDocument();
   });
 
   it('still runs the AI parse for a CV that has no source records yet', async () => {

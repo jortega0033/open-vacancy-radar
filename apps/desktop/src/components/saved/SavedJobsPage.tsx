@@ -159,7 +159,7 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
       setPrepareNotice(
         result.ok
           ? {
-              message: `Preparing an application for "${job.role}" at ${job.company}.`,
+              message: `Preparing an application for "${job.role}" at ${job.company}.${result.warning ? ` ${result.warning}` : ''}`,
               attemptId: result.attemptId,
             }
           : { message: result.detail ?? 'this application could not be started', attemptId: result.attemptId },

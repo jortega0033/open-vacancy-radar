@@ -232,6 +232,17 @@ function resolveSourceCv(db: WorkspaceDb, cvId: string | null): CvDocumentRecord
   return documents.find((document) => document.id === defaultCvId) ?? documents.find((document) => document.isDefault);
 }
 
+/** The sentence a review card reads as "documents exist" without claiming a tailored CV (#521). */
+export const CV_READY_PHRASE = 'Your tailored CV is ready.';
+export const CV_NOT_TAILORED_PHRASE = 'Your CV was prepared without any skills.';
+function cvReadyPhrase(skillsMissing: boolean): string {
+  return skillsMissing ? CV_NOT_TAILORED_PHRASE : CV_READY_PHRASE;
+}
+
+/** Shown before and after tailoring when the reviewed CV profile has no skills (#521). */
+export const NO_PROFILE_SKILLS_WARNING =
+  'Your CV profile has no skills, so tailoring cannot match this vacancy. Add skills to your CV.';
+
 export interface StartApplicationAttemptInput {
   vacancy: PipelineVacancy;
   /** Null to use the library's default CV. */
@@ -296,7 +307,11 @@ export async function startApplicationAttempt(
   }
 
   await enqueueApplicationAttempt(deps, attempt.id);
-  return { ok: true, attemptId: attempt.id };
+  return {
+    ok: true,
+    attemptId: attempt.id,
+    ...(cv.profile.skills.length === 0 ? { warning: NO_PROFILE_SKILLS_WARNING } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------------- running
@@ -640,6 +655,7 @@ export async function runApplicationAttempt(
   const target = { company: attempt.company, role: attempt.role };
   let resume: TailoredResume;
   let tailoringSummary: string;
+  let skillsMissing = false;
   if (attempt.tailoringMode === 'original') {
     resume = cvDocumentToTailoredResume(cv, profile);
     tailoringSummary = 'Original reviewed CV used by your explicit choice after automatic tailoring stopped.';
@@ -650,6 +666,13 @@ export async function runApplicationAttempt(
       resume = tailored.resume;
       if (tailored.dropped.length > 0) {
         tailoringSummary += ` Removed unsupported output: ${tailored.dropped.join('; ')}.`;
+      }
+      // Every skill gone is not a tailored CV, whatever the rest of the document looks like (#521).
+      if (resume.skills.length === 0) {
+        skillsMissing = true;
+        tailoringSummary += cv.profile.skills.length === 0
+          ? ` ${NO_PROFILE_SKILLS_WARNING}`
+          : ' Every skill was removed, so this CV is not tailored to the vacancy.';
       }
     } catch (err) {
       return settle(
@@ -754,7 +777,7 @@ export async function runApplicationAttempt(
   const policyId = resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl);
   if (!policyId) {
     const detail = letterBlocker
-      ? `${tailoringSummary} Your tailored CV is ready. Cover letter blocker: ${letterBlocker}. Use Generate letter to create and review one, then return here, or provide one on the employer site.`
+      ? `${tailoringSummary} ${cvReadyPhrase(skillsMissing)} Cover letter blocker: ${letterBlocker}. Use Generate letter to create and review one, then return here, or provide one on the employer site.`
       : `${tailoringSummary} Your application documents are ready. This employer site is not approved for automated submission, so apply on the site yourself and mark the attempt when you finish.`;
     return settle(
       run,
@@ -770,7 +793,7 @@ export async function runApplicationAttempt(
       run,
       attemptId,
       'needs_user',
-      `Automatic cover letter preparation stopped: ${letterBlocker}. Your tailored CV is ready. Generate and review a cover letter, then resume the application.`,
+      `Automatic cover letter preparation stopped: ${letterBlocker}. ${cvReadyPhrase(skillsMissing)} Generate and review a cover letter, then resume the application.`,
       'needs_user',
     );
   }

@@ -126,7 +126,11 @@ export function ManualApplicationReviewCard({
             </h2>
             <p className="mt-1 text-xs text-base-content/60">
               {letterBlocked
-                ? 'This site is not approved for automated submission. Your tailored CV is ready, but the letter still needs attention.'
+                ? `This site is not approved for automated submission. ${
+                    attempt.checkpointDetail.includes('Your CV was prepared without any skills.')
+                      ? 'Your CV has no skills to match this vacancy, and the letter still needs attention.'
+                      : 'Your tailored CV is ready, but the letter still needs attention.'
+                  }`
                 : 'This site is not approved for automated submission. Your documents are ready for you to use on the employer site.'}
             </p>
           </div>

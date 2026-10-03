@@ -127,7 +127,8 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         if (cancelled) return;
         if (!policyId) {
           const hasUsefulManualDocuments = attempt.checkpointDetail.includes('Your application documents are ready.')
-            || attempt.checkpointDetail.includes('Your tailored CV is ready.');
+            || attempt.checkpointDetail.includes('Your tailored CV is ready.')
+            || attempt.checkpointDetail.includes('Your CV was prepared without any skills.');
           if (attempt.checkpoint === 'needs_user' && !hasUsefulManualDocuments) {
             setState({ phase: 'preparation_blocked', message: attempt.checkpointDetail, busy: false });
             return;
