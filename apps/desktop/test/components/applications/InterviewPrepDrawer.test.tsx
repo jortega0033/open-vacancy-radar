@@ -8,8 +8,9 @@ import type {
   LetterRecord,
   SavedJobRecord,
 } from '../../../src/window.js';
-import { installBridges } from '../../cv-bridges.js';
+import { CLAUDE_INSTALLED, installBridges } from '../../cv-bridges.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
+import { resetProviderLimitsForTest, setProviderOverride } from '../../../src/provider-limits.js';
 
 function makeApplication(overrides: Partial<ApplicationRecord> = {}): ApplicationRecord {
   return {
@@ -137,6 +138,9 @@ function setupBridges(options: {
   });
   return { ...bridges, workspace };
 }
+
+const CODEX_READY = { ...CLAUDE_INSTALLED, id: 'codex', name: 'Codex' } as typeof CLAUDE_INSTALLED;
+const LIMIT = "You've hit your session limit, resets 11:59pm (Europe/Amsterdam)";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -293,4 +297,31 @@ describe('InterviewPrepDrawer', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/recruiter screen or interview stage/i);
     expect(screen.queryByRole('button', { name: /generate prep pack/i })).not.toBeInTheDocument();
   });
+
+  it('shows the guided limit notice with a switch action when interview prep hits a usage limit (#547)', async () => {
+    resetProviderLimitsForTest();
+    setProviderOverride(null);
+    const bridges = setupBridges();
+    vi.mocked(bridges.agentDock.listProviders).mockResolvedValue([CLAUDE_INSTALLED, CODEX_READY]);
+    render(
+      <InterviewPrepDrawer
+        application={makeApplication()}
+        savedJobs={[makeSavedJob()]}
+        cvDocuments={[makeCv()]}
+        letters={[makeLetter()]}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /generate prep pack/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /generate prep pack/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    bridges.emit('sess-cv-1', { type: 'session.failed', message: LIMIT });
+
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent('usage limit until 11:59pm (Europe/Amsterdam)');
+    expect(await screen.findByRole('button', { name: 'Use Codex for now' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    setProviderOverride(null);
+  });
+
 });
