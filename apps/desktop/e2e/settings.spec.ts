@@ -81,9 +81,9 @@ test.describe('Settings', () => {
     await window.getByRole('group', { name: 'Density' }).getByRole('button', { name: 'Compact' }).click();
     await expect(window.locator('html')).toHaveAttribute('data-density', 'compact');
 
-    // "Reset settings" lives under the Advanced tab (SettingsPage.tsx groups Data management
-    // there), while Theme/Density are under General -- so this test crosses tabs deliberately.
-    await window.getByRole('tab', { name: 'Advanced' }).click();
+    // "Reset settings" lives under the Data tab (#442), while Theme/Density are under General -- so
+    // this test crosses tabs deliberately.
+    await window.getByRole('tab', { name: 'Data' }).click();
     await window.getByRole('button', { name: 'Reset settings' }).click();
     const confirm = window.getByRole('alertdialog');
     await expect(confirm).toContainText(/reset settings\?/i);

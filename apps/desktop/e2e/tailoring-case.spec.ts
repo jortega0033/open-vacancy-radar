@@ -169,7 +169,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await editDialog.getByLabel(/skills/i).fill('TypeScript, Playwright');
     // The drawer says what the save affects before it is pressed.
     await expect(editDialog.getByText(/Saving changes puts (it|them) on hold until you review what changed/)).toBeVisible();
-    await editDialog.getByRole('button', { name: /save changes/i }).click();
+    await editDialog.getByRole('button', { name: /confirm and save|save changes/i }).click();
     await expect(editDialog).toBeHidden();
     await expect(caseRow.getByRole('cell').nth(2)).toHaveText('CV changed, review needed');
     await expect(caseRow.getByRole('cell').nth(3)).toHaveText('out of date');

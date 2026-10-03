@@ -62,7 +62,7 @@ test.describe('CV library', () => {
     await window.getByRole('button', { name: /save to cv library/i }).click();
     await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();
     await expect(window.getByText('sample-cv.txt')).toBeVisible();
-    await expect(window.getByText('Ready', { exact: true })).toBeVisible();
+    await expect(window.getByText('Text found', { exact: true })).toBeVisible();
   });
 
   test('uploads a DOCX CV file and saves the extracted text to the library (issue #357)', async ({
@@ -105,7 +105,7 @@ test.describe('CV library', () => {
       await window.getByRole('button', { name: /save to cv library/i }).click();
       await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();
       await expect(window.getByText('cv.docx')).toBeVisible();
-      await expect(window.getByText('Ready', { exact: true })).toBeVisible();
+      await expect(window.getByText('Text found', { exact: true })).toBeVisible();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1119,6 +1119,15 @@ export function SearchPage({
     ? `${reportSalaryCounts.comparable.toLocaleString()} comparable · ${reportSalaryCounts.unknown.toLocaleString()} unknown`
     : SALARY_NOTE;
 
+  // A window narrowed while a vacancy is open keeps showing that vacancy instead of dropping back to
+  // the list. A page that starts narrow still opens on the list.
+  const wasTwoPaneRef = useRef(false);
+  useEffect(() => {
+    if (pageWidth === null) return;
+    if (singlePane && wasTwoPaneRef.current && selectedKey) setPaneView('detail');
+    wasTwoPaneRef.current = !singlePane;
+  }, [pageWidth, singlePane, selectedKey]);
+
   const showDetailPane = !!selected && (!singlePane || paneView === 'detail');
   const showListPane = !singlePane || paneView === 'list' || !selected;
 
