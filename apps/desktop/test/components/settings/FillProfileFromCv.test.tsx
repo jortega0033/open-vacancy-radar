@@ -109,10 +109,10 @@ describe('FillProfileFromCvDrawer', () => {
 
     const panel = await waitFor(() => {
       const found = dialog();
-      expect(found.getByRole('button', { name: 'Use parsed values' })).toBeInTheDocument();
+      expect(found.getByRole('button', { name: 'Use saved CV details' })).toBeInTheDocument();
       return found;
     });
-    fireEvent.click(panel.getByRole('button', { name: 'Use parsed values' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Use saved CV details' }));
 
     expect(panel.getByLabelText('Current role')).toHaveValue('Senior Frontend Engineer');
     expect(panel.getByLabelText('Years of experience')).toHaveValue(8);
@@ -335,7 +335,7 @@ describe('FillProfileFromCvDrawer', () => {
     render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} />);
     await runExtraction(bridges, 'I could not read that CV.');
 
-    await waitFor(() => expect(dialog().getByRole('alert')).toHaveTextContent(/not valid JSON/));
+    await waitFor(() => expect(dialog().getByRole('alert')).toHaveTextContent(/Could not read your CV this time/));
     expect(dialog().getByRole('button', { name: 'Save to profile' })).toBeDisabled();
   });
 

@@ -47,8 +47,8 @@ describe('AtsRosterSection', () => {
 
     render(<AtsRosterSection {...baseProps()} />);
 
-    await waitFor(() => expect(screen.getByText(/Not yet imported/)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Refresh company roster' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Download the company list once/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Update company list' })).toBeInTheDocument();
   });
 
   it('shows the last-refreshed date and total entries when a roster already exists', async () => {
@@ -62,7 +62,7 @@ describe('AtsRosterSection', () => {
 
     render(<AtsRosterSection {...baseProps()} />);
 
-    await waitFor(() => expect(screen.getByText(/Last refreshed/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Updated /)).toBeInTheDocument());
     expect(screen.getByText(/1,234 companies/)).toBeInTheDocument();
   });
 
@@ -73,8 +73,8 @@ describe('AtsRosterSection', () => {
 
     render(<AtsRosterSection {...baseProps()} />);
 
-    await waitFor(() => expect(screen.getByText('disk read failed')).toBeInTheDocument());
-    expect(screen.queryByText(/Not yet imported/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Could not load the company list.')).toBeInTheDocument());
+    expect(screen.queryByText(/Download the company list once/)).not.toBeInTheDocument();
   });
 
   it('runs the refresh on click, reports success upward, and shows the refreshed status', async () => {
@@ -87,8 +87,8 @@ describe('AtsRosterSection', () => {
 
     render(<AtsRosterSection {...baseProps({ onRefreshed })} />);
 
-    await waitFor(() => expect(screen.getByText(/Not yet imported/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh company roster' }));
+    await waitFor(() => expect(screen.getByText(/Download the company list once/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Update company list' }));
 
     await waitFor(() => expect(refreshAtsRoster).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onRefreshed).toHaveBeenCalledWith(importResult()));
@@ -105,11 +105,11 @@ describe('AtsRosterSection', () => {
 
     render(<AtsRosterSection {...baseProps({ onRefreshError })} />);
 
-    await waitFor(() => expect(screen.getByText(/Not yet imported/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh company roster' }));
+    await waitFor(() => expect(screen.getByText(/Download the company list once/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Update company list' }));
 
     await waitFor(() =>
-      expect(onRefreshError).toHaveBeenCalledWith('a vacancy scan is already running'),
+      expect(onRefreshError).toHaveBeenCalledWith('Could not update the company list.', 'a vacancy scan is already running'),
     );
   });
 
@@ -125,11 +125,11 @@ describe('AtsRosterSection', () => {
 
     render(<AtsRosterSection {...baseProps()} />);
 
-    await waitFor(() => expect(screen.getByText(/Not yet imported/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh company roster' }));
+    await waitFor(() => expect(screen.getByText(/Download the company list once/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Update company list' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Refreshing…' })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Updating…' })).toBeDisabled());
     resolveRefresh(importResult());
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh company roster' })).not.toBeDisabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update company list' })).not.toBeDisabled());
   });
 });

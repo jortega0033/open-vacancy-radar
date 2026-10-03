@@ -20,7 +20,7 @@ type Report = {
 };
 
 async function previewText(): Promise<string> {
-  const box = (await screen.findByLabelText('Diagnostics text')) as HTMLTextAreaElement;
+  const box = (await screen.findByLabelText('Bug report text')) as HTMLTextAreaElement;
   await waitFor(() => expect(box.value).toMatch(/^\{/));
   return box.value;
 }
@@ -51,7 +51,7 @@ describe('AboutSection', () => {
     });
 
     render(<AboutSection currentPage="settings" previousPage="search" />);
-    const box = (await screen.findByLabelText('Diagnostics text')) as HTMLTextAreaElement;
+    const box = (await screen.findByLabelText('Bug report text')) as HTMLTextAreaElement;
     expect(box).toHaveAttribute('readonly');
     const report = JSON.parse(await previewText()) as Report;
 
@@ -106,7 +106,7 @@ describe('AboutSection', () => {
 
     render(<AboutSection currentPage="settings" />);
     const shown = await previewText();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy report' }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0]?.[0]).toBe(shown);
@@ -124,7 +124,7 @@ describe('AboutSection', () => {
     const link = screen.getByRole('link', { name: 'Open GitHub issue' });
     expect(link).toHaveAttribute('href', expect.stringContaining('/issues/new?'));
     expect(issueBody()).toContain('```json\n' + shown + '\n```');
-    expect(issueBody()).not.toContain('Click Copy diagnostics first');
+    expect(issueBody()).not.toContain('Click Copy report first');
     expect(shown).toContain('"state": "ready"');
     expect(shown).toContain('engine locked');
   });
@@ -144,10 +144,10 @@ describe('AboutSection', () => {
     engineDown = true;
     fireEvent.click(screen.getByRole('button', { name: 'Refresh preview' }));
     await waitFor(async () => {
-      const box = screen.getByLabelText('Diagnostics text') as HTMLTextAreaElement;
+      const box = screen.getByLabelText('Bug report text') as HTMLTextAreaElement;
       expect(box.value).toContain('engine went down');
     });
-    const shown = (screen.getByLabelText('Diagnostics text') as HTMLTextAreaElement).value;
+    const shown = (screen.getByLabelText('Bug report text') as HTMLTextAreaElement).value;
     expect(issueBody()).toContain(shown);
   });
 
@@ -174,7 +174,7 @@ describe('AboutSection', () => {
     expect(shown).toContain('[redacted-url]');
     expect(shown).toContain('Bearer [redacted-token]');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy report' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0]?.[0]).toBe(shown);
     expect(issueBody()).not.toMatch(/abc123secret|C:\\Users|\/Users\/jake|abcDEF123456/);

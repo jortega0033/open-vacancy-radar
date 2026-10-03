@@ -10,6 +10,8 @@ export interface ErrorBannerProps {
   /** Defaults to `alert`; use `status` for a polite, non-blocking notice. */
   role?: 'alert' | 'status';
   'aria-label'?: string;
+  /** Raw technical text (an error message, a path). Kept out of sight behind a "Details" disclosure. */
+  details?: string;
 }
 
 /**
@@ -21,10 +23,20 @@ export interface ErrorBannerProps {
  * screen reader user gets no announcement at all from the sites missing it. This component makes
  * both of those impossible to get wrong at a call site.
  */
-export function ErrorBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel }: ErrorBannerProps) {
+export function ErrorBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel, details }: ErrorBannerProps) {
   return (
     <div className={['alert', 'alert-error', 'alert-soft', 'text-sm', className].filter(Boolean).join(' ')} role={role} aria-label={ariaLabel}>
-      <span>{children}</span>
+      {details ? (
+        <div className="min-w-0 flex-1">
+          <span>{children}</span>
+          <details className="mt-1">
+            <summary className="cursor-pointer text-xs font-medium">Details</summary>
+            <pre className="mt-1 max-h-40 overflow-auto text-xs break-words whitespace-pre-wrap">{details}</pre>
+          </details>
+        </div>
+      ) : (
+        <span>{children}</span>
+      )}
       {action}
     </div>
   );
