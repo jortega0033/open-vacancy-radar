@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
-import { decodeFeedEntities } from '../ats/shared.js';
+import { decodeFeedEntities, htmlToText } from '../ats/shared.js';
 import { resolveApplyUrl, vacancyIdentityFor } from '../vacancies/identity.js';
 import { annualizedMinimumUsd, classifyDiscoveryVacancy } from './evaluation.js';
 import { normalizeSalary } from './salary.js';
@@ -66,6 +66,21 @@ export function locations(value: unknown, emptyFallback = 'Worldwide'): string {
   return names.length === 0 ? emptyFallback : names.join(', ');
 }
 
+const MARKUP_PATTERN = /<\/?[a-z][^>]*>|&(?:[a-z]+|#\d+|#x[0-9a-f]+);/iu;
+
+/**
+ * Some sources (Remote First Jobs, Remote OK) deliver the description as HTML. Convert it once here
+ * so every consumer (result list, details, the saved job description, AI prompts) reads the same
+ * plain text, with paragraph breaks kept and list items as "- " lines. Text without markup is
+ * returned untouched.
+ */
+export function plainDescription(
+  description: string | null | undefined,
+): string | null | undefined {
+  if (typeof description !== 'string' || !MARKUP_PATTERN.test(description)) return description;
+  return htmlToText(description.replace(/<li\b[^>]*>/giu, '<li>- ')).replace(/\n{2,}(?=- )/gu, '\n');
+}
+
 export function discoveryAudit(
   input: Omit<
     DiscoveryVacancyAudit,
@@ -98,6 +113,7 @@ export function discoveryAudit(
     salaryProvenance?: import('./salary.js').SalaryProvenance;
   },
 ): DiscoveryVacancyAudit {
+  const description = plainDescription(input.description);
   const annualized = annualizedMinimumUsd(
     input.advertisedMinimum,
     input.currency,
@@ -115,7 +131,7 @@ export function discoveryAudit(
     location: input.location,
     annualizedMinimumUsd: annualized,
     minimumAnnualBaseUsd: input.minimumAnnualBaseUsd,
-    ...(input.description === undefined ? {} : { description: input.description }),
+    ...(description === undefined ? {} : { description }),
   });
   // Issue #278: every discovery source computes its canonical identity and apply-URL evidence
   // through this one shared constructor, rather than each of the ~30 call sites in global-remote/*.ts
@@ -140,7 +156,7 @@ export function discoveryAudit(
     sources: [{ provider: input.provider, key: input.key, url: input.url }],
     location: input.location,
     locations: [input.location],
-    searchableText: [`${input.title} ${input.description ?? ''}`.trim()],
+    searchableText: [`${input.title} ${description ?? ''}`.trim()],
     employmentTypes: input.employmentType ? [input.employmentType] : [],
     employmentType: input.employmentType,
     currency: input.currency,
@@ -154,7 +170,7 @@ export function discoveryAudit(
     decision: classification.decision,
     reasons: classification.reasons,
     contentHash: createHash('sha256').update(JSON.stringify(input.raw)).digest('hex'),
-    description: input.description ?? null,
+    description: description ?? null,
     postedAt: input.postedAt ?? null,
     // Always null at discovery time: unlike `description`/`postedAt`, a profile score needs the
     // candidate profile and the pipeline's own salary floor, neither of which any individual
