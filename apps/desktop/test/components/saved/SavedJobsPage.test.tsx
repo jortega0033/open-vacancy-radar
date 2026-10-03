@@ -325,4 +325,96 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
 
     expect(await screen.findByRole('status')).toHaveTextContent('already in progress');
   });
+
+  describe('application state per row (#467)', () => {
+    function attempt(overrides: Record<string, unknown>) {
+      return {
+        id: 'att-1',
+        applicationId: null,
+        vacancyKey: 'vac-a',
+        checkpoint: 'ready',
+        createdAt: '2026-10-02T10:00:00.000Z',
+        updatedAt: '2026-10-02T10:05:00.000Z',
+        submittedAt: null,
+        scheduledAutomaticSubmitAt: null,
+        ...overrides,
+      };
+    }
+
+    it('shows each row\'s own state and swaps Prepare for Open review once an attempt exists', async () => {
+      const onView = vi.fn();
+      installApplicationPipelineBridge();
+      installWorkspaceBridge({
+        listSavedJobs: vi.fn().mockResolvedValue([
+          makeJob({ id: 'a', vacancyKey: 'vac-a', role: 'Platform Engineer' }),
+          makeJob({ id: 'b', vacancyKey: 'vac-b', role: 'Data Engineer' }),
+          makeJob({ id: 'c', vacancyKey: 'vac-c', role: 'QA Engineer' }),
+        ]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([
+          attempt({ id: 'att-a', vacancyKey: 'vac-a', checkpoint: 'tailoring' }),
+          attempt({ id: 'att-b', vacancyKey: 'vac-b', checkpoint: 'submitted', submittedAt: '2026-10-02T14:05:00.000Z' }),
+        ]),
+      });
+      render(<SavedJobsPage onViewApplicationAttempt={onView} />);
+
+      expect(await screen.findByText('Preparing (tailoring CV)')).toBeInTheDocument();
+      expect(screen.getByText(/^Sent /)).toBeInTheDocument();
+      expect(screen.getByText('Not started')).toBeInTheDocument();
+      // Only the untouched row still offers Prepare.
+      expect(screen.getAllByRole('button', { name: /^prepare application for/i })).toHaveLength(1);
+      fireEvent.click(screen.getByRole('button', { name: /open review for platform engineer/i }));
+      expect(onView).toHaveBeenCalledWith('att-a');
+    });
+
+    it('labels an unconfirmed send and a person\'s own report instead of calling them Sent', async () => {
+      installWorkspaceBridge({
+        listSavedJobs: vi.fn().mockResolvedValue([
+          makeJob({ id: 'a', vacancyKey: 'vac-a', role: 'Platform Engineer' }),
+          makeJob({ id: 'b', vacancyKey: 'vac-b', role: 'Data Engineer' }),
+        ]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([
+          attempt({ id: 'att-a', vacancyKey: 'vac-a', checkpoint: 'submission_unknown' }),
+          attempt({ id: 'att-b', vacancyKey: 'vac-b', checkpoint: 'user_reported', submittedAt: '2026-10-02T14:05:00.000Z' }),
+        ]),
+      });
+      render(<SavedJobsPage onViewApplicationAttempt={vi.fn()} />);
+
+      expect(await screen.findByText('Sent, not confirmed')).toBeInTheDocument();
+      expect(screen.getByText(/^Reported as applied/)).toBeInTheDocument();
+      expect(screen.queryByText(/^Sent \d|^Sent [A-Z]/)).not.toBeInTheDocument();
+    });
+
+    it('keeps other rows usable while one prepares, and names the busy button', async () => {
+      let finish: (value: { ok: true; attemptId: string }) => void = () => undefined;
+      const start = vi.fn().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+      installApplicationPipelineBridge(start);
+      installWorkspaceBridge({
+        listSavedJobs: vi.fn().mockResolvedValue([
+          makeJob({ id: 'a', role: 'Platform Engineer' }),
+          makeJob({ id: 'b', role: 'Data Engineer' }),
+        ]),
+      });
+      render(<SavedJobsPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /prepare application for platform engineer/i }));
+
+      const busy = await screen.findByRole('button', { name: /preparing application for platform engineer/i });
+      expect(busy).toHaveTextContent('Preparing…');
+      expect(busy).toBeDisabled();
+      expect(screen.getByRole('button', { name: /prepare application for data engineer/i })).toBeEnabled();
+
+      finish({ ok: true, attemptId: 'att-1' });
+      await waitFor(() => expect(screen.queryByRole('button', { name: /preparing application for/i })).not.toBeInTheDocument());
+    });
+
+    it('explains Prepare application once, under the current automatic-sending setting', async () => {
+      installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([makeJob({ id: 'a' })]) });
+      render(<SavedJobsPage />);
+
+      const note = await screen.findByRole('note');
+      expect(note).toHaveTextContent(/nothing is sent automatically/i);
+      fireEvent.click(within(note).getByRole('button', { name: /got it/i }));
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    });
+  });
 });
