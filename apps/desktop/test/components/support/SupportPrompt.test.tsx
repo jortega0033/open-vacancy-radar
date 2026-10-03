@@ -164,6 +164,7 @@ describe('Support ask trigger (#503)', () => {
     const { executor } = installBridges();
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
 
     expect(await findDialog()).toBeInTheDocument();
     expect(executor.submitReview).toHaveBeenCalledTimes(1);
@@ -178,6 +179,7 @@ describe('Support ask trigger (#503)', () => {
     });
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
     fireEvent.click(await screen.findByRole('button', { name: 'I already applied' }));
 
     expect(await findDialog()).toBeInTheDocument();
@@ -189,6 +191,7 @@ describe('Support ask trigger (#503)', () => {
     });
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Not sent.');
     await expectNoDialog();
   });
@@ -200,6 +203,7 @@ describe('Support ask trigger (#503)', () => {
     });
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
     fireEvent.click(await screen.findByRole('button', { name: 'I already applied' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Already sent.');
     await expectNoDialog();

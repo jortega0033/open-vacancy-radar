@@ -162,12 +162,13 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     expect(screen.getByText(/Form checks \(2\) and fields \(3\)/i)).toBeInTheDocument();
   });
 
-  it('keeps the swipe target compact and puts the full review behind disclosures', () => {
+  it('keeps the swipe target compact, with the answers open and the rest behind disclosures', () => {
     renderCard();
     const swipeCard = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
     const preview = screen.getByRole('img', { name: /live application page preview/i });
     expect(swipeCard).not.toContainElement(preview);
-    expect(screen.getByText('Prepared application details').closest('details')).not.toHaveAttribute('open');
+    // Open on first render (#443): the answers are what a person is about to send.
+    expect(screen.getByText('Prepared application details').closest('details')).toHaveAttribute('open');
     expect(screen.getByText('Review application form').closest('details')).not.toHaveAttribute('open');
   });
 
@@ -176,7 +177,7 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     const cardBacks = screen.getAllByTestId('swipe-card-back');
     expect(cardBacks).toHaveLength(2);
     cardBacks.forEach((cardBack) => expect(cardBack).toHaveAttribute('aria-hidden', 'true'));
-    expect(screen.getByTestId('application-swipe-card')).toHaveAttribute('title', 'Drag left to skip or right to submit');
+    expect(screen.getByTestId('application-swipe-card')).toHaveAttribute('title', 'Drag left to skip');
   });
 
   it('lists every blocker so a person can see what is actually wrong', () => {
@@ -241,7 +242,7 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
 
-  it('maps right and left drags to submit and skip without stale drag state', () => {
+  it('maps only a left drag to skip, and a right drag never submits (#443)', () => {
     const { onApprove, onSkip } = renderCard();
     const card = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
     expect(card).not.toBeNull();
@@ -256,14 +257,95 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     }
 
     drag('pointerdown', 100, 1);
-    drag('pointermove', 230, 1);
-    drag('pointerup', 230, 1);
-    expect(onApprove).toHaveBeenCalledTimes(1);
+    drag('pointermove', 400, 1);
+    drag('pointerup', 400, 1);
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('send-confirmation')).not.toBeInTheDocument();
 
     drag('pointerdown', 230, 2);
     drag('pointermove', 90, 2);
     drag('pointerup', 90, 2);
     expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  describe('final send confirmation (#443)', () => {
+    const SENT_ATTEMPT = {
+      ...ATTEMPT,
+      canonicalUrl: 'https://jobs.employer.invalid/apply/42',
+      preparedFields: {
+        version: 1,
+        preparedAt: '2026-01-01T00:00:00.000Z',
+        company: 'Acme Corp',
+        role: 'Senior Engineer',
+        verification: 'applied',
+        fields: [
+          { label: 'Full name', controlType: 'text', required: true, status: 'committed', value: 'Jamie Rivera', provenance: 'cv' },
+          { label: 'Portfolio', controlType: 'text', required: false, status: 'left_blank' },
+        ],
+      },
+    } as unknown as ApplicationAttemptRecord;
+    const DOCUMENTS = [
+      { id: 'a1', attemptId: ATTEMPT.id, kind: 'cv_pdf', fileName: 'Jamie-Rivera-CV.pdf', mimeType: 'application/pdf', byteSize: 10, contentHash: 'h1', createdAt: '2026-01-01T00:00:00.000Z' },
+    ] as const;
+
+    it('takes two deliberate actions: Submit application opens the confirmation, Send application sends', () => {
+      const { onApprove } = renderCard({ attempt: SENT_ATTEMPT, documents: DOCUMENTS });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Submit application' }));
+      expect(onApprove).not.toHaveBeenCalled();
+
+      const confirmation = screen.getByTestId('send-confirmation');
+      expect(within(confirmation).getByRole('heading', { name: 'Send this application to Acme Corp?' })).toBeInTheDocument();
+      expect(within(confirmation).getByText('jobs.employer.invalid')).toBeInTheDocument();
+      expect(within(confirmation).getByText('Jamie-Rivera-CV.pdf')).toBeInTheDocument();
+      expect(within(confirmation).getByText('Jamie Rivera')).toBeInTheDocument();
+      expect(within(confirmation).getByText(/1 filled/)).toBeInTheDocument();
+      expect(within(confirmation).getByText(/you cannot undo this from the app/i)).toBeInTheDocument();
+
+      fireEvent.click(within(confirmation).getByRole('button', { name: 'Send application' }));
+      expect(onApprove).toHaveBeenCalledTimes(1);
+    });
+
+    it('Go back closes the confirmation without sending', () => {
+      const { onApprove } = renderCard({ attempt: SENT_ATTEMPT, documents: DOCUMENTS });
+      fireEvent.click(screen.getByRole('button', { name: 'Submit application' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Go back' }));
+      expect(screen.queryByTestId('send-confirmation')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Submit application' })).toBeEnabled();
+      expect(onApprove).not.toHaveBeenCalled();
+    });
+
+    it('withdraws the confirmation and asks for a fresh review when the files change underneath it', () => {
+      const props = {
+        attempt: SENT_ATTEMPT,
+        snapshot: SNAPSHOT,
+        screenshotBase64: 'ZmFrZQ==',
+        readiness: readiness(),
+        onApprove: vi.fn(),
+        onSkip: vi.fn(),
+        onOpenLiveView: vi.fn(),
+      };
+      const { rerender } = render(<ApplicationReviewSwipeCard {...props} documents={DOCUMENTS} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Submit application' }));
+      expect(screen.getByTestId('send-confirmation')).toBeInTheDocument();
+
+      rerender(
+        <ApplicationReviewSwipeCard
+          {...props}
+          documents={[{ ...DOCUMENTS[0], id: 'a2', fileName: 'Other.pdf', contentHash: 'h2' }]}
+        />,
+      );
+
+      expect(screen.queryByTestId('send-confirmation')).not.toBeInTheDocument();
+      expect(screen.getByText(/changed while you were confirming/i)).toBeInTheDocument();
+      expect(props.onApprove).not.toHaveBeenCalled();
+    });
+
+    it('starts with the prepared answers summary expanded', () => {
+      renderCard({ attempt: SENT_ATTEMPT, documents: DOCUMENTS });
+      const details = screen.getByText('Prepared application details').closest('details');
+      expect(details).toHaveAttribute('open');
+    });
   });
 
   it('does not finish a drag after another decision makes the card busy', () => {

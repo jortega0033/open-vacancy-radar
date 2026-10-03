@@ -65,6 +65,8 @@ function installBridges(overrides: Record<string, unknown> = {}) {
 
 async function submitFromReview() {
   fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+  // The second deliberate action (#443): the final confirmation.
+  fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
 }
 
 function setViewportWide(wide: boolean) {

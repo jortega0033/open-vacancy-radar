@@ -751,6 +751,7 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: /^send application$/i }));
 
       await waitFor(() => expect(submitReview).toHaveBeenCalled());
       // The header close-icon button and the modal-backdrop button share the accessible name "Close".
@@ -790,6 +791,7 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: /^send application$/i }));
 
       await waitFor(() => expect(submitReview).toHaveBeenCalledWith(attempt.id));
       await waitFor(() => expect(closeReview).toHaveBeenCalledWith(attempt.id));
@@ -938,6 +940,7 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: /^send application$/i }));
 
       await waitFor(() => expect(within(dialog).getByText(/does not appear in the rendered documents/i)).toBeInTheDocument());
     });
