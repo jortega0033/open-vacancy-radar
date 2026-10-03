@@ -57,7 +57,7 @@ export function describeSavedJobApplication(attempt: ApplicationAttemptRecord | 
     case 'user_reported':
       return { ...open, label: `Reported as applied ${shortDate(attempt.submittedAt ?? attempt.updatedAt)}`.trim(), tone: 'neutral' };
     case 'submission_unknown':
-      return { ...open, label: 'Sent, not confirmed', tone: 'warning' };
+      return { ...open, label: 'Sent, unconfirmed', tone: 'warning' };
     case 'failed':
       return { ...open, label: 'Preparation failed', tone: 'error' };
     case 'skipped':

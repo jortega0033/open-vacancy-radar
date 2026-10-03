@@ -379,7 +379,7 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
       });
       render(<SavedJobsPage onViewApplicationAttempt={vi.fn()} />);
 
-      expect(await screen.findByText('Sent, not confirmed')).toBeInTheDocument();
+      expect(await screen.findByText('Sent, unconfirmed')).toBeInTheDocument();
       expect(screen.getByText(/^Reported as applied/)).toBeInTheDocument();
       expect(screen.queryByText(/^Sent \d|^Sent [A-Z]/)).not.toBeInTheDocument();
     });
