@@ -136,7 +136,7 @@ describe('saving a gap analysis onto its saved job', () => {
 
     render(<SavedJobDrawer job={reopened} onSave={vi.fn()} onClose={vi.fn()} />);
 
-    const panel = screen.getByRole('region', { name: /saved gap analysis/i });
+    const panel = screen.getByRole('region', { name: /saved fit check/i });
     expect(panel).toHaveTextContent('Eight years of Angular.');
     expect(panel).toHaveTextContent('No Kubernetes exposure.');
     // The rest of the job came back untouched by the write.
@@ -147,7 +147,7 @@ describe('saving a gap analysis onto its saved job', () => {
   it('shows nothing in the drawer for a job that has no saved analysis', () => {
     installWorkspaceBridge();
     render(<SavedJobDrawer job={SAVED_JOB} onSave={vi.fn()} onClose={vi.fn()} />);
-    expect(screen.queryByRole('region', { name: /saved gap analysis/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /saved fit check/i })).not.toBeInTheDocument();
   });
 
   it('does not resend the analysis when the drawer itself is saved, so an edit cannot rewrite it', () => {

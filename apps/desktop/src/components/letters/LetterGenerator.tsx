@@ -347,7 +347,7 @@ export function LetterGenerator({
       setSelectionError(undefined);
     } catch (err) {
       setSelectionError(
-        describeError(err, 'the letter generation run returned something that could not be used'),
+        describeError(err, 'The reply could not be used.'),
       );
     }
   }, [run.status, run.text]);
@@ -582,7 +582,7 @@ export function LetterGenerator({
                     disabled={run.isBusy}
                   />
                   <span className="mt-1 block text-xs text-base-content/60">
-                    Optional, but the draft is only as specific as the posting text you give it.
+                    Optional. More text gives a more specific letter.
                   </span>
                 </label>
               </div>
@@ -694,8 +694,7 @@ export function LetterGenerator({
               />
             </label>
             <p className="mt-1 text-xs text-base-content/60">
-              Optional. Instructions only steer which of your confirmed facts get cited: nothing here
-              can add a claim your CV does not carry.
+              Optional. Say what you want mentioned. Only facts from your CV are used.
             </p>
           </section>
 
@@ -721,20 +720,14 @@ export function LetterGenerator({
                 </div>
               </div>
             )}
-            {!cvDocument && cvs.length > 0 && (
-              <p className="text-xs text-base-content/60">Choose a CV to enable generation.</p>
-            )}
-            {!lead && (
-              <p className="text-xs text-base-content/60">
-                Choose a job, or enter a role and a company, to enable generation.
-              </p>
+            {(!lead || (!cvDocument && cvs.length > 0)) && (
+              <p className="text-xs text-base-content/60">Choose a job and a CV to start.</p>
             )}
             {bundle && !isGrounded && (
               <p className="text-xs text-base-content/60">{GROUNDED_LETTER_UNAVAILABLE}</p>
             )}
             <p className="text-xs text-base-content/60">
-              Generated on your own {PROVIDER_LABEL[provider]} CLI through AgentDock. Nothing is
-              sent to a letter-writing service.
+              Your CV and the job text are sent to {PROVIDER_LABEL[provider]} to write this letter.
             </p>
           </div>
         </div>
@@ -847,13 +840,20 @@ export function LetterGenerator({
             // screen may still reject, and showing it would put unvalidated model output on screen
             // looking like a draft. The finished letter appears in the editor below or not at all.
             text=""
-            {...(failure ? { error: failure } : {})}
+            {...(failure ? { error: 'We could not write the letter this time. Try again.' } : {})}
             label="letter being generated"
             idleHint="No document yet."
-            busyLabel={`Choosing which of your CV facts belong in this ${typeLabel.toLowerCase()}…`}
+            busyLabel="Writing your letter…"
             providerLabel={PROVIDER_LABEL[provider]}
           />
         )}
+
+        {failure && showStreamPanel && !run.isBusy ? (
+          <details className="mt-2 text-xs text-base-content/70">
+            <summary className="cursor-pointer font-medium">Details</summary>
+            <p className="mt-1 break-words">{failure}</p>
+          </details>
+        ) : null}
 
         {hasBody ? (
           <div className="mt-4">
@@ -868,8 +868,7 @@ export function LetterGenerator({
               }}
             />
             <p className="mt-2 text-xs text-base-content/60">
-              {GROUNDED_LETTER_DISCLOSURE} Read it before you send it: you are responsible for the
-              final text.
+              {GROUNDED_LETTER_DISCLOSURE}
             </p>
           </div>
         ) : (
@@ -877,7 +876,7 @@ export function LetterGenerator({
             <EmptyState
               illustration={emptyLettersIllustration}
               title="No document yet"
-              description="Choose a job, a CV and the document settings, then generate. The draft is assembled from the facts you confirmed on that CV, and stays editable."
+              description="Pick a job and a CV, then choose Generate. You can edit the letter afterwards."
             />
           )
         )}

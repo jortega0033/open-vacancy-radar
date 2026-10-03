@@ -49,7 +49,7 @@ export function canGenerateGroundedLetter(bundle: GenerationInputBundle | null):
  * hand back exactly the risk the grounded path removes.
  */
 export const GROUNDED_LETTER_UNAVAILABLE =
-  'This CV has no reviewed source record yet, so there are no confirmed facts to write from. Open it in your CV library, review and confirm the extracted source, then come back.';
+  'Confirm this CV first. Open it in your CV library, check the details, then come back.';
 
 /**
  * Said on both screens, because it is a real property of the output rather than a caveat.
@@ -60,7 +60,7 @@ export const GROUNDED_LETTER_UNAVAILABLE =
  * rather than from the letter.
  */
 export const GROUNDED_LETTER_DISCLOSURE =
-  'Assembled from facts you confirmed on your CV, with connecting lines written by this app in English. Nothing in it is written by the model: it only chooses which of your facts to cite.';
+  'Built from facts in your CV, with short linking lines in English. Read it before you send it.';
 
 const LABELS: GroundedSelectionLabels = {
   run: 'the letter generation run',

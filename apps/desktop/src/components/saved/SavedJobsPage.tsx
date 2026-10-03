@@ -162,11 +162,11 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
               message: `Preparing an application for "${job.role}" at ${job.company}.`,
               attemptId: result.attemptId,
             }
-          : { message: result.detail ?? 'this application could not be started', attemptId: result.attemptId },
+          : { message: result.detail ?? 'We could not start this application.', attemptId: result.attemptId },
       );
       if (result.ok) onSavedJobsChanged?.();
-    } catch (err) {
-      setActionError(describeError(err, 'could not start preparing this application'));
+    } catch {
+      setActionError('We could not start this application.');
     } finally {
       setPreparingJobId(null);
     }
@@ -251,7 +251,7 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
         <EmptyState
           illustration={emptySavedJobsIllustration}
           title="No saved jobs"
-          description="Save vacancies from a scan, or add one manually to compare opportunities and prepare applications."
+          description="Save jobs you like from Search, or add one yourself."
           action={
             <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>
               Add manually

@@ -145,7 +145,7 @@ describe('CoverLetter', () => {
     render(<CoverLetter cv={CV} vacancy={TEST_VACANCY} />);
 
     expect(screen.getByRole('button', { name: /draft cover letter/i })).toBeDisabled();
-    expect(screen.getByText(/no reviewed source record yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/Confirm this CV first/i)).toBeInTheDocument();
   });
 
   it('copies the assembled letter to the clipboard and confirms it', async () => {

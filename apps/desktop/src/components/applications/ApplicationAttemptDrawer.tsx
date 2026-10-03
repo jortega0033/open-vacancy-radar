@@ -19,13 +19,6 @@ const ARTIFACT_KIND_LABEL: Record<ApplicationArtifactSummary['kind'], string> = 
   other: 'File',
 };
 
-function formatBytes(byteSize: number): string {
-  if (byteSize < 1024) return `${byteSize} B`;
-  const kb = byteSize / 1024;
-  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
-  return `${(kb / 1024).toFixed((kb / 1024) < 10 ? 1 : 0)} MB`;
-}
-
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
@@ -84,8 +77,8 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
       try {
         const rows = await window.workspace.listApplicationArtifacts(attempt.id);
         if (!cancelled) setArtifacts(rows);
-      } catch (err) {
-        if (!cancelled) setArtifactsError(err instanceof Error ? err.message : 'could not load documents for this attempt');
+      } catch {
+        if (!cancelled) setArtifactsError('We could not load the documents.');
       }
     }
     void load();
@@ -121,13 +114,16 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
           )}
 
           {attempt.checkpointDetail && (
-            <div className="rounded-box border border-base-300 bg-base-200 p-3 text-sm">{attempt.checkpointDetail}</div>
+            <details className="rounded-box border border-base-300 bg-base-200 p-3 text-sm">
+              <summary className="cursor-pointer font-medium">Details</summary>
+              <p className="mt-2 break-words">{attempt.checkpointDetail}</p>
+            </details>
           )}
 
           {attempt.canonicalUrl && (
             <div>
               <span className="mb-1 block ovr-eyebrow">
-                Application URL
+                Job link
               </span>
               <a href={attempt.canonicalUrl} target="_blank" rel="noreferrer" className="link link-hover break-all text-sm">
                 {attempt.canonicalUrl}
@@ -136,20 +132,18 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
           )}
 
           <div>
-            <span className="mb-1 block ovr-eyebrow">
-              Job description
-            </span>
             {attempt.jdSnapshot ? (
               <details className="collapse-arrow collapse border border-base-300">
                 <summary className="collapse-title text-sm">
-                  {attempt.jdComplete ? 'Full text captured' : 'Partial text captured (source was truncated)'}
+                  Job description
                 </summary>
                 <div className="collapse-content">
+                  {attempt.jdComplete ? null : <p className="mb-2 text-xs text-base-content/60">Part of the description is missing.</p>}
                   <p className="whitespace-pre-wrap text-sm text-base-content/80">{attempt.jdSnapshot}</p>
                 </div>
               </details>
             ) : (
-              <p className="text-sm text-base-content/60">Not captured yet.</p>
+              <p className="text-sm text-base-content/60">No job description yet.</p>
             )}
           </div>
 
@@ -167,7 +161,6 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
                 {artifacts.map((artifact) => (
                   <li key={artifact.id} className="flex items-center justify-between px-3 py-2 text-sm">
                     <span>{ARTIFACT_KIND_LABEL[artifact.kind]}</span>
-                    <span className="text-base-content/60">{formatBytes(artifact.byteSize)}</span>
                   </li>
                 ))}
               </ul>

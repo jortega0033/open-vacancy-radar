@@ -141,25 +141,31 @@ function renderCard(overrides: Partial<Parameters<typeof ApplicationReviewSwipeC
 }
 
 describe('ApplicationReviewSwipeCard (#277)', () => {
-  it('reports verified-filled against discovered, never the discovered count on its own', () => {
-    renderCard({ readiness: readiness({ verifiedFilledCount: 1, ready: false, requiredFieldsSatisfied: 1 }) });
-    expect(screen.getByText(/1 of 3 fields verified filled/i)).toBeInTheDocument();
+  it('never reports a field count, and says an unready form still needs the person', () => {
+    // The card used to read "N fields filled" from the page's own field count (#277). It now
+    // carries no count at all: either everything required is filled, or some answers still need you.
+    renderCard({ readiness: readiness({ verifiedFilledCount: 1, ready: false, requiredFieldsSatisfied: 1, blockers: [{ kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' }] }) });
+    expect(screen.queryByText(/fields? (verified )?filled/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Form checks/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Some answers still need you.')).toBeInTheDocument();
   });
 
-  it('says zero filled for a page that was only ever looked at, screenshot and all', () => {
-    // The exact case that used to read "3 fields filled": a snapshot found three fields, a
-    // screenshot exists, and nothing has been written to anything.
+  it('says everything required is filled in only when the form is ready', () => {
+    renderCard();
+    expect(screen.getByText('Everything required is filled in.')).toBeInTheDocument();
+    expect(screen.queryByText('Some answers still need you.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the screenshot available without a stat strip or a field inventory', () => {
     renderCard({
       readiness: readiness({ verifiedFilledCount: 0, requiredFieldsSatisfied: 0, ready: false, blockers: [
         { kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' },
         { kind: 'required_field_empty', fieldRef: 'f2', label: 'Email' },
       ] }),
     });
-    expect(screen.getByText(/0 of 3 fields verified filled/i)).toBeInTheDocument();
-    expect(screen.queryByText(/3 fields filled/i)).not.toBeInTheDocument();
-    // The screenshot is still available, but no longer makes the decision card itself enormous.
     expect(screen.getByRole('img', { name: /live application page preview/i })).toBeInTheDocument();
-    expect(screen.getByText(/Form checks \(2\) and fields \(3\)/i)).toBeInTheDocument();
+    expect(screen.queryByText('Checks left')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\(text, required\)/i)).not.toBeInTheDocument();
   });
 
   it('keeps the swipe target compact and puts the full review behind disclosures', () => {
@@ -176,7 +182,7 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     const cardBacks = screen.getAllByTestId('swipe-card-back');
     expect(cardBacks).toHaveLength(2);
     cardBacks.forEach((cardBack) => expect(cardBack).toHaveAttribute('aria-hidden', 'true'));
-    expect(screen.getByTestId('application-swipe-card')).toHaveAttribute('title', 'Drag left to skip or right to submit');
+    expect(screen.queryByText(/Drag left/i)).not.toBeInTheDocument();
   });
 
   it('lists every blocker so a person can see what is actually wrong', () => {
@@ -190,7 +196,7 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
         ],
       }),
     });
-    expect(screen.getByText(/This form is not ready to submit/i)).toBeInTheDocument();
+    expect(screen.getByText('Some answers still need you.')).toBeInTheDocument();
     expect(screen.getByText(/"Full name" is required and still empty/i)).toBeInTheDocument();
     expect(screen.getByText(/Enter a valid email address/i)).toBeInTheDocument();
     expect(screen.getByText(/"Resume" needs a file and has none attached/i)).toBeInTheDocument();
@@ -320,46 +326,24 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
   });
 
   describe('cross-origin field visibility (draft-cross-origin-ipc-bridge-visibility)', () => {
-    it('shows a distinct, frame-origin-specific notice for a field the executor never fills, never a generic blocker', () => {
-      renderCard({ snapshot: CROSS_ORIGIN_SNAPSHOT });
-      expect(screen.getByText(/Also found in a different frame, not filled automatically/i)).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          /"Visitor name" was found in a different frame \(https:\/\/chat\.vendor\.invalid\) than this page \(https:\/\/careers\.employer\.invalid\) and is not part of the form under review, so it was left untouched\./i,
-        ),
-      ).toBeInTheDocument();
-      expect(screen.getByText(/\+1 more in another frame/i)).toBeInTheDocument();
-      // Never claims the policy refused a write: an inactive cross-origin field can equally be a
-      // vendor embed the policy does allowlist that simply is not the winning group, and the card
-      // cannot tell those apart from the snapshot. "Not part of the form" is what it does know.
-      expect(screen.queryByText(/does not type into a third-party embed/i)).not.toBeInTheDocument();
-      // Distinct from an ordinary blocker: the real form's own two required fields are unfilled
-      // in this fixture too (readiness() defaults to zero blockers only because nothing here
-      // asserts on it), but the cross-origin notice never claims to be one of `readiness.blockers`.
-      expect(screen.queryByText(/is required and still empty/i)).not.toBeInTheDocument();
-    });
+    const HOSTED_ELSEWHERE = /Part of this form is hosted by another site, so the app left it blank\. Use the live page to fill it in\./i;
 
-    it('lists every cross-origin field, and folds the count into the form-checks summary', () => {
+    it('says nothing about a widget in another frame that is not the form under review', () => {
       renderCard({ snapshot: CROSS_ORIGIN_SNAPSHOT });
-      expect(screen.getByText(/Form checks \(0\) and fields \(2\), 2 in another frame/i)).toBeInTheDocument();
-      // Every cross-origin field is listed, not only the first one summarized on the card.
-      expect(
-        screen.getByText(
-          /"Email" was found in a different frame \(https:\/\/chat\.vendor\.invalid\) than this page \(https:\/\/careers\.employer\.invalid\) and is not part of the form under review, so it was left untouched\./i,
-        ),
-      ).toBeInTheDocument();
+      expect(screen.queryByText(HOSTED_ELSEWHERE)).not.toBeInTheDocument();
+      expect(screen.queryByText(/different frame/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/https:\/\/chat\.vendor\.invalid/i)).not.toBeInTheDocument();
     });
 
     it('never mentions another frame for a same-origin snapshot, additive-only as the ticket requires', () => {
       renderCard();
-      expect(screen.queryByText(/different frame/i)).not.toBeInTheDocument();
-      expect(screen.getByText(/Form checks \(0\) and fields \(3\)/i)).toBeInTheDocument();
+      expect(screen.queryByText(HOSTED_ELSEWHERE)).not.toBeInTheDocument();
     });
 
-    it('explains the page whose entire form is inside a disallowed embed, where every field comes back active', () => {
-      // The regression this whole predicate exists for. With the notice keyed on `!field.active`,
-      // this page produced nothing at all: no notice, and two bare "required and still empty"
-      // blockers for fields the executor was never going to be allowed to type into.
+    it('explains the page whose entire form is inside a disallowed embed, in one line with no addresses', () => {
+      // With the notice keyed on `!field.active`, this page produced nothing at all: no notice, and
+      // two bare "required and still empty" blockers for fields the executor was never allowed to
+      // type into.
       renderCard({
         snapshot: EMBEDDED_FORM_ONLY_SNAPSHOT,
         readiness: readiness({
@@ -374,23 +358,15 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
         }),
       });
 
-      expect(screen.getByText(/This form is inside a third-party embed/i)).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          /"Full name" is part of a form embedded from https:\/\/boards\.ats-vendor\.invalid, which is not this page's own address \(https:\/\/careers\.employer\.invalid\)\. This app does not type into a third-party embed, so nothing was entered here\./i,
-        ),
-      ).toBeInTheDocument();
-      expect(screen.getByText(/\+1 more in another frame/i)).toBeInTheDocument();
-      expect(screen.getByText(/Form checks \(2\) and fields \(2\), 2 in another frame/i)).toBeInTheDocument();
-      // The unexplained blocker is still shown, as it should be -- the point is that it is no
-      // longer the only thing a reviewer is given about this page.
+      expect(screen.getByText(HOSTED_ELSEWHERE)).toBeInTheDocument();
+      expect(screen.queryByText(/ats-vendor/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/\+\d+ more/i)).not.toBeInTheDocument();
+      // The blockers are listed on the card itself, label only.
       expect(screen.getByText(/"Full name" is required and still empty\./i)).toBeInTheDocument();
-      // And the wording never calls the embedded form "not part of the form under review": it is
-      // the form under review, which is exactly why nothing could be filled.
-      expect(screen.queryByText(/not part of the form under review/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/"Email" is required and still empty\./i)).toBeInTheDocument();
     });
 
-    it('summarizes the embedded form, not an unrelated widget that happens to come first in field order', () => {
+    it('shows the one notice for a page mixing a chat widget with an embedded form', () => {
       renderCard({
         snapshot: MIXED_ORIGIN_SNAPSHOT,
         readiness: readiness({
@@ -398,40 +374,11 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
           verifiedFilledCount: 0,
           discoveredFieldCount: 2,
           requiredFieldsSatisfied: 0,
-          blockers: [
-            { kind: 'required_field_empty', fieldRef: 'e1', label: 'Full name' },
-            { kind: 'required_field_empty', fieldRef: 'e2', label: 'Email' },
-          ],
+          blockers: [{ kind: 'required_field_empty', fieldRef: 'e1', label: 'Full name' }],
         }),
       });
-
-      // The heading and the one visible sentence must agree about which field they're describing:
-      // the embedded form, not the chat widget that happens to sort first.
-      expect(screen.getByText(/This form is inside a third-party embed/i)).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          /"Full name" is part of a form embedded from https:\/\/boards\.ats-vendor\.invalid, which is not this page's own address \(https:\/\/careers\.employer\.invalid\)\. This app does not type into a third-party embed, so nothing was entered here\./i,
-        ),
-      ).toBeInTheDocument();
-
-      // Expanding the disclosure shows exactly the two fields the summary omitted -- the chat
-      // widget (never shown above) and the second embedded-form field -- and never repeats the
-      // summarized field.
-      expect(screen.getByText(/\+2 more in another frame/i)).toBeInTheDocument();
-      const summarySentenceCount = screen.getAllByText(
-        /"Full name" is part of a form embedded from https:\/\/boards\.ats-vendor\.invalid/i,
-      ).length;
-      expect(summarySentenceCount).toBe(1);
-      expect(
-        screen.getByText(
-          /"Visitor name" was found in a different frame \(https:\/\/chat\.vendor\.invalid\) than this page \(https:\/\/careers\.employer\.invalid\) and is not part of the form under review, so it was left untouched\./i,
-        ),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          /"Email" is part of a form embedded from https:\/\/boards\.ats-vendor\.invalid, which is not this page's own address \(https:\/\/careers\.employer\.invalid\)\. This app does not type into a third-party embed, so nothing was entered here\./i,
-        ),
-      ).toBeInTheDocument();
+      expect(screen.getAllByText(HOSTED_ELSEWHERE)).toHaveLength(1);
+      expect(screen.queryByText(/Visitor name/i)).not.toBeInTheDocument();
     });
   });
 

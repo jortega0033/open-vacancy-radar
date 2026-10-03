@@ -124,7 +124,7 @@ describe('CvAssistant', () => {
     // person confirmed, and an ad-hoc upload has none, so the card says what would fix that rather
     // than falling back to prose nobody checked.
     expect(screen.getByRole('button', { name: /draft cover letter/i })).toBeDisabled();
-    expect(screen.getByText(/no reviewed source record yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/Confirm this CV first/i)).toBeInTheDocument();
     expect(screen.getByText(/jake\.pdf/)).toBeInTheDocument();
     // The vacancy under consideration is named, so the user knows what these buttons act on.
     expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument();

@@ -95,7 +95,8 @@ describe('ApplicationReviewSession error screen (#468)', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Not sent. The form still has checks to finish.');
-    expect(alert).toHaveTextContent('Full name is empty');
+    // The raw reason stays reachable, collapsed.
+    expect(screen.getByText('Full name is empty').closest('details')).not.toHaveAttribute('open');
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Open the live page' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Skip for now' })).toBeEnabled();
@@ -134,7 +135,7 @@ describe('ApplicationReviewSession error screen (#468)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('We could not confirm whether this was sent.');
     expect(alert).not.toHaveTextContent('Not sent.');
-    expect(alert).toHaveTextContent('IPC channel closed');
+    expect(screen.getByText('IPC channel closed').closest('details')).not.toHaveAttribute('open');
   });
 
   it('skips from the error screen without calling submitReview, and tells the parent', async () => {
@@ -196,8 +197,8 @@ describe('ApplicationReviewSession error screen (#468)', () => {
     render(<ApplicationReviewSession attempt={{ ...ATTEMPT, canonicalUrl: '' }} onClose={vi.fn()} />);
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Not sent. We could not open a review for this attempt.');
-    expect(alert).toHaveTextContent('the page did not respond');
+    expect(alert).toHaveTextContent('Not sent. We could not open this application.');
+    expect(screen.getByText('the page did not respond').closest('details')).not.toHaveAttribute('open');
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Open the live page' })).not.toBeInTheDocument();
   });

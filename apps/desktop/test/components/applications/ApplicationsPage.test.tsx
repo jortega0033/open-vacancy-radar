@@ -522,7 +522,7 @@ describe('ApplicationsPage', () => {
       expect((await screen.findAllByText('Queued')).length).toBeGreaterThan(0);
 
       await waitFor(
-        () => expect(screen.getByRole('button', { name: 'Continue on employer site' })).toBeInTheDocument(),
+        () => expect(screen.getByRole('button', { name: 'Open employer site' })).toBeInTheDocument(),
         { timeout: 3_000 },
       );
       expect(listApplicationAttempts.mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -587,8 +587,8 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByText(/review application/i)).toBeInTheDocument();
       await waitFor(() => expect(resolveTargetPolicyId).toHaveBeenCalledWith(attempt.canonicalUrl));
-      await waitFor(() => expect(within(dialog).getByText(/not approved for automated submission/i)).toBeInTheDocument());
-      expect(within(dialog).getByRole('button', { name: /continue on employer site/i })).toBeInTheDocument();
+      await waitFor(() => expect(within(dialog).getByText(/You send this one yourself/i)).toBeInTheDocument());
+      expect(within(dialog).getByRole('button', { name: /open employer site/i })).toBeInTheDocument();
     });
 
     it('advances directly to the next actionable card after a decision', async () => {
@@ -642,8 +642,11 @@ describe('ApplicationsPage', () => {
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
       const dialog = await screen.findByRole('dialog');
-      expect(within(dialog).getByRole('button', { name: 'Retry tailoring' })).toBeInTheDocument();
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Use original CV' }));
+      expect(within(dialog).getByText('We could not tailor your CV for this job.')).toBeInTheDocument();
+      // The raw reason is kept, collapsed, rather than shown as the headline.
+      expect(within(dialog).getByText('provider unavailable').closest('details')).not.toHaveAttribute('open');
+      expect(within(dialog).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Use my CV as it is' }));
       await waitFor(() => expect(useOriginalCv).toHaveBeenCalledWith(attempt.id));
       expect(retryTailoring).not.toHaveBeenCalled();
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -716,8 +719,9 @@ describe('ApplicationsPage', () => {
       fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
 
       const dialog = await screen.findByRole('dialog');
-      expect(await within(dialog).findByText('resume.pdf')).toBeInTheDocument();
-      expect(within(dialog).getByText(/tailored CV is ready, but the letter still needs attention/i)).toBeInTheDocument();
+      expect(await within(dialog).findByText('Tailored CV')).toBeInTheDocument();
+      expect(within(dialog).queryByText('resume.pdf')).not.toBeInTheDocument();
+      expect(within(dialog).getByText(/Your CV is ready\. The cover letter still needs attention/i)).toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Generate letter' }));
       expect(onGenerateLetter).toHaveBeenCalledWith(expect.objectContaining({ key: attempt.vacancyKey }), attempt.id);
     });
@@ -832,14 +836,14 @@ describe('ApplicationsPage', () => {
 
       const dialog = await screen.findByRole('dialog');
       // The CAPTCHA blocker is what makes the handoff the obvious next step.
-      await waitFor(() => expect(within(dialog).getByText(/showing a CAPTCHA/i)).toBeInTheDocument());
+      await waitFor(() => expect(within(dialog).getByText(/prove you are human/i)).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /open the live page/i }));
 
       await waitFor(() => expect(showHandoff).toHaveBeenCalledWith(attempt.id));
       // The modal gets out of the way of the real page, and says which application this is.
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(screen.getByText(/live application page for Senior Engineer at Acme Corp/i)).toBeInTheDocument();
-      expect(screen.getByText(/Other pending applications are untouched/i)).toBeInTheDocument();
+      expect(screen.getByText(/Finish anything left on this page/i)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /done, back to review/i }));
 
@@ -849,7 +853,7 @@ describe('ApplicationsPage', () => {
       expect(openReview).toHaveBeenLastCalledWith({ attemptId: attempt.id, policyId: 'some-real-policy', targetUrl: attempt.canonicalUrl, refresh: true });
       // And the state on screen is the state after the person worked in the page, not before.
       const reopened = await screen.findByRole('dialog');
-      await waitFor(() => expect(within(reopened).queryByText(/showing a CAPTCHA/i)).not.toBeInTheDocument());
+      await waitFor(() => expect(within(reopened).queryByText(/prove you are human/i)).not.toBeInTheDocument());
       expect(within(reopened).getByRole('button', { name: /submit application/i })).toBeEnabled();
     });
 
@@ -878,7 +882,9 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /open the live page/i })).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /open the live page/i }));
 
-      expect(await screen.findByRole('alert')).toHaveTextContent('this attempt is mid-submit');
+      expect(await screen.findByRole('alert')).toHaveTextContent('We could not open the live page.');
+      // The raw reason stays reachable, collapsed.
+      expect(screen.getByText('this attempt is mid-submit').closest('details')).not.toHaveAttribute('open');
     });
 
     it('skipping the swipe card closes the review and marks the attempt skipped, without ever calling submitReview', async () => {
@@ -982,7 +988,7 @@ describe('ApplicationsPage', () => {
       render(<ApplicationsPage />);
       fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
 
-      await waitFor(() => expect(screen.getByText(/workspace unreachable/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('We could not load your applications.')).toBeInTheDocument());
     });
 
     it('hides the "Add application" button while on the Review queue tab', async () => {
