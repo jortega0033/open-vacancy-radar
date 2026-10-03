@@ -48,8 +48,8 @@ describe('parseRequirementMappingResponse (#419)', () => {
     });
     expect(accepted.map((r) => r.text)).toEqual(['Real one']);
     expect(rejected.map((r) => r.text)).toEqual(['Kubernetes', 'Paraphrase', 'No quote at all']);
-    expect(rejected[0]?.reason).toMatch(/not an exact passage/);
-    expect(rejected[2]?.reason).toMatch(/no quote/);
+    expect(rejected[0]?.reason).toMatch(/could not be found in the job description/);
+    expect(rejected[2]?.reason).toMatch(/did not say where/);
   });
 
   it('drops a repeated proposal (same wording or same quote) from one answer', () => {

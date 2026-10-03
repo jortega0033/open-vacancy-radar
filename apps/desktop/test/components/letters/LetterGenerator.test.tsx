@@ -160,7 +160,7 @@ describe('LetterGenerator', () => {
     render(<LetterGenerator vacancy={LETTER_VACANCY} />);
 
     await waitFor(() => expect(bridges.workspace.listCvDocuments).toHaveBeenCalled());
-    expect(await screen.findByText(/Confirm this CV first/i)).toBeInTheDocument();
+    expect(await screen.findByText(/check your cv details first/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^generate$/i })).toBeDisabled();
   });
 
@@ -359,7 +359,7 @@ describe('LetterGenerator', () => {
     expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue(makeLetter().body);
   });
 
-  it("names the actually-configured provider in its CLI disclosure and 'starting' status, not a hardcoded Claude Code", async () => {
+  it("names the actually-configured provider in its CLI disclosure and its working status, not a hardcoded Claude Code", async () => {
     // Real regression: this copy (and AiOutput's "Starting Claude Code…" status line) used to
     // hardcode Claude Code regardless of which CLI the run actually goes through.
     const bridges = installBridges({
@@ -385,7 +385,7 @@ describe('LetterGenerator', () => {
     expect(screen.queryByText(/Claude Code/)).not.toBeInTheDocument();
 
     fireEvent.click(await waitForGenerateEnabled());
-    expect(await screen.findByText(/^Starting Codex…$/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Getting started…$/)).toBeInTheDocument();
 
     expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1);
   });

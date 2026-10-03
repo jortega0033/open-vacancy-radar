@@ -45,38 +45,35 @@ export function VerificationSection({ result }: VerificationSectionProps) {
     <section className="mt-6">
       <SectionHeading>Sources</SectionHeading>
 
-      <div className="rounded-box mt-3 border border-base-300 p-4">
-        <div className="text-sm font-semibold">Official vacancy check</div>
-        {official ? (
-          <>
-            <p className="mt-1.5 text-sm text-base-content/70">
-              This exact URL was also fetched from an official employer/ATS source in this run: a
-              check on the <em>vacancy</em> only.
-            </p>
-            <KeyValue
-              items={[
-                { k: 'Official source state', v: official.state },
-                { k: 'Decision', v: official.decision.replace(/_/g, ' ') },
-                { k: 'Provider', v: official.provider },
-                { k: 'Reviewed', v: formatDate(official.reviewedAt) },
-              ]}
-            />
-            {official.evidence.length > 0 && (
-              <ul className="mt-2 list-disc pl-5 text-sm text-base-content/70">
-                {official.evidence.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            )}
-          </>
-        ) : (
-          <p className="mt-1.5 text-sm text-base-content/70">
-            This lead was not fetched from an official employer or ATS source in this run, so it is
-            a discovery lead only. Open the vacancy and confirm it on the employer&apos;s own site
-            before acting on it.
+      {official ? (
+        <details className="rounded-box mt-3 border border-base-300 p-4">
+          <summary className="cursor-pointer text-sm font-semibold">How this was checked</summary>
+          <div className="mt-3 text-sm text-base-content/70">
+            This URL was checked against the employer&apos;s own site.
+          </div>
+          <KeyValue
+            items={[
+              { k: 'Official source state', v: official.state },
+              { k: 'Decision', v: official.decision.replace(/_/g, ' ') },
+              { k: 'Provider', v: official.provider },
+              { k: 'Reviewed', v: formatDate(official.reviewedAt) },
+            ]}
+          />
+          {official.evidence.length > 0 && (
+            <ul className="mt-2 list-disc pl-5 text-sm text-base-content/70">
+              {official.evidence.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+        </details>
+      ) : (
+        <div className="rounded-box mt-3 border border-base-300 p-4">
+          <p className="text-sm text-base-content/70">
+            Not confirmed on the employer&apos;s own site. Check the posting before you apply.
           </p>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }

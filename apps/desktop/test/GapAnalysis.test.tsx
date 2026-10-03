@@ -43,7 +43,7 @@ describe('GapAnalysis', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
 
-    expect(await screen.findByText(/^Starting Codex…$/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Getting started…$/)).toBeInTheDocument();
   });
 
   it('streams the analysis: shows a working state, accumulates chunks, then settles on completion', async () => {

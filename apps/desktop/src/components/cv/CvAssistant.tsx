@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { describeCvSourceGaps } from '../../../electron/workspace/cv-source-schema.js';
 import { jobDescriptionBody } from '../../../electron/generation-input.js';
@@ -18,6 +17,10 @@ import { TailoringProposalsPanel } from './TailoringProposalsPanel.js';
 import type { CvDocument, VacancyLead } from './types.js';
 import { caseKeyFor } from './vacancy-key.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
+
+/** One message for every screen that needs the CV details reviewed first. */
+const CV_DETAILS_FIRST =
+  'Check your CV details first. Open this CV in the CV Library, review what was read from it, and confirm.';
 
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
@@ -137,7 +140,6 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
   const effectiveModel = pinnedModel ?? (model || undefined);
   const availableModels = providerStatus?.availableModels ?? [];
   const providerUnavailable = providerStatus && !providerStatus.installed;
-  const providerLabel = PROVIDER_LABEL[provider];
   const usableLibraryCvs = libraryCvs.filter((doc) => doc.text.trim().length > 0);
   const unusableLibraryCvs = libraryCvs.length - usableLibraryCvs.length;
   const selectedLibraryCv = usableLibraryCvs.find((doc) => doc.id === selectedLibraryCvId);
@@ -148,25 +150,21 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
   const sourceNotice = !selectedLibraryCv
     ? null
     : !selectedSourceCv
-      ? 'This CV has no reviewed structured source yet. The advisory tools below still work. To approve a tailored CV, open this CV in the CV Library, read its source and review it first.'
+      ? CV_DETAILS_FIRST
       : describeCvSourceGaps(selectedSourceCv).length > 0
-        ? `This CV's structured source is not ready for approval: ${describeCvSourceGaps(selectedSourceCv).join(', ')}. Review it in the CV Library first.`
+        ? `${CV_DETAILS_FIRST} (${describeCvSourceGaps(selectedSourceCv).join(', ')})`
         : null;
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="text-lg font-semibold">CV assistant</h2>
-        <p className="mt-1 text-sm text-base-content/60">
-          Runs on your own authenticated {providerLabel} CLI. This app never holds an API key.
-        </p>
+        <p className="mt-1 text-sm text-base-content/60">Review your CV and tailor it to a job.</p>
       </div>
 
       {providerUnavailable && (
         <ErrorBanner>
-          {providerLabel} is not installed or not detected, so these features cannot run. Install
-          and authenticate the CLI, or choose a different default in AI runtime, then reopen this
-          screen.
+          AI is not set up yet, so these tools cannot run. Set it up in Settings, then come back.
         </ErrorBanner>
       )}
 
@@ -225,7 +223,6 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
           setCv(next);
           if (next) setSelectedLibraryCvId('');
         }}
-        providerLabel={providerLabel}
       />
 
       {/* The upload above stays usable for a single unsaved gap analysis; this is the opt-in
@@ -259,21 +256,24 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
       )}
 
       {!pinnedModel && availableModels.length > 0 && (
-        <label className="block">
-          <span className="mb-1 block text-sm font-medium">Model</span>
-          <select
-            className="select w-full"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          >
-            <option value="">Provider default</option>
-            {availableModels.map((id) => (
-              <option key={id} value={id}>
-                {id}
-              </option>
-            ))}
-          </select>
-        </label>
+        <details className="text-sm">
+          <summary className="cursor-pointer text-base-content/70">Advanced</summary>
+          <label className="mt-2 block">
+            <span className="mb-1 block text-sm font-medium">AI model</span>
+            <select
+              className="select w-full"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              <option value="">Automatic</option>
+              {availableModels.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          </label>
+        </details>
       )}
 
       <section className="flex flex-col gap-3" aria-labelledby="cv-only-tools-heading">

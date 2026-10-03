@@ -180,7 +180,7 @@ describe('CvSourceReview (#274)', () => {
     expect(screen.getByText(/Left out by the limit above/)).toBeInTheDocument();
   });
 
-  it('states plainly when the CV was not read to the end, and that exports are blocked', () => {
+  it('states plainly when the CV was not read to the end, and to fix it before exporting', () => {
     render(
       <CvSourceReview
         source={{ ...SOURCE, complete: false, incompleteReason: 'only the first 200,000 characters could be read' }}
@@ -189,8 +189,8 @@ describe('CvSourceReview (#274)', () => {
     );
 
     const banner = screen.getByRole('alert');
-    expect(banner).toHaveTextContent('only the first 200,000 characters could be read');
-    expect(banner).toHaveTextContent(/Exports are blocked/);
+    expect(banner).toHaveTextContent('Part of your CV may be missing');
+    expect(banner).toHaveTextContent(/before exporting/);
   });
 
   it('shows no incompleteness warning for a CV that was read in full', () => {

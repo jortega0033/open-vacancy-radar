@@ -844,7 +844,6 @@ export function LetterGenerator({
             label="letter being generated"
             idleHint="No document yet."
             busyLabel="Writing your letter…"
-            providerLabel={PROVIDER_LABEL[provider]}
           />
         )}
 

@@ -33,11 +33,9 @@ const OWNERSHIP_LABEL: Record<CvFactOwnership, string> = {
 
 function provenanceLabel(fact: CvEvidenceFact): string {
   if (fact.verification === 'candidate_confirmed_gap') return 'Your statement that this was not your work';
-  if (fact.verification === 'unreviewed') return 'Proposed by a connected app. You have not confirmed it yet.';
-  if (fact.sourceKind === 'repository_inspection') {
-    return 'Repository inspection. It can corroborate how something was built, but not that you wrote it or that it ran in production.';
-  }
-  return fact.verification === 'corroborated' ? 'Corroborated' : 'Self-reported by you';
+  if (fact.verification === 'unreviewed') return 'Suggested by another app, waiting for your approval';
+  if (fact.sourceKind === 'repository_inspection') return 'Found in your project files';
+  return fact.verification === 'corroborated' ? 'Confirmed by another source' : 'You told us';
 }
 
 interface FactCorrection {
@@ -231,8 +229,7 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Facts and wording</div>
         <p className="text-sm text-base-content/60">
-          Approve each fact before it can back any CV wording, then approve the exact wording shown. A fact
-          you correct is replaced and the wording that used it is withdrawn.
+          Approve facts first, then the wording that uses them.
         </p>
 
         {error && (
@@ -278,30 +275,37 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
               {fact.verification === 'candidate_confirmed_gap' ? (
                 <p className="mt-1 text-xs text-base-content/70">You said this was not your work.</p>
               ) : (
-                <dl className="mt-1 grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[8rem_1fr]">
-                  <dt className="text-base-content/60">What you did</dt>
-                  <dd>{fact.activity}</dd>
-                  <dt className="text-base-content/60">Client relationship</dt>
-                  <dd>{fact.client || 'None stated'}</dd>
-                  <dt className="text-base-content/60">When</dt>
-                  <dd>{fact.timePhase || 'Not stated'}</dd>
-                  <dt className="text-base-content/60">Ownership</dt>
-                  <dd>{OWNERSHIP_LABEL[fact.ownership]}</dd>
-                  <dt className="text-base-content/60">How</dt>
-                  <dd>{fact.mechanism || 'Not stated'}</dd>
-                  <dt className="text-base-content/60">Result</dt>
-                  <dd>{fact.result || 'Not stated'}</dd>
-                  {fact.metricValue && (
-                    <>
-                      <dt className="text-base-content/60">Number</dt>
-                      <dd>
-                        {fact.metricValue} {fact.metricUnit} (basis: {fact.metricBasis})
-                      </dd>
-                    </>
-                  )}
-                  <dt className="text-base-content/60">Provenance</dt>
-                  <dd>{provenanceLabel(fact)}</dd>
-                </dl>
+                <>
+                  <dl className="mt-1 grid gap-x-3 gap-y-1 text-xs sm:grid-cols-[8rem_1fr]">
+                    <dt className="text-base-content/60">What you did</dt>
+                    <dd>{fact.activity}</dd>
+                    <dt className="text-base-content/60">Result</dt>
+                    <dd>{fact.result || 'Not stated'}</dd>
+                  </dl>
+                  <details className="mt-1 text-xs">
+                    <summary className="cursor-pointer text-base-content/60">More details</summary>
+                    <dl className="mt-1 grid gap-x-3 gap-y-1 sm:grid-cols-[8rem_1fr]">
+                      <dt className="text-base-content/60">Client</dt>
+                      <dd>{fact.client || 'None stated'}</dd>
+                      <dt className="text-base-content/60">When</dt>
+                      <dd>{fact.timePhase || 'Not stated'}</dd>
+                      <dt className="text-base-content/60">Ownership</dt>
+                      <dd>{OWNERSHIP_LABEL[fact.ownership]}</dd>
+                      <dt className="text-base-content/60">How</dt>
+                      <dd>{fact.mechanism || 'Not stated'}</dd>
+                      {fact.metricValue && (
+                        <>
+                          <dt className="text-base-content/60">Number</dt>
+                          <dd>
+                            {fact.metricValue} {fact.metricUnit}
+                          </dd>
+                        </>
+                      )}
+                      <dt className="text-base-content/60">Where this came from</dt>
+                      <dd>{provenanceLabel(fact)}</dd>
+                    </dl>
+                  </details>
+                </>
               )}
               {correcting?.factId === fact.factId ? (
                 <div className="mt-2 flex flex-col gap-2">

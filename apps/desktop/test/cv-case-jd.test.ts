@@ -269,9 +269,9 @@ Also: GraphQL is required.`,
     expect(changed.requirements[0]?.jdRevisionId).toBe(firstRevisionId);
     expect(gaps).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('have not been extracted and confirmed'),
+        expect.stringContaining('have not been read and confirmed'),
         expect.stringContaining('older job description'),
-        expect.stringContaining('have not been reviewed'),
+        expect.stringContaining('not been reviewed'),
       ]),
     );
   });

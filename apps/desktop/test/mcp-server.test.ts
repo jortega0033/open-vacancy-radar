@@ -224,7 +224,7 @@ describe('local MCP endpoint tool surface (#421)', () => {
     // something is proposed and accepted -- see the pagination test below.
     // A job description this short is flagged, so the case reports that gap from the start.
     expect(started.gaps).toEqual(
-      expect.arrayContaining([expect.stringMatching(/looks incomplete/), expect.stringMatching(/not been extracted and confirmed/)]),
+      expect.arrayContaining([expect.stringMatching(/looks incomplete/), expect.stringMatching(/not been read and confirmed/)]),
     );
 
     // Coverage was earned by this call, not pre-granted: a second tool call against the same

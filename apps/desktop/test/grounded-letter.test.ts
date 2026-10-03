@@ -305,8 +305,8 @@ describe('grounded letter tidiness', () => {
   });
 
   it('states the provenance without contradicting itself, and without a dash', () => {
-    expect(GROUNDED_LETTER_DISCLOSURE).toContain('Built from facts in your CV');
-    expect(GROUNDED_LETTER_DISCLOSURE).toContain('short linking lines in English');
+    expect(GROUNDED_LETTER_DISCLOSURE).toContain('Built from facts you confirmed on your CV');
+    expect(GROUNDED_LETTER_DISCLOSURE).toContain('The connecting lines are in English');
     expect(GROUNDED_LETTER_DISCLOSURE).not.toMatch(/nothing in it is written by the model/i);
     expect(GROUNDED_LETTER_DISCLOSURE).not.toContain(String.fromCharCode(0x2014));
   });

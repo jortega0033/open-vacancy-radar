@@ -191,7 +191,7 @@ export function selectSourceProjects(source: CvSourceDocument): CvSourceProjectE
 export function describeCvSourceGaps(source: CvSourceDocument): string[] {
   const reasons = describeCvSourceContentGaps(source);
   if (source.reviewedAt.trim().length === 0) {
-    reasons.push('the extracted source CV has not been reviewed and confirmed yet');
+    reasons.push('your CV details have not been checked yet');
   }
   return reasons;
 }
@@ -204,10 +204,7 @@ export function describeCvSourceGaps(source: CvSourceDocument): string[] {
  */
 export function describeCvSourceContentGaps(source: CvSourceDocument): string[] {
   if (source.complete) return [];
-  const detail =
-    source.incompleteReason ||
-    `only ${source.coveredChars.toLocaleString('en-US')} of ${source.sourceChars.toLocaleString('en-US')} characters of the CV were read`;
-  return [`the source CV is incomplete: ${detail}`];
+  return ['your CV was only partly read, so some sections may be missing'];
 }
 
 export function isCvSourceExportable(source: CvSourceDocument): boolean {

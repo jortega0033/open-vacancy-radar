@@ -58,11 +58,11 @@ test.describe('CV library', () => {
 
     // "Save to CV library" unmounts the picked-file panel the instant the save resolves (back to
     // the plain "Upload CV" button) and reloads the list: the durable, testable outcome is the
-    // new row appearing with a "Parsed" status, not the transient confirmation in between.
+    // new row appearing with a "Ready" status, not the transient confirmation in between.
     await window.getByRole('button', { name: /save to cv library/i }).click();
     await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();
     await expect(window.getByText('sample-cv.txt')).toBeVisible();
-    await expect(window.getByText('Parsed', { exact: true })).toBeVisible();
+    await expect(window.getByText('Ready', { exact: true })).toBeVisible();
   });
 
   test('uploads a DOCX CV file and saves the extracted text to the library (issue #357)', async ({
@@ -105,7 +105,7 @@ test.describe('CV library', () => {
       await window.getByRole('button', { name: /save to cv library/i }).click();
       await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();
       await expect(window.getByText('cv.docx')).toBeVisible();
-      await expect(window.getByText('Parsed', { exact: true })).toBeVisible();
+      await expect(window.getByText('Ready', { exact: true })).toBeVisible();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
