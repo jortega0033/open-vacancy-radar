@@ -121,7 +121,7 @@ const APPLICATION_STATUS_OPTIONS = [
 
 type SaveStatus = { kind: 'saved'; message: string } | { kind: 'error'; message: string; details?: string };
 
-type ResetTarget = 'settings' | 'data';
+type ResetTarget = 'settings' | 'data' | 'cache';
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -171,13 +171,14 @@ export interface SettingsPageProps {
   previousPage?: NavPage;
 }
 
-export type SettingsTab = 'general' | 'search' | 'workspace' | 'advanced';
+export type SettingsTab = 'general' | 'search' | 'workspace' | 'data' | 'advanced';
 export type SettingsFocusSection = 'search-profile';
 
 const SETTINGS_TABS: ReadonlyArray<{ readonly id: SettingsTab; readonly label: string }> = [
   { id: 'general', label: 'General' },
   { id: 'search', label: 'Search' },
   { id: 'workspace', label: 'Workspace' },
+  { id: 'data', label: 'Data' },
   { id: 'advanced', label: 'Advanced' },
 ];
 
@@ -329,6 +330,22 @@ export function SettingsPage({
       setBusy(true);
       void (async () => {
         try {
+          if (target === 'cache') {
+            // Touches only the downloaded vacancy cache: no workspace record is read or written.
+            const result = await window.vacancyRadar.rebuildCache();
+            if (!result.ok) {
+              flash(failure(new Error(result.detail), 'Could not rebuild the job cache.'));
+              return;
+            }
+            flash({
+              kind: 'saved',
+              message:
+                result.sponsorRefresh === 'ok'
+                  ? 'Job cache rebuilt'
+                  : 'Job cache rebuilt. The sponsor register could not be refreshed yet.',
+            });
+            return;
+          }
           if (target === 'data') {
             const result = await window.workspace.resetApplicationData();
             saveSeq.current += 1;
@@ -618,17 +635,20 @@ export function SettingsPage({
             onToggled={changeField}
           />
 
-          <DataManagement
-            busy={busy}
-            onRequestResetSettings={() => setConfirmTarget('settings')}
-            onRequestResetData={() => setConfirmTarget('data')}
-          />
-
           <AboutSection
             {...(currentPage ? { currentPage } : {})}
             {...(previousPage ? { previousPage } : {})}
           />
         </>
+      )}
+
+      {activeTab === 'data' && (
+        <DataManagement
+          busy={busy}
+          onRequestRebuildCache={() => setConfirmTarget('cache')}
+          onRequestResetSettings={() => setConfirmTarget('settings')}
+          onRequestResetData={() => setConfirmTarget('data')}
+        />
       )}
       </TabPanel>
 
@@ -641,11 +661,35 @@ export function SettingsPage({
           onCancel={() => setConfirmTarget(null)}
         />
       )}
+      {confirmTarget === 'cache' && (
+        <ConfirmDialog
+          title="Rebuild the job cache?"
+          message="The current downloaded job cache is set aside and a fresh one is built, so downloaded vacancies and sponsor data are fetched again. Your CVs, applications and letters are kept."
+          confirmLabel="Rebuild job cache"
+          onConfirm={() => runReset('cache')}
+          onCancel={() => setConfirmTarget(null)}
+        />
+      )}
       {confirmTarget === 'data' && (
         <ConfirmDialog
-          title="Reset application data?"
-          message="This permanently deletes your saved jobs, applications, CVs, letters, generated files and search profile, and resets settings. This cannot be undone."
-          confirmLabel="Delete everything"
+          title="Delete my data?"
+          message={
+            <>
+              <p>This permanently deletes:</p>
+              <ul className="mt-1 list-disc pl-5">
+                <li>your saved jobs</li>
+                <li>your applications and application history</li>
+                <li>your CVs and tailoring cases</li>
+                <li>your letters</li>
+                <li>generated application files</li>
+                <li>your saved answers and search profile</li>
+              </ul>
+              <p className="mt-2">Settings go back to their defaults. Your downloaded job cache is kept.</p>
+              <p className="mt-2 font-medium">There is no backup. Deleted CVs, applications and letters cannot be recovered.</p>
+            </>
+          }
+          confirmLabel="Delete my data"
+          requireText="DELETE"
           onConfirm={() => runReset('data')}
           onCancel={() => setConfirmTarget(null)}
         />

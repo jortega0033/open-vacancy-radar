@@ -307,6 +307,8 @@ let daemonConnection: { baseUrl: string; token: string } | undefined;
 let daemonInstanceId: string | undefined;
 
 let vacancyDb: Database | undefined;
+/** The open connection behind `vacancyDb`, kept so a cache reset can release the file before renaming it. */
+let vacancyClient: ReturnType<typeof createDatabaseClient> | undefined;
 let vacancyEngineInit: Promise<Database> | undefined;
 let vacancyScanLock: ScanLock | undefined;
 /** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
@@ -431,6 +433,7 @@ async function ensureVacancyEngine(): Promise<Database> {
       throw error;
     }
     const { db } = client;
+    vacancyClient = client;
     vacancyDb = db;
     vacancyEngineFailure = undefined;
     // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
@@ -2443,27 +2446,44 @@ guardedIpc.handle('vacancy:get-status', async (): Promise<VacancyEngineStatus> =
 });
 
 /**
- * "Rebuild job cache" (#441, reused by #442). Allowed only when the engine database is confirmed
- * corrupt *right now*: the open is retried first, so a cache that has healed (a second app instance
- * released a lock, say) is never moved aside, and locked / migration / unknown failures get no
- * rebuild at all. Touches only the vacancy engine's file family; the workspace database is neither
- * opened nor named here.
+ * "Rebuild job cache" (#441, and the Settings > Data reset of #442). Two entry states, nothing else:
+ *
+ * - **Confirmed corrupt right now** (Search recovery): the open is retried first, so a cache that
+ *   healed is never moved aside, and locked / migration / unknown failures get no rebuild.
+ * - **Healthy** (a deliberate reset from Settings, which says plainly that downloaded vacancies and
+ *   sponsor data are fetched again): the connection is released, then the same set-aside runs.
+ *
+ * Holds the scan guard throughout, so no scan or second rebuild overlaps it. Touches only the
+ * vacancy engine's file family; the workspace database is neither opened nor named here.
  */
-guardedIpc.handle('vacancy:rebuild-cache', async (): Promise<VacancyCacheRebuildResult> => {
-  if (isScanInFlight()) return { ok: false, reason: 'scan_running', detail: 'A scan is running. Wait for it to finish, then try again.' };
-  if (vacancyDb) {
-    return { ok: false, reason: 'not_damaged', detail: 'The job cache opens normally, so there is nothing to rebuild.' };
-  }
-  try {
-    await ensureVacancyEngine();
-    return { ok: false, reason: 'not_damaged', detail: 'The job cache opens normally, so there is nothing to rebuild.' };
-  } catch {
-    if (vacancyEngineFailure?.category !== 'corrupt') {
-      return { ok: false, reason: 'not_corrupt', detail: 'The job cache problem is not a damaged file, so it cannot be fixed by rebuilding.' };
+async function rebuildVacancyCache(): Promise<VacancyCacheRebuildResult> {
+  const config = vacancyEngineConfig();
+  const wasHealthy = vacancyDb !== undefined;
+
+  if (!wasHealthy) {
+    try {
+      await ensureVacancyEngine();
+    } catch {
+      if (vacancyEngineFailure?.category !== 'corrupt') {
+        return { ok: false, reason: 'not_corrupt', detail: 'The job cache problem is not a damaged file, so it cannot be fixed by rebuilding.' };
+      }
     }
   }
 
-  const config = vacancyEngineConfig();
+  const releaseHandles = () => {
+    try {
+      vacancyClient?.close();
+    } catch {
+      // A handle that will not close cleanly is about to be replaced; the rename is what matters.
+    }
+    vacancyClient = undefined;
+    vacancyDb = undefined;
+    vacancyEngineInit = undefined;
+    vacancyScanLock = undefined;
+    applicationJdHttpClient = undefined;
+  };
+  releaseHandles();
+
   const outcome = await rebuildVacancyEngineDatabase({
     databasePath: config.databasePath,
     now: () => new Date(),
@@ -2471,24 +2491,37 @@ guardedIpc.handle('vacancy:rebuild-cache', async (): Promise<VacancyCacheRebuild
       await ensureVacancyEngine();
     },
     discardFresh: async () => {
-      // Only the half-built replacement: close it and remove its files. The damaged file was
-      // renamed away before this ran and is put back by the caller.
-      vacancyDb = undefined;
-      vacancyEngineInit = undefined;
-      vacancyScanLock = undefined;
+      // Only the half-built replacement: the damaged file was renamed away before this ran and is
+      // put back by the caller.
+      releaseHandles();
       for (const tail of ['', '-wal', '-shm']) await rm(`${config.databasePath}${tail}`, { force: true });
     },
     refreshSponsors: async () => {
       await runSponsorSync(await ensureVacancyEngine(), config, createLogger(config));
     },
   });
-  if (!outcome.ok) return { ok: false, reason: 'rebuild_failed', detail: outcome.detail };
+  if (!outcome.ok) {
+    // The old file is back where it was; reopen it so a healthy cache keeps working.
+    if (wasHealthy) await ensureVacancyEngine().catch(() => undefined);
+    return { ok: false, reason: 'rebuild_failed', detail: outcome.detail };
+  }
   return {
     ok: true,
     retainedFileName: outcome.retainedFileName,
     sponsorRefresh: outcome.sponsorRefresh,
     ...(outcome.sponsorError ? { sponsorError: outcome.sponsorError } : {}),
   };
+}
+
+guardedIpc.handle('vacancy:rebuild-cache', async (): Promise<VacancyCacheRebuildResult> => {
+  try {
+    return await runExclusiveScan(rebuildVacancyCache, { takeAdvisoryLock: vacancyDb !== undefined });
+  } catch (error) {
+    if (isExpectedScanBusyError(error)) {
+      return { ok: false, reason: 'scan_running', detail: 'A scan is running. Wait for it to finish, then try again.' };
+    }
+    throw error;
+  }
 });
 
 guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);

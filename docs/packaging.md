@@ -174,9 +174,9 @@ purpose or otherwise.
 workspace SQLite database (saved jobs, applications, CV documents, letters, settings), the
 vacancy-engine database, the `ai-workspace/` scratch directory the CV/AI features use, and
 AgentDock's own daemon state directory. None of it is removed by uninstalling the app. Settings >
-Advanced > Reset application data deletes personal workspace records, generated application files,
+Data > Delete my data (confirmed by typing DELETE) deletes personal workspace records, generated application files,
 the application queue and search profile. It intentionally keeps the public vacancy cache and AI
-runtime history. Removing `%APPDATA%\Open Vacancy Radar` with the app closed clears everything.
+runtime history. Settings > Data > Rebuild job cache sets aside the vacancy-engine database and builds a fresh one without touching workspace records. Removing `%APPDATA%\Open Vacancy Radar` with the app closed clears everything.
 
 The retention claim comes from packaging config and the absence of an uninstall script. The
 uninstaller process has been tested, but a current clean-machine inspect-before/after check of

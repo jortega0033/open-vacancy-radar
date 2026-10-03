@@ -28,7 +28,7 @@ export type VacancyEngineStatus = {
 
 export type VacancyCacheRebuildResult =
   | { ok: true; retainedFileName: string; sponsorRefresh: 'ok' | 'failed'; sponsorError?: string }
-  | { ok: false; reason: 'scan_running' | 'not_damaged' | 'not_corrupt' | 'rebuild_failed'; detail: string };
+  | { ok: false; reason: 'scan_running' | 'not_corrupt' | 'rebuild_failed'; detail: string };
 
 export interface VacancyEngineFailure {
   category: VacancyEngineFailureCategory;
