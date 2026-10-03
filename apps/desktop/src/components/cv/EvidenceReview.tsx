@@ -227,7 +227,7 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">Facts and wording</div>
+        <div id="cv-step-facts" tabIndex={-1} className="card-title text-base font-bold outline-none">Facts and wording</div>
         <p className="text-sm text-base-content/60">
           Approve facts first, then the wording that uses them.
         </p>

@@ -1,5 +1,17 @@
-import { CaretLeft, Cpu } from '@phosphor-icons/react';
+import {
+  CaretLeft,
+  CheckCircle,
+  CircleNotch,
+  Database,
+  DownloadSimple,
+  Hourglass,
+  Key,
+  Warning,
+  XCircle,
+  type Icon,
+} from '@phosphor-icons/react';
 import type { WorkspaceCounts } from '../../window.js';
+import type { EngineHealth } from '../../engine-health.js';
 import { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 import { NavIcon } from './NavIcon.js';
 import { badgeCount, PRIMARY_NAV, SECONDARY_NAV, type NavItem, type NavPage } from './nav.js';
@@ -10,8 +22,34 @@ const RUNTIME_TEXT: Record<RuntimeState, string> = {
   ready: 'ready',
   unavailable: 'unavailable',
   'not-installed': 'not installed',
-  'not-authenticated': 'not authenticated',
+  'not-authenticated': 'not signed in',
+  'limit-reached': 'usage limit reached',
 };
+
+/** One shape per state, so every state can be told apart with no color at all (#477). */
+const RUNTIME_ICON: Record<RuntimeState, Icon> = {
+  ready: CheckCircle,
+  connecting: CircleNotch,
+  unavailable: XCircle,
+  'not-installed': DownloadSimple,
+  'not-authenticated': Key,
+  'limit-reached': Hourglass,
+};
+
+const RUNTIME_TONE: Record<RuntimeState, string> = {
+  ready: 'text-success',
+  connecting: 'text-base-content/60',
+  unavailable: 'text-error',
+  'not-installed': 'text-warning',
+  'not-authenticated': 'text-warning',
+  'limit-reached': 'text-warning',
+};
+
+function engineText(engine: EngineHealth): string {
+  if (engine.state === 'ready') return 'Job search ready';
+  if (engine.state === 'checking') return 'Checking job search';
+  return 'Job search needs attention';
+}
 
 export interface AppSidebarProps {
   active: NavPage;
@@ -24,6 +62,8 @@ export interface AppSidebarProps {
   /** The one place this now shows: distinguishes an unreachable daemon from a daemon that's fine
    * but has no CLI installed/authenticated, so this never claims "ready" when nothing is. */
   runtimeState: RuntimeState;
+  /** The job search engine, shown beside the AI runtime so one cannot mask the other (#477). */
+  engine?: EngineHealth;
 }
 
 /**
@@ -43,8 +83,8 @@ export function AppSidebar({
   counts,
   runtimeLabel,
   runtimeState,
+  engine = { state: 'checking' },
 }: AppSidebarProps) {
-  const runtimeReady = runtimeState === 'ready';
   const toggleLabel = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
 
   return (
@@ -80,34 +120,94 @@ export function AppSidebar({
 
       <div className="flex-1" />
 
-      <div
-        className={`border-t border-base-300 ${collapsed ? 'flex flex-col items-center gap-1.5 py-3' : 'flex items-center gap-2 px-3.5 py-3'}`}
-      >
-        <div className="relative flex-none">
-          {/* This footer is the AI runtime status, not an account/profile: the app has no login or
-              online profile concept, so it must never borrow that vocabulary (see AppSidebar's
-              history: it briefly shipped as a fake "Local profile" avatar + label). */}
-          <div
-            className="flex size-7 items-center justify-center rounded-full bg-base-300 text-base-content/70"
-            aria-label="AI runtime"
-          >
-            <Cpu size={15} weight="bold" aria-hidden="true" />
-          </div>
-          <span
-            className={`absolute right-0 bottom-0 size-2 rounded-full border-2 border-base-200 ${runtimeReady ? 'bg-success' : 'bg-base-content/30'}`}
-            aria-hidden="true"
-          />
-        </div>
-        {!collapsed && (
-          <div className="min-w-0">
-            <div className="truncate text-xs font-medium">AI runtime</div>
-            <div className="truncate text-xs text-base-content/60">
-              {runtimeLabel} {RUNTIME_TEXT[runtimeState]}
-            </div>
-          </div>
-        )}
-      </div>
+      <SidebarStatus
+        collapsed={collapsed}
+        runtimeLabel={runtimeLabel}
+        runtimeState={runtimeState}
+        engine={engine}
+        onOpenRuntime={() => onNavigate('runtime')}
+        onOpenSearch={() => onNavigate('search')}
+      />
     </aside>
+  );
+}
+
+interface SidebarStatusProps {
+  collapsed: boolean;
+  runtimeLabel: string;
+  runtimeState: RuntimeState;
+  engine: EngineHealth;
+  onOpenRuntime(): void;
+  onOpenSearch(): void;
+}
+
+/**
+ * The two system statuses at the foot of the rail: the AI runtime and the job search engine, each
+ * its own button that opens where it is fixed. They are separate on purpose (#477): a provider that
+ * is ready says nothing about whether scans can run. Every state has its own icon and its own words,
+ * and the button's name carries the whole state, so the collapsed rail (which drops the words)
+ * announces exactly what the expanded one shows.
+ */
+function SidebarStatus({ collapsed, runtimeLabel, runtimeState, engine, onOpenRuntime, onOpenSearch }: SidebarStatusProps) {
+  const RuntimeIcon = RUNTIME_ICON[runtimeState];
+  const runtimeName = `AI runtime: ${runtimeLabel}, ${RUNTIME_TEXT[runtimeState]}`;
+  const EngineIcon = engine.state === 'attention' ? Warning : Database;
+  const engineLabel = engineText(engine);
+  const engineName = `Job search: ${engine.state === 'attention' ? `needs attention, ${engine.message}` : engine.state === 'ready' ? 'ready' : 'checking'}`;
+  const engineTone = engine.state === 'attention' ? 'text-warning' : engine.state === 'ready' ? 'text-success' : 'text-base-content/60';
+
+  if (collapsed) {
+    return (
+      <div className="flex flex-col items-center gap-1 border-t border-base-300 py-2">
+        <button type="button" className="btn btn-ghost btn-square ovr-nav-icon" aria-label={runtimeName} title={runtimeName} onClick={onOpenRuntime}>
+          <span className={RUNTIME_TONE[runtimeState]}>
+            <RuntimeIcon size={18} weight="bold" aria-hidden="true" className={runtimeState === 'connecting' ? 'animate-spin' : undefined} />
+          </span>
+        </button>
+        <button type="button" className="btn btn-ghost btn-square ovr-nav-icon" aria-label={engineName} title={engineName} onClick={onOpenSearch}>
+          <span className={engineTone}>
+            <EngineIcon size={18} weight="bold" aria-hidden="true" />
+          </span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5 border-t border-base-300 px-2 py-2">
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm h-auto min-h-0 justify-start gap-2.5 py-1.5 text-left font-normal"
+        aria-label={runtimeName}
+        title={runtimeName}
+        onClick={onOpenRuntime}
+      >
+        <span className={`flex-none ${RUNTIME_TONE[runtimeState]}`}>
+          <RuntimeIcon size={18} weight="bold" aria-hidden="true" className={runtimeState === 'connecting' ? 'animate-spin' : undefined} />
+        </span>
+        <span className="min-w-0">
+          <span className="block truncate text-xs font-medium">AI runtime</span>
+          <span className="block truncate text-xs text-base-content/60">
+            {runtimeLabel} {RUNTIME_TEXT[runtimeState]}
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm h-auto min-h-0 justify-start gap-2.5 py-1.5 text-left font-normal"
+        aria-label={engineName}
+        title={engine.state === 'attention' ? engine.message : engineLabel}
+        onClick={onOpenSearch}
+      >
+        <span className={`flex-none ${engineTone}`}>
+          <EngineIcon size={18} weight="bold" aria-hidden="true" />
+        </span>
+        <span className="min-w-0">
+          <span className="block truncate text-xs font-medium">{engineLabel}</span>
+          {engine.state === 'attention' && <span className="block truncate text-xs text-base-content/60">Open Search to fix it</span>}
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -125,12 +225,16 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
       {items.map((item) => {
         const isActive = item.id === active;
         const count = badgeCount(counts, item.badge);
+        // Review work and scheduled sends sit on the Applications row so they are visible from
+        // every page, not only once the Review queue tab has been opened (#445).
+        const attention = item.id === 'applications' ? (counts?.needsReview ?? 0) + (counts?.scheduledSubmissions ?? 0) : 0;
+        const label = attention > 0 ? `${item.label}, ${attention} to review` : item.label;
         return (
           <button
             key={item.id}
             type="button"
-            aria-label={item.label}
-            title={item.label}
+            aria-label={label}
+            title={label}
             {...(isActive ? { 'aria-current': 'page' as const } : {})}
             onClick={() => onNavigate(item.id)}
             className={[
@@ -140,7 +244,7 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
               // so having both here left the collapsed icon pinned to the button's start edge
               // instead of centered in its 44px `ovr-nav-icon` box, overriding daisyUI's own
               // centered-by-default `.btn` layout.
-              collapsed ? 'ovr-nav-icon mx-auto justify-center px-0' : 'w-full justify-start',
+              collapsed ? 'ovr-nav-icon relative mx-auto justify-center px-0' : 'w-full justify-start',
               isActive ? 'bg-base-300 text-base-content' : 'text-base-content/70',
             ].join(' ')}
           >
@@ -148,10 +252,18 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
             {!collapsed && (
               <>
                 <span className="truncate">{item.label}</span>
+                {attention > 0 && (
+                  <span className="badge badge-warning badge-sm ml-auto font-semibold" aria-hidden="true">
+                    {attention} to review
+                  </span>
+                )}
                 {count !== undefined && (
-                  <span className="ml-auto text-xs font-normal text-base-content/60">{count}</span>
+                  <span className={`${attention > 0 ? '' : 'ml-auto '}text-xs font-normal text-base-content/60`}>{count}</span>
                 )}
               </>
+            )}
+            {collapsed && attention > 0 && (
+              <span className="absolute right-1 top-1 size-2 rounded-full bg-warning" aria-hidden="true" />
             )}
           </button>
         );

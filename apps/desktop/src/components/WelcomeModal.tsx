@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ProviderId } from '@agent-dock/shared';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { PROVIDER_LABEL } from '../provider-labels.js';
+import { Dialog } from './shell/Dialog.js';
 import { CvUploadAction } from './cv-library/CvUploadAction.js';
 import { FillProfileFromCvDrawer } from './settings/FillProfileFromCv.js';
 import { useAtsRoster } from './settings/useAtsRoster.js';
@@ -186,13 +187,8 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
   })();
 
   return (
-    <div
-      className="modal modal-open"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Welcome to Open Vacancy Radar"
-    >
-      <div className="modal-box p-0">
+    <Dialog aria-label="Welcome to Open Vacancy Radar" boxClassName="p-0" closeDisabled={busy} onClose={onClose}>
+      <div>
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">Welcome to Open Vacancy Radar</h2>
           <button type="button" aria-label="Close" className="btn btn-ghost btn-sm btn-circle" onClick={onClose}>
@@ -317,7 +313,6 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
           </button>
         </div>
       </div>
-      <button type="button" className="modal-backdrop" aria-label="Close" onClick={onClose} disabled={busy} />
-    </div>
+    </Dialog>
   );
 }

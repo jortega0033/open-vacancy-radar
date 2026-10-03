@@ -180,6 +180,9 @@ export function installSystemBridge(overrides: Partial<SystemBridge> = {}): Syst
 export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge> = {}): VacancyRadarBridge {
   const bridge: VacancyRadarBridge = {
     getStatus: vi.fn().mockResolvedValue({ ready: false, error: 'not configured in this test' }),
+    rebuildCache: vi.fn(),
+    getScanProgress: vi.fn().mockResolvedValue({ scanning: false }),
+    cancelScan: vi.fn().mockResolvedValue({ cancelled: true }),
     getReport: vi.fn().mockResolvedValue(null),
     getReportSummary: vi.fn().mockResolvedValue(null),
     runScan: vi.fn(),

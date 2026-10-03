@@ -270,10 +270,10 @@ describe('CvLibraryPage', () => {
     expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript');
   });
 
-  it('fills the summary fields from the reviewed source CV instead of firing a second AI run', async () => {
-    // The two extractions read the same document: once the source CV records exist, the title, the
-    // years and the location are arithmetic over data the candidate has already reviewed, so asking
-    // a model for them again costs a wait and a second chance to come back unparseable for nothing.
+  it('fills the core fields from the reviewed source CV, then completes skills with one AI read (#521)', async () => {
+    // Title, years and location are arithmetic over records the candidate has reviewed, so they land
+    // at once. The source records have no skills section, so Skills used to stay empty and tailoring
+    // then stripped every skill: one AI pass now fills only what is still blank.
     // The date range is closed on both ends so the expected years figure cannot drift with the
     // calendar; the open-ended arithmetic is covered in `cv-profile-from-source.test.ts`.
     const record = makeCv({
@@ -285,6 +285,7 @@ describe('CvLibraryPage', () => {
     });
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
     installCvBridge();
+    const emit = installAgentDockBridge();
 
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
@@ -294,7 +295,7 @@ describe('CvLibraryPage', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
-    expect(await within(dialog).findByText(/filled in from your cv/i)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/filled in from your cv: title/i)).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
     expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
     // The source-CV review panel sitting above the form has a "Location" input of its own, so the
@@ -303,7 +304,57 @@ describe('CvLibraryPage', () => {
     expect(profileLocation).toHaveValue('Amsterdam, Netherlands');
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
-    expect(bridge.createSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+    emit('sess-cv-parse-1', {
+      type: 'assistant.message',
+      text: JSON.stringify({
+        title: 'Some Other Title',
+        years: '99 years',
+        location: 'Elsewhere',
+        languages: 'English, Dutch',
+        skills: ['React', 'TypeScript'],
+        summary: '',
+        auth: '',
+      }),
+    });
+    emit('sess-cv-parse-1', { type: 'session.completed' });
+
+    await waitFor(() => expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript'));
+    expect(within(dialog).getByLabelText(/languages/i)).toHaveValue('English, Dutch');
+    // The AI pass completes blanks only; it never overwrites what the records already supplied.
+    expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
+    expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
+    expect(within(dialog).queryByText(/no skills found/i)).not.toBeInTheDocument();
+  });
+
+  it('says so when the profile fill finds no skills (#521)', async () => {
+    const record = makeCv({
+      id: 'derive-3',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. Amsterdam.',
+      source: makeSource(),
+    });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+    const emit = installAgentDockBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+    emit('sess-cv-parse-1', {
+      type: 'assistant.message',
+      text: JSON.stringify({ title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' }),
+    });
+    emit('sess-cv-parse-1', { type: 'session.completed' });
+
+    expect(await within(dialog).findByText(/no skills found/i)).toBeInTheDocument();
   });
 
   it('still runs the AI parse for a CV that has no source records yet', async () => {
@@ -706,6 +757,80 @@ describe('CvLibraryPage', () => {
     await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
   });
 
+  describe('source-review readiness (#447)', () => {
+    it('keeps Parsed, structured source and reviewed source apart, and never shows green for an unreviewed upload', async () => {
+      const reviewed = makeCv({ id: 'r', name: 'Reviewed.pdf', kind: 'uploaded', text: 'text', source: makeSource() });
+      const unreviewed = makeCv({ id: 'u', name: 'Unreviewed.pdf', kind: 'uploaded', text: 'text', source: makeSource({ reviewedAt: '' }) });
+      const unread = makeCv({ id: 'n', name: 'Unread.pdf', kind: 'uploaded', text: 'text', source: null });
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([reviewed, unreviewed, unread]) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+
+      const rowOf = async (name: string) => (await screen.findByText(name)).closest('tr')!;
+      const reviewedRow = await rowOf('Reviewed.pdf');
+      expect(within(reviewedRow).getByText('Yes')).toBeInTheDocument();
+      expect(within(reviewedRow).getByText('Text found')).toHaveClass('text-success');
+
+      const unreviewedRow = await rowOf('Unreviewed.pdf');
+      expect(within(unreviewedRow).getByText('Needs your review')).toBeInTheDocument();
+      expect(within(unreviewedRow).getByText('Text found')).not.toHaveClass('text-success');
+
+      const unreadRow = await rowOf('Unread.pdf');
+      expect(within(unreadRow).getByText('Not read yet')).toBeInTheDocument();
+      expect(within(unreadRow).getByText('Text found')).not.toHaveClass('text-success');
+    });
+
+    it('opens the review from the readiness cell, and calls the save a confirmation when the drawer holds a source', async () => {
+      const unreviewed = makeCv({ id: 'u', name: 'Unreviewed.pdf', kind: 'uploaded', text: 'text', source: makeSource({ reviewedAt: '' }) });
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([unreviewed]) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Review Unreviewed.pdf' }));
+      const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+      expect(within(dialog).getByRole('button', { name: 'Confirm and save' })).toBeInTheDocument();
+      expect(within(dialog).getByText(/saving confirms these records are correct/i)).toBeInTheDocument();
+    });
+
+    it('opens the exact CV from the tailoring workspace and returns to the same case after saving', async () => {
+      const unreviewed = makeCv({
+        id: 'u',
+        name: 'Unreviewed.pdf',
+        kind: 'uploaded',
+        text: 'Frontend engineer.',
+        isDefault: true,
+        source: makeSource({ reviewedAt: '' }),
+      });
+      const reviewedAfterSave = { ...unreviewed, source: makeSource() };
+      // The page and the workspace each read the library once on the way in; every later read is after the save.
+      const listCvDocuments = vi.fn().mockResolvedValueOnce([unreviewed]).mockResolvedValueOnce([unreviewed]).mockResolvedValue([reviewedAfterSave]);
+      const updateCvDocument = vi.fn().mockResolvedValue(reviewedAfterSave);
+      installWorkspaceBridge({ listCvDocuments, updateCvDocument, getCvEvidenceOverlay: vi.fn().mockResolvedValue(null), createCvEvidenceOverlay: vi.fn().mockResolvedValue(undefined) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /tailor for a job/i }));
+      const form = await screen.findByRole('form', { name: /tailor for a job/i });
+      fireEvent.change(within(form).getByLabelText('Role (required)'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company (required)'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText('Job description (required)'), { target: { value: 'Build the freight planner.' } });
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      await screen.findByRole('combobox', { name: /use saved cv/i });
+      const notice = await screen.findByText(/check your CV details first/i);
+      expect(notice).toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: 'Review this CV now' })[0]!);
+
+      const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm and save' }));
+
+      await waitFor(() => expect(updateCvDocument).toHaveBeenCalledTimes(1));
+      // Still in the same case, with the notice gone.
+      await waitFor(() => expect(screen.queryByText(/check your CV details first/i)).not.toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Back to CV library' })).toBeInTheDocument();
+    });
+  });
+
   describe('Tailor for a job (#419)', () => {
     async function openForm() {
       render(<CvLibraryPage />);
@@ -853,6 +978,27 @@ describe('CvLibraryPage', () => {
 
       await waitFor(() => expect(createCvEvidenceOverlay).toHaveBeenCalledWith(expect.objectContaining({ cvId: 'cv-b' })));
       expect(await screen.findByRole('combobox', { name: /use saved cv/i })).toHaveValue('cv-b');
+    });
+
+    it('puts ATS fit, the draft and the cover letter in a collapsed Other tools section under the steps (#446)', async () => {
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ id: 'cv-a', name: 'A.pdf', isDefault: true })]),
+        createCvEvidenceOverlay: vi.fn().mockResolvedValue(undefined),
+        getCvEvidenceOverlay: vi.fn().mockResolvedValue(null),
+      });
+      installCvBridge();
+      const form = await openForm();
+
+      fillForm(form);
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      expect(await screen.findByRole('navigation', { name: 'Tailoring steps' })).toBeInTheDocument();
+      const other = screen.getByLabelText('Other tools');
+      expect(other.tagName).toBe('DETAILS');
+      expect(other).not.toHaveAttribute('open');
+      expect(within(other).getByText(/job fit check/i, { selector: '.card-title, h3, div' })).toBeInTheDocument();
+      // The main path stays outside it.
+      expect(within(other).queryByText('Requirement mapping')).not.toBeInTheDocument();
     });
 
     it('lists the case under Tailoring cases when the candidate leaves right after opening', async () => {

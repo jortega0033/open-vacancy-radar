@@ -123,7 +123,9 @@ export function ManualApplicationReviewCard({
             </h2>
             <p className="mt-1 text-xs text-base-content/60">
               {letterBlocked
-                ? 'Your CV is ready. The cover letter still needs attention.'
+                ? attempt.checkpointDetail.includes('Your CV was prepared without any skills.')
+                  ? 'Your CV has no skills to match this vacancy. The cover letter still needs attention.'
+                  : 'Your CV is ready. The cover letter still needs attention.'
                 : 'You send this one yourself. Your documents are ready.'}
             </p>
           </div>

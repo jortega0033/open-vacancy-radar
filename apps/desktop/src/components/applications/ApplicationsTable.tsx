@@ -1,5 +1,6 @@
 import type { ApplicationRecord, ApplicationStatus } from '../../window.js';
 import { NotSet } from '../shell/NotSet.js';
+import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
 import {
   APPLICATION_STATUS_LABEL,
   APPLICATION_STATUS_ORDER,
@@ -17,6 +18,16 @@ export interface ApplicationsTableProps {
    * up simply doesn't get the row action, rather than every existing render site needing a new
    * required prop. */
   onPrepareInterview?: (record: ApplicationRecord) => void;
+  /** Opens the linked attempt in the Review queue (#444). Without it the attempt state is shown but not linked. */
+  onOpenAttempt?: (attemptId: string) => void;
+}
+
+/** How a row linked to an attempt says it got where it is, with the source of a sent state kept visible. */
+function attemptSourceNote(attempt: NonNullable<ApplicationRecord['attempt']>): string | null {
+  if (attempt.checkpoint === 'submitted') return 'Receipt observed by this app';
+  if (attempt.checkpoint === 'user_reported') return 'Reported by you';
+  if (attempt.checkpoint === 'submission_unknown') return 'Not confirmed';
+  return null;
 }
 
 function formatAppliedDate(iso: string | null): string | null {
@@ -37,6 +48,7 @@ export function ApplicationsTable({
   onToggleArchive,
   onDelete,
   onPrepareInterview,
+  onOpenAttempt,
 }: ApplicationsTableProps) {
   return (
     <div
@@ -88,6 +100,26 @@ export function ApplicationsTable({
                     </option>
                   ))}
                 </select>
+                {application.attempt && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className={`${ATTEMPT_CHECKPOINT_BADGE_CLASS[application.attempt.checkpoint]} badge-sm`}>
+                      {ATTEMPT_CHECKPOINT_LABEL[application.attempt.checkpoint]}
+                    </span>
+                    {attemptSourceNote(application.attempt) && (
+                      <span className="text-base-content/60">{attemptSourceNote(application.attempt)}</span>
+                    )}
+                    {onOpenAttempt && (
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() => onOpenAttempt(application.attempt!.attemptId)}
+                        aria-label={`Open the application attempt for ${application.role} at ${application.company}`}
+                      >
+                        Open attempt
+                      </button>
+                    )}
+                  </div>
+                )}
               </td>
               <td className="ovr-responsive-table__cell whitespace-nowrap" data-label="Applied">
                 {formatAppliedDate(application.appliedAt) ?? <NotSet />}

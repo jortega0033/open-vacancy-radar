@@ -229,6 +229,8 @@ export function GapAnalysis({
           label="ATS fit result"
           idleHint="No analysis yet."
           busyLabel="Checking your CV against this vacancy…"
+          providerId={provider ?? 'claude'}
+          onRetry={handleRun}
         />
       </div>
     </div>

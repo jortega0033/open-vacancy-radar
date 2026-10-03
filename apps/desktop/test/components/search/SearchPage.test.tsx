@@ -2,6 +2,7 @@ import { StrictMode, useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
+import { getEngineHealth } from '../../../src/engine-health.js';
 import { LiveAnnouncerProvider } from '../../../src/components/shell/index.js';
 import {
   SearchPage,
@@ -320,6 +321,144 @@ describe('SearchPage', () => {
     expect(bridge.getReport).toHaveBeenCalledTimes(1);
     // Viewing a stored report must never cost a live scan.
     expect(bridge.runScan).not.toHaveBeenCalled();
+  });
+
+  describe('single-pane flow on a narrow page (#451)', () => {
+    function stubPageWidth(width: number) {
+      class FakeResizeObserver {
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          this.callback([{ target, contentRect: { width } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+        }
+        unobserve() {}
+        disconnect() {}
+      }
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    }
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function twoVacancies() {
+      return makeWorldwideReport([
+        makeWorldwideVacancy({ key: 'a', title: 'Alpha Engineer', url: 'https://example.invalid/a' }),
+        makeWorldwideVacancy({ key: 'b', title: 'Beta Engineer', url: 'https://example.invalid/b' }),
+      ]);
+    }
+
+    it('shows the list or the detail, never both, and keeps the selection across the switch', async () => {
+      stubPageWidth(700);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      expect(await screen.findByLabelText('Vacancy results')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Vacancy details')).not.toBeInTheDocument();
+
+      fireEvent.click(await screen.findByRole('button', { name: /beta engineer/i }));
+
+      expect(screen.queryByLabelText('Vacancy results')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Vacancy details')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 2, name: 'Beta Engineer' })).toHaveFocus();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Back to results' }));
+
+      expect(screen.getByLabelText('Vacancy results')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Vacancy details')).not.toBeInTheDocument();
+      // Back returns to the row that was open, still marked as the current one.
+      const row = screen.getByRole('button', { name: /beta engineer/i });
+      expect(row).toHaveFocus();
+      expect(row).toHaveAttribute('aria-current', 'true');
+    });
+
+    it('keeps both panes side by side when the page is wide enough', async () => {
+      stubPageWidth(1000);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      expect(await screen.findByLabelText('Vacancy results')).toBeInTheDocument();
+      fireEvent.click(await screen.findByRole('button', { name: /beta engineer/i }));
+      expect(screen.getByLabelText('Vacancy results')).toBeInTheDocument();
+      expect(screen.getByLabelText('Vacancy details')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Back to results' })).not.toBeInTheDocument();
+    });
+
+    it('folds the count and scan time into one Scan details line on a narrow page', async () => {
+      stubPageWidth(700);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      const summary = await screen.findByText(/^Scan details: 2 vacancies, scanned/);
+      expect(summary.closest('details')).not.toHaveAttribute('open');
+      // The separate stats line above the list is gone, so the list gets that height.
+      expect(screen.queryByText(/ · scanned /)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('scan progress and Stop (#459)', () => {
+    it('shows source groups finished, elapsed time and rows found from the main process, with an honest time range', async () => {
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise((resolve) => { resolveScan = resolve; })),
+        getScanProgress: vi.fn().mockResolvedValue({
+          scanning: true, scanId: 'scan-1', startedAt: Date.now() - 102_000, sourcesDone: 4, sourcesTotal: 11, vacanciesSoFar: 212,
+        }),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+      expect(await screen.findByText('Checked 4 of 11 source groups')).toBeInTheDocument();
+      expect(screen.getByText('212 vacancies so far')).toBeInTheDocument();
+      expect(screen.getByText(/1:4\d elapsed|1:5\d elapsed/)).toBeInTheDocument();
+      expect(screen.getByText(/usually takes 2 to 5 minutes/i)).toBeInTheDocument();
+      expect(screen.getByRole('progressbar', { name: 'Scan progress' })).toHaveAttribute('value', '36');
+      expect(screen.queryByText(/about ten seconds/i)).not.toBeInTheDocument();
+      resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
+    });
+
+    it('stops the exact run, keeps the previous report, and says so instead of reporting a failure', async () => {
+      let rejectScan: (error: Error) => void = () => {};
+      const cancelScan = vi.fn().mockImplementation(async () => {
+        rejectScan(new Error("Error invoking remote method 'vacancy:run-scan': ScanCancelledError: The scan was stopped."));
+        return { cancelled: true };
+      });
+      const bridge = installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise((_resolve, reject) => { rejectScan = reject; })),
+        getScanProgress: vi.fn().mockResolvedValue({ scanning: true, scanId: 'scan-42', startedAt: Date.now(), sourcesDone: 1, sourcesTotal: 11, vacanciesSoFar: 3 }),
+        cancelScan,
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Stop scan' }));
+
+      await waitFor(() => expect(cancelScan).toHaveBeenCalledWith('scan-42'));
+      expect(await screen.findByText('Scan stopped. Your previous report is unchanged.')).toBeInTheDocument();
+      expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      // The saved report is still on screen.
+      expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
+      expect(bridge.getReport).toHaveBeenCalled();
+    });
+
+    it('does not offer Stop until the main process has named the run', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise(() => {})),
+        getScanProgress: vi.fn().mockResolvedValue({ scanning: true }),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+      expect(await screen.findByRole('button', { name: 'Stop scan' })).toBeDisabled();
+    });
   });
 
   it('reattaches to a scan already running on mount, instead of looking idle', async () => {
@@ -1816,22 +1955,84 @@ describe('SearchPage', () => {
     expect(screen.queryByText('workspace database is locked')).not.toBeInTheDocument();
   });
 
-  it('an engine-unavailable Retry button rechecks status and recovers once the engine reports ready', async () => {
+  it('an engine-unavailable Check again button rechecks status and recovers once the engine reports ready', async () => {
     const getStatus = vi
       .fn()
-      .mockResolvedValueOnce({ ready: false, error: 'engine binary missing' } satisfies VacancyEngineStatus)
+      .mockResolvedValueOnce({
+        ready: false,
+        error: 'The local job cache could not be started.',
+        category: 'unknown',
+        canRebuild: false,
+      } satisfies VacancyEngineStatus)
       .mockResolvedValueOnce({ ready: true } satisfies VacancyEngineStatus);
     installAllBridges({ getStatus });
 
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/searching is not available right now/i)).toBeInTheDocument());
+    // An unclassified failure is never offered a destructive-looking fix.
+    expect(screen.queryByRole('button', { name: /rebuild job cache/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check again/i }));
 
     await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(screen.queryByText(/searching is not available right now/i)).not.toBeInTheDocument(),
     );
+  });
+
+  describe('damaged job cache (#441)', () => {
+    const CORRUPT: VacancyEngineStatus = {
+      ready: false,
+      error:
+        'The local job cache is damaged and cannot be opened. It only holds downloaded vacancies and the sponsor register. Your CVs, applications and letters are stored separately and are safe.',
+      category: 'corrupt',
+      canRebuild: true,
+      details: 'Failed to run the query CREATE INDEX discovery_runs_generated_at_idx ON <data folder>/vacancy-engine.db',
+    };
+
+    it('explains the damage in plain words, hides SQL behind technical details, and disables scanning', async () => {
+      installAllBridges({ getStatus: vi.fn().mockResolvedValue(CORRUPT) });
+      render(<SearchPage />);
+
+      await waitFor(() => expect(screen.getByText(/the local job cache is damaged/i)).toBeInTheDocument());
+      expect(screen.getByText(/your cvs, applications and letters are stored separately and are safe/i)).toBeInTheDocument();
+      // The raw text is in the DOM only inside the closed disclosure.
+      const disclosure = screen.getByText('Show technical details').closest('details');
+      expect(disclosure).not.toHaveAttribute('open');
+      expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: /browse all vacancies/i })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: /run the first scan/i })).not.toBeInTheDocument();
+    });
+
+    it('rebuilds with one click and returns to a scannable state without a restart', async () => {
+      const getStatus = vi.fn().mockResolvedValueOnce(CORRUPT).mockResolvedValue({ ready: true } satisfies VacancyEngineStatus);
+      const rebuildCache = vi.fn().mockResolvedValue({ ok: true, retainedFileName: 'vacancy-engine.db.damaged-1', sponsorRefresh: 'ok' });
+      installAllBridges({ getStatus, rebuildCache });
+      render(<SearchPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /rebuild job cache/i }));
+
+      await waitFor(() => expect(rebuildCache).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText(/the damaged copy was kept as vacancy-engine\.db\.damaged-1/i)).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText(/the local job cache is damaged/i)).not.toBeInTheDocument());
+      // The sidebar reads the same reading, so it clears at once instead of at its next poll (#477).
+      expect(getEngineHealth()).toEqual({ state: 'ready' });
+    });
+
+    it('offers no rebuild for a locked cache', async () => {
+      installAllBridges({
+        getStatus: vi.fn().mockResolvedValue({
+          ready: false,
+          error: 'The local job cache is in use by another process.',
+          category: 'locked',
+          canRebuild: false,
+        } satisfies VacancyEngineStatus),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/in use by another process/i)).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /rebuild job cache/i })).not.toBeInTheDocument();
+    });
   });
 
   it('saves the selected vacancy through the workspace IPC', async () => {

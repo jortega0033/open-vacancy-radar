@@ -30,8 +30,8 @@ function setup(overrides: Parameters<typeof installWorkspaceBridge>[0] = {}) {
   return { bridge, system };
 }
 
-/** Settings is now tabbed (General/Search/Workspace/Advanced); a field only renders once its tab is active. */
-function openTab(name: 'General' | 'Search' | 'Workspace' | 'Advanced') {
+/** Settings is now tabbed (General/Search/Workspace/Data/Advanced); a field only renders once its tab is active. */
+function openTab(name: 'General' | 'Search' | 'Workspace' | 'Data' | 'Advanced') {
   fireEvent.click(screen.getByRole('tab', { name }));
 }
 
@@ -130,13 +130,13 @@ describe('SettingsPage', () => {
     expect(screen.queryByLabelText('Start page')).not.toBeInTheDocument();
   });
 
-  it('renders exactly these sections across its four tabs, no fake per-source discovery toggles', async () => {
+  it('renders exactly these sections across its five tabs, no fake per-source discovery toggles', async () => {
     setup();
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
-    expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Advanced']);
+    expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Data', 'Advanced']);
 
     const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
     expect(headingsNow()).toEqual(['Startup', 'Appearance', 'Support']);
@@ -149,8 +149,11 @@ describe('SettingsPage', () => {
     openTab('Workspace');
     expect(headingsNow()).toEqual(['Documents', 'Applications', 'Saved application answers']);
 
+    openTab('Data');
+    expect(headingsNow()).toEqual(['Job cache', 'Your data']);
+
     openTab('Advanced');
-    expect(headingsNow()).toEqual(['AI runtime', 'Connect other AI apps', 'Data management', 'About']);
+    expect(headingsNow()).toEqual(['AI runtime', 'Connect other AI apps', 'About']);
   });
 
   it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {
@@ -344,7 +347,7 @@ describe('SettingsPage', () => {
       expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true'),
     );
 
-    openTab('Advanced');
+    openTab('Data');
     fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /reset settings/i }));
@@ -377,7 +380,7 @@ describe('SettingsPage', () => {
     expect(bridge.deleteLetter).not.toHaveBeenCalled();
   });
 
-  it('reset application data uses the main-process reset and applies returned defaults', async () => {
+  it('delete my data needs the word DELETE typed, then uses the main-process reset and applies returned defaults', async () => {
     const { bridge } = setup({
       resetApplicationData: vi.fn().mockResolvedValue({
         settings: DEFAULT_SETTINGS,
@@ -397,14 +400,51 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
-    openTab('Advanced');
-    fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
+    openTab('Data');
+    expect(screen.queryByRole('button', { name: 'Reset application data' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete my data' }));
     const dialog = await screen.findByRole('alertdialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: /delete everything/i }));
+    expect(within(dialog).getByText(/there is no backup/i)).toBeInTheDocument();
+    for (const record of [/saved jobs/i, /applications and application history/i, /cvs/i, /letters/i]) {
+      expect(within(dialog).getAllByText(record).length).toBeGreaterThan(0);
+    }
+
+    const confirm = within(dialog).getByRole('button', { name: 'Delete my data' });
+    // A click on the button alone cannot confirm.
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(bridge.resetApplicationData).not.toHaveBeenCalled();
+
+    // Wrong text, and the Enter key on it, do nothing either.
+    const input = within(dialog).getByLabelText(/type delete to confirm/i);
+    fireEvent.change(input, { target: { value: 'delete' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(bridge.resetApplicationData).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: 'DELETE' } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
 
     await waitFor(() => expect(screen.getByText('Application data reset')).toBeInTheDocument());
     expect(bridge.resetApplicationData).toHaveBeenCalledTimes(1);
     expect(bridge.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('a failed deletion reports the failure and leaves the settings screen usable', async () => {
+    const { bridge } = setup({ resetApplicationData: vi.fn().mockRejectedValue(new Error('database is locked')) });
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    openTab('Data');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete my data' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.change(within(dialog).getByLabelText(/type delete to confirm/i), { target: { value: 'DELETE' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete my data' }));
+
+    expect(await screen.findByText('Could not delete your data.')).toBeInTheDocument();
+    expect(bridge.resetApplicationData).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Delete my data' })).toBeEnabled();
   });
 
   it('cancelling a reset confirmation deletes nothing and saves nothing', async () => {
@@ -415,14 +455,51 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
-    openTab('Advanced');
-    fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
+    openTab('Data');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete my data' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(bridge.resetApplicationData).not.toHaveBeenCalled();
     expect(bridge.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('rebuild job cache is a separate action that never touches workspace records', async () => {
+    const { bridge } = setup();
+    const vacancy = installVacancyRadarBridge({
+      rebuildCache: vi.fn().mockResolvedValue({ ok: true, retainedFileName: 'vacancy-engine.db.damaged-1', sponsorRefresh: 'ok' }),
+    });
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    openTab('Data');
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild job cache' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/your cvs, applications and letters are kept/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild job cache' }));
+
+    expect(await screen.findByText('Job cache rebuilt')).toBeInTheDocument();
+    expect(vacancy.rebuildCache).toHaveBeenCalledTimes(1);
+    expect(bridge.resetApplicationData).not.toHaveBeenCalled();
+    expect(bridge.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('a failed cache rebuild says so and does not report success', async () => {
+    setup();
+    installVacancyRadarBridge({
+      rebuildCache: vi.fn().mockResolvedValue({ ok: false, reason: 'rebuild_failed', detail: 'could not build a fresh job cache: disk full' }),
+    });
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    openTab('Data');
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild job cache' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild job cache' }));
+
+    expect(await screen.findByText('Could not rebuild the job cache.')).toBeInTheDocument();
+    expect(screen.queryByText('Job cache rebuilt')).not.toBeInTheDocument();
   });
 
   it('surfaces a settings load failure without crashing', async () => {

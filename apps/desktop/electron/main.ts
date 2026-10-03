@@ -36,6 +36,10 @@ import {
   readGlobalRemoteReport,
   runAtsRosterImport,
   runGlobalRemoteScan,
+  runSponsorSync,
+  isScanCancelledError,
+  SCAN_PROGRESS_SOURCE_IDS,
+  ScanCancelledError,
   workableJobReferenceFromUrl,
   type AtsRosterImportResult,
   type AtsRosterStatus,
@@ -118,6 +122,15 @@ import {
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
+import type { VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
+import {
+  describeVacancyEngineFailure,
+  rebuildVacancyEngineDatabase,
+  type VacancyCacheRebuildResult,
+  type VacancyEngineFailure,
+  type VacancyEngineFailureStage,
+  type VacancyEngineStatus,
+} from './vacancy-engine-recovery.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
 import { createDaemonRestart } from './daemon-restart.js';
 import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
@@ -298,8 +311,12 @@ let daemonConnection: { baseUrl: string; token: string } | undefined;
 let daemonInstanceId: string | undefined;
 
 let vacancyDb: Database | undefined;
+/** The open connection behind `vacancyDb`, kept so a cache reset can release the file before renaming it. */
+let vacancyClient: ReturnType<typeof createDatabaseClient> | undefined;
 let vacancyEngineInit: Promise<Database> | undefined;
 let vacancyScanLock: ScanLock | undefined;
+/** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
+let vacancyEngineFailure: VacancyEngineFailure | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
 
 /**
@@ -400,12 +417,29 @@ async function ensureVacancyEngine(): Promise<Database> {
   // against the same SQLite file.
   vacancyEngineInit ??= (async () => {
     const config = vacancyEngineConfig();
-    const { db } = createDatabaseClient(config.databasePath);
-    // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
-    // resolves when the process cwd happens to be `packages/vacancy-engine`, never true once
-    // Electron actually launches. Resolve it explicitly instead of relying on cwd.
-    await migrateDatabase(db, vacancyEngineMigrationsFolder());
+    let stage: VacancyEngineFailureStage = 'open';
+    let client: ReturnType<typeof createDatabaseClient> | undefined;
+    try {
+      client = createDatabaseClient(config.databasePath);
+      // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
+      // resolves when the process cwd happens to be `packages/vacancy-engine`, never true once
+      // Electron actually launches. Resolve it explicitly instead of relying on cwd.
+      stage = 'migrate';
+      await migrateDatabase(client.db, vacancyEngineMigrationsFolder());
+    } catch (error) {
+      // Release the file handle so a rebuild can move the file aside and a retry can reopen it.
+      try {
+        client?.close();
+      } catch {
+        // Closing a handle on a damaged file can itself throw; the original error is the one to report.
+      }
+      vacancyEngineFailure = describeVacancyEngineFailure(error, stage, [app.getPath('userData')]);
+      throw error;
+    }
+    const { db } = client;
+    vacancyClient = client;
     vacancyDb = db;
+    vacancyEngineFailure = undefined;
     // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
     // sidecar SQLite file keyed to this database path, so it is meaningful across processes
     // (a `pnpm vacancies:scan` run against the same userData database, a second app instance
@@ -444,6 +478,14 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     // ADI-22: hydrate the `close`-handler and background-scan-timer mirrors once, here, since
     // neither can await a fresh read at the moment they need the answer. Kept in sync afterward
     // by the `workspace:settings:update` handler.
+    // #444: give attempts that predate the tracker link (or whose row was never created) their
+    // Applications row. Local reads and writes only; nothing is contacted or resent. A failure here
+    // must never stop the workspace from opening.
+    try {
+      workspace.reconcileApplicationRows(db);
+    } catch (error) {
+      console.error('[workspace] could not reconcile application rows', error);
+    }
     const settings = workspace.getSettings(db);
     minimizeToTrayOnClose = settings.minimizeToTrayOnClose;
     autoScanEnabled = settings.autoScanEnabled;
@@ -2397,12 +2439,100 @@ guardedIpc.handle('system:save-file', async (_event, input: unknown): Promise<{ 
  * panel's existing "Checking vacancy engine status…" state, and `{ ready: false }` now means only
  * what the renderer already assumes it means: initialization actually failed.
  */
-guardedIpc.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?: string }> => {
+guardedIpc.handle('vacancy:get-status', async (): Promise<VacancyEngineStatus> => {
   try {
     await ensureVacancyEngine();
     return { ready: true };
   } catch (error) {
-    return { ready: false, error: (error as Error).message };
+    // A category and a plain sentence, never the raw message: that is SQL and file paths. The raw
+    // text travels separately as `details` for the "Show technical details" disclosure only.
+    const failure = vacancyEngineFailure ?? describeVacancyEngineFailure(error, 'open', [app.getPath('userData')]);
+    return {
+      ready: false,
+      error: failure.message,
+      category: failure.category,
+      canRebuild: failure.canRebuild,
+      details: failure.details,
+    };
+  }
+});
+
+/**
+ * "Rebuild job cache" (#441, and the Settings > Data reset of #442). Two entry states, nothing else:
+ *
+ * - **Confirmed corrupt right now** (Search recovery): the open is retried first, so a cache that
+ *   healed is never moved aside, and locked / migration / unknown failures get no rebuild.
+ * - **Healthy** (a deliberate reset from Settings, which says plainly that downloaded vacancies and
+ *   sponsor data are fetched again): the connection is released, then the same set-aside runs.
+ *
+ * Holds the scan guard throughout, so no scan or second rebuild overlaps it. Touches only the
+ * vacancy engine's file family; the workspace database is neither opened nor named here.
+ */
+async function rebuildVacancyCache(): Promise<VacancyCacheRebuildResult> {
+  const config = vacancyEngineConfig();
+  const wasHealthy = vacancyDb !== undefined;
+
+  if (!wasHealthy) {
+    try {
+      await ensureVacancyEngine();
+    } catch {
+      if (vacancyEngineFailure?.category !== 'corrupt') {
+        return { ok: false, reason: 'not_corrupt', detail: 'The job cache problem is not a damaged file, so it cannot be fixed by rebuilding.' };
+      }
+    }
+  }
+
+  const releaseHandles = () => {
+    try {
+      vacancyClient?.close();
+    } catch {
+      // A handle that will not close cleanly is about to be replaced; the rename is what matters.
+    }
+    vacancyClient = undefined;
+    vacancyDb = undefined;
+    vacancyEngineInit = undefined;
+    vacancyScanLock = undefined;
+    applicationJdHttpClient = undefined;
+  };
+  releaseHandles();
+
+  const outcome = await rebuildVacancyEngineDatabase({
+    databasePath: config.databasePath,
+    now: () => new Date(),
+    createFresh: async () => {
+      await ensureVacancyEngine();
+    },
+    discardFresh: async () => {
+      // Only the half-built replacement: the damaged file was renamed away before this ran and is
+      // put back by the caller.
+      releaseHandles();
+      for (const tail of ['', '-wal', '-shm']) await rm(`${config.databasePath}${tail}`, { force: true });
+    },
+    refreshSponsors: async () => {
+      await runSponsorSync(await ensureVacancyEngine(), config, createLogger(config));
+    },
+  });
+  if (!outcome.ok) {
+    // The old file is back where it was; reopen it so a healthy cache keeps working.
+    if (wasHealthy) await ensureVacancyEngine().catch(() => undefined);
+    return { ok: false, reason: 'rebuild_failed', detail: outcome.detail };
+  }
+  return {
+    ok: true,
+    retainedFileName: outcome.retainedFileName,
+    sponsorRefresh: outcome.sponsorRefresh,
+    ...(outcome.sponsorError ? { sponsorError: outcome.sponsorError } : {}),
+  };
+}
+
+guardedIpc.handle('vacancy:rebuild-cache', async (): Promise<VacancyCacheRebuildResult> => {
+  try {
+    return await runExclusiveScan(rebuildVacancyCache, { takeAdvisoryLock: vacancyDb !== undefined });
+  } catch (error) {
+    if (isExpectedScanBusyError(error)) {
+      return { ok: false, reason: 'scan_running', detail: 'A scan is running. Wait for it to finish, then try again.' };
+    }
+    throw error;
   }
 });
 
@@ -2423,7 +2553,45 @@ guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt
  * process and is never tied to any renderer window's lifetime, so this is the only way the
  * renderer can tell "idle" and "already running, just not the one I started" apart.
  */
+/** The vacancy scan this process is running right now, with the progress its engine events have
+ * reported so far (#459). Held here, not in the renderer, so a page that remounts mid-scan still
+ * shows the true source count, start time and run id. */
+interface ActiveVacancyScan {
+  id: string;
+  startedAt: number;
+  controller: AbortController;
+  doneSources: Set<string>;
+  total: number;
+  vacancies: number;
+}
+let activeVacancyScan: ActiveVacancyScan | undefined;
+
 guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
+
+/** The same question as `vacancy:get-scan-status`, with the run's id, start time and source counts.
+ * A separate channel so the plain status keeps its one-field shape for every existing caller. */
+guardedIpc.handle('vacancy:get-scan-progress', (): VacancyScanStatus => {
+  const scan = activeVacancyScan;
+  if (!scan) return { scanning: isScanInFlight() };
+  return {
+    scanning: true,
+    scanId: scan.id,
+    startedAt: scan.startedAt,
+    sourcesDone: scan.doneSources.size,
+    sourcesTotal: scan.total,
+    vacanciesSoFar: scan.vacancies,
+    ...(scan.controller.signal.aborted ? { stopping: true } : {}),
+  };
+});
+
+/** Stops the run named by `scanId`. Idempotent, and a stale id (the run already finished, or a newer
+ * one started) cancels nothing rather than the wrong scan. */
+guardedIpc.handle('vacancy:cancel-scan', (_event, scanId: unknown): VacancyScanCancelResult => {
+  const scan = activeVacancyScan;
+  if (!scan || typeof scanId !== 'string' || scan.id !== scanId) return { cancelled: false };
+  scan.controller.abort();
+  return { cancelled: true };
+});
 
 /**
  * Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
@@ -2479,6 +2647,16 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
       async () => {
         const config = vacancyEngineConfig();
         const logger = createLogger(config);
+        const scan: ActiveVacancyScan = {
+          id: randomUUID(),
+          startedAt: Date.now(),
+          controller: new AbortController(),
+          doneSources: new Set(),
+          total: SCAN_PROGRESS_SOURCE_IDS.length,
+          vacancies: 0,
+        };
+        activeVacancyScan = scan;
+        try {
         // Issue #398 Phase 1: an additional, on-demand AI-web-search discovery pass, entirely
         // inline here inside the `runExclusiveScan` guard this closure already runs under.
         // `runAiWebDiscovery` itself never acquires `ScanGuard` (see its own doc comment) -- this
@@ -2511,11 +2689,25 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
             logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
           }
         }
+        if (scan.controller.signal.aborted) throw new ScanCancelledError();
         const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
+          signal: scan.controller.signal,
           ...(request.mode === 'query'
             ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
             : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
-          onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
+          onProgress: (event: ScanProgressEvent) => {
+            // A stopped run's late events must not reach the page: it has already gone back to the
+            // previous report.
+            if (scan.controller.signal.aborted) return;
+            scan.doneSources.add(event.sourceId);
+            scan.vacancies += event.vacancies.length;
+            sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, {
+              ...event,
+              scanId: scan.id,
+              sourcesDone: scan.doneSources.size,
+              sourcesTotal: scan.total,
+            });
+          },
           ...(aiWebDiscovery
             ? {
                 aiWebDiscoveryVacancies: aiWebDiscovery.vacancies,
@@ -2525,6 +2717,9 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         });
         latestVacancyReport = result.report;
         return result.report;
+        } finally {
+          if (activeVacancyScan === scan) activeVacancyScan = undefined;
+        }
       },
       { takeAdvisoryLock: true },
     );
@@ -2536,7 +2731,8 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
     );
     return report;
   } catch (error) {
-    if (!isExpectedScanBusyError(error)) {
+    // A stop the person asked for is neither a failure nor worth a notification.
+    if (!isExpectedScanBusyError(error) && !isScanCancelledError(error)) {
       notifyScanOutcome(() =>
         notifyVacancyScanFailed({ detail: error instanceof Error ? error.message : 'unknown error' }),
       );

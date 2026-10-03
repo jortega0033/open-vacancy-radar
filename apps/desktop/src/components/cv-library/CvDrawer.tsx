@@ -6,7 +6,7 @@ import { describeCvSourceContentGaps, reconcileExperienceIds } from '../../../el
 import { buildCvParsePrompt, buildSourceCvPrompt } from '../cv/prompts.js';
 import { parseSourceCvResponse } from '../cv/source-cv-response.js';
 import { useAgentRun } from '../cv/useAgentRun.js';
-import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { Dialog } from '../shell/Dialog.js';
 import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 import { coversCvProfileCore, deriveCvProfileFromSource } from './cv-profile-from-source.js';
@@ -84,6 +84,26 @@ function applyProfileFields(prev: FormState, parsed: Partial<CvProfile>): FormSt
   };
 }
 
+/**
+ * Like `applyProfileFields`, but only into fields that are still empty. The deterministic fill has
+ * already placed values the candidate can see (title, years, ...); the AI pass that follows exists
+ * only for what the source records cannot supply (skills, languages, work authorization), so it
+ * must never overwrite them.
+ */
+function applyMissingProfileFields(prev: FormState, parsed: Partial<CvProfile>): FormState {
+  const blank = (value: string) => value.trim().length === 0;
+  return {
+    ...prev,
+    title: blank(prev.title) ? (parsed.title ?? prev.title) : prev.title,
+    years: blank(prev.years) ? (parsed.years ?? prev.years) : prev.years,
+    location: blank(prev.location) ? (parsed.location ?? prev.location) : prev.location,
+    languages: blank(prev.languages) ? (parsed.languages ?? prev.languages) : prev.languages,
+    skillsText: blank(prev.skillsText) && parsed.skills ? skillsToText(parsed.skills) : prev.skillsText,
+    summary: blank(prev.summary) ? (parsed.summary ?? prev.summary) : prev.summary,
+    auth: blank(prev.auth) ? (parsed.auth ?? prev.auth) : prev.auth,
+  };
+}
+
 /** How each derivable field is named to the user in the "filled from your source CV" status, in the
  * form's own label wording rather than the schema's field names. */
 const DERIVED_FIELD_LABELS: Partial<Record<keyof CvProfile, string>> = {
@@ -104,7 +124,6 @@ const DERIVED_FIELD_LABELS: Partial<Record<keyof CvProfile, string>> = {
  * fixed panel: one of the two existing drawer conventions, not a third.
  */
 export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
-  useEscapeToClose(onCancel);
   const [form, setForm] = useState<FormState>(() => toFormState(record));
   const [validationError, setValidationError] = useState<string>();
   const [error, setError] = useState<string>();
@@ -141,7 +160,12 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
   const parseRun = useAgentRun({ chunkSeparator: '' });
   const parseAppliedRef = useRef(false);
+  /** True while the running parse only completes what the source-CV fill could not (#521): it then
+   * fills empty fields and leaves the derived ones alone. */
+  const parseGapsOnlyRef = useRef(false);
   const parseSucceeded = parseRun.status === 'completed' && !parseError;
+  // A finished fill that still left Skills empty (#521): say so instead of leaving a silent blank.
+  const noSkillsFound = parseSucceeded && textToSkills(form.skillsText).length === 0;
 
   // A second, separate run for #274's full source-CV extraction. Deliberately not folded into the
   // one above: they answer different questions (seven summary fields vs. the whole document as
@@ -182,7 +206,8 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     parseAppliedRef.current = true;
     try {
       const parsed = parseCvAiResponse(parseRun.text);
-      setForm((prev) => applyProfileFields(prev, parsed));
+      const gapsOnly = parseGapsOnlyRef.current;
+      setForm((prev) => (gapsOnly ? applyMissingProfileFields(prev, parsed) : applyProfileFields(prev, parsed)));
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'could not read the AI response');
     }
@@ -244,10 +269,20 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
           .map((key) => DERIVED_FIELD_LABELS[key])
           .filter((label): label is string => label !== undefined),
       );
+      // The source records have no skills section, so the derivation can never fill Skills,
+      // Languages or Work authorization. Leaving them empty made tailoring strip every skill (#521):
+      // when any of them is still blank, one AI pass completes just those.
+      const needsGapFill =
+        textToSkills(form.skillsText).length === 0 || form.languages.trim().length === 0 || form.auth.trim().length === 0;
+      if (!needsGapFill) return;
+      parseGapsOnlyRef.current = true;
+      parseAppliedRef.current = false;
+      void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
       return;
     }
 
     setDerivedFields(null);
+    parseGapsOnlyRef.current = false;
     parseAppliedRef.current = false;
     void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
   }
@@ -305,13 +340,13 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   }
 
   return (
-    <div
-      className="modal modal-open modal-end"
-      role="dialog"
-      aria-modal="true"
+    <Dialog
       aria-label={isEdit ? 'Edit CV' : 'Add manual CV profile'}
+      placement="end"
+      boxClassName="flex max-w-md flex-col rounded-none p-0"
+      onClose={onCancel}
+      closeDisabled={submitting}
     >
-      <div className="modal-box flex max-w-md flex-col rounded-none p-0">
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">{isEdit ? 'Edit CV' : 'Add manual profile'}</h2>
           <button
@@ -352,7 +387,17 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     Fills the fields below. You can edit them.
                   </span>
                 </div>
-                {(derivedFields || parseSucceeded) && (
+                {derivedFields && (
+                  <p className="mt-2 text-xs text-success" role="status">
+                    Filled in from your CV: {derivedFields.join(', ')}. Check before saving.
+                  </p>
+                )}
+                {noSkillsFound && (
+                  <p className="mt-2 text-xs text-warning" role="status">
+                    No skills found in this CV. Add them in the Skills field so tailoring can match jobs to you.
+                  </p>
+                )}
+                {parseSucceeded && !derivedFields && (
                   <p className="mt-2 text-xs text-success" role="status">
                     Filled in from your CV. Check before saving.
                   </p>
@@ -545,18 +590,22 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             </p>
           )}
 
+          {source && (
+            <p className="border-t border-base-300 px-5 py-3 text-sm text-base-content/70">
+              Saving confirms these records are correct. Approved CVs are built only from them.
+            </p>
+          )}
+
           <div className="flex justify-end gap-2 border-t border-base-300 px-5 py-3.5">
             <button type="button" className="btn btn-outline" onClick={onCancel} disabled={submitting}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               {submitting && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
-              {isEdit ? 'Save changes' : 'Add CV'}
+              {source ? 'Confirm and save' : isEdit ? 'Save changes' : 'Add CV'}
             </button>
           </div>
         </form>
-      </div>
-      <button type="button" className="modal-backdrop" aria-label="Close" onClick={onCancel} disabled={submitting} />
-    </div>
+    </Dialog>
   );
 }

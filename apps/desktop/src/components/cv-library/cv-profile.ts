@@ -1,4 +1,5 @@
 import type { CvDocumentRecord, CvKind } from '../../window.js';
+import { cvTailoringReadiness } from './cv-source-readiness.js';
 
 export const CV_KIND_LABEL: Record<CvKind, string> = {
   uploaded: 'Uploaded',
@@ -36,9 +37,10 @@ export interface ParseStatus {
  */
 export function cvParseStatus(doc: CvDocumentRecord): ParseStatus {
   if (doc.kind === 'manual') return { label: 'Ready', tone: 'neutral' };
-  return doc.text.trim().length > 0
-    ? { label: 'Ready', tone: 'success' }
-    : { label: 'No text found. Try a different file.', tone: 'warning' };
+  if (doc.text.trim().length === 0) return { label: 'No text found. Try a different file.', tone: 'warning' };
+  // Text was read, which alone is not a success (#447): green is reserved for a CV whose source the
+  // candidate has reviewed, so an uploaded CV that approval would still refuse never looks done.
+  return { label: 'Text found', tone: cvTailoringReadiness(doc).state === 'ready' ? 'success' : 'neutral' };
 }
 
 export function formatCvDate(iso: string): string {

@@ -1,4 +1,14 @@
+import type { ElectronApplication, Page } from '@playwright/test';
 import { ensureLightTheme, expect, goto, test } from './fixtures.js';
+
+/** Opens the window wide enough that the sidebar is expanded rather than the 64px rail. */
+async function widenWindow(electronApp: ElectronApplication, window: Page): Promise<void> {
+  await electronApp.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds(bounds), {
+    width: 1280,
+    height: 720,
+  });
+  await window.waitForTimeout(150);
+}
 
 /**
  * The one flow every other spec depends on being right: the app boots, every destination is
@@ -36,7 +46,9 @@ test.describe('app shell', () => {
     }
   });
 
-  test('the sidebar footer carries no fake identity', async ({ window }) => {
+  test('the sidebar footer carries no fake identity', async ({ electronApp, window }) => {
+    // The labelled status is the expanded sidebar's; the default 1000px window shows the rail (#451).
+    await widenWindow(electronApp, window);
     // Regression guard for the hardcoded "JO" avatar bug: whatever the sidebar's footer renders,
     // it must never be literal initials with no real data behind them. The footer itself is the
     // AI runtime status, not an account/profile (this app has no login or online profile concept).
@@ -156,7 +168,8 @@ test.describe('app shell', () => {
     expect(geolocationResult).toMatch(/^denied:/);
   });
 
-  test('collapsed sidebar visual baseline', async ({ window }) => {
+  test('collapsed sidebar visual baseline', async ({ electronApp, window }) => {
+    await widenWindow(electronApp, window);
     // Regression guard for a real bug: NavGroup's collapsed nav buttons carried both
     // `justify-start` (unconditional) and `justify-center` (collapsed-only) at once, so the icon
     // sat pinned to the button's start edge inside its 44px `ovr-nav-icon` box instead of centered.

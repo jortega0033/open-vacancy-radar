@@ -516,24 +516,38 @@ describe('SearchResultList', () => {
     expect(onSelect).toHaveBeenCalledWith(second);
   });
 
-  it('leaves room for the detail pane below it when the two panes are stacked (under lg)', () => {
-    // Regression guard. `SearchPage` lays this pane and `VacancyDetail` out as `flex-col lg:flex-row`,
-    // and the app's own default window is 1000px wide -- narrower than `lg`'s 1024px -- so the
-    // stacked column is the layout a user gets out of the box. `VacancyDetail` is `flex-1`
-    // (`flex: 1 1 0%`, a zero flex basis). While this pane was `flex: 0 1 auto`, basing itself on its
-    // own page-of-25-rows-tall content, the column had no free space left to distribute and the
-    // detail pane stayed at its zero basis: it rendered at zero height, below the bottom of a
-    // `<main>` that does not scroll, so "Save job", "Generate letter" and the verification cards were
-    // all invisible and unclickable at the default window size.
-    //
-    // jsdom runs no layout engine, so the flex classes themselves are the testable contract here:
-    // `flex-1` below `lg` (an even split with the detail pane, each scrolling internally) and
-    // `lg:flex-none` from `lg` up (so the side-by-side layout's own `lg:w-2/5` sizing still applies).
-    const { container } = render(
+  it('sizes itself from the page\'s layout choice, not from the viewport (#451)', () => {
+    // jsdom runs no layout engine, so the classes are the testable contract. Beside the detail pane
+    // the list is a fixed-width column; on its own (the single-pane flow) it takes the whole width.
+    // Either way it is never sized by a viewport breakpoint, because the sidebar changes the width
+    // the page really has without changing the viewport.
+    const props = {
+      results: [worldwideResult('1', 'Frontend Engineer')],
+      totalCount: 1,
+      selectedKey: null,
+      onSelect: vi.fn(),
+      savedKeys: new Set<string>(),
+      summary: '1 vacancy',
+      page: 0,
+      pageCount: 1,
+      onPageChange: vi.fn(),
+    };
+
+    const { container: split } = render(<SearchResultList {...props} />);
+    expect(split.firstElementChild).toHaveClass('w-2/5', 'min-w-80', 'max-w-md', 'flex-none', 'border-r');
+
+    const { container: alone } = render(<SearchResultList {...props} split={false} />);
+    expect(alone.firstElementChild).toHaveClass('flex-1');
+    expect(alone.firstElementChild).not.toHaveClass('w-2/5');
+    expect(alone.firstElementChild?.className).not.toMatch(/\blg:/);
+  });
+
+  it('marks each row with its key so focus can return to it after Back', () => {
+    render(
       <SearchResultList
         results={[worldwideResult('1', 'Frontend Engineer')]}
         totalCount={1}
-        selectedKey={null}
+        selectedKey="1"
         onSelect={vi.fn()}
         savedKeys={new Set()}
         summary="1 vacancy"
@@ -542,11 +556,6 @@ describe('SearchResultList', () => {
         onPageChange={vi.fn()}
       />,
     );
-
-    const pane = container.firstElementChild!;
-    expect(pane).toHaveClass('flex-1');
-    expect(pane).toHaveClass('lg:flex-none');
-    // The side-by-side sizing must stay exactly as it was; this fix is scoped to the stacked case.
-    expect(pane).toHaveClass('lg:w-2/5');
+    expect(document.querySelector('[data-result-key="1"]')).not.toBeNull();
   });
 });

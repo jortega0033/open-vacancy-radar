@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import { App } from '../../../src/App.js';
+import { resetEngineHealthForTest } from '../../../src/engine-health.js';
 import { AppSidebar } from '../../../src/components/shell/AppSidebar.js';
 import { WorkspaceHeader } from '../../../src/components/shell/WorkspaceHeader.js';
 import { EmptyState } from '../../../src/components/shell/EmptyState.js';
@@ -53,6 +54,7 @@ function installAgentDock(overrides: Partial<AgentDockBridge> = {}): AgentDockBr
 const NOOP = () => {};
 
 beforeEach(() => {
+  resetEngineHealthForTest();
   installAgentDock();
   installVacancyRadarBridge();
   installWorkspaceBridge();
@@ -102,6 +104,25 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('button', { name: 'Search' })).toHaveTextContent(/^Search$/);
   });
 
+  it('shows the review and scheduled-send count on Applications, named for assistive tech (#445)', () => {
+    render(<AppSidebar {...BASE} counts={{ ...BASE.counts, needsReview: 2, scheduledSubmissions: 1 }} />);
+    const button = screen.getByRole('button', { name: 'Applications, 3 to review' });
+    expect(button).toHaveTextContent('3 to review');
+    // No other row picks up the review badge.
+    expect(screen.getByRole('button', { name: 'Saved jobs' })).not.toHaveTextContent('to review');
+  });
+
+  it('shows no review badge when nothing is waiting', () => {
+    render(<AppSidebar {...BASE} counts={{ ...BASE.counts, needsReview: 0, scheduledSubmissions: 0 }} />);
+    expect(screen.getByRole('button', { name: 'Applications' })).not.toHaveTextContent('to review');
+  });
+
+  it('shows a usage limit as its own runtime state, not as ready (#461)', () => {
+    render(<AppSidebar {...BASE} runtimeState="limit-reached" />);
+    expect(screen.getByText(/claude code usage limit reached/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ready/i)).not.toBeInTheDocument();
+  });
+
   it('marks the active destination with aria-current, and only that one', () => {
     render(<AppSidebar {...BASE} active="applications" />);
     expect(screen.getByRole('button', { name: 'Applications' })).toHaveAttribute('aria-current', 'page');
@@ -143,13 +164,91 @@ describe('AppSidebar', () => {
     expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not installed');
 
     rerender(<AppSidebar {...BASE} runtimeState="not-authenticated" />);
-    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not authenticated');
+    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not signed in');
 
     rerender(<AppSidebar {...BASE} runtimeState="unavailable" />);
     expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code unavailable');
 
     rerender(<AppSidebar {...BASE} runtimeState="connecting" />);
     expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code starting');
+  });
+});
+
+describe('AppSidebar system status (#477)', () => {
+  const BASE = {
+    active: 'search' as const,
+    onNavigate: NOOP,
+    collapsed: false,
+    onToggleCollapsed: NOOP,
+    counts: undefined,
+    runtimeLabel: 'Claude Code',
+    runtimeState: 'ready' as const,
+  };
+  const ATTENTION = { state: 'attention', category: 'corrupt', message: 'The local job cache is damaged and cannot be opened.' } as const;
+
+  it('shows a warning for a failing job search even while the AI runtime is ready', () => {
+    render(<AppSidebar {...BASE} engine={ATTENTION} />);
+    expect(screen.getByRole('button', { name: /^AI runtime: Claude Code, ready$/ })).toBeInTheDocument();
+    const engine = screen.getByRole('button', { name: /^Job search: needs attention/ });
+    expect(engine).toHaveTextContent('Job search needs attention');
+    expect(engine).toHaveAttribute('title', ATTENTION.message);
+  });
+
+  it('shows a ready job search when the engine is healthy', () => {
+    render(<AppSidebar {...BASE} engine={{ state: 'ready' }} />);
+    expect(screen.getByRole('button', { name: 'Job search: ready' })).toHaveTextContent('Job search ready');
+  });
+
+  it('opens AI runtime from the runtime status and Search from the job search status', () => {
+    const onNavigate = vi.fn();
+    render(<AppSidebar {...BASE} onNavigate={onNavigate} engine={ATTENTION} />);
+    fireEvent.click(screen.getByRole('button', { name: /^AI runtime: / }));
+    expect(onNavigate).toHaveBeenLastCalledWith('runtime');
+    fireEvent.click(screen.getByRole('button', { name: /^Job search: / }));
+    expect(onNavigate).toHaveBeenLastCalledWith('search');
+  });
+
+  it('gives every runtime state its own icon, so none depends on color', () => {
+    const states = ['ready', 'connecting', 'unavailable', 'not-installed', 'not-authenticated', 'limit-reached'] as const;
+    const shapes = new Set<string>();
+    for (const runtimeState of states) {
+      const { unmount } = render(<AppSidebar {...BASE} runtimeState={runtimeState} />);
+      const button = screen.getByRole('button', { name: /^AI runtime: / });
+      const svg = button.querySelector('svg');
+      expect(svg, runtimeState).not.toBeNull();
+      shapes.add(svg!.innerHTML);
+      unmount();
+    }
+    expect(shapes.size).toBe(states.length);
+  });
+
+  it('keeps the whole state in the name of each collapsed status button', () => {
+    render(<AppSidebar {...BASE} collapsed runtimeState="not-authenticated" engine={ATTENTION} />);
+    expect(screen.getByRole('button', { name: 'AI runtime: Claude Code, not signed in' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Job search: needs attention, The local job cache is damaged/ })).toBeInTheDocument();
+    // Collapsed drops the words, so the names above are the only text a screen reader gets.
+    expect(screen.queryByText(/not signed in/)).not.toBeInTheDocument();
+  });
+
+  it('tells a job search that is still being checked from one that works', () => {
+    render(<AppSidebar {...BASE} engine={{ state: 'checking' }} />);
+    expect(screen.getByRole('button', { name: 'Job search: checking' })).toHaveTextContent('Checking job search');
+  });
+});
+
+describe('App shell job search status (#477)', () => {
+  it('reads the live engine status at start-up and shows it in the sidebar', async () => {
+    installWorkspaceBridge();
+    installVacancyRadarBridge({
+      getStatus: vi.fn().mockResolvedValue({
+        ready: false,
+        error: 'The local job cache is damaged and cannot be opened.',
+        category: 'corrupt',
+        canRebuild: true,
+      }),
+    });
+    render(<App />);
+    expect(await screen.findByRole('button', { name: /^Job search: needs attention/ })).toBeInTheDocument();
   });
 });
 
@@ -412,6 +511,78 @@ describe('App shell sidebar collapse', () => {
     });
     render(<App />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument());
+  });
+});
+
+describe('App shell sidebar on a narrow window (#451)', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });
+  }
+
+  it('is the 64px rail at 760px wide and writes nothing when it is opened as an overlay', async () => {
+    setWindowWidth(760);
+    const bridge: WorkspaceBridge = installWorkspaceBridge();
+    render(<App />);
+
+    const toggle = await screen.findByRole('button', { name: 'Expand sidebar' });
+    expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument();
+    expect(document.querySelector('aside')).toHaveClass('ovr-sidebar-collapsed');
+
+    fireEvent.click(toggle);
+    const overlay = await screen.findByRole('dialog', { name: 'Main navigation' });
+    expect(within(overlay).getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+    expect(within(overlay).getByText('Saved jobs')).toBeInTheDocument();
+    // A transient overlay is not a saved preference.
+    expect(bridge.updateSettings).not.toHaveBeenCalledWith({ sidebarCollapsed: false });
+    expect(bridge.updateSettings).not.toHaveBeenCalledWith({ sidebarCollapsed: true });
+  });
+
+  it('closes the overlay on Escape, on the dimmed area and after choosing a page, and gives focus back', async () => {
+    setWindowWidth(760);
+    installWorkspaceBridge();
+    render(<App />);
+
+    const toggle = await screen.findByRole('button', { name: 'Expand sidebar' });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const overlay = await screen.findByRole('dialog', { name: 'Main navigation' });
+    expect(overlay.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Main navigation' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    fireEvent.click(await screen.findByRole('dialog', { name: 'Main navigation' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Main navigation' })).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    const again = await screen.findByRole('dialog', { name: 'Main navigation' });
+    fireEvent.click(within(again).getByRole('button', { name: 'Saved jobs' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Main navigation' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
+  });
+
+  it('keeps the full sidebar at 1000px when the person pinned it expanded', async () => {
+    setWindowWidth(1000);
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, sidebarStart: 'expanded' }),
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument());
+    expect(document.querySelector('aside')).toHaveClass('ovr-sidebar');
+  });
+
+  it('is the rail at 1000px by default and the full sidebar from 1100px up', async () => {
+    setWindowWidth(1000);
+    installWorkspaceBridge();
+    const { unmount } = render(<App />);
+    await screen.findByRole('button', { name: 'Expand sidebar' });
+    unmount();
+
+    setWindowWidth(1100);
+    installWorkspaceBridge();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Collapse sidebar' });
   });
 });
 

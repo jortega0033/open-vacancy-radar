@@ -987,6 +987,28 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(createApplicationView).not.toHaveBeenCalled();
   });
 
+  it('warns at start and never calls the CV ready when the profile has no skills (#521)', async () => {
+    const cvId = workspace.listCvDocuments(db)[0]!.id;
+    workspace.updateCvDocument(db, cvId, {
+      profile: { title: 'Senior Engineer', location: 'Amsterdam', skills: [], summary: 'Synthetic summary.' },
+    });
+    generateCoverLetter.mockResolvedValueOnce({ ok: true, text: '{"factIds":["experience-99"]}' });
+
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-no-skills', applyUrl: 'https://jobs.example.invalid/apply/no-skills' },
+    });
+    expect(started.ok).toBe(true);
+    expect(started.warning).toBe(pipeline.NO_PROFILE_SKILLS_WARNING);
+
+    queueApplicationDocumentRenders();
+    await pipeline.runNextApplicationAttempt(deps);
+
+    const detail = workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail;
+    expect(detail).toContain('Your CV profile has no skills');
+    expect(detail).toContain('Your CV was prepared without any skills.');
+    expect(detail).not.toContain('Your tailored CV is ready.');
+  });
+
   it('stages a requested final letter without replacing it with automatic generation', async () => {
     workspace.createLetter(db, {
       title: 'Cover Letter',

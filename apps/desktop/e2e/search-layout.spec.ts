@@ -116,6 +116,12 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
         }, theme);
         for (const collapsed of [false, true]) {
           if (collapsed !== sidebarCollapsed) {
+            // Below 1100px the sidebar is the rail and its toggle opens an overlay instead (#451), so
+            // the saved collapse preference is only reachable in a wide window.
+            await electronApp.evaluate(({ BrowserWindow }) => {
+              BrowserWindow.getAllWindows()[0]?.setBounds({ width: 1440, height: 900 });
+            });
+            await window.waitForTimeout(150);
             await window
               .getByRole('button', {
                 name: collapsed ? 'Collapse sidebar' : 'Expand sidebar',
@@ -124,10 +130,10 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
             sidebarCollapsed = collapsed;
           }
           for (const viewport of [
-            { name: 'default', width: 1000, height: 720, desktop: false },
-            { name: 'expanded-details', width: 800, height: 600, desktop: false },
-            { name: 'wide', width: 1440, height: 900, desktop: true },
-            { name: 'narrow', width: 760, height: 820, desktop: false },
+            { name: 'default', width: 1000, height: 720 },
+            { name: 'expanded-details', width: 800, height: 600 },
+            { name: 'wide', width: 1440, height: 900 },
+            { name: 'narrow', width: 760, height: 820 },
           ]) {
             await electronApp.evaluate(
               ({ BrowserWindow }, bounds) => {
@@ -136,6 +142,10 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
               { width: viewport.width, height: viewport.height },
             );
             await window.waitForTimeout(100);
+            // Narrowing with a vacancy open keeps that vacancy on screen as the single pane (#451);
+            // this check measures the list, so go back to it.
+            const backToResults = window.getByRole('button', { name: 'Back to results' });
+            if (await backToResults.isVisible()) await backToResults.click();
 
             const geometry = await window.evaluate(() => {
               const main = document.querySelector('main')?.getBoundingClientRect();
@@ -157,40 +167,38 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
               const footer = [...document.querySelectorAll('p')]
                 .find((element) => element.textContent?.startsWith('Run e2e-search-layout'))
                 ?.parentElement?.getBoundingClientRect();
-              if (
-                !main ||
-                !controls ||
-                !resultsScroller ||
-                !detailScroller ||
-                !results ||
-                !detail ||
-                !summaryGrid
-              )
+              if (!main || !controls || !resultsScroller || !results)
                 throw new Error('Search layout is incomplete');
+              // Below 900px of page width the list and the details are one pane at a time (#451), so
+              // the details scroller is simply absent until a vacancy is opened.
+              const twoPane = !!detailScroller;
+              if (twoPane && (!detail || !summaryGrid)) throw new Error('Search layout is incomplete');
               resultsScroller.scrollTop = 80;
-              detailScroller.scrollTop = 80;
+              if (detailScroller) detailScroller.scrollTop = 80;
               return {
+                twoPane,
                 mainLeft: main.left,
                 mainRight: main.right,
                 controlsLeft: controls.left,
                 resultsLeft: results.left,
-                detailRight: detail.right,
+                detailRight: detail?.right ?? 0,
                 horizontalOverflow:
                   document.documentElement.scrollWidth - document.documentElement.clientWidth,
                 listHorizontalOverflow: resultsScroller.scrollWidth - resultsScroller.clientWidth,
-                detailHorizontalOverflow: detailScroller.scrollWidth - detailScroller.clientWidth,
+                detailHorizontalOverflow: detailScroller ? detailScroller.scrollWidth - detailScroller.clientWidth : 0,
                 summaryColumnCount: (() => {
+                  if (!summaryGrid) return 0;
                   const top = Math.round(summaryGrid.children[0]?.getBoundingClientRect().top ?? 0);
                   return [...summaryGrid.children].filter(
                     (child) => Math.round(child.getBoundingClientRect().top) === top,
                   ).length;
                 })(),
                 listScrollTop: resultsScroller.scrollTop,
-                detailScrollTop: detailScroller.scrollTop,
+                detailScrollTop: detailScroller?.scrollTop ?? 0,
                 mainScrollTop: document.querySelector('main')?.scrollTop ?? -1,
                 footerGap: workspace && footer ? footer.top - workspace.bottom : -1,
                 listOverflow: getComputedStyle(resultsScroller).overflowY,
-                detailOverflow: getComputedStyle(detailScroller).overflowY,
+                detailOverflow: detailScroller ? getComputedStyle(detailScroller).overflowY : 'auto',
               };
             });
 
@@ -199,19 +207,19 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
             expect(geometry.listHorizontalOverflow).toBeLessThanOrEqual(0);
             expect(geometry.detailHorizontalOverflow).toBeLessThanOrEqual(0);
             expect(geometry.listScrollTop).toBeGreaterThan(0);
-            expect(geometry.detailScrollTop).toBeGreaterThan(0);
+            if (geometry.twoPane) expect(geometry.detailScrollTop).toBeGreaterThan(0);
             expect(geometry.mainScrollTop).toBe(0);
             expect(geometry.footerGap).toBeGreaterThanOrEqual(0);
             expect(geometry.listOverflow).toBe('auto');
             expect(geometry.detailOverflow).toBe('auto');
-            if (viewport.name === 'expanded-details' && !collapsed)
+            if (geometry.twoPane && viewport.name === 'expanded-details' && !collapsed)
               expect(geometry.summaryColumnCount).toBe(1);
-            if (viewport.desktop) {
+            if (geometry.twoPane) {
+              // Two panes own the page edges; a single pane keeps the 24px gutters.
               expect(geometry.resultsLeft).toBeCloseTo(geometry.mainLeft, 0);
               expect(geometry.detailRight).toBeCloseTo(geometry.mainRight, 0);
             } else {
               expect(geometry.resultsLeft - geometry.mainLeft).toBeCloseTo(24, 0);
-              expect(geometry.mainRight - geometry.detailRight).toBeCloseTo(24, 0);
             }
 
             const screenshotPath = test
@@ -233,6 +241,12 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
         }
       }
 
+      // The last viewport above is a single pane showing only the list (#451); the details, and the
+      // button that opens the CV assistant, are on screen again at a width that fits two panes.
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setBounds({ width: 1440, height: 900 });
+      });
+      await window.waitForTimeout(150);
       await window.getByRole('button', { name: 'Compare with my CV' }).click();
       await expect(window.getByRole('heading', { name: 'CV assistant' })).toBeVisible();
       await expect(window.getByRole('heading', { name: 'CV-only tools' })).toBeVisible();
@@ -306,7 +320,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
  * anything can observe it, which is why this test uses a report that never gives it anything to
  * correct into.
  */
-test('a zero-vacancy Search report at narrow widths keeps both panes at a real, non-collapsed height', async () => {
+test('a zero-vacancy Search report at narrow widths shows one pane at a real, non-collapsed height', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'ovr-search-layout-empty-'));
   const vacancyEngineDataRoot = await mkdtemp(join(tmpdir(), 'ovr-search-layout-empty-engine-'));
   const reportPath = join(vacancyEngineDataRoot, 'reports', 'global-remote', 'latest.json');
@@ -339,29 +353,17 @@ test('a zero-vacancy Search report at narrow widths keeps both panes at a real, 
       // kept its full natural height. With both panes carrying `min-h-0`, the column's shortage
       // splits between them instead, matching `SearchResultList.tsx`'s own comment on the sibling
       // `VacancyDetail` fix ("gives the two panes an even split of the column").
+      // Below 900px the page is one pane at a time (#451): the stacked two-pane layout this test
+      // used to guard no longer exists, so the empty list owns the whole column and the details
+      // pane, which has nothing to show, is not rendered at all.
       await expect(window.getByRole('heading', { name: 'No vacancies found' })).toBeVisible();
-      await expect(window.getByRole('heading', { name: 'Select a vacancy' })).toBeVisible();
+      await expect(window.getByRole('heading', { name: 'Select a vacancy' })).toHaveCount(0);
 
-      const heights = await window.evaluate(() => {
-        const heightOf = (headingText: string) => {
-          const heading = [...document.querySelectorAll('h2')].find((el) => el.textContent === headingText);
-          return heading?.closest('.min-h-0')?.getBoundingClientRect().height ?? -1;
-        };
-        return { list: heightOf('No vacancies found'), detail: heightOf('Select a vacancy') };
+      const listHeight = await window.evaluate(() => {
+        const heading = [...document.querySelectorAll('h2')].find((el) => el.textContent === 'No vacancies found');
+        return heading?.closest('.min-h-0')?.getBoundingClientRect().height ?? -1;
       });
-
-      // Real, measured before/after values at this exact window size (800x600, well below `lg`):
-      // pre-fix the list pane was crushed to literally 0px while the detail pane kept ~185px; with
-      // the fix both panes get a real, comfortably-nonzero share (~55-95px here -- the two
-      // EmptyStates' combined minimums genuinely exceed what an 800x600 window has left after its
-      // own header/filter-bar chrome, so neither pane reaching its full ~256px content height is
-      // expected and fine; the bug was one side getting *none* of the shortfall, not both sides
-      // being finite). The ratio check is the one that actually distinguishes "evenly shared" from
-      // "one pane crushed": pre-fix it was 0, post-fix it is close to 1.
-      expect(heights.list).toBeGreaterThan(30);
-      expect(heights.detail).toBeGreaterThan(30);
-      expect(heights.list / heights.detail).toBeGreaterThan(0.4);
-      expect(heights.list / heights.detail).toBeLessThan(2.5);
+      expect(listHeight).toBeGreaterThan(100);
     } finally {
       await electronApp.close();
     }

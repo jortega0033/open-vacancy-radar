@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installBridges } from '../../cv-bridges.js';
 import { useAgentRun } from '../../../src/components/cv/useAgentRun.js';
+import { activeProviderLimit, resetProviderLimitsForTest } from '../../../src/provider-limits.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -230,6 +231,61 @@ describe('useAgentRun', () => {
       });
 
       await waitFor(() => expect(bridges.agentDock.cancelSession).toHaveBeenCalledWith('sess-late-3'));
+    });
+  });
+
+  describe('usage limits (#461)', () => {
+    it('records a limit against the provider that hit it and keeps the streamed text', async () => {
+      resetProviderLimitsForTest();
+      const { emit } = installBridges();
+      const { result } = renderHook(() => useAgentRun());
+
+      await act(async () => {
+        await result.current.start('map requirements', { provider: 'claude' });
+      });
+      act(() => {
+        emit('sess-cv-1', { type: 'assistant.message', text: 'Partial answer.' });
+        emit('sess-cv-1', { type: 'session.failed', message: "You've hit your session limit, resets 12:10pm" });
+      });
+
+      await waitFor(() => expect(result.current.status).toBe('failed'));
+      expect(result.current.text).toBe('Partial answer.');
+      expect(activeProviderLimit('claude')).toMatchObject({ provider: 'claude', resetLabel: '12:10pm' });
+      expect(activeProviderLimit('codex')).toBeUndefined();
+    });
+
+    it('clears the limit once that provider completes a run again', async () => {
+      resetProviderLimitsForTest();
+      const { emit } = installBridges();
+      const { result } = renderHook(() => useAgentRun());
+
+      await act(async () => {
+        await result.current.start('first', { provider: 'claude' });
+      });
+      act(() => emit('sess-cv-1', { type: 'session.failed', message: 'session limit reached' }));
+      await waitFor(() => expect(activeProviderLimit('claude')).toBeDefined());
+
+      await act(async () => {
+        await result.current.start('second', { provider: 'claude' });
+      });
+      act(() => {
+        emit('sess-cv-1', { type: 'assistant.message', text: 'It works again.' });
+        emit('sess-cv-1', { type: 'session.completed' });
+      });
+      await waitFor(() => expect(result.current.status).toBe('completed'));
+      expect(activeProviderLimit('claude')).toBeUndefined();
+    });
+
+    it('does not mark a provider limited for an unrelated failure', async () => {
+      resetProviderLimitsForTest();
+      const { emit } = installBridges();
+      const { result } = renderHook(() => useAgentRun());
+      await act(async () => {
+        await result.current.start('x', { provider: 'claude' });
+      });
+      act(() => emit('sess-cv-1', { type: 'session.failed', message: 'the model returned invalid JSON' }));
+      await waitFor(() => expect(result.current.status).toBe('failed'));
+      expect(activeProviderLimit('claude')).toBeUndefined();
     });
   });
 });

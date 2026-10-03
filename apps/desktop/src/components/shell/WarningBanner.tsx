@@ -10,13 +10,15 @@ export interface WarningBannerProps {
   /** Defaults to `alert`; use `status` for a polite, non-blocking notice. */
   role?: 'alert' | 'status';
   'aria-label'?: string;
+  /** Children are block content (paragraphs, a row of buttons, a disclosure) rather than one line of text. */
+  stacked?: boolean;
 }
 
 /** The shared warning banner: `alert alert-warning alert-soft` with `role="alert"` baked in. */
-export function WarningBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel }: WarningBannerProps) {
+export function WarningBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel, stacked = false }: WarningBannerProps) {
   return (
     <div className={['alert', 'alert-warning', 'alert-soft', 'text-sm', className].filter(Boolean).join(' ')} role={role} aria-label={ariaLabel}>
-      <span>{children}</span>
+      {stacked ? <div className="min-w-0">{children}</div> : <span>{children}</span>}
       {action}
     </div>
   );

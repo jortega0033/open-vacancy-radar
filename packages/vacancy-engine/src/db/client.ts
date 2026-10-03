@@ -31,9 +31,16 @@ export function createDatabaseClient(databasePath: string): DatabaseClient {
   // Write-ahead logging keeps readers from blocking the single writer, and
   // SQLite disables foreign keys by default while this schema depends on
   // cascade/restrict/set-null behaviour.
-  connection.pragma('journal_mode = WAL');
-  connection.pragma('foreign_keys = ON');
-  connection.pragma('busy_timeout = 10000');
+  try {
+    connection.pragma('journal_mode = WAL');
+    connection.pragma('foreign_keys = ON');
+    connection.pragma('busy_timeout = 10000');
+  } catch (error) {
+    // A damaged file fails here, after it was opened. Release the handle so the file can be moved
+    // aside for a rebuild; Windows will not rename or delete a file that is still open.
+    connection.close();
+    throw error;
+  }
 
   return {
     db: drizzle(connection, { schema }),

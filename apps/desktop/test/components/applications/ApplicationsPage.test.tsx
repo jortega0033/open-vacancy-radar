@@ -755,12 +755,17 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: /^send application$/i }));
 
       await waitFor(() => expect(submitReview).toHaveBeenCalled());
-      // The header close-icon button and the modal-backdrop button share the accessible name "Close".
+      // The header close button is disabled, and so are the other ways out: a click on the dimmed
+      // backdrop and Escape do nothing while the decision is in flight.
       const closeButtons = within(dialog).getAllByRole('button', { name: /^close$/i });
-      expect(closeButtons).toHaveLength(2);
-      for (const button of closeButtons) expect(button).toBeDisabled();
+      expect(closeButtons).toHaveLength(1);
+      expect(closeButtons[0]).toBeDisabled();
+      fireEvent.click(dialog);
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
 
       resolveSubmit({ ok: true });
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -794,6 +799,7 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: /^send application$/i }));
 
       await waitFor(() => expect(submitReview).toHaveBeenCalledWith(attempt.id));
       await waitFor(() => expect(closeReview).toHaveBeenCalledWith(attempt.id));
@@ -944,6 +950,7 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
       fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+      fireEvent.click(await within(dialog).findByRole('button', { name: /^send application$/i }));
 
       await waitFor(() => expect(within(dialog).getByText(/does not appear in the rendered documents/i)).toBeInTheDocument());
     });
@@ -971,7 +978,7 @@ describe('ApplicationsPage', () => {
       const row = screen.getByRole('row', { name: /senior frontend engineer/i });
       expect(within(row).getByText(/submitting automatically at/i)).toBeInTheDocument();
 
-      fireEvent.click(within(row).getByRole('button', { name: /^cancel$/i }));
+      fireEvent.click(within(row).getByRole('button', { name: /^cancel sending senior frontend engineer/i }));
 
       await waitFor(() => expect(cancelScheduledAutomaticSubmission).toHaveBeenCalledWith(attempt.id));
       // Clicking Cancel must not also open the review session -- it's a distinct action on the row.

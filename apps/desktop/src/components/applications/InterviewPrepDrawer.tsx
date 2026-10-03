@@ -11,7 +11,7 @@ import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
-import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { Dialog } from '../shell/Dialog.js';
 import { INTERVIEW_PREPARABLE_STATUSES } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
 import { buildInterviewPrepPrompt, type InterviewPrepContext, type InterviewPrepStage } from './interview-prep-prompt.js';
@@ -62,7 +62,6 @@ export function InterviewPrepDrawer({
   letters,
   onClose,
 }: InterviewPrepDrawerProps) {
-  useEscapeToClose(onClose);
   const run = useAgentRun();
 
   const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
@@ -173,8 +172,12 @@ export function InterviewPrepDrawer({
   }, [run.text]);
 
   return (
-    <div className="modal modal-open modal-end" role="dialog" aria-modal="true">
-      <div className="modal-box flex max-w-md flex-col rounded-none p-0">
+    <Dialog
+      aria-label={`Prepare interview for ${application.role} at ${application.company}`}
+      placement="end"
+      boxClassName="flex max-w-md flex-col rounded-none p-0"
+      onClose={onClose}
+    >
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">
             Prepare interview <span className="text-base-content/60">for</span> {application.role}{' '}
@@ -264,8 +267,6 @@ export function InterviewPrepDrawer({
             Close
           </button>
         </div>
-      </div>
-      <button type="button" className="modal-backdrop" aria-label="Close" onClick={onClose} />
-    </div>
+    </Dialog>
   );
 }

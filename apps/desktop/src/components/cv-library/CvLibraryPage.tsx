@@ -103,6 +103,8 @@ export function CvLibraryPage() {
   /** `'form'` while the candidate fills in the job, then the vacancy the workspace opens on. A
    * reopened case also names the CV it belongs to. */
   const [tailoring, setTailoring] = useState<'form' | { vacancy: VacancyLead; cvId?: string } | null>(null);
+  /** Bumped after a CV is saved from the review drawer, for the tailoring workspace behind it. */
+  const [libraryRevision, setLibraryRevision] = useState(0);
   const [actionError, setActionError] = useState<string>();
   const [actionStatus, setActionStatus] = useState<string>();
 
@@ -156,6 +158,8 @@ export function CvLibraryPage() {
       } else {
         const updated = await window.workspace.updateCvDocument(drawerState.record.id, payload);
         setDocuments((prev) => (prev ?? []).map((doc) => (doc.id === updated.id ? updated : doc)));
+        // An open tailoring case re-reads the library, so its source notice clears in place (#447).
+        setLibraryRevision((revision) => revision + 1);
       }
       setDrawerState(null);
     },
@@ -242,6 +246,22 @@ export function CvLibraryPage() {
   const isLoading = documents === null;
   const hasAnyDocuments = (documents?.length ?? 0) > 0;
 
+  /** Opens the exact CV's review over whatever is on screen; the tailoring case behind it stays put. */
+  const reviewCv = (cvId: string) => {
+    const record = documents?.find((doc) => doc.id === cvId);
+    if (record) openEditDrawer(record);
+  };
+
+  const drawer = drawerState ? (
+    <CvDrawer
+      key={drawerState.mode === 'edit' ? drawerState.record.id : 'new'}
+      mode={drawerState.mode}
+      record={drawerState.mode === 'edit' ? drawerState.record : undefined}
+      onCancel={closeDrawer}
+      onSubmit={handleDrawerSubmit}
+    />
+  ) : null;
+
   if (tailoring !== null) {
     return (
       <div className="flex flex-col gap-4 max-w-3xl mx-auto">
@@ -257,8 +277,15 @@ export function CvLibraryPage() {
             onCancel={() => setTailoring(null)}
           />
         ) : (
-          <CvAssistant vacancy={tailoring.vacancy} {...(tailoring.cvId ? { initialCvId: tailoring.cvId } : {})} />
+          <CvAssistant
+            vacancy={tailoring.vacancy}
+            {...(tailoring.cvId ? { initialCvId: tailoring.cvId } : {})}
+            onReviewCv={reviewCv}
+            libraryRevision={libraryRevision}
+            tailoringCase
+          />
         )}
+        {drawer}
       </div>
     );
   }
@@ -319,15 +346,7 @@ export function CvLibraryPage() {
         <TailoringCases documents={documents ?? []} onOpen={(vacancy, cvId) => setTailoring({ vacancy, cvId })} />
       )}
 
-      {drawerState && (
-        <CvDrawer
-          key={drawerState.mode === 'edit' ? drawerState.record.id : 'new'}
-          mode={drawerState.mode}
-          record={drawerState.mode === 'edit' ? drawerState.record : undefined}
-          onCancel={closeDrawer}
-          onSubmit={handleDrawerSubmit}
-        />
-      )}
+      {drawer}
 
       {deleteTarget && (
         <ConfirmDialog

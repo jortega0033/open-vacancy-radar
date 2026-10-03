@@ -11,6 +11,8 @@ export { createScanLock, withScanAdvisoryTryLock, type ScanLock } from './db/adv
 
 export {
   runGlobalRemoteScan,
+  ScanCancelledError,
+  isScanCancelledError,
   type GlobalRemoteScanOptions,
   type GlobalRemoteScanResult,
 } from './pipeline/global-remote.js';
@@ -149,3 +151,4 @@ export {
   type WorkEligibilityInput,
   type WorkLocationStatement,
 } from './eligibility/index.js';
+export { SCAN_PROGRESS_SOURCE_IDS } from './global-remote/discovery.js';

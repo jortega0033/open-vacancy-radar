@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OpenApplicationReviewResult } from '../../../electron/application-executor-types.js';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import type { SelectedVacancy } from '../letters/types.js';
+import { Dialog } from '../shell/Dialog.js';
 import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
@@ -150,7 +151,8 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         if (cancelled) return;
         if (!policyId) {
           const hasUsefulManualDocuments = attempt.checkpointDetail.includes('Your application documents are ready.')
-            || attempt.checkpointDetail.includes('Your tailored CV is ready.');
+            || attempt.checkpointDetail.includes('Your tailored CV is ready.')
+            || attempt.checkpointDetail.includes('Your CV was prepared without any skills.');
           if (attempt.checkpoint === 'needs_user' && !hasUsefulManualDocuments) {
             setState({ phase: 'preparation_blocked', message: attempt.checkpointDetail, busy: false });
             return;
@@ -439,7 +441,9 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     || (state.phase === 'ineligible' && state.busy)
     || (state.phase === 'error' && state.busy);
 
-  useEscapeToClose(() => onClose('dismissed'), closeDisabled);
+  // Only while the live page is handed over: the dialog below owns Escape for every other phase, and
+  // the banner shown during a handoff is not a dialog.
+  useEscapeToClose(() => onClose('dismissed'), closeDisabled || state.phase !== 'handoff');
 
   // The two-pane layout only applies where there is a form screenshot to put beside the decision
   // panel. Every other phase is short text and keeps the narrow dialog.
@@ -474,12 +478,15 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
   }
 
   return (
-    <div className="modal modal-open" role="dialog" aria-modal="true">
-      <div
-        className={`modal-box max-h-[calc(100vh-2rem)] overflow-y-auto p-4 ${
-          twoPane ? 'max-w-[min(1100px,calc(100vw-2rem))]' : 'max-w-md'
-        }`}
-      >
+    <Dialog
+      aria-label={`Review application for ${attempt.role} at ${attempt.company}`}
+      boxClassName={`max-h-[calc(100vh-2rem)] overflow-y-auto p-4 ${
+        twoPane ? 'max-w-[min(1100px,calc(100vw-2rem))]' : 'max-w-md'
+      }`}
+      closeDisabled={closeDisabled}
+      onClose={() => onClose('dismissed')}
+    >
+      <div>
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
@@ -644,7 +651,6 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
           />
         )}
       </div>
-      <button type="button" className="modal-backdrop" aria-label="Close" disabled={closeDisabled} onClick={() => onClose('dismissed')} />
-    </div>
+    </Dialog>
   );
 }

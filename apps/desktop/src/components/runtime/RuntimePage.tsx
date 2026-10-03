@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { activeProviderLimit, useProviderLimits } from '../../provider-limits.js';
 import { AiHelperNotice, ErrorBanner, PageLoading } from '../shell/index.js';
 import { ProviderCard, type ProviderCheckState } from './ProviderCard.js';
 
@@ -49,6 +50,7 @@ export function RuntimePage({
   onDefaultProviderChanged,
 }: RuntimePageProps) {
   const [providers, setProviders] = useState<ProviderStatus[]>();
+  const providerLimits = useProviderLimits();
   const [providersError, setProvidersError] = useState<Problem>();
   const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
   const [savingDefault, setSavingDefault] = useState(false);
@@ -196,6 +198,7 @@ export function RuntimePage({
               showPicker={showPicker}
               onUseAsDefault={() => void useAsDefault(status.id)}
               onCheckAgain={() => void checkAgain(status.id)}
+              {...(providerLimits.has(status.id) && activeProviderLimit(status.id) ? { limit: activeProviderLimit(status.id)! } : {})}
               {...(checkStates[status.id] ? { checkState: checkStates[status.id] } : {})}
             />
           ))}

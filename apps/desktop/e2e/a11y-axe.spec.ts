@@ -34,20 +34,17 @@ const CONFIGS = [
 ] as const;
 
 /**
- * Known violations. Every page shows the same single one: AppSidebar's size-7 avatar circle carries an
- * aria attribute its role does not allow. Only ever remove it, and when it is fixed delete the whole
- * entry. The light theme color-contrast findings that were here are fixed (#455), so a new one fails.
+ * Known violations. None: the sidebar avatar that used to fire `aria-prohibited-attr` on every page
+ * is gone (#477). Only ever add an entry for an existing, tracked problem; a new one fails.
  */
-const SHELL_AVATAR = 'aria-prohibited-attr';
-
 const BASELINE: Record<PageName, string[]> = {
-  Search: [SHELL_AVATAR],
-  'Saved jobs': [SHELL_AVATAR],
-  Applications: [SHELL_AVATAR],
-  CV: [SHELL_AVATAR],
-  Letters: [SHELL_AVATAR],
-  'AI runtime': [SHELL_AVATAR],
-  Settings: [SHELL_AVATAR],
+  Search: [],
+  'Saved jobs': [],
+  Applications: [],
+  CV: [],
+  Letters: [],
+  'AI runtime': [],
+  Settings: [],
 };
 
 const observed: Record<string, Set<string>> = Object.fromEntries(PAGES.map((p) => [p, new Set<string>()]));

@@ -220,6 +220,27 @@ export async function discoverJobicy(
  * existing parallel discovery, not new discovery logic. `run` itself is returned unchanged, so the
  * aggregation below sees exactly what it always did.
  */
+/**
+ * Every discovery group `runGlobalRemoteDiscovery` reports progress for, in the order it starts
+ * them, plus the Workable global listing the scan pipeline runs beside it. A scan emits exactly one
+ * `ScanProgressEvent` per entry, so this is the honest denominator for "N of M" progress: it counts
+ * groups of sources (`structured`, `feeds` and `ats_roster` each cover many individual boards), not
+ * individual boards, and callers should say so.
+ */
+export const SCAN_PROGRESS_SOURCE_IDS = [
+  'himalayas',
+  'jobicy',
+  'ai_dev_jobs',
+  'taiwan_jobs',
+  'structured',
+  'feeds',
+  'jobtech',
+  'additional',
+  'keyed',
+  'ats_roster',
+  'workable_global',
+] as const;
+
 function withProgress(
   sourceId: string,
   run: Promise<DiscoveryRun>,
@@ -251,6 +272,7 @@ export async function runGlobalRemoteDiscovery(
   atsRoster: readonly AtsRosterEntry[] = [],
   projectRoot?: string,
   onProgress?: ScanProgressCallback,
+  signal?: AbortSignal,
 ): Promise<DiscoveryRun> {
   const [himalayas, jobicy, aiDevJobs, taiwanJobs, structured, feeds, jobtech, additional, keyed, atsRosterScan] =
     await Promise.all([
@@ -289,7 +311,9 @@ export async function runGlobalRemoteDiscovery(
     ...keyed.vacancies,
     ...atsRosterScan.vacancies,
   ];
-  if (projectRoot !== undefined) {
+  // A cancelled run's sources all "failed" because their requests were refused, which says nothing
+  // about the sources themselves, so it must not feed gap telemetry.
+  if (projectRoot !== undefined && signal?.aborted !== true) {
     try {
       const gapReport = await recordDiscoveryGapTelemetry(sources, projectRoot);
       await writeGapTelemetryReport(gapReport, projectRoot);

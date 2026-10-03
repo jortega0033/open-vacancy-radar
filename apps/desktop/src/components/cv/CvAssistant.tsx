@@ -17,6 +17,7 @@ import { TailoringProposalsPanel } from './TailoringProposalsPanel.js';
 import type { CvDocument, VacancyLead } from './types.js';
 import { caseKeyFor } from './vacancy-key.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
+import { CaseStepTracker } from './CaseStepTracker.js';
 
 /** One message for every screen that needs the CV details reviewed first. */
 const CV_DETAILS_FIRST =
@@ -41,13 +42,20 @@ export interface CvAssistantProps {
   /** The library CV an existing tailoring case belongs to, so reopening a case lands on the CV it
    * was built from rather than on the default one. */
   initialCvId?: string;
+  /** Opens the CV's review over the workspace (#447). Without it, the notices only describe the gap. */
+  onReviewCv?: (cvId: string) => void;
+  /** Bumped by the host after the CV library changed, so the source notices clear in place. */
+  libraryRevision?: number;
+  /** Opened from "Tailor for a job" (#446): ATS fit, the quick draft and the cover letter move into a
+   * collapsed "Other tools" section below the steps. */
+  tailoringCase?: boolean;
 }
 
 function cvDocumentFromLibrary(doc: CvDocumentRecord): CvDocument {
   return { fileName: doc.name, text: doc.text };
 }
 
-export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBackToVacancy, initialCvId }: CvAssistantProps) {
+export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBackToVacancy, initialCvId, onReviewCv, libraryRevision = 0, tailoringCase = false }: CvAssistantProps) {
   const [cv, setCv] = useState<CvDocument | null>(null);
   const [libraryCvs, setLibraryCvs] = useState<CvDocumentRecord[]>([]);
   const [selectedLibraryCvId, setSelectedLibraryCvId] = useState('');
@@ -137,6 +145,22 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
     };
   }, []);
 
+  // The host changed the library (the CV review drawer saved): re-read the records so the source
+  // notices below clear in place. Selection is left alone, so the case stays open (#447).
+  useEffect(() => {
+    if (libraryRevision === 0) return;
+    let cancelled = false;
+    void window.workspace
+      .listCvDocuments()
+      .then((documents) => {
+        if (!cancelled) setLibraryCvs(documents);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryRevision]);
+
   const effectiveModel = pinnedModel ?? (model || undefined);
   const availableModels = providerStatus?.availableModels ?? [];
   const providerUnavailable = providerStatus && !providerStatus.installed;
@@ -154,6 +178,37 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
       : describeCvSourceGaps(selectedSourceCv).length > 0
         ? `${CV_DETAILS_FIRST} (${describeCvSourceGaps(selectedSourceCv).join(', ')})`
         : null;
+
+  const gapAnalysisTool = (
+    <GapAnalysis
+      cv={cv}
+      vacancy={vacancy}
+      sourceCv={selectedSourceCv}
+      profile={selectedProfile}
+      provider={provider}
+      {...(effectiveModel ? { model: effectiveModel } : {})}
+    />
+  );
+  const draftAndLetterTools = (
+    <>
+      <TailorCv
+        cv={cv}
+        vacancy={vacancy}
+        sourceCv={selectedSourceCv}
+        profile={selectedProfile}
+        provider={provider}
+        {...(effectiveModel ? { model: effectiveModel } : {})}
+      />
+      <CoverLetter
+        cv={cv}
+        vacancy={vacancy}
+        sourceCv={selectedSourceCv}
+        profile={selectedProfile}
+        provider={provider}
+        {...(effectiveModel ? { model: effectiveModel } : {})}
+      />
+    </>
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -239,9 +294,21 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
         </div>
       )}
 
+      <CaseStepTracker
+        cvId={selectedLibraryCv?.id ?? null}
+        vacancy={vacancy}
+        sourceCv={selectedSourceCv}
+        refreshKey={jdVersion + evidenceVersion + libraryRevision}
+      />
+
       {vacancy && sourceNotice && (
         <WarningBanner role="status">
-          {sourceNotice}
+          <span>{sourceNotice}</span>
+          {onReviewCv && selectedLibraryCv && (
+            <button type="button" className="btn btn-warning btn-xs ml-3" onClick={() => onReviewCv(selectedLibraryCv.id)}>
+              Review this CV now
+            </button>
+          )}
         </WarningBanner>
       )}
 
@@ -301,14 +368,7 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
             Compare or draft for the selected vacancy.
           </p>
         </div>
-        <GapAnalysis
-          cv={cv}
-          vacancy={vacancy}
-          sourceCv={selectedSourceCv}
-          profile={selectedProfile}
-          provider={provider}
-          {...(effectiveModel ? { model: effectiveModel } : {})}
-        />
+        {!tailoringCase && gapAnalysisTool}
         <RequirementMapping
           key={`requirements-${jdVersion}`}
           cvId={selectedLibraryCv?.id ?? null}
@@ -338,23 +398,22 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
           vacancy={vacancy}
           sourceCv={selectedSourceCv}
           profile={selectedProfile}
+          {...(onReviewCv && selectedLibraryCv ? { onReviewSource: () => onReviewCv(selectedLibraryCv.id) } : {})}
         />
-        <TailorCv
-          cv={cv}
-          vacancy={vacancy}
-          sourceCv={selectedSourceCv}
-          profile={selectedProfile}
-          provider={provider}
-          {...(effectiveModel ? { model: effectiveModel } : {})}
-        />
-        <CoverLetter
-          cv={cv}
-          vacancy={vacancy}
-          sourceCv={selectedSourceCv}
-          profile={selectedProfile}
-          provider={provider}
-          {...(effectiveModel ? { model: effectiveModel } : {})}
-        />
+        {tailoringCase ? (
+          <details className="rounded-box border border-base-300 p-4" aria-label="Other tools">
+            <summary className="cursor-pointer text-base font-semibold">Other tools</summary>
+            <p className="mt-1 text-sm text-base-content/60">
+              Optional: ATS fit, a quick unapproved draft, and a cover letter. None of them is needed to approve your CV.
+            </p>
+            <div className="mt-3 flex flex-col gap-3">
+              {gapAnalysisTool}
+              {draftAndLetterTools}
+            </div>
+          </details>
+        ) : (
+          draftAndLetterTools
+        )}
       </section>
     </div>
   );

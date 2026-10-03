@@ -2,6 +2,7 @@ import { Check } from '@phosphor-icons/react';
 import type { ProviderStatus } from '@agent-dock/shared';
 import { CopyButton } from '../shell/index.js';
 import { detectPlatform, providerGuidance } from './provider-guidance.js';
+import type { ProviderLimit } from '../../provider-limits.js';
 
 function authLabel(status: ProviderStatus): string {
   if (status.authenticated === 'authenticated') return 'Signed in';
@@ -9,15 +10,17 @@ function authLabel(status: ProviderStatus): string {
   return 'Unknown';
 }
 
-function readyLabel(status: ProviderStatus): string {
+function readyLabel(status: ProviderStatus, limit?: ProviderLimit): string {
   if (!status.installed) return 'Not installed';
+  if (limit && status.authenticated === 'authenticated') return 'Usage limit reached';
   if (status.authenticated === 'authenticated') return 'Ready';
   if (status.authenticated === 'unauthenticated') return 'Not signed in';
   return 'Unknown';
 }
 
 /** Green only for the one state that actually means "this CLI can run a session right now". */
-function readyDotClass(status: ProviderStatus): string {
+function readyDotClass(status: ProviderStatus, limit?: ProviderLimit): string {
+  if (limit && status.installed && status.authenticated === 'authenticated') return 'bg-warning';
   return status.installed && status.authenticated === 'authenticated' ? 'bg-success' : 'bg-base-content/30';
 }
 
@@ -36,6 +39,8 @@ export interface ProviderCardProps {
   /** Re-reads provider status. Without it the card shows no "Check again" button. */
   onCheckAgain?: () => void;
   checkState?: ProviderCheckState;
+  /** A usage limit this provider reported recently (#461). It is not an install or sign-in problem. */
+  limit?: ProviderLimit;
 }
 
 /**
@@ -45,7 +50,7 @@ export interface ProviderCardProps {
  * Every field here is real data from `window.agentDock.listProviders()`: nothing is invented for
  * the sake of matching the mockup's layout.
  */
-export function ProviderCard({ status, isDefault, onUseAsDefault, saving, showPicker = true, onCheckAgain, checkState }: ProviderCardProps) {
+export function ProviderCard({ status, isDefault, onUseAsDefault, saving, showPicker = true, onCheckAgain, checkState, limit }: ProviderCardProps) {
   const needsInstall = !status.installed;
   const needsSignIn = status.installed && status.authenticated !== 'authenticated';
   const guidance = providerGuidance(status.id, detectPlatform(navigator.userAgent));
@@ -67,14 +72,22 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving, showPi
             {isDefault && <span className="badge badge-outline badge-sm">Default</span>}
           </div>
           <div className="flex items-center gap-1.5 text-xs text-base-content/70">
-            <span className={`size-1.5 rounded-full ${readyDotClass(status)}`} aria-hidden="true" />
-            {readyLabel(status)}
+            <span className={`size-1.5 rounded-full ${readyDotClass(status, limit)}`} aria-hidden="true" />
+            {readyLabel(status, limit)}
           </div>
         </div>
 
         <dl className="grid grid-cols-[110px_1fr] gap-x-2.5 gap-y-1.5 text-xs">
           <dt className="text-base-content/60">Sign-in</dt>
           <dd className="font-medium">{authLabel(status)}</dd>
+          {limit && (
+            <>
+              <dt className="text-base-content/60">Usage</dt>
+              <dd className="font-medium">
+                Limit reached{limit.resetLabel ? `, resets ${limit.resetLabel}` : ''}
+              </dd>
+            </>
+          )}
         </dl>
 
         <details className="text-xs">

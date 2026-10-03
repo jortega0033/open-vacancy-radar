@@ -16,6 +16,8 @@ export interface CvArtifactPanelProps {
   /** Why the CV's source cannot back an export right now (#419). Empty when it can. The main
    * process refuses the export for the same reasons; this explains it before the click. */
   sourceGaps?: readonly string[];
+  /** Opens this CV's review (#447). */
+  onReviewSource?: () => void;
 }
 
 const FORMATS: { format: CvExportFormat; label: string; exportLabel: string }[] = [
@@ -60,7 +62,7 @@ function FileLocation({ artifact }: { artifact: CvArtifactRecord }) {
  * as a second way to look; a Word file is looked at in the candidate's own editor, because
  * pagination depends on the editor and no page fit is claimed. Nothing here says the vacancy is ready to apply.
  */
-export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: CvArtifactPanelProps) {
+export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [], onReviewSource }: CvArtifactPanelProps) {
   const exportBlocked = sourceGaps.length > 0;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
@@ -127,7 +129,7 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
 
   return (
     <section className="flex flex-col gap-3 rounded-box border border-base-300 p-4 text-sm" aria-label="Exported files">
-      <h3 className="font-medium">Files</h3>
+      <h3 id="cv-step-files" tabIndex={-1} className="font-medium outline-none">Files</h3>
       <p className="text-base-content/70">Export your approved CV, open it, and confirm it looks right.</p>
 
       {exportBlocked && (
@@ -139,7 +141,16 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
                 <li key={gap}>{gap}</li>
               ))}
             </ul>
-            <p className="mt-1">Check your CV details first. Open this CV in the CV Library, review what was read from it, and confirm.</p>
+            {onReviewSource ? (
+              <>
+                <p className="mt-1">Check your CV details first. Review what was read from it, and confirm.</p>
+                <button type="button" className="btn btn-warning btn-sm mt-2" onClick={onReviewSource}>
+                  Review this CV now
+                </button>
+              </>
+            ) : (
+              <p className="mt-1">Check your CV details first. Open this CV in the CV Library, review what was read from it, and confirm.</p>
+            )}
           </div>
         </div>
       )}

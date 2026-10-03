@@ -746,7 +746,45 @@ export type GlobalRemoteScanOptions = {
    * `aiWebDiscoveryVacancies` above. Omitted when AI-web discovery did not run for this run.
    */
   aiWebDiscoverySourceAudit?: DiscoverySourceAudit;
+  /**
+   * Cancels the run (#459). Aborting stops every new request at once (in-flight ones finish within
+   * their own timeouts) and makes the scan reject with `ScanCancelledError` at the next stage
+   * boundary, before any report is built or persisted by the caller. A cancelled run therefore
+   * leaves the previous report exactly as it was.
+   */
+  signal?: AbortSignal;
 };
+
+export class ScanCancelledError extends Error {
+  public constructor() {
+    super('The scan was stopped.');
+    this.name = 'ScanCancelledError';
+  }
+}
+
+export function isScanCancelledError(error: unknown): error is ScanCancelledError {
+  return error instanceof Error && error.name === 'ScanCancelledError';
+}
+
+function throwIfScanCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new ScanCancelledError();
+}
+
+/** Refuses any request started after the run was cancelled, so the sources still running wind down
+ * at their next request instead of continuing to hit the network for a scan nobody wants. */
+export function cancellable<T extends object>(client: T, signal: AbortSignal | undefined): T {
+  if (!signal) return client;
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        throwIfScanCancelled(signal);
+        return (value as (...a: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+}
 
 /**
  * The cap decision itself, extracted from `applyBrowseAllResultCap` below so `runGlobalRemoteScan`
@@ -925,6 +963,7 @@ export async function runGlobalRemoteScan(
   projectRoot = process.cwd(),
   options: GlobalRemoteScanOptions = {},
 ): Promise<GlobalRemoteScanResult> {
+  throwIfScanCancelled(options.signal);
   const loadedProfile = await loadGlobalRemoteConfig(projectRoot);
   // Keyed-discovery credentials always come from process env, never the checked-in profile
   // JSON, so a secret can never land in git even if someone sets these fields in the file.
@@ -952,7 +991,9 @@ export async function runGlobalRemoteScan(
       atsRosterFocusCountry: options.country ?? loadedProfile.discovery.atsRosterFocusCountry ?? '',
     },
   };
-  const { safeClient, atsClient: http } = createDatabaseBackedHttpClients(appConfig, database, {
+  const signal = options.signal;
+  throwIfScanCancelled(signal);
+  const { safeClient: rawSafeClient, atsClient: rawHttp } = createDatabaseBackedHttpClients(appConfig, database, {
     maxStreamTimeoutMs: WORKABLE_GLOBAL_TIMEOUT_MS,
     maxStreamResponseBytes: WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
     onNetworkRequest(url, meta) {
@@ -966,6 +1007,8 @@ export async function runGlobalRemoteScan(
       logger.warn({ error, operation, url }, 'Global remote scan cache operation failed');
     },
   });
+  const safeClient = cancellable(rawSafeClient, signal);
+  const http = cancellable(rawHttp, signal);
   const reuseDiscovery = options.officialOnly === true || options.offlineReclassify === true;
   // All three run independently -- workableGlobal consumes neither baseDiscovery's nor official's
   // output (it is only merged into the result afterward, below) -- so they run in parallel rather
@@ -989,7 +1032,7 @@ export async function runGlobalRemoteScan(
   const [baseDiscovery, official, workableGlobal] = await Promise.all([
     reuseDiscovery
       ? loadPreviousDiscovery(projectRoot)
-      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, trackedOnProgress),
+      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, trackedOnProgress, signal),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile, candidateLanguages)
       : runOfficialGlobalRemoteSources(http, profile, candidateLanguages),
@@ -1000,6 +1043,8 @@ export async function runGlobalRemoteScan(
           return result;
         }),
   ]);
+  // Discovery is the long part, and everything after it is enrichment of rows nobody asked to keep.
+  throwIfScanCancelled(signal);
   const withWorkableGlobal =
     workableGlobal === null
       ? baseDiscovery
@@ -1055,6 +1100,7 @@ export async function runGlobalRemoteScan(
     candidateProfile,
     profile.minimumAnnualBaseUsd,
   );
+  throwIfScanCancelled(signal);
   const sponsorMatchStarted = Date.now();
   const sponsorMatched = await applyWorldwideSponsorMatches(
     scoredDiscoveryAudit,

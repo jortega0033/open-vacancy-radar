@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { Info } from '@phosphor-icons/react';
+import { ArrowLeft, Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
-import type { SavedJobInput } from '../../window.js';
+import type { SavedJobInput, VacancyEngineStatus } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState, ErrorBanner, WarningBanner, useAnnounce, useEscapeToClose } from '../shell/index.js';
+import { EmptyState, ErrorBanner, WarningBanner, useAnnounce } from '../shell/index.js';
 import {
   SCAN_FAILED_ANNOUNCEMENT,
   SCAN_STARTED_ANNOUNCEMENT,
@@ -16,6 +16,10 @@ import {
   scanFinishedAnnouncement,
 } from './scan-announcements.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
+import { Dialog } from '../shell/Dialog.js';
+import { ScanProgressPanel, useScanStatus } from './ScanProgressPanel.js';
+import { useElementWidth } from './useElementWidth.js';
+import { publishEngineHealth } from '../../engine-health.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
@@ -175,6 +179,11 @@ export interface SearchPageProps {
   onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
 }
 
+/** Below this much width for the page itself, the list and the detail take turns instead of
+ * sharing the row (#451). The width is the page's own, measured after the sidebar, so a 936px
+ * window with the rail still splits and a 1000px window with the full sidebar does not. */
+const SINGLE_PANE_BELOW_PX = 900;
+
 export function SearchPage({
   onOpenSearchProfile,
   onSavedJobsChanged,
@@ -187,6 +196,12 @@ export function SearchPage({
   const session = controlledSession ?? localSession;
   const setSession = onSessionChange ?? setLocalSession;
   const [engineState, setEngineState] = useState<EngineState>('checking');
+  const [engineError, setEngineError] = useState<string>();
+  /** What the main process knows about an engine failure (#441): never SQL, never a path. */
+  const [engineFailure, setEngineFailure] = useState<Partial<Pick<VacancyEngineStatus, 'category' | 'canRebuild' | 'details'>>>();
+  const [rebuildingCache, setRebuildingCache] = useState(false);
+  const [cacheNotice, setCacheNotice] = useState<string>();
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
 
   const [worldwideReport, setWorldwideReport] = useSearchSessionField(session, setSession, 'report');
   const [reportHydrated, setReportHydrated] = useSearchSessionField(session, setSession, 'reportHydrated');
@@ -237,11 +252,22 @@ export function SearchPage({
 
   const [hydrating, setHydrating] = useState(true);
   const [loadError, setLoadError] = useState<string>();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pageWidth = useElementWidth(rootRef);
+  /** True when the page is too narrow for two panes (#451). `null` width (not measured) reads as wide. */
+  const singlePane = pageWidth !== null && pageWidth < SINGLE_PANE_BELOW_PX;
+  /** In the single-pane flow, which pane is showing. The selected vacancy survives either. */
+  const [paneView, setPaneView] = useState<'list' | 'detail'>('list');
+  /** Where focus goes after the next pane change: the detail heading on select, the row on Back. */
+  const paneFocusRef = useRef<'detail' | 'row' | null>(null);
   const [scanning, setScanning] = useState(false);
+  /** A stop was requested for the running scan and it has not wound down yet (#459). */
+  const [stopping, setStopping] = useState(false);
+  const stopRequestedRef = useRef(false);
+  const [stopNotice, setStopNotice] = useState<string>();
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
   const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
-  useEscapeToClose(() => setConfirmBrowseAll(false), !confirmBrowseAll);
   // User opt-out from the live view during an active rescan that already has a saved report loaded
   // (issue #364): reset to `false` -- i.e. default to live -- at the start of every scan, so a fresh
   // rescan always shows its own progress first, with an explicit way back to the saved report.
@@ -290,9 +316,21 @@ export function SearchPage({
     void (async () => {
       try {
         const status = await window.vacancyRadar.getStatus();
+        // Published even when this page has since unmounted: the sidebar wants the newest reading.
+        publishEngineHealth(status);
         if (cancelled) return;
-        if (status.ready) setEngineState('ready');
-        else setEngineState('unavailable');
+        if (status.ready) {
+          setEngineState('ready');
+          setEngineFailure(undefined);
+        } else {
+          setEngineState('unavailable');
+          setEngineError(status.error ?? 'The local job cache is not ready.');
+          setEngineFailure({
+            ...(status.category ? { category: status.category } : {}),
+            ...(status.canRebuild !== undefined ? { canRebuild: status.canRebuild } : {}),
+            ...(status.details ? { details: status.details } : {}),
+          });
+        }
       } catch {
         if (cancelled) return;
         setEngineState('unavailable');
@@ -306,6 +344,44 @@ export function SearchPage({
   }, [engineCheckTick]);
 
   const retryEngineCheck = useCallback(() => setEngineCheckTick((tick) => tick + 1), []);
+
+  const rebuildJobCache = useCallback(async () => {
+    setRebuildingCache(true);
+    setCacheNotice(undefined);
+    try {
+      const result = await window.vacancyRadar.rebuildCache();
+      if (!result.ok) {
+        setCacheNotice(result.detail);
+        return;
+      }
+      setCacheNotice(
+        result.sponsorRefresh === 'ok'
+          ? `The job cache was rebuilt. The damaged copy was kept as ${result.retainedFileName}.`
+          : `The job cache was rebuilt and the damaged copy was kept as ${result.retainedFileName}. The sponsor register could not be refreshed yet, so sponsor checks stay limited until it is.`,
+      );
+      setEngineCheckTick((tick) => tick + 1);
+    } catch (error) {
+      setCacheNotice(describeError(error, 'could not rebuild the job cache'));
+    } finally {
+      setRebuildingCache(false);
+    }
+  }, []);
+
+  const copyEngineDiagnostics = useCallback(async () => {
+    const lines = [
+      'Open Vacancy Radar job cache diagnostics',
+      `Time: ${new Date().toISOString()}`,
+      `Category: ${engineFailure?.category ?? 'unknown'}`,
+      `Message: ${engineError ?? ''}`,
+      `Details: ${engineFailure?.details ?? ''}`,
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      setDiagnosticsCopied(true);
+    } catch {
+      setDiagnosticsCopied(false);
+    }
+  }, [engineError, engineFailure]);
 
   // Bumped by `retryLoad` to force the hydration effect below to re-run even though nothing else
   // changed: clearing `hasHydrated.current` alone doesn't, since ref mutations don't trigger
@@ -377,6 +453,8 @@ export function SearchPage({
    */
   useEffect(() => {
     return window.vacancyRadar.onScanProgress((event) => {
+      // After a stop, anything still in flight belongs to a run the page has already left.
+      if (stopRequestedRef.current) return;
       setPartialVacancies((current) => {
         const seen = new Set(current.map((vacancy) => vacancy.key));
         const additions = event.vacancies.filter((vacancy) => !seen.has(vacancy.key));
@@ -394,6 +472,12 @@ export function SearchPage({
    * only way the page can ever stop looking idle/failed while a scan it knows nothing else about
    * is genuinely still running.
    */
+  const noteStoppedScan = useCallback(() => {
+    stopRequestedRef.current = false;
+    setStopping(false);
+    setStopNotice('Scan stopped. Your previous report is unchanged.');
+  }, []);
+
   const waitForScanToFinish = useCallback((requestedGeneration?: number) => {
     const requestGeneration = requestedGeneration ?? ++reportRequestGenerationRef.current;
     const poll = (): void => {
@@ -435,6 +519,7 @@ export function SearchPage({
           // rows from this run have served their purpose and stop being retained.
           setPartialVacancies([]);
           setScanning(false);
+          if (stopRequestedRef.current) noteStoppedScan();
         } catch {
           // A failed status check just stops reattaching; it does not invent a scan failure for a
           // scan this page never itself started and has no error message for.
@@ -443,7 +528,7 @@ export function SearchPage({
       })();
     };
     poll();
-  }, [setPartialVacancies, setSession]);
+  }, [noteStoppedScan, setPartialVacancies, setSession]);
 
   // Reattaches to a scan already running when this page mounts (see `waitForScanToFinish` above).
   useEffect(() => {
@@ -711,6 +796,7 @@ export function SearchPage({
   const busy = hydrating || scanning;
 
   const runScan = useCallback(async (queryOverride?: string) => {
+    if (engineState === 'unavailable') return;
     const scanFilters = queryOverride === undefined ? filters : { ...filters, query: queryOverride };
     const query = scanFilters.query.trim();
     if (!query) {
@@ -727,6 +813,9 @@ export function SearchPage({
       return;
     }
     const requestGeneration = ++reportRequestGenerationRef.current;
+    stopRequestedRef.current = false;
+    setStopping(false);
+    setStopNotice(undefined);
     setScanning(true);
     setScanError(undefined);
     setScanGuard(undefined);
@@ -788,6 +877,12 @@ export function SearchPage({
         // rows by this attempt's unrelated, stale query while `waitForScanToFinish` catches up.
         setPendingScanFilters(null);
         waitForScanToFinish(requestGeneration);
+      } else if (stopRequestedRef.current || message.includes('The scan was stopped')) {
+        // The person stopped it: the saved report is still the report, and this is not a failure.
+        setPendingScanFilters(null);
+        setPartialVacancies([]);
+        setScanning(false);
+        noteStoppedScan();
       } else {
         setPendingScanFilters(null);
         // This attempt's own criteria are gone (line above), but rows it already streamed into
@@ -799,11 +894,14 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, engineState, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const runBrowseAllScan = useCallback(async () => {
     const requestGeneration = ++reportRequestGenerationRef.current;
     setConfirmBrowseAll(false);
+    stopRequestedRef.current = false;
+    setStopping(false);
+    setStopNotice(undefined);
     setScanning(true);
     setScanError(undefined);
     setScanGuard(undefined);
@@ -840,6 +938,12 @@ export function SearchPage({
         // rows by this attempt's unrelated, stale query while `waitForScanToFinish` catches up.
         setPendingScanFilters(null);
         waitForScanToFinish(requestGeneration);
+      } else if (stopRequestedRef.current || message.includes('The scan was stopped')) {
+        // The person stopped it: the saved report is still the report, and this is not a failure.
+        setPendingScanFilters(null);
+        setPartialVacancies([]);
+        setScanning(false);
+        noteStoppedScan();
       } else {
         setPendingScanFilters(null);
         // This attempt's own criteria are gone (line above), but rows it already streamed into
@@ -851,7 +955,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const handleRescore = useCallback(() => {
     const query = currentProfileScanQuery;
@@ -862,13 +966,34 @@ export function SearchPage({
   }, [currentProfileScanQuery, filters, runScan, setFilters]);
 
   // Commits the current draft only when the upstream refresh succeeds and installs its report.
+  const { status: scanStatus, now: scanNow } = useScanStatus(scanning);
+
+  const handleStopScan = useCallback(async () => {
+    const scanId = scanStatus?.scanId;
+    if (!scanId) return;
+    stopRequestedRef.current = true;
+    setStopping(true);
+    try {
+      const { cancelled } = await window.vacancyRadar.cancelScan(scanId);
+      if (!cancelled) {
+        // It finished (or another run started) before the stop landed: nothing was stopped.
+        stopRequestedRef.current = false;
+        setStopping(false);
+      }
+    } catch {
+      stopRequestedRef.current = false;
+      setStopping(false);
+    }
+  }, [scanStatus?.scanId]);
+
   const handleSearch = useCallback(() => {
     void runScan();
   }, [runScan]);
 
   const handleBrowseAll = useCallback(() => {
+    if (engineState === 'unavailable') return;
     setConfirmBrowseAll(true);
-  }, []);
+  }, [engineState]);
 
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
@@ -917,7 +1042,16 @@ export function SearchPage({
   const handleSelect = useCallback((result: SearchResult) => {
     setSelectedKey(result.key);
     setDetailScrollTop(0);
-  }, [setDetailScrollTop, setSelectedKey]);
+    if (singlePane) {
+      paneFocusRef.current = 'detail';
+      setPaneView('detail');
+    }
+  }, [setDetailScrollTop, setSelectedKey, singlePane]);
+
+  const handleBackToResults = useCallback(() => {
+    paneFocusRef.current = 'row';
+    setPaneView('list');
+  }, []);
 
   const handleSave = useCallback(async () => {
     if (!selected) return;
@@ -985,13 +1119,47 @@ export function SearchPage({
     ? `${reportSalaryCounts.comparable.toLocaleString()} comparable · ${reportSalaryCounts.unknown.toLocaleString()} unknown`
     : SALARY_NOTE;
 
+  // A window narrowed while a vacancy is open keeps showing that vacancy instead of dropping back to
+  // the list. A page that starts narrow still opens on the list.
+  const wasTwoPaneRef = useRef(false);
+  useEffect(() => {
+    if (pageWidth === null) return;
+    if (singlePane && wasTwoPaneRef.current && selectedKey) setPaneView('detail');
+    wasTwoPaneRef.current = !singlePane;
+  }, [pageWidth, singlePane, selectedKey]);
+
+  const showDetailPane = !!selected && (!singlePane || paneView === 'detail');
+  const showListPane = !singlePane || paneView === 'list' || !selected;
+
+  // Moves focus where the person just went: the detail heading after choosing a vacancy, the row
+  // they came from after Back (#451). Runs after the pane has rendered, once per change.
+  useEffect(() => {
+    const target = paneFocusRef.current;
+    if (!target || !singlePane) return;
+    paneFocusRef.current = null;
+    if (target === 'detail') {
+      const heading = document.querySelector<HTMLElement>('[data-vacancy-heading]');
+      heading?.focus({ preventScroll: false });
+      heading?.scrollIntoView?.({ block: 'start' });
+    } else if (selectedKey) {
+      const rows = document.querySelectorAll<HTMLElement>('[data-result-key]');
+      for (const row of rows) {
+        if (row.dataset.resultKey === selectedKey) {
+          row.focus({ preventScroll: true });
+          row.scrollIntoView?.({ block: 'nearest' });
+          break;
+        }
+      }
+    }
+  }, [paneView, singlePane, selectedKey]);
+
   const summary =
     hasReport || isStreamingPartial
       ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
       : 'No results yet';
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <div className="px-6">
         <SearchFilterBar
           onLocationChange={handleLocationChange}
@@ -1009,6 +1177,7 @@ export function SearchPage({
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
+          scanUnavailable={engineState === 'unavailable'}
         />
       </div>
 
@@ -1016,33 +1185,63 @@ export function SearchPage({
         {engineState === 'unavailable' && (
           <ErrorBanner
             className="mt-3"
+            details={engineFailure?.details}
+            detailsLabel="Show technical details"
             action={
-              <button
-                type="button"
-                className="btn btn-outline btn-xs ml-auto flex-none"
-                onClick={retryEngineCheck}
-                disabled={checkingEngine}
-              >
-                {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-                Retry
-              </button>
+              <div className="ml-auto flex flex-none flex-wrap gap-2">
+                {engineFailure?.canRebuild && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-xs"
+                    onClick={() => void rebuildJobCache()}
+                    disabled={rebuildingCache}
+                  >
+                    {rebuildingCache && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                    Rebuild job cache
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={retryEngineCheck}
+                  disabled={checkingEngine || rebuildingCache}
+                >
+                  {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                  Check again
+                </button>
+                <button type="button" className="btn btn-ghost btn-xs" onClick={() => void copyEngineDiagnostics()}>
+                  {diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}
+                </button>
+              </div>
             }
           >
-            Searching is not available right now. Your saved results are still here.
+            Searching is not available right now.{' '}
+            {engineFailure?.category ? `${engineError ?? ''} ` : ''}
+            {engineFailure?.canRebuild
+              ? 'Rebuilding keeps the damaged file, set aside under a new name, and starts a fresh cache. Searching is paused until then.'
+              : 'Your saved results are still here.'}
           </ErrorBanner>
+        )}
+        {cacheNotice && (
+          <div className="alert alert-info alert-soft mt-3 text-sm" role="status">
+            {cacheNotice}
+          </div>
         )}
         {scanning && (
           // A named group, not role="status": a status region mounted together with its text is
           // often not spoken, and the always-mounted app announcer already speaks start/progress/finish.
           <div className="alert alert-info mt-3 flex items-center gap-3 text-sm" role="group" aria-label="Scan progress">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            <span className="flex-1">
-              {showLiveResults
-                ? 'Searching job sites. New jobs appear as they are found.'
-                : hasReport
-                ? `Searching job sites. Showing your last results meanwhile${hasLiveRows ? ` (${liveProgressCount.toLocaleString()} new so far)` : ''}.`
-                : 'Searching job sites. This can take a few minutes.'}
-            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <span>
+                {showLiveResults
+                  ? 'Searching job sites. New jobs appear as they are found.'
+                  : hasReport
+                  ? `Searching job sites. Showing your last results meanwhile${hasLiveRows ? ` (${liveProgressCount.toLocaleString()} new so far)` : ''}.`
+                  : 'Searching job sites. This can take a few minutes.'}
+              </span>
+              <ScanProgressPanel status={scanStatus} now={scanNow} stopping={stopping} onStop={() => void handleStopScan()} />
+            </div>
             {hasReport && hasLiveRows && (
               <button
                 type="button"
@@ -1052,6 +1251,14 @@ export function SearchPage({
                 {showLiveResults ? 'Show saved results' : `Show live results (${liveProgressCount.toLocaleString()})`}
               </button>
             )}
+          </div>
+        )}
+        {stopNotice && !scanning && (
+          <div className="alert alert-info alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+            <span>{stopNotice}</span>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setStopNotice(undefined)}>
+              Dismiss
+            </button>
           </div>
         )}
         {scanError && (
@@ -1136,11 +1343,17 @@ export function SearchPage({
           <EmptyState
             illustration={emptySearchIllustration}
             title="No search yet"
-            description="Enter a role and search to find jobs."
+            description={
+              engineState === 'unavailable'
+                ? 'Searching is paused until the job cache works again. See the message above.'
+                : 'Enter a role and search to find jobs.'
+            }
             action={
-              <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
-                Search
-              </button>
+              engineState === 'unavailable' ? undefined : (
+                <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
+                  Search
+                </button>
+              )
             }
           />
         </div>
@@ -1180,34 +1393,49 @@ export function SearchPage({
               Could not check your profile.
             </WarningBanner>
           )}
-          {worldwideReport && (
+          {worldwideReport && !singlePane && (
             <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">
               {visible.length.toLocaleString()} {visible.length === 1 ? 'vacancy' : 'vacancies'}
               {appliedFilters.query.trim() ? ` match '${appliedFilters.query.trim()}'` : ''} · scanned{' '}
               {new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </p>
           )}
-          <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0" aria-busy={scanning}>
-            <SearchResultList
-              results={pageItems}
-              totalCount={results.length}
-              selectedKey={selectedKey}
-              onSelect={handleSelect}
-              savedKeys={savedKeys}
-              summary={summary}
-              scanActive={scanning}
-              unscoredCount={unscoredCount}
-              page={page}
-              pageCount={pageCount}
-              onPageChange={(nextPage) => {
-                setPage(nextPage);
-                setListScrollTop(0);
-              }}
-              scrollTop={listScrollTop}
-              onScrollTopChange={setListScrollTop}
-            />
+          <div
+            className={`mt-3 flex min-h-0 flex-1 ${singlePane ? 'flex-col px-6' : 'flex-row'}`}
+            aria-busy={scanning}
+          >
+            {showListPane && (
+              <SearchResultList
+                results={pageItems}
+                totalCount={results.length}
+                selectedKey={selectedKey}
+                onSelect={handleSelect}
+                savedKeys={savedKeys}
+                summary={summary}
+                scanActive={scanning}
+                unscoredCount={unscoredCount}
+                page={page}
+                pageCount={pageCount}
+                onPageChange={(nextPage) => {
+                  setPage(nextPage);
+                  setListScrollTop(0);
+                }}
+                scrollTop={listScrollTop}
+                onScrollTopChange={setListScrollTop}
+                split={!singlePane}
+              />
+            )}
 
-            {selected ? (
+            {showDetailPane && selected ? (
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {singlePane && (
+                  <div className="flex-none border-b border-base-300 px-1 py-2">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={handleBackToResults}>
+                      <ArrowLeft size={14} aria-hidden="true" />
+                      Back to results
+                    </button>
+                  </div>
+                )}
               <VacancyDetail
                 result={selected}
                 defaultCvName={defaultCvName}
@@ -1231,7 +1459,8 @@ export function SearchPage({
                   />
                 }
               />
-            ) : (
+              </div>
+            ) : singlePane ? null : (
               // `min-h-0` for the same reason `SearchResultList`'s own scroll pane needs it (see
               // that file's comment): below `lg` this pane stacks in a column flex above/below
               // `SearchResultList`, and without an explicit `min-h-0` a flex child's minimum height
@@ -1255,25 +1484,22 @@ export function SearchPage({
       )}
 
       {confirmBrowseAll && (
-        <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="browse-all-title">
-          <div className="modal-box max-w-lg">
-            <h3 id="browse-all-title" className="text-base font-semibold">
-              Browse all vacancies?
-            </h3>
-            <p className="mt-2 text-sm text-base-content/70">
-              This searches without a role or filters. It can take longer and shows up to {BROWSE_ALL_RESULT_CAP.toLocaleString()} jobs.
-            </p>
-            <div className="modal-action">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-warning btn-sm" onClick={() => void runBrowseAllScan()}>
-                Browse all vacancies
-              </button>
-            </div>
+        <Dialog aria-labelledby="browse-all-title" boxClassName="max-w-lg" onClose={() => setConfirmBrowseAll(false)}>
+          <h3 id="browse-all-title" className="text-base font-semibold">
+            Browse all vacancies?
+          </h3>
+          <p className="mt-2 text-sm text-base-content/70">
+            This searches without a role or filters. It can take longer and shows up to {BROWSE_ALL_RESULT_CAP.toLocaleString()} jobs.
+          </p>
+          <div className="modal-action">
+            <button data-autofocus="" type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-warning btn-sm" onClick={() => void runBrowseAllScan()}>
+              Browse all vacancies
+            </button>
           </div>
-          <button type="button" className="modal-backdrop" aria-label="Close" onClick={() => setConfirmBrowseAll(false)} />
-        </div>
+        </Dialog>
       )}
 
       {/* A quiet status strip, not a page footer: always visible without scrolling (this row sits
@@ -1334,7 +1560,12 @@ export function SearchPage({
           )}
           {worldwideReport && (
             <details className="pb-1.5 text-xs text-base-content/60">
-              <summary className="cursor-pointer">Scan details</summary>
+              <summary className="cursor-pointer">
+                Scan details
+                {singlePane
+                  ? `: ${visible.length.toLocaleString()} ${visible.length === 1 ? 'vacancy' : 'vacancies'}, scanned ${new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                  : ''}
+              </summary>
               <p className="mt-1">
                 Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
                 {scanBounds?.mode === 'browse_all'

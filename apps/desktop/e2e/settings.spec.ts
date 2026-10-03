@@ -81,9 +81,9 @@ test.describe('Settings', () => {
     await window.getByRole('group', { name: 'Density' }).getByRole('button', { name: 'Compact' }).click();
     await expect(window.locator('html')).toHaveAttribute('data-density', 'compact');
 
-    // "Reset settings" lives under the Advanced tab (SettingsPage.tsx groups Data management
-    // there), while Theme/Density are under General -- so this test crosses tabs deliberately.
-    await window.getByRole('tab', { name: 'Advanced' }).click();
+    // "Reset settings" lives under the Data tab (#442), while Theme/Density are under General -- so
+    // this test crosses tabs deliberately.
+    await window.getByRole('tab', { name: 'Data' }).click();
     await window.getByRole('button', { name: 'Reset settings' }).click();
     const confirm = window.getByRole('alertdialog');
     await expect(confirm).toContainText(/reset settings\?/i);
@@ -120,11 +120,12 @@ test.describe('Settings', () => {
     });
 
     await goto(window, 'Settings');
-    await window.getByRole('tab', { name: 'Advanced' }).click();
-    await window.getByRole('button', { name: 'Reset application data' }).click();
+    await window.getByRole('tab', { name: 'Data' }).click();
+    await window.getByRole('button', { name: 'Delete my data' }).click();
     const confirm = window.getByRole('alertdialog');
-    await expect(confirm).toContainText(/search profile, and resets settings\. This cannot be undone/i);
-    await confirm.getByRole('button', { name: 'Delete everything' }).click();
+    await expect(confirm).toContainText(/there is no backup/i);
+    await confirm.getByLabel(/type delete to confirm/i).fill('DELETE');
+    await confirm.getByRole('button', { name: 'Delete my data' }).click();
     await expect(window.getByRole('status').filter({ hasText: 'Application data reset' })).toBeVisible();
 
     const state = await window.evaluate(async () => ({

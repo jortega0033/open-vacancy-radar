@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
+import type { ApplicationAttemptRecord, SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
 import emptySavedJobsIllustration from '../../../assets/illustrations/empty-saved-jobs.svg?no-inline';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
 import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, UndoToast } from '../shell/index.js';
 import { SavedJobDrawer } from './SavedJobDrawer.js';
 import { SavedJobFilterBox } from './SavedJobFilterBox.js';
 import { toSavedJobInput } from './saved-job-input.js';
+import { newestAttemptBySavedJob } from './saved-job-application.js';
 import { SavedJobsTable } from './SavedJobsTable.js';
 
 type DrawerState = { mode: 'add' } | { mode: 'edit'; job: SavedJobRecord };
@@ -18,6 +19,18 @@ interface PendingUndo {
 interface PrepareNotice {
   message: string;
   attemptId?: string;
+}
+
+const PREPARE_EXPLAINED_KEY = 'ovr.savedJobs.prepareExplained';
+/** How often each row's application state is re-read while the page is open (#467). */
+const ATTEMPT_REFRESH_MS = 5_000;
+
+function readExplained(): boolean {
+  try {
+    return window.localStorage.getItem(PREPARE_EXPLAINED_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
 function describeError(err: unknown, fallback: string): string {
@@ -63,8 +76,12 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
   // #272: which job's preparation request is in flight, and what came back from the last one. One
   // at a time by id rather than a single boolean, so a slow request never disables every other
   // row's button.
-  const [preparingJobId, setPreparingJobId] = useState<string | null>(null);
+  const [preparingJobIds, setPreparingJobIds] = useState<ReadonlySet<string>>(() => new Set());
   const [prepareNotice, setPrepareNotice] = useState<PrepareNotice>();
+  /** The newest attempt per saved job (#467), so each row says where its application stands. */
+  const [attemptsByJobId, setAttemptsByJobId] = useState<ReadonlyMap<string, ApplicationAttemptRecord>>(() => new Map());
+  const [explained, setExplained] = useState(readExplained);
+  const [autoApplyEnabled, setAutoApplyEnabled] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +97,49 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  const refreshAttempts = useCallback(async () => {
+    try {
+      const [rows, attempts, applications] = await Promise.all([
+        window.workspace.listSavedJobs(),
+        window.workspace.listApplicationAttempts(),
+        window.workspace.listApplications('all'),
+      ]);
+      setAttemptsByJobId(newestAttemptBySavedJob(rows, attempts, applications));
+    } catch {
+      // The rows still render with "Not started"; a failed refresh is not worth an error banner.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAttempts();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshAttempts();
+    }, ATTEMPT_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshAttempts]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) setAutoApplyEnabled(settings.autoApplyEnabled);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const dismissExplanation = useCallback(() => {
+    setExplained(true);
+    try {
+      window.localStorage.setItem(PREPARE_EXPLAINED_KEY, '1');
+    } catch {
+      // Remembering this is a convenience; the note simply shows again next time.
+    }
   }, []);
 
   const filteredJobs = useMemo(() => {
@@ -153,24 +213,29 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
   const handlePrepare = useCallback(async (job: SavedJobRecord) => {
     setActionError(undefined);
     setPrepareNotice(undefined);
-    setPreparingJobId(job.id);
+    setPreparingJobIds((current) => new Set(current).add(job.id));
     try {
       const result = await window.applicationPipeline.start(job.id);
       setPrepareNotice(
         result.ok
           ? {
-              message: `Preparing an application for "${job.role}" at ${job.company}.`,
+              message: `Preparing an application for "${job.role}" at ${job.company}.${result.warning ? ` ${result.warning}` : ''}`,
               attemptId: result.attemptId,
             }
           : { message: result.detail ?? 'We could not start this application.', attemptId: result.attemptId },
       );
       if (result.ok) onSavedJobsChanged?.();
+      void refreshAttempts();
     } catch {
       setActionError('We could not start this application.');
     } finally {
-      setPreparingJobId(null);
+      setPreparingJobIds((current) => {
+        const next = new Set(current);
+        next.delete(job.id);
+        return next;
+      });
     }
-  }, [onSavedJobsChanged, onViewApplicationAttempt]);
+  }, [onSavedJobsChanged, refreshAttempts]);
 
   const requestDelete = useCallback((job: SavedJobRecord) => {
     setActionError(undefined);
@@ -245,6 +310,21 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
         </div>
       )}
 
+      {hasAnyJobs && !explained && (
+        <div className="alert alert-info alert-soft mt-4 flex items-start justify-between gap-3 text-sm" role="note">
+          <span>
+            <strong>Prepare application</strong> tailors your CV to the job and fills in the employer&apos;s form,
+            then stops for your review.{' '}
+            {autoApplyEnabled
+              ? 'Sites you have approved for automatic sending can be scheduled to send after a short cancel window that stays visible on every page. Every other site waits for you to choose Send application.'
+              : 'Nothing is sent automatically: you review each application and choose Send application yourself.'}
+          </span>
+          <button type="button" className="btn btn-ghost btn-xs flex-none" onClick={dismissExplanation}>
+            Got it
+          </button>
+        </div>
+      )}
+
       {isLoading && !loadError && <PageLoading label="Loading saved jobs…" />}
 
       {!isLoading && !hasAnyJobs && (
@@ -276,7 +356,9 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
             onDelete={requestDelete}
             onStatusChange={handleStatusChange}
             onPrepareApplication={handlePrepare}
-            preparingJobId={preparingJobId}
+            preparingJobIds={preparingJobIds}
+            attemptsByJobId={attemptsByJobId}
+            {...(onViewApplicationAttempt ? { onOpenReview: onViewApplicationAttempt } : {})}
           />
         </div>
       )}

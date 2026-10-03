@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApplicationsTable } from '../../../src/components/applications/ApplicationsTable.js';
 import type { ApplicationRecord, ApplicationStatus } from '../../../src/window.js';
@@ -116,5 +116,42 @@ describe('ApplicationsTable', () => {
 
     const uniqueNames = new Set(deleteNames);
     expect(uniqueNames.size).toBe(deleteNames.length);
+  });
+
+  it('shows the linked attempt state, keeps the source of a sent state visible, and opens the attempt (#444)', () => {
+    const onOpenAttempt = vi.fn();
+    render(
+      <ApplicationsTable
+        applications={[
+          makeApplication({
+            id: 'a',
+            status: 'applied',
+            attempt: { attemptId: 'att-1', checkpoint: 'submitted', evidence: 'receipt_confirmed', at: '2026-10-02T14:05:00.000Z' },
+          }),
+          makeApplication({
+            id: 'b',
+            role: 'Data Engineer',
+            attempt: { attemptId: 'att-2', checkpoint: 'user_reported', evidence: 'user_reported', at: '2026-10-02T14:05:00.000Z' },
+          }),
+          makeApplication({
+            id: 'c',
+            role: 'QA Engineer',
+            attempt: { attemptId: 'att-3', checkpoint: 'submission_unknown', evidence: null, at: '2026-10-02T14:05:00.000Z' },
+          }),
+          makeApplication({ id: 'd', role: 'Manual entry' }),
+        ]}
+        {...NOOP_PROPS}
+        onOpenAttempt={onOpenAttempt}
+      />,
+    );
+
+    expect(screen.getByText('Receipt observed by this app')).toBeInTheDocument();
+    expect(screen.getByText('Reported by you')).toBeInTheDocument();
+    expect(screen.getByText('Not confirmed')).toBeInTheDocument();
+    // A hand-entered row has no attempt and therefore no attempt link.
+    expect(screen.getAllByRole('button', { name: /open the application attempt/i })).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: /open the application attempt for senior frontend engineer/i }));
+    expect(onOpenAttempt).toHaveBeenCalledWith('att-1');
   });
 });

@@ -27,6 +27,11 @@ export interface StartApplicationAttemptResult {
   reason?: StartApplicationAttemptRefusal;
   /** A message written by this process, never by the daemon or by any remote source. */
   detail?: string;
+  /**
+   * Present when the attempt was started but the chosen CV profile will make tailoring weak, e.g.
+   * it lists no skills (#521). The attempt still runs; this is what the caller shows up front.
+   */
+  warning?: string;
 }
 
 export interface StartApplicationFromVacancyResult extends StartApplicationAttemptResult {

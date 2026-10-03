@@ -4,7 +4,6 @@ import type {
   AtsRosterStatus,
   CandidateProfile,
   GlobalRemoteReport,
-  ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 
@@ -39,7 +38,10 @@ export interface AgentDockBridge {
   selectDirectory(): Promise<string | null>;
 }
 
-export type VacancyEngineStatus = { ready: boolean; error?: string };
+import type { VacancyCacheRebuildResult, VacancyEngineStatus } from '../electron/vacancy-engine-recovery.js';
+import type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from '../electron/vacancy-scan-progress-types.js';
+export type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus };
+export type { VacancyCacheRebuildResult, VacancyEngineStatus };
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
 export type VacancyScanRequest =
   | string
@@ -56,6 +58,8 @@ export type VacancyScanRequest =
 
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
+  /** "Rebuild job cache" (#441): sets a confirmed-corrupt vacancy database aside and builds a fresh one. */
+  rebuildCache(): Promise<VacancyCacheRebuildResult>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
   getReportSummary(): Promise<VacancyReportSummary | null>;
@@ -65,13 +69,17 @@ export interface VacancyRadarBridge {
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
+  /** The running scan's id, start time and source counts (#459). */
+  getScanProgress(): Promise<VacancyScanStatus>;
+  /** Stops the scan named by `scanId` (from `getScanStatus`), keeping the previous report (#459). */
+  cancelScan(scanId: string): Promise<VacancyScanCancelResult>;
   /**
    * Subscribes to `vacancy:scan-progress` (issue #252): each event is one discovery sub-source's
    * own freshly discovered rows, pushed the moment that source resolves rather than only once the
    * whole scan finishes. Fires for any scan in this process, not just one this window started.
    * Returns an unsubscribe function; call it on unmount.
    */
-  onScanProgress(callback: (event: ScanProgressEvent) => void): () => void;
+  onScanProgress(callback: (event: VacancyScanProgressEvent) => void): () => void;
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;

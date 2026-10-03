@@ -29,6 +29,7 @@ import type { CvDocument, VacancyLead } from './types.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
 import { ErrorBanner } from '../shell/index.js';
+import { ProviderErrorNotice } from './ProviderErrorNotice.js';
 
 export interface RequirementMappingProps {
   /** The CV Library record this session's evidence belongs to. This feature needs a persisted CV
@@ -434,7 +435,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">Job requirements</div>
+        <div id="cv-step-requirements" tabIndex={-1} className="card-title text-base font-bold outline-none">Job requirements</div>
         <p className="text-sm text-base-content/60">
           Match each job requirement to your experience. A tailored CV only claims what you confirm here.
         </p>
@@ -491,9 +492,11 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           </div>
         )}
         {run.status === 'failed' && run.error && (
-          <ErrorBanner>
-            {run.error}
-          </ErrorBanner>
+          <ProviderErrorNotice
+            error={run.error}
+            providerId={provider ?? 'claude'}
+            onRetry={() => handleRun(batchesRef.current > 1)}
+          />
         )}
         {saveError && (
           <ErrorBanner>
@@ -570,7 +573,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         )}
 
         {overlay && overlay.requirements.length > 0 && (
-          <div className="flex flex-wrap items-center gap-3" aria-label="Review progress">
+          <div id="cv-step-answers" tabIndex={-1} className="flex flex-wrap items-center gap-3 outline-none" aria-label="Review progress">
             <p className="text-sm font-medium">
               {reviewedCount} of {activeRequirements.length} reviewed.{openIds.size > 0 ? ` ${openIds.size} need your answer.` : ''}
             </p>

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
-import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { Dialog } from '../shell/Dialog.js';
 import { SAVED_JOB_STATUSES, SAVED_JOB_STATUS_LABEL } from './saved-job-status.js';
 
 export interface SavedJobDrawerProps {
@@ -62,7 +62,6 @@ function formatKeptAt(iso: string): string {
  * instead of carrying over stale field values.
  */
 export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJobDrawerProps) {
-  useEscapeToClose(onClose);
   const [form, setForm] = useState<FormState>(() => toFormState(job));
   const [validationError, setValidationError] = useState<string>();
 
@@ -93,19 +92,12 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end" role="presentation">
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/40"
-        aria-label="Close drawer"
-        onClick={onClose}
-      />
-      <div
-        className="relative flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-base-300 bg-base-100 p-5 shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        aria-label={isEdit ? 'Edit saved job' : 'Add saved job'}
-      >
+    <Dialog
+      aria-label={isEdit ? 'Edit saved job' : 'Add saved job'}
+      placement="end"
+      boxClassName="flex h-full w-full max-w-md flex-col overflow-y-auto rounded-none p-5"
+      onClose={onClose}
+    >
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold">{isEdit ? 'Edit saved job' : 'Add job manually'}</h2>
           <button className="btn btn-ghost btn-sm" type="button" onClick={onClose} aria-label="Close">
@@ -268,7 +260,6 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Dialog>
   );
 }

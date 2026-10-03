@@ -219,6 +219,22 @@ describe('first-launch welcome modal', () => {
     expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
   });
 
+  it('Escape closes it, marks it seen, and puts focus inside it while it is open (#454)', async () => {
+    const workspace = installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue(UNSEEN_SETTINGS),
+      listCvDocuments: vi.fn().mockResolvedValue([]),
+    });
+
+    render(<App />);
+    const dialog = await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
+    expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
+  });
+
   it('a successful upload saves the CV and hands off into an auto-started Fill from CV review, without a Read CV click', async () => {
     const savedCv = makeCv({ id: 'cv-new', isDefault: true, text: 'Angular. TypeScript. 8 years.' });
     const createCvDocument = vi.fn().mockResolvedValue(savedCv);

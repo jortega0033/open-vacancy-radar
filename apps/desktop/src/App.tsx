@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
-import type { WorkspaceCounts } from './window.js';
+import type { ApplicationAttemptRecord, WorkspaceCounts } from './window.js';
 import { PROVIDER_LABEL } from './provider-labels.js';
 import { SearchPage, createSearchSessionState } from './components/search/index.js';
 import { SavedJobsPage } from './components/saved/index.js';
@@ -16,18 +16,29 @@ import {
   AI_HELPER_NOTICE_PAGES,
   AiHelperNotice,
   AppSidebar,
+  Dialog,
   LiveAnnouncerProvider,
+  ScheduledSendBanner,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
+  type CancelScheduledOutcome,
   type NavPage,
   type RuntimeState,
 } from './components/shell/index.js';
 import { applyDensity, applyTheme } from './theme.js';
+import { activeProviderLimit, useProviderLimits, useProviderOverride } from './provider-limits.js';
+import { publishEngineHealth, useEngineHealth } from './engine-health.js';
 
 type DaemonState = 'connecting' | 'ready' | 'unavailable';
 
 const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
+/** How often the shell re-reads the sidebar counts so pipeline-driven changes show without navigating. */
+const COUNTS_REFRESH_MS = 5_000;
+/** How often the shell re-reads the job search engine's health (#477). */
+const ENGINE_HEALTH_REFRESH_MS = 20_000;
+/** Below this window width the sidebar is the 64px rail unless the person pinned it open (#451). */
+const SIDEBAR_RAIL_BELOW_PX = 1100;
 
 export function App() {
   const [nav, setNav] = useState<NavPage>('search');
@@ -39,9 +50,26 @@ export function App() {
     lastNavRef.current = nav;
   }, [nav]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // The person chose "Expanded" as the sidebar's starting state: that is a pin, so a narrow window
+  // does not take it away. Everyone else gets the rail at narrow widths and an overlay on demand.
+  const [sidebarPinnedOpen, setSidebarPinnedOpen] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
+  const railForced = windowWidth < SIDEBAR_RAIL_BELOW_PX && !sidebarPinnedOpen;
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  useEffect(() => {
+    // Widening the window, or pinning the sidebar, leaves nothing for the overlay to cover.
+    if (!railForced) setSidebarOverlayOpen(false);
+  }, [railForced]);
   // `undefined` until the first successful fetch (issue #178): rendering a zeroed WorkspaceCounts
   // here made "not loaded yet" and "genuinely zero" the same badge/subtitle, indistinguishably.
   const [counts, setCounts] = useState<WorkspaceCounts | undefined>(undefined);
+  /** Ready attempts with an automatic send scheduled, soonest first (#445). */
+  const [scheduledSends, setScheduledSends] = useState<ApplicationAttemptRecord[]>([]);
 
   // The one piece of cross-page state this shell carries: a vacancy handed off from the Search
   // page's "Generate Letter" action, waiting to be picked up by the Letters page. Cleared as soon
@@ -100,6 +128,7 @@ export function App() {
         applyDensity(settings.density);
         setDefaultProvider(settings.defaultProvider);
 
+        setSidebarPinnedOpen(settings.sidebarStart === 'expanded');
         if (settings.sidebarStart === 'expanded') setSidebarCollapsed(false);
         else if (settings.sidebarStart === 'collapsed') setSidebarCollapsed(true);
         else setSidebarCollapsed(settings.sidebarCollapsed);
@@ -141,6 +170,18 @@ export function App() {
     try {
       const fresh = await window.workspace.getCounts();
       setCounts(fresh);
+      // The banner's deadlines come from the persisted attempts, read whenever the count says there
+      // are scheduled sends, so it is right at start-up and after a restart (#445).
+      if ((fresh.scheduledSubmissions ?? 0) > 0) {
+        const attempts = await window.workspace.listApplicationAttempts();
+        setScheduledSends(
+          attempts
+            .filter((attempt) => attempt.checkpoint === 'ready' && attempt.scheduledAutomaticSubmitAt !== null)
+            .sort((a, b) => Date.parse(a.scheduledAutomaticSubmitAt ?? '') - Date.parse(b.scheduledAutomaticSubmitAt ?? '')),
+        );
+      } else {
+        setScheduledSends((current) => (current.length === 0 ? current : []));
+      }
     } catch {
       // Leaves `counts` exactly as it was (undefined if never loaded, otherwise the last successful
       // fetch) rather than resetting to a fabricated zero -- not worth an error banner over the
@@ -150,6 +191,23 @@ export function App() {
 
   useEffect(() => {
     void refreshCounts();
+  }, [refreshCounts]);
+
+  // The pipeline changes counts on its own (an attempt starts, a submission lands) with no renderer
+  // action to hang a refresh on, so the sidebar and page headers would otherwise stay stale until
+  // the next navigation (#444). Cheap local read; paused while the window is hidden.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshCounts();
+    }, COUNTS_REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshCounts();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [refreshCounts]);
 
   const handleNavigate = useCallback((page: NavPage) => {
@@ -215,13 +273,36 @@ export function App() {
     void refreshCounts();
   }, [refreshCounts]);
 
+  const handleCancelScheduledSend = useCallback(
+    async (attempt: ApplicationAttemptRecord): Promise<CancelScheduledOutcome> => {
+      try {
+        await window.applicationExecutor.cancelScheduledAutomaticSubmission(attempt.id);
+        // Confirmed against the stored attempt, not assumed: the cancel is a no-op once the
+        // deadline has passed, and the person must be told what really happened.
+        const fresh = await window.workspace.getApplicationAttempt(attempt.id);
+        await refreshCounts();
+        if (fresh.scheduledAutomaticSubmitAt === null && fresh.checkpoint === 'ready') return { status: 'cancelled' };
+        return { status: 'too_late', checkpoint: fresh.checkpoint };
+      } catch {
+        void refreshCounts();
+        return { status: 'failed' };
+      }
+    },
+    [refreshCounts],
+  );
+
   const handleToggleSidebar = useCallback(() => {
+    if (railForced) {
+      // The rail is not a saved preference, so toggling it opens the overlay and writes nothing.
+      setSidebarOverlayOpen((open) => !open);
+      return;
+    }
     setSidebarCollapsed((previous) => {
       const next = !previous;
       void window.workspace?.updateSettings({ sidebarCollapsed: next }).catch(() => {});
       return next;
     });
-  }, []);
+  }, [railForced]);
 
   useEffect(() => {
     let cancelled = false;
@@ -302,6 +383,36 @@ export function App() {
     };
   }, [daemonState, defaultProvider]);
 
+  // The job search engine's live health, so the sidebar says so when scans cannot run even though
+  // the AI runtime is fine (#477). Read at start-up, then every 20 s while the window is visible.
+  const engineHealth = useEngineHealth();
+  useEffect(() => {
+    let cancelled = false;
+    const read = async () => {
+      try {
+        const status = await window.vacancyRadar.getStatus();
+        if (!cancelled) publishEngineHealth(status);
+      } catch {
+        // No reading leaves the last one in place rather than inventing a failure.
+      }
+    };
+    void read();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void read();
+    }, ENGINE_HEALTH_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // A provider that answered "usage limit" is not ready, whatever its install and sign-in say (#461).
+  const providerLimits = useProviderLimits();
+  const providerInUse = useProviderOverride() ?? defaultProvider;
+  const providerLimited = providerLimits.has(providerInUse) && activeProviderLimit(providerInUse) !== undefined;
+  const shownRuntimeState: RuntimeState =
+    providerRuntimeState === 'ready' && providerLimited ? 'limit-reached' : providerRuntimeState;
+
   const { title, subtitle } = headerCopy(nav, counts);
 
   return (
@@ -311,18 +422,51 @@ export function App() {
       <AppSidebar
         active={nav}
         onNavigate={handleNavigate}
-        collapsed={sidebarCollapsed}
+        collapsed={sidebarCollapsed || railForced}
         onToggleCollapsed={handleToggleSidebar}
         counts={counts}
-        runtimeLabel={PROVIDER_LABEL[defaultProvider]}
-        runtimeState={providerRuntimeState}
+        runtimeLabel={PROVIDER_LABEL[providerInUse]}
+        runtimeState={shownRuntimeState}
+        engine={engineHealth}
       />
+
+      {/* The full sidebar over the content at narrow widths, without taking width from it (#451).
+          The rail stays in the layout; this is drawn above it and closes on Escape, on the dimmed
+          area, or after choosing a page. */}
+      {railForced && sidebarOverlayOpen && (
+        <Dialog
+          aria-label="Main navigation"
+          placement="start"
+          boxClassName="h-full max-h-none w-auto max-w-none rounded-none p-0"
+          onClose={() => setSidebarOverlayOpen(false)}
+        >
+          <AppSidebar
+            active={nav}
+            onNavigate={(page) => {
+              setSidebarOverlayOpen(false);
+              handleNavigate(page);
+            }}
+            collapsed={false}
+            onToggleCollapsed={() => setSidebarOverlayOpen(false)}
+            counts={counts}
+            runtimeLabel={PROVIDER_LABEL[providerInUse]}
+            runtimeState={shownRuntimeState}
+            engine={engineHealth}
+          />
+        </Dialog>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <WorkspaceHeader title={title} subtitle={subtitle} />
 
+        <ScheduledSendBanner
+          attempts={scheduledSends}
+          onReview={handleViewApplicationAttempt}
+          onCancel={handleCancelScheduledSend}
+        />
+
         <main
-          className={`min-h-0 flex-1 py-6 ${
+          className={`min-h-0 flex-1 ${nav === 'search' ? 'pb-2 pt-4' : 'py-6'} ${
             nav === 'search' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-6'
           }`}
         >

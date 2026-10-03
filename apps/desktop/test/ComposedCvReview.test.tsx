@@ -208,6 +208,18 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeDisabled();
   });
 
+  it('offers a Review this CV now button on the source notice when the host can open the review (#447)', async () => {
+    const unreviewed: CvSourceDocument = { ...SOURCE, reviewedAt: '' };
+    const hash = await hashOf(unreviewed);
+    installOverlayBridge(baseOverlay({ sourceCvContentHash: hash }));
+    const onReviewSource = vi.fn();
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={unreviewed} onReviewSource={onReviewSource} />);
+
+    const notice = await screen.findByLabelText('CV details not checked');
+    fireEvent.click(within(notice).getByRole('button', { name: 'Review this CV now' }));
+    expect(onReviewSource).toHaveBeenCalledTimes(1);
+  });
+
   it('names a truncated source and blocks export of an already approved case', async () => {
     const truncated: CvSourceDocument = { ...SOURCE, complete: false, incompleteReason: 'the last two pages were never read' };
     const hash = await hashOf(truncated);

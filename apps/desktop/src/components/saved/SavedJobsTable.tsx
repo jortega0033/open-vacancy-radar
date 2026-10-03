@@ -1,4 +1,5 @@
-import type { SavedJobRecord, SavedJobStatus } from '../../window.js';
+import type { ApplicationAttemptRecord, SavedJobRecord, SavedJobStatus } from '../../window.js';
+import { describeSavedJobApplication } from './saved-job-application.js';
 import { SAVED_JOB_STATUSES, SAVED_JOB_STATUS_LABEL } from './saved-job-status.js';
 import { NotSet } from '../shell/NotSet.js';
 
@@ -12,9 +13,21 @@ export interface SavedJobsTableProps {
    * attempt waiting for review. Never a submission -- see `window.applicationPipeline`.
    */
   onPrepareApplication: (job: SavedJobRecord) => void;
-  /** The job whose preparation request is currently in flight, if any. */
-  preparingJobId: string | null;
+  /** The jobs whose preparation request is currently in flight. Only those rows' buttons are busy. */
+  preparingJobIds: ReadonlySet<string>;
+  /** The newest application attempt for each job (#467), keyed by saved job id. */
+  attemptsByJobId?: ReadonlyMap<string, ApplicationAttemptRecord>;
+  /** Opens the job's attempt in the Applications review queue. */
+  onOpenReview?: (attemptId: string) => void;
 }
+
+const TONE_BADGE: Record<ReturnType<typeof describeSavedJobApplication>['tone'], string> = {
+  neutral: 'badge badge-neutral badge-soft',
+  info: 'badge badge-info badge-soft',
+  success: 'badge badge-success badge-soft',
+  warning: 'badge badge-warning badge-soft',
+  error: 'badge badge-error badge-soft',
+};
 
 function formatSavedAt(iso: string): string {
   const date = new Date(iso);
@@ -33,7 +46,9 @@ export function SavedJobsTable({
   onDelete,
   onStatusChange,
   onPrepareApplication,
-  preparingJobId,
+  preparingJobIds,
+  attemptsByJobId,
+  onOpenReview,
 }: SavedJobsTableProps) {
   return (
     <div className="saved-jobs-table-shell">
@@ -43,6 +58,7 @@ export function SavedJobsTable({
           <col className="saved-job-col-company" />
           <col className="saved-job-col-location" />
           <col className="saved-job-col-status" />
+          <col className="saved-job-col-application" />
           <col className="saved-job-col-saved" />
           <col className="saved-job-col-actions" />
         </colgroup>
@@ -52,6 +68,7 @@ export function SavedJobsTable({
             <th scope="col">Company</th>
             <th scope="col">Location</th>
             <th scope="col">Status</th>
+            <th scope="col">Application</th>
             <th scope="col">Saved</th>
             <th scope="col" className="text-right">
               Actions
@@ -59,7 +76,9 @@ export function SavedJobsTable({
           </tr>
         </thead>
         <tbody>
-          {jobs.map((job) => (
+          {jobs.map((job) => {
+            const application = describeSavedJobApplication(attemptsByJobId?.get(job.id));
+            return (
             <tr key={job.id} className="ovr-row hover:bg-base-200">
               <td data-label="Role" className="font-medium">
                 {job.role}
@@ -84,24 +103,45 @@ export function SavedJobsTable({
                   ))}
                 </select>
               </td>
+              <td data-label="Application">
+                <span className={TONE_BADGE[application.tone]}>{application.label}</span>
+              </td>
               <td data-label="Saved" className="text-base-content/60">
                 {formatSavedAt(job.savedAt)}
               </td>
               <td data-label="Actions" className="saved-job-actions-cell text-right">
                 <div className="saved-job-actions">
-                  <button
-                    className="btn btn-outline btn-sm px-1.5"
-                    type="button"
-                    disabled={preparingJobId !== null}
-                    onClick={() => onPrepareApplication(job)}
-                    aria-label={`Prepare application for ${job.role} at ${job.company}`}
-                  >
-                    {preparingJobId === job.id ? (
-                      <span className="loading loading-spinner loading-xs" />
-                    ) : (
-                      'Prepare application'
-                    )}
-                  </button>
+                  {application.attemptId && !application.canPrepare && onOpenReview ? (
+                    <button
+                      className="btn btn-outline btn-sm px-1.5"
+                      type="button"
+                      onClick={() => onOpenReview(application.attemptId!)}
+                      aria-label={`Open review for ${job.role} at ${job.company}`}
+                    >
+                      Open review
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-outline btn-sm px-1.5"
+                      type="button"
+                      disabled={preparingJobIds.has(job.id)}
+                      onClick={() => onPrepareApplication(job)}
+                      aria-label={
+                        preparingJobIds.has(job.id)
+                          ? `Preparing application for ${job.role} at ${job.company}`
+                          : `Prepare application for ${job.role} at ${job.company}`
+                      }
+                    >
+                      {preparingJobIds.has(job.id) ? (
+                        <>
+                          <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                          Preparing…
+                        </>
+                      ) : (
+                        'Prepare application'
+                      )}
+                    </button>
+                  )}
                   <button
                     className="btn btn-ghost btn-sm px-1.5"
                     type="button"
@@ -121,7 +161,8 @@ export function SavedJobsTable({
                 </div>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

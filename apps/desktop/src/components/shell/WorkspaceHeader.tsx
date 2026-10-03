@@ -4,7 +4,14 @@
  * authenticated (see the `providerRuntimeState` effect in `App.tsx`), so this type also carries the two
  * CLI-specific states `RuntimePage` already knew about but the shell status dot didn't.
  */
-export type RuntimeState = 'connecting' | 'ready' | 'unavailable' | 'not-installed' | 'not-authenticated';
+export type RuntimeState =
+  | 'connecting'
+  | 'ready'
+  | 'unavailable'
+  | 'not-installed'
+  | 'not-authenticated'
+  /** Installed and signed in, but the provider reported a usage limit (#461). */
+  | 'limit-reached';
 
 export interface WorkspaceHeaderProps {
   title: string;

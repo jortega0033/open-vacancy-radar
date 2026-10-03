@@ -198,6 +198,20 @@ export interface ApplicationRecord {
   letterId: string | null;
   notes: string;
   archived: boolean;
+  /**
+   * The newest pipeline attempt linked to this row (#444), or null for a row entered by hand. Only
+   * `listApplications` fills it; `evidence` says how a sent attempt was established, so an observed
+   * receipt and a person's own report stay distinguishable.
+   */
+  attempt?: ApplicationAttemptLink | null;
+}
+
+export interface ApplicationAttemptLink {
+  attemptId: string;
+  checkpoint: ApplicationAttemptCheckpoint;
+  evidence: ApplicationCompletionEvidence | null;
+  /** ISO-8601: when it was sent when it was, otherwise when the attempt last changed. */
+  at: string;
 }
 
 export interface ApplicationInput {
@@ -985,6 +999,14 @@ export interface WorkspaceCounts {
   activeApplications: number;
   letters: number;
   cvDocuments: number;
+  /**
+   * Attempts waiting on a person (`ready` or `needs_user`) with no automatic send scheduled, read
+   * from the persisted attempt store so the sidebar is right at start-up without the Review queue
+   * ever having mounted (#445). Always present from main; optional so older stubs still type.
+   */
+  needsReview?: number;
+  /** Ready attempts with an automatic send scheduled and not yet fired (#445). */
+  scheduledSubmissions?: number;
 }
 
 /** Result of the main-process-owned destructive reset. */

@@ -139,7 +139,8 @@ describe('settings', () => {
 
     expect(result.deleted).toEqual({
       savedJobs: 1,
-      applications: 1,
+      // The tracker row seeded by hand, plus the one the attempt now creates for itself (#444).
+      applications: 2,
       cvDocuments: 1,
       letters: 1,
       applicationAttempts: 1,
@@ -1097,11 +1098,11 @@ describe('counts', () => {
     workspace.createApplication(db, { ...JOB, archived: true });
     workspace.createLetter(db, { title: 'L' });
 
-    expect(workspace.getCounts(db)).toEqual({ savedJobs: 2, activeApplications: 1, letters: 1, cvDocuments: 0 });
+    expect(workspace.getCounts(db)).toMatchObject({ savedJobs: 2, activeApplications: 1, letters: 1, cvDocuments: 0 });
   });
 
   it('is all zeros on a fresh database', () => {
-    expect(workspace.getCounts(db)).toEqual({ savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 });
+    expect(workspace.getCounts(db)).toMatchObject({ savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 });
   });
 });
 

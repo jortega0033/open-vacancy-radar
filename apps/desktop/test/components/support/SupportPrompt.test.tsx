@@ -164,6 +164,7 @@ describe('Support ask trigger (#503)', () => {
     const { executor } = installBridges();
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
 
     expect(await findDialog()).toBeInTheDocument();
     expect(executor.submitReview).toHaveBeenCalledTimes(1);
@@ -178,6 +179,7 @@ describe('Support ask trigger (#503)', () => {
     });
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
     fireEvent.click(await screen.findByRole('button', { name: 'I already applied' }));
 
     expect(await findDialog()).toBeInTheDocument();
@@ -189,6 +191,7 @@ describe('Support ask trigger (#503)', () => {
     });
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Not sent.');
     await expectNoDialog();
   });
@@ -200,6 +203,7 @@ describe('Support ask trigger (#503)', () => {
     });
     renderReview();
     fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^send application$/i }));
     fireEvent.click(await screen.findByRole('button', { name: 'I already applied' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Already sent.');
     await expectNoDialog();
@@ -380,7 +384,8 @@ describe('SupportDialog (#503)', () => {
 
   it('a backdrop click behaves like Not now', async () => {
     await openDialog();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    // The dimmed area is the dialog element itself, not a separate button (#454).
+    fireEvent.click(screen.getByRole('dialog'));
     await waitFor(() => expect(stored).toEqual({ answered: false, asks: 1, successesSinceDismissal: 0 }));
     expect(dialog()).not.toBeInTheDocument();
   });

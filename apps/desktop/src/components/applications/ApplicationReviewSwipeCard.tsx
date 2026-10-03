@@ -95,14 +95,52 @@ function describeCrossOriginField(): string {
   return 'Part of this form is hosted by another site, so the app left it blank. Use the live page to fill it in.';
 }
 
+/** The host a form will be sent to, read from the live page's own origin when the snapshot has one
+ * and from the recorded application URL otherwise. Never the company name: this is the address. */
+function destinationHost(attempt: ApplicationAttemptRecord, snapshot: FormSnapshot): string {
+  for (const candidate of [snapshot.topFrameOrigin, attempt.canonicalUrl]) {
+    if (!candidate) continue;
+    try {
+      return new URL(candidate).host;
+    } catch {
+      // Not a parseable URL: try the next source rather than showing a half-address.
+    }
+  }
+  return 'the employer site';
+}
+
+/**
+ * Everything the final confirmation shows, folded to one string. If any of it differs from what the
+ * person was looking at when they opened the confirmation, that confirmation is withdrawn and a
+ * fresh review is required (#443): the destination, the files, the answer values and the form
+ * checks are exactly what "I reviewed this" has to mean.
+ */
+function reviewFingerprint(
+  attempt: ApplicationAttemptRecord,
+  snapshot: FormSnapshot,
+  documents: readonly ApplicationArtifactSummary[],
+  readiness: FormReadiness,
+): string {
+  return JSON.stringify({
+    host: destinationHost(attempt, snapshot),
+    url: attempt.canonicalUrl,
+    files: documents.map((document) => [document.id, document.fileName, document.contentHash]),
+    answers: (attempt.preparedFields?.fields ?? []).map((field) => [field.label, field.controlType, field.status, field.value ?? '']),
+    ready: readiness.ready,
+    verified: readiness.verifiedFilledCount,
+    blockers: readiness.blockers.map((blocker) => describeBlocker(blocker)),
+  });
+}
+
 /**
  * The one-attempt-at-a-time review card issue #202 needed a genuinely fast confirmation step for:
  * a real screenshot of the application page as it currently stands (see the image's own comment
  * below for what that screenshot does and doesn't prove) plus what the form actually holds, decided
- * with a single gesture -- drag right to submit, drag left to skip -- with the same
- * two actions always available as ordinary buttons underneath, since a desktop app has no touch
- * screen to assume and a button is the one interaction every input device and screen reader can
- * reach. The drag is presentation only: it never calls `onApprove`/`onSkip` until released past
+ * with a drag left to skip or the same two actions as ordinary buttons underneath, since a desktop
+ * app has no touch screen to assume and a button is the one interaction every input device and
+ * screen reader can reach. Dragging can only ever skip (#443): sending a real application takes two
+ * deliberate button actions, "Submit application" and then "Send application" on the final
+ * confirmation. The drag never calls `onSkip` until released past
  * `SWIPE_THRESHOLD_PX`, and it renders no live-updating text (`aria-live` noise on every pixel of
  * drag would be worse than no live region at all) -- the buttons carry the real accessible names.
  *
@@ -137,6 +175,10 @@ export function ApplicationReviewSwipeCard({
   const dragXRef = useRef(0);
   const dragOriginRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  /** The fingerprint of what the open final confirmation showed, or null while it is closed (#443). */
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+  const [reviewChanged, setReviewChanged] = useState(false);
+  const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
   /** The reusable answer library (#372), fetched once per card mount -- this is a small,
    * personal-scale list, so one plain fetch rather than a subscription. `undefined` (not `[]`)
    * while unloaded, so `ApplicationPreparedSummary` can tell "still loading" from "loaded, empty"
@@ -177,7 +219,21 @@ export function ApplicationReviewSwipeCard({
     });
   }
 
-  const { blockers } = readiness;
+  const fingerprint = reviewFingerprint(attempt, snapshot, documents, readiness);
+  const confirming = confirmation !== null;
+  useEffect(() => {
+    if (confirmation !== null && confirmation !== fingerprint) {
+      // The form, the files or the destination moved under an open confirmation: the person
+      // confirmed something that is no longer what would be sent.
+      setConfirmation(null);
+      setReviewChanged(true);
+    }
+  }, [confirmation, fingerprint]);
+  useEffect(() => {
+    if (confirming) confirmationHeadingRef.current?.focus();
+  }, [confirming]);
+
+  const { verifiedFilledCount, blockers } = readiness;
   const canSubmit = readiness.ready && !busy;
   const otherFrameFields = crossOriginFields(snapshot);
   // The notice only matters when the form under review is itself inside an embed. A field in
@@ -205,16 +261,14 @@ export function ApplicationReviewSwipeCard({
     // this same card renders) could turn `busy` true while a drag begun before it is still in
     // progress. Without this, releasing that drag past the threshold would fire a second
     // approve/skip on top of the one already in flight.
-    if (!busy) {
-      if (dragXRef.current > SWIPE_THRESHOLD_PX && canSubmit) onApprove();
-      else if (dragXRef.current < -SWIPE_THRESHOLD_PX) onSkip();
-    }
+    // Only a leftward drag decides anything. A rightward one used to submit (#443); it now does
+    // nothing at all, however far it goes.
+    if (!busy && dragXRef.current < -SWIPE_THRESHOLD_PX) onSkip();
     dragXRef.current = 0;
     setDragX(0);
   }
 
   const rotation = Math.max(-MAX_ROTATION_DEG, Math.min(MAX_ROTATION_DEG, dragX / 10));
-  const approveOpacity = canSubmit ? Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX)) : 0;
   const skipOpacity = Math.min(1, Math.max(0, -dragX / SWIPE_THRESHOLD_PX));
   const screenshotAlt = `Live application page preview for ${attempt.role} at ${attempt.company}`;
 
@@ -250,13 +304,6 @@ export function ApplicationReviewSwipeCard({
         onPointerCancel={endDrag}
       >
         <div aria-hidden="true" className="mx-auto mt-2 h-1 w-7 rounded-full bg-base-content/20" />
-        <div
-          className="badge badge-success absolute left-4 top-4 z-10 rotate-[-8deg] text-sm font-semibold"
-          style={{ opacity: approveOpacity }}
-          aria-hidden="true"
-        >
-          Submit
-        </div>
         <div
           className="badge badge-neutral absolute right-4 top-4 z-10 rotate-[8deg] text-sm font-semibold"
           style={{ opacity: skipOpacity }}
@@ -304,16 +351,95 @@ export function ApplicationReviewSwipeCard({
       </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <button type="button" className="btn btn-outline flex-1" disabled={busy} onClick={onSkip}>
-          Skip
-        </button>
-        <button type="button" className="btn btn-success flex-1" disabled={!canSubmit} onClick={onApprove}>
-          {busy ? <span className="loading loading-spinner loading-sm" /> : 'Submit application'}
-        </button>
-      </div>
+      {reviewChanged && !confirming ? (
+        <p className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs" role="status">
+          The form or its files changed while you were confirming. Review the details again before sending.
+        </p>
+      ) : null}
 
-      <details className="rounded-lg border border-base-300 bg-base-100">
+      {confirming ? (
+        <section
+          aria-labelledby="send-confirmation-heading"
+          data-testid="send-confirmation"
+          className="flex flex-col gap-3 rounded-lg border border-warning/50 bg-base-100 p-4"
+        >
+          <h3 id="send-confirmation-heading" ref={confirmationHeadingRef} tabIndex={-1} className="text-sm font-semibold outline-none">
+            Send this application to {attempt.company}?
+          </h3>
+          <p className="text-xs text-base-content/70">
+            This sends the form on <strong>{destinationHost(attempt, snapshot)}</strong> with the files and answers below.
+            You cannot undo this from the app.
+          </p>
+          <div>
+            <p className="text-xs font-semibold">Files ({documents.length})</p>
+            {documents.length > 0 ? (
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-base-content/70">
+                {documents.map((document) => (
+                  <li key={document.id}>{document.fileName}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1 text-xs text-base-content/60">No files are attached.</p>
+            )}
+          </div>
+          <div>
+            <p className="text-xs font-semibold">
+              Answers ({(attempt.preparedFields?.fields ?? []).filter((field) => field.status === 'committed').length} filled, {verifiedFilledCount} verified on the page)
+            </p>
+            <ul className="mt-1 space-y-0.5 text-xs text-base-content/70">
+              {(attempt.preparedFields?.fields ?? []).map((field, index) => (
+                <li key={`${field.controlType}-${field.label}-${index}`}>
+                  <span className="font-medium">{field.label || 'Unlabelled field'}:</span>{' '}
+                  {field.status === 'committed'
+                    ? field.value
+                    : field.status === 'left_blank'
+                      ? 'left blank'
+                      : field.status === 'awaiting_you'
+                        ? 'you answer this on the page'
+                        : 'needs a file'}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {blockers.length > 0 ? (
+            <div>
+              <p className="text-xs font-semibold text-warning">Still unresolved</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-base-content/70">
+                {blockers.map((blocker, index) => (
+                  <li key={`${blocker.kind}-${index}`}>{describeBlocker(blocker)}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <div className="grid grid-cols-2 gap-3">
+            <button type="button" className="btn btn-outline" disabled={busy} onClick={() => setConfirmation(null)}>
+              Go back
+            </button>
+            <button type="button" className="btn btn-success" disabled={!canSubmit} onClick={onApprove}>
+              {busy ? <span className="loading loading-spinner loading-sm" /> : 'Send application'}
+            </button>
+          </div>
+        </section>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <button type="button" className="btn btn-outline flex-1" disabled={busy} onClick={onSkip}>
+            Skip
+          </button>
+          <button
+            type="button"
+            className="btn btn-success flex-1"
+            disabled={!canSubmit}
+            onClick={() => {
+              setReviewChanged(false);
+              setConfirmation(fingerprint);
+            }}
+          >
+            Submit application
+          </button>
+        </div>
+      )}
+
+      <details open className="rounded-lg border border-base-300 bg-base-100">
         <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Prepared application details</summary>
         <ApplicationPreparedSummary
           attempt={attempt}

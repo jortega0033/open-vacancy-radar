@@ -8,7 +8,7 @@ import type {
   LetterRecord,
   SavedJobRecord,
 } from '../../window.js';
-import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { Dialog } from '../shell/Dialog.js';
 import { APPLICATION_STATUS_LABEL, APPLICATION_STATUS_ORDER, toDateInputValue } from './application-status.js';
 
 interface DraftState {
@@ -83,7 +83,6 @@ export function ApplicationDrawer({
   onCancel,
   onSubmit,
 }: ApplicationDrawerProps) {
-  useEscapeToClose(onCancel);
   const [draft, setDraft] = useState<DraftState>(() => draftFromRecord(record));
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
@@ -126,8 +125,13 @@ export function ApplicationDrawer({
   }
 
   return (
-    <div className="modal modal-open modal-end" role="dialog" aria-modal="true">
-      <div className="modal-box flex max-w-md flex-col rounded-none p-0">
+    <Dialog
+      aria-label={mode === 'create' ? 'New application' : 'Edit application'}
+      placement="end"
+      boxClassName="flex max-w-md flex-col rounded-none p-0"
+      onClose={onCancel}
+      closeDisabled={submitting}
+    >
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">{mode === 'create' ? 'New application' : 'Edit application'}</h2>
           <button
@@ -310,8 +314,6 @@ export function ApplicationDrawer({
             {mode === 'create' ? 'Create application' : 'Save changes'}
           </button>
         </div>
-      </div>
-      <button type="button" className="modal-backdrop" aria-label="Close" onClick={onCancel} disabled={submitting} />
-    </div>
+    </Dialog>
   );
 }

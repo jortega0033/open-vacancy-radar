@@ -204,6 +204,14 @@ export function ApplicationsPage({
     onFocusAttemptConsumed?.();
   }, [focusAttemptId, onFocusAttemptConsumed]);
 
+  /** "Open attempt" on a tracker row (#444): the same route a focus request from elsewhere takes. */
+  const handleOpenAttemptFromRow = useCallback((attemptId: string) => {
+    setActiveTab('in_progress');
+    setFocusedAttemptId(attemptId);
+    dismissedReviewAttempt.current = null;
+    setAttempts(null);
+  }, []);
+
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
   const sortedAttempts = useMemo(() => sortAttempts(attempts ?? []), [attempts]);
   const reviewAttempts = useMemo(
@@ -508,6 +516,7 @@ export function ApplicationsPage({
                 onToggleArchive={handleToggleArchive}
                 onDelete={requestDelete}
                 onPrepareInterview={openInterviewPrepDrawer}
+                onOpenAttempt={handleOpenAttemptFromRow}
               />
             </div>
           )}

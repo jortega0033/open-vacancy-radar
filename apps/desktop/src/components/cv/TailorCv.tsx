@@ -143,6 +143,8 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
           label="tailored CV draft"
           idleHint="No draft yet."
           busyLabel="Tailoring your CV for this vacancy…"
+          providerId={provider ?? 'claude'}
+          onRetry={handleRun}
         />
       </div>
     </details>

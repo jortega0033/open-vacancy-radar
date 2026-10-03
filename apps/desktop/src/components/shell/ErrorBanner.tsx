@@ -12,6 +12,8 @@ export interface ErrorBannerProps {
   'aria-label'?: string;
   /** Raw technical text (an error message, a path). Kept out of sight behind a "Details" disclosure. */
   details?: string;
+  /** Label of the disclosure that hides `details`. Defaults to "Details". */
+  detailsLabel?: string;
 }
 
 /**
@@ -23,14 +25,14 @@ export interface ErrorBannerProps {
  * screen reader user gets no announcement at all from the sites missing it. This component makes
  * both of those impossible to get wrong at a call site.
  */
-export function ErrorBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel, details }: ErrorBannerProps) {
+export function ErrorBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel, details, detailsLabel = 'Details' }: ErrorBannerProps) {
   return (
     <div className={['alert', 'alert-error', 'alert-soft', 'text-sm', className].filter(Boolean).join(' ')} role={role} aria-label={ariaLabel}>
       {details ? (
         <div className="min-w-0 flex-1">
           <span>{children}</span>
           <details className="mt-1">
-            <summary className="cursor-pointer text-xs font-medium">Details</summary>
+            <summary className="cursor-pointer text-xs font-medium">{detailsLabel}</summary>
             <pre className="mt-1 max-h-40 overflow-auto text-xs break-words whitespace-pre-wrap">{details}</pre>
           </details>
         </div>
