@@ -765,9 +765,11 @@ export function SearchPage({
     });
   }, [pageCount, preferredSelectedKey, setSession, visible]);
 
+  // The detail pane only ever shows a vacancy the list on screen shows: a selection that is on
+  // another page, or that a refresh just removed, falls back to the empty state (#562).
   const selected = useMemo(
-    () => visible.find((result) => result.key === selectedKey) ?? null,
-    [visible, selectedKey],
+    () => pageItems.find((result) => result.key === selectedKey) ?? null,
+    [pageItems, selectedKey],
   );
 
   const reportHasOnlyUnscoredRows =
@@ -786,6 +788,27 @@ export function SearchPage({
     [worldwideReport],
   );
   const sourceWarnings = sourceCoverage?.warnings ?? [];
+
+  const [scanLogCopied, setScanLogCopied] = useState(false);
+  // The full run log is not shown on the Search page; it is copied on demand (#562).
+  const copyScanLog = useCallback(async () => {
+    if (!worldwideReport) return;
+    const stats = worldwideReport.statistics;
+    const lines = [
+      `Run ${worldwideReport.runId}, generated ${new Date(worldwideReport.generatedAt).toLocaleString()}`,
+      `${(stats.rawRowsFetched ?? stats.discoveryListings).toLocaleString()} listings fetched, ${stats.discoveryUniqueListings.toLocaleString()} unique vacancies`,
+      ...sourceWarnings.map(
+        (source) =>
+          `${discoveryProviderLabel(source.provider)} (${source.id}, ${source.status}): ${source.completenessReason ?? source.error ?? source.status}`,
+      ),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      setScanLogCopied(true);
+    } catch {
+      setScanLogCopied(false);
+    }
+  }, [worldwideReport, sourceWarnings]);
   const scanBounds = worldwideReport?.scanBounds;
   const scanIncomplete = scanBounds?.complete === false;
   // Whether the rows currently on screen are provisional/live rather than the saved report -- drives
@@ -1505,7 +1528,7 @@ export function SearchPage({
       {/* A quiet status strip, not a page footer: always visible without scrolling (this row sits
           outside the scrollable results/detail area above), for diagnostic/provenance metadata
           that's useful on demand but not worth greeting every visit with above the results. */}
-      {(sourceWarnings.length > 0 || worldwideReport) && (
+      {sourceWarnings.length > 0 && (
         <div className="flex-none border-t border-base-300 px-6 pt-2">
           {sourceWarnings.length > 0 && (
             <>
@@ -1552,39 +1575,14 @@ export function SearchPage({
                           )}
                         </div>
                       )}
+                      <button type="button" className="btn btn-ghost btn-xs" onClick={() => void copyScanLog()}>
+                        {scanLogCopied ? 'Copied' : 'Copy diagnostics'}
+                      </button>
                     </div>
                   ) : null}
                 </div>
               )}
             </>
-          )}
-          {worldwideReport && (
-            <details className="pb-1.5 text-xs text-base-content/60">
-              <summary className="cursor-pointer">
-                Scan details
-                {singlePane
-                  ? `: ${visible.length.toLocaleString()} ${visible.length === 1 ? 'vacancy' : 'vacancies'}, scanned ${new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                  : ''}
-              </summary>
-              <p className="mt-1">
-                Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
-                {scanBounds?.mode === 'browse_all'
-                  ? ` · browse-all cap ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} · ${scanBounds.complete ? 'complete' : 'incomplete'}`
-                  : ''}
-              </p>
-              <p className="mt-1">
-                {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} listings fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} unique vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
-              </p>
-              {sourceWarnings.length > 0 && (
-                <ul className="mt-1">
-                  {sourceWarnings.map((source) => (
-                    <li key={source.id}>
-                      {discoveryProviderLabel(source.provider)} ({source.id}, {source.status}): {source.completenessReason ?? source.error ?? source.status}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
           )}
         </div>
       )}
