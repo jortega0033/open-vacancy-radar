@@ -32,7 +32,7 @@ describe('describeCvEvidenceOverlayGaps', () => {
 
   it('flags a source CV that changed since this overlay was built', () => {
     expect(describeCvEvidenceOverlayGaps(overlay(), 'b'.repeat(64))).toEqual([
-      'the reviewed source CV has changed since this draft was built',
+      'your CV changed since this draft was built, so update the tailoring',
     ]);
   });
 
@@ -47,7 +47,7 @@ describe('describeCvEvidenceOverlayGaps', () => {
       overlay({ requirements: [requirement({ reviewed: false }), requirement({ requirementId: 'r-2', reviewed: true })] }),
       HASH,
     );
-    expect(reasons).toContain('1 requirement(s) have not been reviewed');
+    expect(reasons).toContain('1 job requirement has not been reviewed');
   });
 
   it('never claims complete coverage while a required item still needs verification', () => {
@@ -55,7 +55,7 @@ describe('describeCvEvidenceOverlayGaps', () => {
       overlay({ requirements: [requirement({ classification: 'required', evidenceClass: 'needs_verification', reviewed: true })] }),
       HASH,
     );
-    expect(reasons).toContain('1 required item(s) still need verification');
+    expect(reasons).toContain('1 job requirement still needs your answer');
   });
 
   it('does not block on a preferred item needing verification', () => {
@@ -63,7 +63,7 @@ describe('describeCvEvidenceOverlayGaps', () => {
       overlay({ requirements: [requirement({ classification: 'preferred', evidenceClass: 'needs_verification', reviewed: true })] }),
       HASH,
     );
-    expect(reasons).not.toContain('1 required item(s) still need verification');
+    expect(reasons).not.toContain('1 job requirement still needs your answer');
   });
 
   it('flags an approved wording variant whose source revision no longer matches', () => {
@@ -72,13 +72,13 @@ describe('describeCvEvidenceOverlayGaps', () => {
       HASH,
     );
     expect(reasons).toEqual(
-      expect.arrayContaining([expect.stringContaining('approved wording variant(s) were approved against a different source revision')]),
+      expect.arrayContaining([expect.stringContaining('wording choice needs approving again because your CV changed')]),
     );
   });
 
   it('flags an approved wording variant that cites no fact', () => {
     const reasons = describeCvEvidenceOverlayGaps(overlay({ wordingVariants: [wording({ factIds: [] })] }), HASH);
-    expect(reasons).toEqual(expect.arrayContaining([expect.stringContaining('cite no supporting fact')]));
+    expect(reasons).toEqual(expect.arrayContaining([expect.stringContaining('not backed by a confirmed fact')]));
   });
 
   it('never flags a draft (not yet approved) wording variant for staleness or grounding', () => {
@@ -91,7 +91,7 @@ describe('describeCvEvidenceOverlayGaps', () => {
 
   it('flags an overlay left in conflict', () => {
     expect(describeCvEvidenceOverlayGaps(overlay({ state: 'conflict' }), HASH)).toContain(
-      'unresolved conflicting corrections remain',
+      'some of your corrections contradict each other',
     );
   });
 });

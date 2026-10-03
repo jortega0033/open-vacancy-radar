@@ -273,7 +273,6 @@ export function InterviewPrepDrawer({
                 label="Interview prep result"
                 idleHint="No prep pack yet."
                 busyLabel="Building your interview prep pack…"
-                providerLabel={providerLabel}
               />
             </>
           )}

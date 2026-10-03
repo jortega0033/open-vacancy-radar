@@ -20,12 +20,9 @@ import type { CvDocument } from './types.js';
 export interface CvUploadProps {
   cv: CvDocument | null;
   onCvChange(cv: CvDocument | null): void;
-  /** Display name of the CLI the loaded text is actually sent to, e.g. "Claude Code" or "Codex"
-   * (see `PROVIDER_LABEL`): reflects the user's configured default provider, not a fixed one. */
-  providerLabel: string;
 }
 
-export function CvUpload({ cv, onCvChange, providerLabel }: CvUploadProps) {
+export function CvUpload({ cv, onCvChange }: CvUploadProps) {
   const picker = useCvPicker();
   const [showText, setShowText] = useState(false);
 
@@ -44,8 +41,7 @@ export function CvUpload({ cv, onCvChange, providerLabel }: CvUploadProps) {
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Your CV</div>
         <p className="text-sm text-base-content/60">
-          PDF, Word, plain text or Markdown. The file is read on this machine and its text is only sent to
-          your own {providerLabel} CLI.
+          PDF, Word, text or Markdown. Your CV text is sent only to the AI tool you set up.
         </p>
 
         <div className="flex flex-wrap items-center gap-2">

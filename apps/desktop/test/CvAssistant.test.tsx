@@ -124,7 +124,7 @@ describe('CvAssistant', () => {
     // person confirmed, and an ad-hoc upload has none, so the card says what would fix that rather
     // than falling back to prose nobody checked.
     expect(screen.getByRole('button', { name: /draft cover letter/i })).toBeDisabled();
-    expect(screen.getByText(/no reviewed source record yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/check your cv details first/i)).toBeInTheDocument();
     expect(screen.getByText(/jake\.pdf/)).toBeInTheDocument();
     // The vacancy under consideration is named, so the user knows what these buttons act on.
     expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument();
@@ -186,7 +186,7 @@ describe('CvAssistant', () => {
     });
 
     render(<CvAssistant vacancy={TEST_VACANCY} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/claude code is not installed/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/ai is not set up yet/i);
   });
 
   it('resolves to the one installed alternative when the persisted default is not installed (issue #400)', async () => {
@@ -224,7 +224,7 @@ describe('CvAssistant', () => {
     // Not blocked as unavailable: the resolved effective provider (Codex) is installed, even
     // though the raw persisted preference (Claude) is not.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(await screen.findByText(/runs on your own authenticated codex cli/i)).toBeInTheDocument();
+    expect(await screen.findByText(/review your cv and tailor it to a job/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
     await waitFor(() =>
@@ -250,7 +250,7 @@ describe('CvAssistant', () => {
     });
 
     render(<CvAssistant vacancy={TEST_VACANCY} />);
-    const picker = await screen.findByRole('combobox', { name: /model/i });
+    const picker = await screen.findByRole('combobox', { name: /ai model/i });
     fireEvent.change(picker, { target: { value: 'opus' } });
 
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));

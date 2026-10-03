@@ -27,7 +27,7 @@ describe('TailorCv', () => {
     expect(screen.getByText('Quick draft to read')).toBeInTheDocument();
     expect(screen.getByText('Unchecked', { selector: '.badge' })).toBeInTheDocument();
     expect(screen.queryByText('Approved', { exact: false, selector: '.badge' })).not.toBeInTheDocument();
-    expect(screen.getByText(/never approved, and copying it does not approve it/i)).toBeInTheDocument();
+    expect(screen.getByText(/never approved and does not replace your cv/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /draft tailored cv/i }));
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));

@@ -132,14 +132,13 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
   }
 
   return (
-    <section className="rounded-box border border-base-300 bg-base-200 p-3" aria-label="Source CV review">
-      <h3 className="ovr-eyebrow">Source CV</h3>
+    <section className="rounded-box border border-base-300 bg-base-200 p-3" aria-label="CV details review">
+      <h3 className="ovr-eyebrow">CV details</h3>
 
       {!source.complete && (
         <div className="alert alert-warning mt-2 text-xs" role="alert">
           <span>
-            Incomplete: {source.incompleteReason || 'this CV was not read all the way through.'} Exports are blocked
-            until this is fixed, so nothing goes out looking finished while it is missing sections.
+            Part of your CV may be missing. Fix this before exporting.
           </span>
         </div>
       )}

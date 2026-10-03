@@ -36,8 +36,7 @@ export function CvTranscriptionFlow({ picker }: CvTranscriptionFlowProps) {
     return (
       <div className="flex flex-col gap-2 rounded-box border border-base-300 bg-base-200/40 p-3">
         <p className="text-sm">
-          Review the transcribed text below before saving it. A vision model can misread dates, employers, or
-          technologies, so check it over and correct anything that looks wrong.
+          We read this from the image. Check dates, employers and tools, and fix anything wrong.
         </p>
         <textarea
           className="textarea textarea-bordered h-48 w-full font-mono text-xs"
@@ -67,8 +66,8 @@ export function CvTranscriptionFlow({ picker }: CvTranscriptionFlowProps) {
       <div className="alert alert-warning flex items-center justify-between text-sm" role="alert">
         <span>
           {state.reason === 'too-many-pages'
-            ? `"${state.fileName}" has too many pages for automatic transcription. Export a text-based PDF or paste the CV as .txt instead.`
-            : `"${state.fileName}" looks like a scanned image with no selectable text. Your configured AI runtime can't accept file attachments right now, so automatic transcription isn't available. Export a text-based PDF or paste the CV as .txt instead.`}
+            ? `"${state.fileName}" has too many pages to read automatically. Save a text-based PDF or a .txt file and try again.`
+            : `"${state.fileName}" looks like a scanned image and cannot be read automatically. Save a text-based PDF or a .txt file and try again.`}
         </span>
         <button className="btn btn-ghost btn-xs" type="button" onClick={picker.reset}>
           Dismiss

@@ -17,7 +17,7 @@ const STATE_LABEL: Record<CvEvidenceOverlayRecord['state'], string> = {
   conflict: 'Facts in conflict',
   draft: 'In progress',
   candidate_approved: 'CV approved',
-  qa_failed: 'Failed its checks',
+  qa_failed: 'Needs fixing',
   artifact_approved: 'Files accepted',
 };
 
@@ -27,10 +27,10 @@ const CV_CHANGED_LABEL = 'CV changed, review needed';
 const ARTIFACT_LABEL = {
   not_exported: 'not exported',
   awaiting_review: 'waiting for your review',
-  qa_failed: 'failed its checks',
+  qa_failed: 'needs fixing',
   accepted: 'accepted',
   stale: 'out of date',
-  legacy_unverified: 'not verified',
+  legacy_unverified: 'export again',
 } as const;
 
 const ORIGIN_LABEL: Record<CvEvidenceOverlayRecord['origin'], string> = {

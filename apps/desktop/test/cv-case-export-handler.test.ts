@@ -276,14 +276,14 @@ describe('exportCvCase: readiness blockers refuse before any render', () => {
       .set({ sourceCv: { ...current, complete: false, incompleteReason: 'the last page was never read' } })
       .where(eq(cvDocuments.id, cv.id))
       .run();
-    await expectRefused(overlay.id, /the last page was never read/);
+    await expectRefused(overlay.id, /only partly read/);
   });
 
   it('a source that is no longer reviewed', async () => {
     const { cv, overlay } = approvedCase();
     const current = workspace.getCvDocument(db, cv.id).source!;
     db.update(cvDocuments).set({ sourceCv: { ...current, reviewedAt: '' } }).where(eq(cvDocuments.id, cv.id)).run();
-    await expectRefused(overlay.id, /has not been reviewed and confirmed/);
+    await expectRefused(overlay.id, /have not been checked yet/);
   });
 
   it('a case that is not approved', async () => {

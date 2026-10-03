@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
 import type { CvProfile, CvSourceDocument, LetterTone } from '../../window.js';
 import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
 import { buildBundledDocumentPrompt } from '../generation/prompts.js';
@@ -160,8 +159,7 @@ export function CoverLetter({ cv, vacancy, sourceCv, profile, model, provider }:
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Cover letter</div>
         <p className="text-sm text-base-content/60">
-          A motivation letter for this specific vacancy. {GROUNDED_LETTER_DISCLOSURE} Read and edit
-          this draft before you send it.
+          A motivation letter for this job. {GROUNDED_LETTER_DISCLOSURE}
         </p>
 
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}
@@ -206,8 +204,7 @@ export function CoverLetter({ cv, vacancy, sourceCv, profile, model, provider }:
           {...(failure ? { error: failure } : {})}
           label="cover letter draft"
           idleHint="No draft yet."
-          busyLabel="Choosing which of your CV facts belong in this letter…"
-          providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
+          busyLabel="Writing your letter…"
         />
       </div>
     </div>

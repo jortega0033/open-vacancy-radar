@@ -200,8 +200,8 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     installOverlayBridge(baseOverlay({ sourceCvContentHash: hash }));
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={unreviewed} />);
 
-    const notice = await screen.findByLabelText('Source CV not ready');
-    expect(notice).toHaveTextContent('has not been reviewed and confirmed');
+    const notice = await screen.findByLabelText('CV details not checked');
+    expect(notice).toHaveTextContent('have not been checked yet');
     expect(notice).toHaveTextContent('CV Library');
     await clickPreview();
     await screen.findByLabelText('Composed CV preview');
@@ -216,8 +216,8 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     );
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={truncated} />);
 
-    const blocked = await screen.findByLabelText('Export blocked by the source CV');
-    expect(blocked).toHaveTextContent('the last two pages were never read');
+    const blocked = await screen.findByLabelText('Export blocked until your CV details are reviewed');
+    expect(blocked).toHaveTextContent('only partly read');
     expect(screen.getByRole('button', { name: /export as pdf/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /export as word/i })).toBeDisabled();
     expect(workspace.exportCvEvidenceOverlay).not.toHaveBeenCalled();
@@ -243,14 +243,14 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
 
     await clickPreview();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/still need verification/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still needs? your answer/i);
     expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeDisabled();
   });
 
-  it('says there is nothing to compose from before requirement mapping has started', () => {
+  it('says there is nothing to compose from before the job requirements are matched', () => {
     installWorkspaceBridge({ getCvEvidenceOverlay: vi.fn().mockResolvedValue(null) });
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
-    expect(screen.getByText(/map this vacancy/i)).toBeInTheDocument();
+    expect(screen.getByText(/match the job requirements above first/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /preview approved cv/i })).toBeDisabled();
   });
 
@@ -421,7 +421,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
       );
       render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={WITH_PROJECTS} />);
 
-      const panel = await screen.findByLabelText('Changes since this case was started');
+      const panel = await screen.findByLabelText('Changes since this tailoring was started');
       expect(panel).toHaveTextContent('Skills: Added: Terraform.');
       expect(panel).toHaveTextContent('Old wording for a removed role');
 
@@ -430,9 +430,9 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
       expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeDisabled();
       expect(workspace.rebaseCvEvidenceOverlay).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByRole('button', { name: /use my current cv for this case/i }));
+      fireEvent.click(screen.getByRole('button', { name: /update to my current cv/i }));
       await waitFor(() => expect(workspace.rebaseCvEvidenceOverlay).toHaveBeenCalledWith('overlay-1', '1'));
-      await waitFor(() => expect(screen.queryByLabelText('Changes since this case was started')).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByLabelText('Changes since this tailoring was started')).not.toBeInTheDocument());
     });
   });
 });

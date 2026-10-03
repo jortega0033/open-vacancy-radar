@@ -68,7 +68,7 @@ function toRequirementMapping(
     return {
       text,
       jdAnchor,
-      reason: jdAnchor ? 'its quote is not an exact passage of the job description' : 'it gave no quote from the job description',
+      reason: jdAnchor ? 'it could not be found in the job description' : 'it did not say where in the job description it came from',
     };
   }
 

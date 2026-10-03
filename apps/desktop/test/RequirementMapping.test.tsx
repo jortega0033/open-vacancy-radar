@@ -92,11 +92,11 @@ describe('RequirementMapping (#419)', () => {
   it('shows a hint and disables the run button until a saved CV and a vacancy are both present', () => {
     installBridges();
     const { rerender } = render(<RequirementMapping cvId={null} cv={null} vacancy={null} />);
-    expect(screen.getByText(/select a saved cv/i)).toBeInTheDocument();
+    expect(screen.getByText(/pick a saved cv/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /map requirements/i })).toBeDisabled();
 
     rerender(<RequirementMapping cvId="cv-1" cv={CV} vacancy={null} />);
-    expect(screen.getByText(/select a vacancy/i)).toBeInTheDocument();
+    expect(screen.getByText(/select a job/i)).toBeInTheDocument();
   });
 
   it('maps requirements, keeping the evidence class structurally separate from ATS fit', async () => {
@@ -119,7 +119,7 @@ describe('RequirementMapping (#419)', () => {
     await screen.findByText('Angular experience');
     expect(workspace.createCvEvidenceOverlay).toHaveBeenCalledTimes(1);
     expect(workspace.updateCvEvidenceOverlay).toHaveBeenCalled();
-    expect(screen.getByText(/1 requirement\(s\) have not been reviewed/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 job requirements? ha(?:s|ve) not been reviewed/i)).toBeInTheDocument();
   });
 
   it('turns away a proposal whose quote is not in the job description, and shows that it did', async () => {
@@ -138,7 +138,7 @@ describe('RequirementMapping (#419)', () => {
 
     await screen.findByText('Angular experience');
     expect(screen.queryByText('Kubernetes experience', { selector: '.font-medium' })).not.toBeInTheDocument();
-    expect(screen.getByText(/1 proposed requirement\(s\) were not added/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 suggested requirement was skipped/i)).toBeInTheDocument();
   });
 
   it('keeps reading further batches when the model reports more, and carries the earlier ones forward', async () => {
@@ -160,8 +160,8 @@ describe('RequirementMapping (#419)', () => {
     await screen.findByText('Frontend years');
     expect(screen.getByText('Angular experience')).toBeInTheDocument();
     // Extraction is finished, but nothing is reviewed yet, so the list still cannot back approval.
-    expect(screen.queryByText(/requirement list is partial/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/2 requirement\(s\) have not been reviewed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/job requirements may be missing/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/2 job requirements? ha(?:s|ve) not been reviewed/i)).toBeInTheDocument();
   });
 
   it('never claims the list is complete while batches remain unread', async () => {
@@ -176,8 +176,8 @@ describe('RequirementMapping (#419)', () => {
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(2));
     emitAnswer(bridges, { requirements: [{ text: 'Angular experience', jdAnchor: QUOTE_ANGULAR }], hasMore: true });
 
-    await screen.findByText(/requirement list is partial/i);
-    expect(screen.getByRole('button', { name: /read the rest of the job description/i })).toBeEnabled();
+    await screen.findByText(/job requirements may be missing/i);
+    expect(screen.getByRole('button', { name: /^read the rest$/i })).toBeEnabled();
     const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
     expect(lastPatch?.requirementCoverage?.status).toBe('partial');
   });
@@ -194,16 +194,16 @@ describe('RequirementMapping (#419)', () => {
     emitAnswer(bridges, { requirements: [], hasMore: true });
     // Both batches are saved before the candidate confirms.
     await waitFor(() => expect(vi.mocked(workspace.updateCvEvidenceOverlay)).toHaveBeenCalledTimes(2));
-    await screen.findByText(/requirement list is partial/i);
+    await screen.findByText(/job requirements may be missing/i);
 
     // While batches remain unread, the confirmation says that the candidate read the rest.
-    expect(screen.queryByRole('button', { name: /i read the whole job description/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /i read the rest myself and added anything missing/i }));
+    expect(screen.queryByRole('button', { name: /this list covers the whole job description/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /i checked the rest myself/i }));
 
     await waitFor(() =>
       expect(vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1].requirementCoverage?.status).toBe('complete'),
     );
-    await waitFor(() => expect(screen.queryByText(/requirement list is partial/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/job requirements may be missing/i)).not.toBeInTheDocument());
   });
 
   it('marking a row reviewed persists the change', async () => {
@@ -220,7 +220,7 @@ describe('RequirementMapping (#419)', () => {
     fireEvent.click(checkbox);
 
     await waitFor(() => expect(checkbox).toBeChecked());
-    await waitFor(() => expect(screen.queryByText(/have not been reviewed/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/not been reviewed/i)).not.toBeInTheDocument());
   });
 
   it('marks a requirement as not a requirement with a reason, keeps it visible, and persists it', async () => {
@@ -243,7 +243,7 @@ describe('RequirementMapping (#419)', () => {
     // Still listed, labelled, and out of the review count.
     expect(screen.getByText('Frontend years')).toBeInTheDocument();
     expect(screen.getByText(/\(not a requirement\)/i)).toBeInTheDocument();
-    expect(screen.queryByText(/have not been reviewed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not been reviewed/i)).not.toBeInTheDocument();
     const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
     expect(lastPatch?.requirements?.[0]).toMatchObject({ excluded: true, exclusionReason: 'Describes the team, not the role' });
   });
@@ -289,7 +289,7 @@ describe('RequirementMapping (#419)', () => {
     expect(screen.getByText(/added by you/i)).toBeInTheDocument();
     // Only the mapped one is still unreviewed: the added one counts as read.
     expect(screen.getByLabelText('Review progress')).toHaveTextContent('1 of 2 reviewed. 1 need your answer.');
-    expect(screen.getByText(/1 requirement\(s\) have not been reviewed/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 job requirements? ha(?:s|ve) not been reviewed/i)).toBeInTheDocument();
     expect(workspace.createCvEvidenceOverlay).toHaveBeenCalledTimes(1);
   });
 
@@ -373,7 +373,7 @@ describe('RequirementMapping (#419)', () => {
 
     it('makes each gap line a link that focuses its rows, one after another', async () => {
       await mapThree();
-      const link = screen.getByRole('button', { name: /3 requirement\(s\) have not been reviewed/i });
+      const link = screen.getByRole('button', { name: /3 job requirements? ha(?:s|ve) not been reviewed/i });
       fireEvent.click(link);
       await waitFor(() => expect(rowOf('Angular experience')).toHaveFocus());
       fireEvent.click(link);
@@ -400,7 +400,7 @@ describe('RequirementMapping (#419)', () => {
 
       fireEvent.click(screen.getByRole('checkbox', { name: /show only what needs me/i }));
       expect(screen.queryByText('Quote went missing')).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: /1 requirement\(s\) have no exact quote/i }));
+      fireEvent.click(screen.getByRole('button', { name: /1 job requirement could not be found/i }));
       await waitFor(() => expect(screen.getByText('Quote went missing').closest('li')).toHaveFocus());
       expect(screen.getByRole('checkbox', { name: /show only what needs me/i })).not.toBeChecked();
     });
@@ -415,10 +415,10 @@ describe('RequirementMapping (#419)', () => {
       await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(2));
       emitAnswer(bridges, { requirements: [], hasMore: true });
 
-      await screen.findByText(/requirement list is partial/i);
-      expect(await screen.findByText(/read so far: 2 batches of the job description/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /i read the rest myself and added anything missing/i })).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /i read the whole job description/i })).not.toBeInTheDocument();
+      await screen.findByText(/job requirements may be missing/i);
+      expect(await screen.findByText(/^only part of the job description was read\.$/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /i checked the rest myself/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /this list covers the whole job description/i })).not.toBeInTheDocument();
       // No made up percentage.
       expect(screen.queryByText(/%/)).not.toBeInTheDocument();
     });

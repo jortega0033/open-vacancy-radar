@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
 import type { CvProfile, CvSourceDocument } from '../../window.js';
 import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
 import { buildBundledDocumentPrompt } from '../generation/prompts.js';
@@ -96,9 +95,7 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
       </summary>
       <div className="card-body gap-3 p-5 pt-0">
         <p className="text-sm text-base-content/60">
-          Your CV content, reordered and re-emphasized for this vacancy. It is a draft to read and
-          never replaces the CV on file. It is never approved, and copying it
-          does not approve it. Only the tailored CV card above builds a CV you can approve.
+          A quick draft to read. It is never approved and does not replace your CV.
         </p>
 
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}
@@ -146,7 +143,6 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
           label="tailored CV draft"
           idleHint="No draft yet."
           busyLabel="Tailoring your CV for this vacancy…"
-          providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
         />
       </div>
     </details>

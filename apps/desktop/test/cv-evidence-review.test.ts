@@ -107,16 +107,16 @@ describe('describeCvRequirementGaps (#419, steps 5 and 6)', () => {
 
   it('never claims coverage while extraction is partial or was never run', () => {
     expect(gaps({ requirementCoverage: { status: 'partial', revisionId: FIXTURE_REVISION_ID, batches: 1 } })).toEqual([
-      expect.stringContaining('requirement list is partial'),
+      expect.stringContaining('job requirements may be missing'),
     ]);
     expect(gaps({ requirementCoverage: { status: 'not_run', revisionId: '', batches: 0 } })).toEqual([
-      expect.stringContaining('not been extracted and confirmed'),
+      expect.stringContaining('not been read and confirmed'),
     ]);
   });
 
   it('treats coverage recorded for an older JD revision as not run', () => {
     expect(gaps({ requirementCoverage: { status: 'complete', revisionId: 'older', batches: 1 } })).toEqual([
-      expect.stringContaining('not been extracted and confirmed'),
+      expect.stringContaining('not been read and confirmed'),
     ]);
   });
 
@@ -133,13 +133,13 @@ describe('describeCvRequirementGaps (#419, steps 5 and 6)', () => {
       }),
     );
     expect(rows).toEqual([
-      { reason: expect.stringContaining('requirement list is partial'), requirementIds: [] },
-      { reason: expect.stringContaining('2 requirement(s) have not been reviewed'), requirementIds: ['open-1', 'open-2'] },
+      { reason: expect.stringContaining('job requirements may be missing'), requirementIds: [] },
+      { reason: expect.stringContaining('2 job requirements have not been reviewed'), requirementIds: ['open-1', 'open-2'] },
     ]);
   });
 
   it('keeps an unreviewed material item blocking even when coverage is complete', () => {
-    expect(gaps({ requirements: [makeRequirement({ reviewed: false })] })).toEqual([expect.stringContaining('have not been reviewed')]);
+    expect(gaps({ requirements: [makeRequirement({ reviewed: false })] })).toEqual([expect.stringContaining('not been reviewed')]);
   });
 
   it('reports requirements read against an older JD and ones with no quote in the JD', () => {
@@ -150,7 +150,7 @@ describe('describeCvRequirementGaps (#419, steps 5 and 6)', () => {
       ],
     });
     expect(reasons).toEqual(
-      expect.arrayContaining([expect.stringContaining('older job description'), expect.stringContaining('no exact quote')]),
+      expect.arrayContaining([expect.stringContaining('older job description'), expect.stringContaining('could not be found in the job description')]),
     );
   });
 
@@ -175,7 +175,7 @@ describe('describeCvRequirementGaps (#419, steps 5 and 6)', () => {
     const gap = makeRequirement({ evidenceClass: 'candidate_confirmed_gap', anchorParentId: '' });
     expect(gaps({ requirements: [gap] })).toEqual([]);
     const contradictory = makeRequirement({ evidenceClass: 'candidate_confirmed_gap', factIds: ['fact-1'] });
-    expect(gaps({ requirements: [contradictory], facts: [makeFact()] })).toEqual([expect.stringContaining('also link a fact')]);
+    expect(gaps({ requirements: [contradictory], facts: [makeFact()] })).toEqual([expect.stringContaining('also links a fact')]);
   });
 
   it('flags a requirement linking a fact that is not approved or does not exist', () => {

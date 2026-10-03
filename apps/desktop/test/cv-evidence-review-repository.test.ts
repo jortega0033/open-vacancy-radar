@@ -175,18 +175,18 @@ describe('requirement coverage and batching gate (#419, step 5)', () => {
     const { overlay } = newCase();
     const partial = update(overlay.id, { requirements: [makeRequirement({ jdAnchor: QUOTE_TS })], requirementCoverage: { status: 'partial', batches: 3 } });
     expect(partial.requirementCoverage).toEqual({ status: 'partial', revisionId: partial.jdRevisions[0]?.revisionId, batches: 3 });
-    expect(() => approve(overlay.id)).toThrow(/requirement list is partial/);
+    expect(() => approve(overlay.id)).toThrow(/job requirements may be missing/);
   });
 
   it('refuses approval when extraction never ran, even with no requirements at all', () => {
     const { overlay } = newCase();
-    expect(() => approve(overlay.id)).toThrow(/not been extracted and confirmed/);
+    expect(() => approve(overlay.id)).toThrow(/not been read and confirmed/);
   });
 
   it('keeps an unreviewed material item blocking after the candidate confirmed coverage', () => {
     const { overlay } = newCase();
     update(overlay.id, { requirements: [makeRequirement({ jdAnchor: QUOTE_TS, reviewed: false })], ...COVERED });
-    expect(() => approve(overlay.id)).toThrow(/have not been reviewed/);
+    expect(() => approve(overlay.id)).toThrow(/not been reviewed/);
   });
 
   it('cannot confirm coverage of an empty job description', () => {
@@ -199,7 +199,7 @@ describe('requirement coverage and batching gate (#419, step 5)', () => {
     const { overlay } = newCase();
     update(overlay.id, COVERED);
     update(overlay.id, { jdSnapshot: `${FULL_JD}\nAlso: GraphQL is required.`, jdSnapshotHash: 'c'.repeat(64) });
-    expect(() => approve(overlay.id)).toThrow(/not been extracted and confirmed/);
+    expect(() => approve(overlay.id)).toThrow(/not been read and confirmed/);
   });
 });
 
@@ -227,7 +227,7 @@ describe('links, confirmed gaps and unknown ids (#419, step 6)', () => {
     const { overlay } = newCase();
     update(overlay.id, { facts: [makeFact({ approval: 'proposed' })] });
     update(overlay.id, { requirements: [makeRequirement({ jdAnchor: QUOTE_TS, factIds: ['fact-1'] })], ...COVERED });
-    expect(() => approve(overlay.id)).toThrow(/link to a fact that is not approved/);
+    expect(() => approve(overlay.id)).toThrow(/links? to a fact you have not approved/);
   });
 });
 

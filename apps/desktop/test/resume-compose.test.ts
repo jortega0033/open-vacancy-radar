@@ -127,7 +127,7 @@ describe('composeApprovedTailoredResume (#419, step 5-6)', () => {
       HASH,
       [],
     );
-    expect(blockers).toEqual(expect.arrayContaining([expect.stringContaining('required item(s) still need verification')]));
+    expect(blockers).toEqual(expect.arrayContaining([expect.stringContaining('job requirement still needs your answer')]));
   });
 
   it('silently skips a description variant for a project the max-projects cap already excluded', () => {

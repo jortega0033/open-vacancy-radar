@@ -242,7 +242,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -292,9 +292,9 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
-    expect(await within(dialog).findByText(/no ai run needed/i)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/filled in from your cv/i)).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
     expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
     // The source-CV review panel sitting above the form has a "Location" input of its own, so the
@@ -323,11 +323,10 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
-    expect(within(dialog).queryByText(/no ai run needed/i)).not.toBeInTheDocument();
   });
 
   it('falls back to the AI parse when the source CV has dates the app cannot read', async () => {
@@ -361,7 +360,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -390,7 +389,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() =>
@@ -410,7 +409,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -434,7 +433,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
