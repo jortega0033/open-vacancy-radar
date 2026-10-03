@@ -8,6 +8,7 @@ import type {
   PreparedApplicationField,
 } from '../../window.js';
 import { applicationAnswerKeyForMatch } from './application-answer-match.js';
+import { TailoringSummary } from './TailoringSummary.js';
 
 /**
  * Resolves each entry in `prepared.fields` to the live snapshot field it corresponds to right now,
@@ -69,9 +70,6 @@ export interface ApplicationPreparedSummaryProps {
    * applications" alongside a fill. */
   onSaveAnswer?: (input: { label: string; controlType: 'text' | 'textarea'; answer: string }) => Promise<void>;
 }
-
-/** The first sentence the pipeline stores once it has tailored a CV (`application-pipeline.ts`). */
-const TAILORED_SENTENCE = 'CV tailored for this vacancy';
 
 const DOCUMENT_LABEL: Record<ApplicationArtifactSummary['kind'], string> = {
   cv_pdf: 'CV',
@@ -295,13 +293,7 @@ export function ApplicationPreparedSummary({
       {attempt.checkpointDetail && (
         <div>
           <h3 className="ovr-eyebrow">CV and documents</h3>
-          {attempt.checkpointDetail.startsWith(TAILORED_SENTENCE) ? (
-            <p className="mt-1 text-xs text-base-content/70">CV tailored for this job.</p>
-          ) : null}
-          <details className="mt-1 text-xs text-base-content/70">
-            <summary className="cursor-pointer font-medium">Details</summary>
-            <p className="mt-1 break-words">{attempt.checkpointDetail}</p>
-          </details>
+          <TailoringSummary detail={attempt.checkpointDetail} />
         </div>
       )}
       <div>

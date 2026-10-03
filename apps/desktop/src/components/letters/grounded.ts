@@ -93,5 +93,8 @@ export function renderGroundedLetterFromSelection(raw: string, request: Grounded
     company: bundle.vacancy.company,
     candidateName: bundle.sourceCv?.contact.name ?? '',
     maxChars: bundle.constraints.maxChars,
+    requirements: bundle.vacancy.requirements?.length
+      ? bundle.vacancy.requirements
+      : bundle.criticalRequirements,
   });
 }

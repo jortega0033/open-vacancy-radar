@@ -92,17 +92,14 @@ describe('ApplicationPreparedSummary', () => {
   it('shows the tailoring change and dropped-content summary before submission', () => {
     render(
       <ApplicationPreparedSummary
-        attempt={attempt({ checkpointDetail: 'CV tailored for this vacancy. Removed unsupported output: skill "Rust".' })}
+        attempt={attempt({ checkpointDetail: 'CV tailored for this vacancy. Removed unsupported output: skill "Rust" is not in your reviewed CV profile.' })}
         documents={[artifact()]}
       />,
     );
 
     expect(screen.getByText('CV and documents')).toBeInTheDocument();
-    expect(screen.getByText('CV tailored for this job.')).toBeInTheDocument();
-    // The pipeline sentence stays reachable, collapsed behind Details.
-    const detail = screen.getByText(/Removed unsupported output: skill "Rust"/);
-    expect(detail.closest('details')).not.toHaveAttribute('open');
-    expect(screen.getByText('Details')).toBeInTheDocument();
+    expect(screen.getByText(/1 skill from this vacancy is not in your CV, so they were left out/)).toBeInTheDocument();
+    expect(screen.getByText(/Show which skill/)).toBeInTheDocument();
   });
 
   it('shows each committed answer with the value and where it came from', () => {
