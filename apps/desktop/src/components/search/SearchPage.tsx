@@ -10,7 +10,7 @@ import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState, ErrorBanner, WarningBanner, useAnnounce, useEscapeToClose } from '../shell/index.js';
+import { EmptyState, ErrorBanner, WarningBanner, useAnnounce } from '../shell/index.js';
 import {
   SCAN_FAILED_ANNOUNCEMENT,
   SCAN_STARTED_ANNOUNCEMENT,
@@ -18,6 +18,7 @@ import {
   scanFinishedAnnouncement,
 } from './scan-announcements.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
+import { Dialog } from '../shell/Dialog.js';
 import { ScanProgressPanel, useScanStatus } from './ScanProgressPanel.js';
 import { useElementWidth } from './useElementWidth.js';
 import { publishEngineHealth } from '../../engine-health.js';
@@ -269,7 +270,6 @@ export function SearchPage({
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
   const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
-  useEscapeToClose(() => setConfirmBrowseAll(false), !confirmBrowseAll);
   // User opt-out from the live view during an active rescan that already has a saved report loaded
   // (issue #364): reset to `false` -- i.e. default to live -- at the start of every scan, so a fresh
   // rescan always shows its own progress first, with an explicit way back to the saved report.
@@ -1483,30 +1483,27 @@ export function SearchPage({
       )}
 
       {confirmBrowseAll && (
-        <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="browse-all-title">
-          <div className="modal-box max-w-lg">
-            <h3 id="browse-all-title" className="text-base font-semibold">
-              Browse all vacancies?
-            </h3>
-            <p className="mt-2 text-sm text-base-content/70">
-              This starts a broad live scan without a role or keyword. It can take longer and hit
-              more external sources. The saved report is capped at {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
-            </p>
-            <p className="mt-2 text-sm text-base-content/70">
-              Browse All runs without role, country, employment, or salary scan criteria. Local
-              display refinements such as source or posting date can still narrow what is shown.
-            </p>
-            <div className="modal-action">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-warning btn-sm" onClick={() => void runBrowseAllScan()}>
-                Browse all vacancies
-              </button>
-            </div>
+        <Dialog aria-labelledby="browse-all-title" boxClassName="max-w-lg" onClose={() => setConfirmBrowseAll(false)}>
+          <h3 id="browse-all-title" className="text-base font-semibold">
+            Browse all vacancies?
+          </h3>
+          <p className="mt-2 text-sm text-base-content/70">
+            This starts a broad live scan without a role or keyword. It can take longer and hit
+            more external sources. The saved report is capped at {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
+          </p>
+          <p className="mt-2 text-sm text-base-content/70">
+            Browse All runs without role, country, employment, or salary scan criteria. Local
+            display refinements such as source or posting date can still narrow what is shown.
+          </p>
+          <div className="modal-action">
+            <button data-autofocus="" type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-warning btn-sm" onClick={() => void runBrowseAllScan()}>
+              Browse all vacancies
+            </button>
           </div>
-          <button type="button" className="modal-backdrop" aria-label="Close" onClick={() => setConfirmBrowseAll(false)} />
-        </div>
+        </Dialog>
       )}
 
       {/* A quiet status strip, not a page footer: always visible without scrolling (this row sits

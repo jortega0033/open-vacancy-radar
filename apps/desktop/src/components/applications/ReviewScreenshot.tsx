@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { Dialog } from '../shell/Dialog.js';
 
 export interface ReviewScreenshotProps {
   screenshotBase64: string;
@@ -22,7 +22,6 @@ export interface ReviewScreenshotProps {
  */
 export function ReviewScreenshot({ screenshotBase64, alt, frameClassName = '' }: ReviewScreenshotProps) {
   const [fullSize, setFullSize] = useState(false);
-  const openerRef = useRef<HTMLButtonElement>(null);
   const src = `data:image/png;base64,${screenshotBase64}`;
 
   return (
@@ -31,7 +30,7 @@ export function ReviewScreenshot({ screenshotBase64, alt, frameClassName = '' }:
         <img src={src} alt={alt} className="w-full" draggable={false} />
       </div>
       <div className="flex justify-end border-t border-base-300 bg-base-100 px-3 py-2">
-        <button ref={openerRef} type="button" className="btn btn-ghost btn-xs" onClick={() => setFullSize(true)}>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={() => setFullSize(true)}>
           View full size
         </button>
       </div>
@@ -40,10 +39,7 @@ export function ReviewScreenshot({ screenshotBase64, alt, frameClassName = '' }:
             <FullSizeScreenshot
               src={src}
               alt={`${alt} at original size`}
-              onClose={() => {
-                setFullSize(false);
-                openerRef.current?.focus();
-              }}
+              onClose={() => setFullSize(false)}
             />,
             document.body,
           )
@@ -53,23 +49,21 @@ export function ReviewScreenshot({ screenshotBase64, alt, frameClassName = '' }:
 }
 
 function FullSizeScreenshot({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
-  const closeRef = useRef<HTMLButtonElement>(null);
-  useEscapeToClose(onClose);
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
-
   return (
-    <div role="dialog" aria-modal="true" aria-label="Form screenshot at original size" className="fixed inset-0 z-[1100] flex flex-col bg-base-100">
+    <Dialog
+      aria-label="Form screenshot at original size"
+      boxClassName="flex h-screen max-h-none w-screen max-w-none flex-col rounded-none p-0"
+      onClose={onClose}
+    >
       <div className="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-2">
         <p className="text-sm font-semibold">Form screenshot at original size</p>
-        <button ref={closeRef} type="button" className="btn btn-outline btn-sm" onClick={onClose}>
+        <button data-autofocus="" type="button" className="btn btn-outline btn-sm" onClick={onClose}>
           Close full size view
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-base-200">
         <img src={src} alt={alt} className="block max-w-none" draggable={false} />
       </div>
-    </div>
+    </Dialog>
   );
 }

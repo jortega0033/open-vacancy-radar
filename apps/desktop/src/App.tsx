@@ -16,6 +16,7 @@ import {
   AI_HELPER_NOTICE_PAGES,
   AiHelperNotice,
   AppSidebar,
+  Dialog,
   LiveAnnouncerProvider,
   ScheduledSendBanner,
   WorkspaceHeader,
@@ -64,14 +65,6 @@ export function App() {
     // Widening the window, or pinning the sidebar, leaves nothing for the overlay to cover.
     if (!railForced) setSidebarOverlayOpen(false);
   }, [railForced]);
-  useEffect(() => {
-    if (!sidebarOverlayOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSidebarOverlayOpen(false);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [sidebarOverlayOpen]);
   // `undefined` until the first successful fetch (issue #178): rendering a zeroed WorkspaceCounts
   // here made "not loaded yet" and "genuinely zero" the same badge/subtitle, indistinguishably.
   const [counts, setCounts] = useState<WorkspaceCounts | undefined>(undefined);
@@ -441,29 +434,26 @@ export function App() {
           The rail stays in the layout; this is drawn above it and closes on Escape, on the dimmed
           area, or after choosing a page. */}
       {railForced && sidebarOverlayOpen && (
-        <div className="fixed inset-0 z-40 flex" data-testid="sidebar-overlay">
-          <div className="shadow-xl">
-            <AppSidebar
-              active={nav}
-              onNavigate={(page) => {
-                setSidebarOverlayOpen(false);
-                handleNavigate(page);
-              }}
-              collapsed={false}
-              onToggleCollapsed={() => setSidebarOverlayOpen(false)}
-              counts={counts}
-              runtimeLabel={PROVIDER_LABEL[providerInUse]}
-              runtimeState={shownRuntimeState}
-              engine={engineHealth}
-            />
-          </div>
-          <button
-            type="button"
-            className="flex-1 cursor-default bg-base-content/30"
-            aria-label="Close sidebar"
-            onClick={() => setSidebarOverlayOpen(false)}
+        <Dialog
+          aria-label="Main navigation"
+          placement="start"
+          boxClassName="h-full max-h-none w-auto max-w-none rounded-none p-0"
+          onClose={() => setSidebarOverlayOpen(false)}
+        >
+          <AppSidebar
+            active={nav}
+            onNavigate={(page) => {
+              setSidebarOverlayOpen(false);
+              handleNavigate(page);
+            }}
+            collapsed={false}
+            onToggleCollapsed={() => setSidebarOverlayOpen(false)}
+            counts={counts}
+            runtimeLabel={PROVIDER_LABEL[providerInUse]}
+            runtimeState={shownRuntimeState}
+            engine={engineHealth}
           />
-        </div>
+        </Dialog>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">

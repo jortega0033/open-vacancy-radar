@@ -754,10 +754,14 @@ describe('ApplicationsPage', () => {
       fireEvent.click(await within(dialog).findByRole('button', { name: /^send application$/i }));
 
       await waitFor(() => expect(submitReview).toHaveBeenCalled());
-      // The header close-icon button and the modal-backdrop button share the accessible name "Close".
+      // The header close button is disabled, and so are the other ways out: a click on the dimmed
+      // backdrop and Escape do nothing while the decision is in flight.
       const closeButtons = within(dialog).getAllByRole('button', { name: /^close$/i });
-      expect(closeButtons).toHaveLength(2);
-      for (const button of closeButtons) expect(button).toBeDisabled();
+      expect(closeButtons).toHaveLength(1);
+      expect(closeButtons[0]).toBeDisabled();
+      fireEvent.click(dialog);
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
 
       resolveSubmit({ ok: true });
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

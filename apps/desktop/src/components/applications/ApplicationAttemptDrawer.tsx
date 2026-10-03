@@ -1,7 +1,7 @@
 import { X } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
-import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { Dialog } from '../shell/Dialog.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
 
 export interface ApplicationAttemptDrawerProps {
@@ -38,7 +38,6 @@ function formatDateTime(iso: string): string {
  * `checkpoint`, never a person from this drawer.
  */
 export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: ApplicationAttemptDrawerProps) {
-  useEscapeToClose(onClose);
   const [artifacts, setArtifacts] = useState<ApplicationArtifactSummary[] | null>(null);
   const [artifactsError, setArtifactsError] = useState<string>();
   const [recovering, setRecovering] = useState(false);
@@ -95,8 +94,12 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
   }, [attempt.id]);
 
   return (
-    <div className="modal modal-open modal-end" role="dialog" aria-modal="true">
-      <div className="modal-box flex max-w-md flex-col rounded-none p-0">
+    <Dialog
+      aria-label={`Application attempt for ${attempt.role} at ${attempt.company}`}
+      placement="end"
+      boxClassName="flex max-w-md flex-col rounded-none p-0"
+      onClose={onClose}
+    >
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">
             {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
@@ -190,8 +193,6 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
             Close
           </button>
         </div>
-      </div>
-      <button type="button" className="modal-backdrop" aria-label="Close" onClick={onClose} />
-    </div>
+    </Dialog>
   );
 }

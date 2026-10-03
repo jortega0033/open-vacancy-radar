@@ -529,7 +529,7 @@ describe('App shell sidebar on a narrow window (#451)', () => {
     expect(document.querySelector('aside')).toHaveClass('ovr-sidebar-collapsed');
 
     fireEvent.click(toggle);
-    const overlay = await screen.findByTestId('sidebar-overlay');
+    const overlay = await screen.findByRole('dialog', { name: 'Main navigation' });
     expect(within(overlay).getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
     expect(within(overlay).getByText('Saved jobs')).toBeInTheDocument();
     // A transient overlay is not a saved preference.
@@ -537,24 +537,28 @@ describe('App shell sidebar on a narrow window (#451)', () => {
     expect(bridge.updateSettings).not.toHaveBeenCalledWith({ sidebarCollapsed: true });
   });
 
-  it('closes the overlay on Escape, on the dimmed area and after choosing a page', async () => {
+  it('closes the overlay on Escape, on the dimmed area and after choosing a page, and gives focus back', async () => {
     setWindowWidth(760);
     installWorkspaceBridge();
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Expand sidebar' }));
-    await screen.findByTestId('sidebar-overlay');
-    fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.queryByTestId('sidebar-overlay')).not.toBeInTheDocument();
+    const toggle = await screen.findByRole('button', { name: 'Expand sidebar' });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const overlay = await screen.findByRole('dialog', { name: 'Main navigation' });
+    expect(overlay.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Main navigation' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toHaveFocus();
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Close sidebar' }));
-    expect(screen.queryByTestId('sidebar-overlay')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('dialog', { name: 'Main navigation' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Main navigation' })).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
-    const overlay = await screen.findByTestId('sidebar-overlay');
-    fireEvent.click(within(overlay).getByRole('button', { name: 'Saved jobs' }));
-    expect(screen.queryByTestId('sidebar-overlay')).not.toBeInTheDocument();
+    const again = await screen.findByRole('dialog', { name: 'Main navigation' });
+    fireEvent.click(within(again).getByRole('button', { name: 'Saved jobs' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Main navigation' })).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
   });
 

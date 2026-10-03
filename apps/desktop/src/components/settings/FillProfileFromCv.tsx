@@ -7,7 +7,7 @@ import type { CvDocumentRecord } from '../../window.js';
 import { buildSearchProfileFromCvPrompt } from '../cv/profile-bridge-prompts.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
-import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { Dialog } from '../shell/Dialog.js';
 import {
   SEARCH_PROFILE_CV_LIMITS,
   parseSearchProfileCvResponse,
@@ -129,7 +129,6 @@ export interface FillProfileFromCvDrawerProps {
 }
 
 export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }: FillProfileFromCvDrawerProps) {
-  useEscapeToClose(onClose);
   const [documents, setDocuments] = useState<CvDocumentRecord[]>();
   const [listError, setListError] = useState<string>();
   const [selectedId, setSelectedId] = useState('');
@@ -254,8 +253,13 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   const runErrorDetails = parseError ? undefined : runFailure;
 
   return (
-    <div className="modal modal-open modal-end" role="dialog" aria-modal="true" aria-label="Fill search profile from CV">
-      <div className="modal-box flex max-w-md flex-col rounded-none p-0">
+    <Dialog
+      aria-label="Fill search profile from CV"
+      placement="end"
+      boxClassName="flex max-w-md flex-col rounded-none p-0"
+      onClose={onClose}
+      closeDisabled={busy}
+    >
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">Fill from CV</h2>
           <button
@@ -493,8 +497,6 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
             </button>
           </div>
         </div>
-      </div>
-      <button type="button" className="modal-backdrop" aria-label="Close" onClick={onClose} disabled={busy} />
-    </div>
+    </Dialog>
   );
 }

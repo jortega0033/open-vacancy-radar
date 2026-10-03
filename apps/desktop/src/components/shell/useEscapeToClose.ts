@@ -1,21 +1,33 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * Which mounted overlay Escape should close, tracked as a stack so a dialog opened from within an
  * already-open drawer (e.g. a delete confirmation raised from CvDrawer) only closes itself on
  * Escape, leaving the drawer underneath open -- see open-vacancy-radar#386.
  */
-const closeStack: Array<() => void> = [];
+interface OverlayEntry {
+  /** Always the newest `onClose` the overlay passed, so the entry itself never has to be replaced. */
+  onClose: () => void;
+  disabled: boolean;
+}
+/** Every mounted overlay in the order it mounted. The order is the nesting: it must not change when
+ * an overlay re-renders, or an outer dialog that re-renders (because an inner one just opened) would
+ * jump above the inner one and take its Escape. */
+const closeStack: OverlayEntry[] = [];
 /** Every mounted overlay, including ones whose Escape handling is currently `disabled`. */
 let mountedOverlays = 0;
 let listenerAttached = false;
 
 function handleGlobalKeyDown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return;
-  const topmost = closeStack[closeStack.length - 1];
-  if (!topmost) return;
-  event.stopPropagation();
-  topmost();
+  // The topmost overlay that is allowed to close; a disabled one lets Escape fall through to beneath.
+  for (let index = closeStack.length - 1; index >= 0; index -= 1) {
+    const entry = closeStack[index]!;
+    if (entry.disabled) continue;
+    event.stopPropagation();
+    entry.onClose();
+    return;
+  }
 }
 
 /**
@@ -40,26 +52,25 @@ export function hasOpenOverlay(): boolean {
  * through to whatever is beneath it (or does nothing, if nothing is).
  */
 export function useEscapeToClose(onClose: () => void, disabled = false): void {
+  const entryRef = useRef<OverlayEntry>({ onClose, disabled });
+  entryRef.current.onClose = onClose;
+  entryRef.current.disabled = disabled;
   useEffect(() => {
     mountedOverlays += 1;
-    return () => {
-      mountedOverlays -= 1;
-    };
-  }, []);
-  useEffect(() => {
-    if (disabled) return;
+    const entry = entryRef.current;
     if (!listenerAttached) {
       window.addEventListener('keydown', handleGlobalKeyDown);
       listenerAttached = true;
     }
-    closeStack.push(onClose);
+    closeStack.push(entry);
     return () => {
-      const index = closeStack.lastIndexOf(onClose);
+      mountedOverlays -= 1;
+      const index = closeStack.lastIndexOf(entry);
       if (index !== -1) closeStack.splice(index, 1);
       if (closeStack.length === 0 && listenerAttached) {
         window.removeEventListener('keydown', handleGlobalKeyDown);
         listenerAttached = false;
       }
     };
-  }, [onClose, disabled]);
+  }, []);
 }

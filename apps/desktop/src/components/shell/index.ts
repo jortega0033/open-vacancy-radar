@@ -41,3 +41,5 @@ export { Menu } from './Menu.js';
 export type { MenuProps, MenuItem } from './Menu.js';
 export { ScheduledSendBanner } from './ScheduledSendBanner.js';
 export type { CancelScheduledOutcome, ScheduledSendBannerProps } from './ScheduledSendBanner.js';
+export { Dialog } from './Dialog.js';
+export type { DialogProps } from './Dialog.js';

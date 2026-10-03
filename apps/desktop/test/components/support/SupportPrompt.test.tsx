@@ -384,7 +384,8 @@ describe('SupportDialog (#503)', () => {
 
   it('a backdrop click behaves like Not now', async () => {
     await openDialog();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    // The dimmed area is the dialog element itself, not a separate button (#454).
+    fireEvent.click(screen.getByRole('dialog'));
     await waitFor(() => expect(stored).toEqual({ answered: false, asks: 1, successesSinceDismissal: 0 }));
     expect(dialog()).not.toBeInTheDocument();
   });
