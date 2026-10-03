@@ -8,6 +8,7 @@ import type {
   PreparedApplicationField,
 } from '../../window.js';
 import { applicationAnswerKeyForMatch } from './application-answer-match.js';
+import { TailoringSummary } from './TailoringSummary.js';
 
 /**
  * Resolves each entry in `prepared.fields` to the live snapshot field it corresponds to right now,
@@ -292,7 +293,7 @@ export function ApplicationPreparedSummary({
       {attempt.checkpointDetail && (
         <div>
           <h3 className="ovr-eyebrow">Tailoring and preparation</h3>
-          <p className="mt-1 text-xs text-base-content/70">{attempt.checkpointDetail}</p>
+          <TailoringSummary detail={attempt.checkpointDetail} />
         </div>
       )}
       <div>
