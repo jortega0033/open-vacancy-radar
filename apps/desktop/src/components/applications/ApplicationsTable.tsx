@@ -49,7 +49,7 @@ export function ApplicationsTable({
             <th>Role</th>
             <th>Company</th>
             <th>Location</th>
-            <th>Sponsor check</th>
+            <th className="whitespace-normal">Sponsor check</th>
             <th>Status</th>
             <th>Applied</th>
             <th>Next step</th>
