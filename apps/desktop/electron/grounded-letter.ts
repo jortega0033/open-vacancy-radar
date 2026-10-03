@@ -88,7 +88,7 @@ export function buildGroundedSourceFacts(input: GroundedSourceFactsInput): Groun
     const dates = entry.dates ? ` (${entry.dates})` : '';
     add(`experience-${index + 1}`, identity, `My reviewed CV lists ${entry.title} at ${entry.company}${client}${dates}`);
     entry.bullets.forEach((bullet, bulletIndex) => {
-      add(`experience-${index + 1}-bullet-${bulletIndex + 1}`, bullet, `The reviewed CV states: ${bullet}`);
+      add(`experience-${index + 1}-bullet-${bulletIndex + 1}`, bullet, bullet);
     });
   });
   source.education.forEach((entry, index) => {
@@ -111,7 +111,7 @@ export function buildGroundedSourceFacts(input: GroundedSourceFactsInput): Groun
     add('profile-years', profile.years, `My reviewed CV records ${profile.years} of experience`);
     add('profile-location', profile.location, `My reviewed CV lists my location as ${profile.location}`);
     add('profile-languages', profile.languages, `My reviewed CV lists my professional languages as ${profile.languages}`);
-    add('profile-authorization', profile.auth, `My reviewed CV states: ${profile.auth}`);
+    add('profile-authorization', profile.auth, `My reviewed CV lists my work authorization as ${profile.auth}`);
   }
   return facts;
 }
@@ -347,6 +347,121 @@ export interface GroundedLetterAssembly {
    * brief: a form that rejects the answer is a worse outcome than a letter citing one fact fewer.
    */
   maxChars?: number | null;
+  /**
+   * The vacancy's requirement lines, when the posting has them. Untrusted scraped text: they are
+   * only ever used to decide which cited facts share a paragraph (by shared words) and, after
+   * `sanitizeGroundedLabel`, to name that paragraph. They never become a claim about the
+   * candidate, and a fact is cited only because the model picked it.
+   */
+  requirements?: readonly string[] | null;
+}
+
+/* ------------------------------------------------------- dedupe and paragraphs ---------------- */
+
+function normalizeForCompare(value: string): string {
+  return ` ${value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()} `;
+}
+
+/** Below this many characters a contained text is a name or a skill, not a repeated sentence. */
+const MIN_CONTAINED_CHARS = 20;
+
+/**
+ * Drops any fact that says again what a higher-ranked fact already said: identical wording, or
+ * wording one fact's text wholly contains (a summary quoting a project bullet). The first, which
+ * is the one the model ranked higher, always survives. Runs before the length ceiling so a
+ * dropped repeat is replaced by the next distinct fact instead of leaving the letter short.
+ */
+export function dedupeGroundedFacts(facts: readonly GroundedSourceFact[]): GroundedSourceFact[] {
+  const kept: { fact: GroundedSourceFact; text: string }[] = [];
+  for (const fact of facts) {
+    const text = normalizeForCompare(fact.sourceText);
+    const repeated = kept.some((other) => {
+      if (other.text === text) return true;
+      const [short, long] = other.text.length <= text.length ? [other.text, text] : [text, other.text];
+      return short.trim().length >= MIN_CONTAINED_CHARS && long.includes(short);
+    });
+    if (!repeated) kept.push({ fact, text });
+  }
+  return kept.map((entry) => entry.fact);
+}
+
+const REQUIREMENT_STOPWORDS = new Set([
+  'about', 'ability', 'also', 'and', 'any', 'are', 'build', 'building', 'experience', 'for', 'from',
+  'good', 'have', 'including', 'knowledge', 'must', 'our', 'preferred', 'required', 'skills', 'strong',
+  'team', 'teams', 'that', 'the', 'their', 'this', 'using', 'will', 'with', 'work', 'working', 'year',
+  'years', 'you', 'your',
+]);
+
+function significantWords(value: string): Set<string> {
+  return new Set(
+    normalizeForCompare(value)
+      .split(' ')
+      .filter((word) => word.length >= 4 && !REQUIREMENT_STOPWORDS.has(word)),
+  );
+}
+
+const MAX_REQUIREMENTS_CONSIDERED = 8;
+
+/** The index of the requirement whose words overlap the fact the most, or -1 when none do. */
+function matchRequirement(fact: GroundedSourceFact, requirementWords: readonly Set<string>[]): number {
+  const words = significantWords(fact.sourceText);
+  let best = -1;
+  let bestScore = 0;
+  requirementWords.forEach((candidate, index) => {
+    let score = 0;
+    for (const word of candidate) if (words.has(word)) score += 1;
+    if (score > bestScore) {
+      best = index;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
+function factKind(fact: GroundedSourceFact): string {
+  if (fact.id === 'summary') return 'summary';
+  if (fact.id.startsWith('experience-')) return 'experience';
+  if (fact.id.startsWith('project-')) return 'project';
+  return 'background';
+}
+
+interface LetterParagraph {
+  /** The sanitized requirement this paragraph answers, or null for a plain grouping. */
+  requirement: string | null;
+  facts: GroundedSourceFact[];
+}
+
+function lowerFirst(value: string): string {
+  return /^[A-Z][a-z]/u.test(value) ? `${value[0]!.toLowerCase()}${value.slice(1)}` : value;
+}
+
+/**
+ * Groups cited facts into short paragraphs: by the vacancy requirement each one shares the most
+ * words with when requirement lines exist, otherwise by the kind of fact. Facts that match no
+ * requirement follow in kind groups. Order follows the model's ranking, by first appearance.
+ */
+function groupIntoParagraphs(
+  facts: readonly GroundedSourceFact[],
+  requirements: readonly string[],
+): LetterParagraph[] {
+  const candidates = requirements
+    .map((line) => sanitizeGroundedLabel(line, ''))
+    .filter((label, index, all) => label.length > 0 && all.indexOf(label) === index)
+    .slice(0, MAX_REQUIREMENTS_CONSIDERED);
+  const requirementWords = candidates.map((label) => significantWords(label));
+  const paragraphs = new Map<string, LetterParagraph>();
+  for (const fact of facts) {
+    const match = matchRequirement(fact, requirementWords);
+    const key = match >= 0 ? `requirement:${match}` : `kind:${factKind(fact)}`;
+    const existing = paragraphs.get(key);
+    if (existing) existing.facts.push(fact);
+    else paragraphs.set(key, { requirement: match >= 0 ? candidates[match]! : null, facts: [fact] });
+  }
+  return [...paragraphs.values()];
 }
 
 /**
@@ -361,13 +476,17 @@ export function assembleGroundedLetter(input: GroundedLetterAssembly): string {
   const role = sanitizeGroundedLabel(input.role, 'advertised');
   const name = input.candidateName.trim();
 
-  const cited = input.facts.slice(0, groundedFactBand(input.type, input.length).max);
+  const cited = dedupeGroundedFacts(input.facts).slice(0, groundedFactBand(input.type, input.length).max);
+  const requirements = input.requirements ?? [];
 
   const render = (facts: readonly GroundedSourceFact[]): string =>
     [
       shape.salutation ? voice.salutation(company) : '',
       voice.opening(role, company),
-      facts.map((fact) => fact.sentence).join(' '),
+      ...groupIntoParagraphs(facts, requirements).map((paragraph) => {
+        const lead = paragraph.requirement ? `On ${lowerFirst(paragraph.requirement)}: ` : '';
+        return `${lead}${paragraph.facts.map((fact) => fact.sentence).join(' ')}`;
+      }),
       shape.closing ? voice.closing : '',
       shape.signOff && name ? voice.signOff(name) : '',
     ]

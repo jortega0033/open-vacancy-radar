@@ -1304,7 +1304,9 @@ export function SearchPage({
                     {sourceCoverage.groups.map((group) => (
                       <li key={group.kind}>
                         <span className="font-medium">{group.title}.</span> {group.description}
-                        <span className="block text-xs text-base-content/70">{group.providers.join(', ')}</span>
+                        <span className="block text-xs text-base-content/70">
+                          {group.providers.map((p) => p.count > 1 ? `${p.name} (${p.count} feeds)` : p.name).join(', ')}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -1318,9 +1320,16 @@ export function SearchPage({
                         </button>
                       )}
                       {sourceCoverage.groups.some((group) => group.kind !== 'not_set_up') && (
-                        <button type="button" className="btn btn-outline btn-xs" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
-                          Retry with a new scan
-                        </button>
+                        <div>
+                          <button type="button" className="btn btn-outline btn-xs" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
+                            Retry with a new scan
+                          </button>
+                          {(busy || !filters.query.trim()) && (
+                            <p className="mt-1 text-xs text-base-content/70">
+                              {busy ? 'Scanning now' : 'Enter a role to retry'}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   ) : null}
