@@ -50,13 +50,12 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
 
 function renderDetail(
   result: SearchResult,
-  overrides: { providerLabel?: string; prepareAvailable?: boolean } = {},
+  overrides: { prepareAvailable?: boolean } = {},
 ) {
   render(
     <VacancyDetail
       result={result}
       defaultCvName={null}
-      providerLabel={overrides.providerLabel ?? 'Claude Code'}
       saveState="idle"
       prepareState="idle"
       prepareAvailable={overrides.prepareAvailable ?? true}
@@ -105,22 +104,15 @@ describe('VacancyDetail', () => {
     expect(screen.getByRole('button', { name: 'Finishing scan…' })).toBeDisabled();
   });
 
-  it("names the actually-configured provider in the CV match card, not a hardcoded Claude Code", () => {
-    renderDetail(worldwideResult(), { providerLabel: 'Codex' });
-
-    expect(screen.getByText(/your own Codex CLI/)).toBeInTheDocument();
-    expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
-  });
-
   describe('profile-score breakdown (issue #367)', () => {
     it('shows the honest unscored state, and no breakdown, when profileScore is null', () => {
       renderDetail(worldwideResult({ profileScore: null }));
 
-      expect(screen.getByText(/has not been scored against your search profile/i)).toBeInTheDocument();
+      expect(within(screen.getByRole('region', { name: 'Profile score breakdown' })).getByText(/not scored yet/i)).toBeInTheDocument();
       expect(screen.queryByText(/Profile fit: \d+ out of 100/i)).not.toBeInTheDocument();
     });
 
-    it("renders the scorer's preserved breakdown -- dimensions, role classification, matching signals, gaps, and reasons -- exactly as computed", () => {
+    it("renders the scorer's preserved breakdown -- matching signals and gaps, without engine reasons or role classification", () => {
       renderDetail(
         worldwideResult({
           profileScore: 82,
@@ -140,20 +132,17 @@ describe('VacancyDetail', () => {
       // The full breakdown. The compact summary above it repeats some of these, so scope to it.
       const breakdown = within(screen.getByRole('region', { name: 'Profile score breakdown' }));
       expect(breakdown.getByText(/Profile fit: 82 out of 100\./)).toBeInTheDocument();
-      expect(breakdown.getByText('90')).toBeInTheDocument();
-      expect(breakdown.getByText('85')).toBeInTheDocument();
-      expect(breakdown.getByText('70')).toBeInTheDocument();
-      expect(breakdown.getByText('Frontend Engineer')).toBeInTheDocument();
+      expect(breakdown.queryByText('Frontend Engineer')).not.toBeInTheDocument();
       expect(breakdown.getByText('Angular')).toBeInTheDocument();
       expect(breakdown.getByText('TypeScript')).toBeInTheDocument();
       expect(breakdown.getByText('Advertised seniority is below the candidate’s experience')).toBeInTheDocument();
-      expect(breakdown.getByText('Technical fit (90): strong match on Angular and TypeScript.')).toBeInTheDocument();
+      expect(breakdown.queryByText('Technical fit (90): strong match on Angular and TypeScript.')).not.toBeInTheDocument();
     });
 
     it('shows the explicit older-report fallback, never fabricating a breakdown, when profileScore exists but profileMatch does not', () => {
       renderDetail(worldwideResult({ profileScore: 82 }));
 
-      expect(screen.getByText(/breakdown unavailable for this older report/i)).toBeInTheDocument();
+      expect(screen.getByText(/details not available/i)).toBeInTheDocument();
       expect(screen.queryByText(/Profile fit: \d+ out of 100/i)).not.toBeInTheDocument();
     });
   });
@@ -285,7 +274,6 @@ function AssistantHarness({ onScrollTopChange }: { onScrollTopChange?: (top: num
     <VacancyDetail
       result={worldwideResult()}
       defaultCvName={null}
-      providerLabel="Claude Code"
       saveState="idle"
       prepareState="idle"
       onSave={vi.fn()}
@@ -358,7 +346,6 @@ describe('VacancyDetail CV assistant opening (issue #453)', () => {
       <VacancyDetail
         result={worldwideResult()}
         defaultCvName={null}
-        providerLabel="Claude Code"
         saveState="idle"
         prepareState="idle"
         onSave={vi.fn()}

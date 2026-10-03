@@ -166,9 +166,6 @@ export interface VacancyDetailProps {
   result: SearchResult;
   /** Name of the CV marked default in the workspace library, or null when there is none. */
   defaultCvName: string | null;
-  /** Display name of the CLI the gap analysis actually runs through, e.g. "Claude Code" or "Codex"
-   * (see `PROVIDER_LABEL`): reflects the user's configured default provider, not a fixed one. */
-  providerLabel: string;
   saveState: SaveState;
   prepareState: PrepareState;
   /** False for streamed rows that are not in the main process's final trusted report yet. */
@@ -197,7 +194,6 @@ export interface VacancyDetailProps {
 export function VacancyDetail({
   result,
   defaultCvName,
-  providerLabel,
   saveState,
   prepareState,
   prepareAvailable = true,

@@ -5,8 +5,6 @@ import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
-import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
@@ -189,7 +187,6 @@ export function SearchPage({
   const session = controlledSession ?? localSession;
   const setSession = onSessionChange ?? setLocalSession;
   const [engineState, setEngineState] = useState<EngineState>('checking');
-  const [engineError, setEngineError] = useState<string>();
 
   const [worldwideReport, setWorldwideReport] = useSearchSessionField(session, setSession, 'report');
   const [reportHydrated, setReportHydrated] = useSearchSessionField(session, setSession, 'reportHydrated');
@@ -283,7 +280,6 @@ export function SearchPage({
   // Which CLI the gap-analysis offer below actually runs through (issue #400): the effective
   // provider, matching what CvAssistant itself resolves, so this copy never names a CLI the
   // analysis won't actually use.
-  const { provider: effectiveProvider } = useEffectiveProvider();
 
   const [engineCheckTick, setEngineCheckTick] = useState(0);
   const [checkingEngine, setCheckingEngine] = useState(false);
@@ -296,14 +292,10 @@ export function SearchPage({
         const status = await window.vacancyRadar.getStatus();
         if (cancelled) return;
         if (status.ready) setEngineState('ready');
-        else {
-          setEngineState('unavailable');
-          setEngineError(status.error ?? 'vacancy engine is not ready');
-        }
-      } catch (error) {
+        else setEngineState('unavailable');
+      } catch {
         if (cancelled) return;
         setEngineState('unavailable');
-        setEngineError(describeError(error, 'failed to reach the vacancy engine'));
       } finally {
         if (!cancelled) setCheckingEngine(false);
       }
@@ -1077,6 +1069,10 @@ export function SearchPage({
             }
           >
             Search failed.
+            <details className="mt-1 text-xs">
+              <summary className="cursor-pointer">Details</summary>
+              <p className="mt-1 break-words">{scanError}</p>
+            </details>
           </ErrorBanner>
         )}
         {scanGuard && (
@@ -1215,7 +1211,6 @@ export function SearchPage({
               <VacancyDetail
                 result={selected}
                 defaultCvName={defaultCvName}
-                providerLabel={PROVIDER_LABEL[effectiveProvider]}
                 saveState={saveState}
                 prepareState={prepareState}
                 prepareAvailable={!selected.provisional}
