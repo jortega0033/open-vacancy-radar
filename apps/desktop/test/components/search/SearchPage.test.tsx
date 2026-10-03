@@ -2,6 +2,7 @@ import { StrictMode, useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
+import { getEngineHealth } from '../../../src/engine-health.js';
 import { LiveAnnouncerProvider } from '../../../src/components/shell/index.js';
 import {
   SearchPage,
@@ -2016,6 +2017,8 @@ describe('SearchPage', () => {
       await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
       expect(await screen.findByText(/the damaged copy was kept as vacancy-engine\.db\.damaged-1/i)).toBeInTheDocument();
       await waitFor(() => expect(screen.queryByText(/the local job cache is damaged/i)).not.toBeInTheDocument());
+      // The sidebar reads the same reading, so it clears at once instead of at its next poll (#477).
+      expect(getEngineHealth()).toEqual({ state: 'ready' });
     });
 
     it('offers no rebuild for a locked cache', async () => {

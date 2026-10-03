@@ -20,6 +20,7 @@ import {
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { ScanProgressPanel, useScanStatus } from './ScanProgressPanel.js';
 import { useElementWidth } from './useElementWidth.js';
+import { publishEngineHealth } from '../../engine-health.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
@@ -318,6 +319,8 @@ export function SearchPage({
     void (async () => {
       try {
         const status = await window.vacancyRadar.getStatus();
+        // Published even when this page has since unmounted: the sidebar wants the newest reading.
+        publishEngineHealth(status);
         if (cancelled) return;
         if (status.ready) {
           setEngineState('ready');

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import { App } from '../../../src/App.js';
+import { resetEngineHealthForTest } from '../../../src/engine-health.js';
 import { AppSidebar } from '../../../src/components/shell/AppSidebar.js';
 import { WorkspaceHeader } from '../../../src/components/shell/WorkspaceHeader.js';
 import { EmptyState } from '../../../src/components/shell/EmptyState.js';
@@ -53,6 +54,7 @@ function installAgentDock(overrides: Partial<AgentDockBridge> = {}): AgentDockBr
 const NOOP = () => {};
 
 beforeEach(() => {
+  resetEngineHealthForTest();
   installAgentDock();
   installVacancyRadarBridge();
   installWorkspaceBridge();
@@ -162,13 +164,91 @@ describe('AppSidebar', () => {
     expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not installed');
 
     rerender(<AppSidebar {...BASE} runtimeState="not-authenticated" />);
-    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not authenticated');
+    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not signed in');
 
     rerender(<AppSidebar {...BASE} runtimeState="unavailable" />);
     expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code unavailable');
 
     rerender(<AppSidebar {...BASE} runtimeState="connecting" />);
     expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code starting');
+  });
+});
+
+describe('AppSidebar system status (#477)', () => {
+  const BASE = {
+    active: 'search' as const,
+    onNavigate: NOOP,
+    collapsed: false,
+    onToggleCollapsed: NOOP,
+    counts: undefined,
+    runtimeLabel: 'Claude Code',
+    runtimeState: 'ready' as const,
+  };
+  const ATTENTION = { state: 'attention', category: 'corrupt', message: 'The local job cache is damaged and cannot be opened.' } as const;
+
+  it('shows a warning for a failing job search even while the AI runtime is ready', () => {
+    render(<AppSidebar {...BASE} engine={ATTENTION} />);
+    expect(screen.getByRole('button', { name: /^AI runtime: Claude Code, ready$/ })).toBeInTheDocument();
+    const engine = screen.getByRole('button', { name: /^Job search: needs attention/ });
+    expect(engine).toHaveTextContent('Job search needs attention');
+    expect(engine).toHaveAttribute('title', ATTENTION.message);
+  });
+
+  it('shows a ready job search when the engine is healthy', () => {
+    render(<AppSidebar {...BASE} engine={{ state: 'ready' }} />);
+    expect(screen.getByRole('button', { name: 'Job search: ready' })).toHaveTextContent('Job search ready');
+  });
+
+  it('opens AI runtime from the runtime status and Search from the job search status', () => {
+    const onNavigate = vi.fn();
+    render(<AppSidebar {...BASE} onNavigate={onNavigate} engine={ATTENTION} />);
+    fireEvent.click(screen.getByRole('button', { name: /^AI runtime: / }));
+    expect(onNavigate).toHaveBeenLastCalledWith('runtime');
+    fireEvent.click(screen.getByRole('button', { name: /^Job search: / }));
+    expect(onNavigate).toHaveBeenLastCalledWith('search');
+  });
+
+  it('gives every runtime state its own icon, so none depends on color', () => {
+    const states = ['ready', 'connecting', 'unavailable', 'not-installed', 'not-authenticated', 'limit-reached'] as const;
+    const shapes = new Set<string>();
+    for (const runtimeState of states) {
+      const { unmount } = render(<AppSidebar {...BASE} runtimeState={runtimeState} />);
+      const button = screen.getByRole('button', { name: /^AI runtime: / });
+      const svg = button.querySelector('svg');
+      expect(svg, runtimeState).not.toBeNull();
+      shapes.add(svg!.innerHTML);
+      unmount();
+    }
+    expect(shapes.size).toBe(states.length);
+  });
+
+  it('keeps the whole state in the name of each collapsed status button', () => {
+    render(<AppSidebar {...BASE} collapsed runtimeState="not-authenticated" engine={ATTENTION} />);
+    expect(screen.getByRole('button', { name: 'AI runtime: Claude Code, not signed in' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Job search: needs attention, The local job cache is damaged/ })).toBeInTheDocument();
+    // Collapsed drops the words, so the names above are the only text a screen reader gets.
+    expect(screen.queryByText(/not signed in/)).not.toBeInTheDocument();
+  });
+
+  it('tells a job search that is still being checked from one that works', () => {
+    render(<AppSidebar {...BASE} engine={{ state: 'checking' }} />);
+    expect(screen.getByRole('button', { name: 'Job search: checking' })).toHaveTextContent('Checking job search');
+  });
+});
+
+describe('App shell job search status (#477)', () => {
+  it('reads the live engine status at start-up and shows it in the sidebar', async () => {
+    installWorkspaceBridge();
+    installVacancyRadarBridge({
+      getStatus: vi.fn().mockResolvedValue({
+        ready: false,
+        error: 'The local job cache is damaged and cannot be opened.',
+        category: 'corrupt',
+        canRebuild: true,
+      }),
+    });
+    render(<App />);
+    expect(await screen.findByRole('button', { name: /^Job search: needs attention/ })).toBeInTheDocument();
   });
 });
 

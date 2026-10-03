@@ -27,12 +27,15 @@ import {
 } from './components/shell/index.js';
 import { applyDensity, applyTheme } from './theme.js';
 import { activeProviderLimit, useProviderLimits, useProviderOverride } from './provider-limits.js';
+import { publishEngineHealth, useEngineHealth } from './engine-health.js';
 
 type DaemonState = 'connecting' | 'ready' | 'unavailable';
 
 const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
 /** How often the shell re-reads the sidebar counts so pipeline-driven changes show without navigating. */
 const COUNTS_REFRESH_MS = 5_000;
+/** How often the shell re-reads the job search engine's health (#477). */
+const ENGINE_HEALTH_REFRESH_MS = 20_000;
 /** Below this window width the sidebar is the 64px rail unless the person pinned it open (#451). */
 const SIDEBAR_RAIL_BELOW_PX = 1100;
 
@@ -387,6 +390,29 @@ export function App() {
     };
   }, [daemonState, defaultProvider]);
 
+  // The job search engine's live health, so the sidebar says so when scans cannot run even though
+  // the AI runtime is fine (#477). Read at start-up, then every 20 s while the window is visible.
+  const engineHealth = useEngineHealth();
+  useEffect(() => {
+    let cancelled = false;
+    const read = async () => {
+      try {
+        const status = await window.vacancyRadar.getStatus();
+        if (!cancelled) publishEngineHealth(status);
+      } catch {
+        // No reading leaves the last one in place rather than inventing a failure.
+      }
+    };
+    void read();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void read();
+    }, ENGINE_HEALTH_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   // A provider that answered "usage limit" is not ready, whatever its install and sign-in say (#461).
   const providerLimits = useProviderLimits();
   const providerInUse = useProviderOverride() ?? defaultProvider;
@@ -408,6 +434,7 @@ export function App() {
         counts={counts}
         runtimeLabel={PROVIDER_LABEL[providerInUse]}
         runtimeState={shownRuntimeState}
+        engine={engineHealth}
       />
 
       {/* The full sidebar over the content at narrow widths, without taking width from it (#451).
@@ -427,6 +454,7 @@ export function App() {
               counts={counts}
               runtimeLabel={PROVIDER_LABEL[providerInUse]}
               runtimeState={shownRuntimeState}
+              engine={engineHealth}
             />
           </div>
           <button
