@@ -321,6 +321,13 @@ export const applicationAttempts = sqliteTable('application_attempts', {
    * notes) the way every other application does. Null while the attempt is still in progress and
    * has not yet reached a state worth surfacing on the Applications page. */
   applicationId: text('application_id').references(() => applications.id, { onDelete: 'set null' }),
+  /**
+   * Set when the person deletes the Applications row this attempt is linked to (#444). The tracker
+   * sync creates a row for an attempt that has none; without this marker the next event, or the
+   * next start-up reconcile, would recreate the row the person just removed. Never set by anything
+   * else, and never cleared: a deleted tracker row stays deleted.
+   */
+  applicationDetached: integer('application_detached', { mode: 'boolean' }).notNull().default(false),
   /** Links back to a DiscoveryVacancyAudit/report row's `key`, matching `savedJobs.vacancyKey`'s
    * existing convention -- this attempt's "posting ID". Null for a manually-entered target. */
   vacancyKey: text('vacancy_key'),

@@ -198,6 +198,20 @@ export interface ApplicationRecord {
   letterId: string | null;
   notes: string;
   archived: boolean;
+  /**
+   * The newest pipeline attempt linked to this row (#444), or null for a row entered by hand. Only
+   * `listApplications` fills it; `evidence` says how a sent attempt was established, so an observed
+   * receipt and a person's own report stay distinguishable.
+   */
+  attempt?: ApplicationAttemptLink | null;
+}
+
+export interface ApplicationAttemptLink {
+  attemptId: string;
+  checkpoint: ApplicationAttemptCheckpoint;
+  evidence: ApplicationCompletionEvidence | null;
+  /** ISO-8601: when it was sent when it was, otherwise when the attempt last changed. */
+  at: string;
 }
 
 export interface ApplicationInput {

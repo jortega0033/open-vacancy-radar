@@ -28,6 +28,8 @@ import { applyDensity, applyTheme } from './theme.js';
 type DaemonState = 'connecting' | 'ready' | 'unavailable';
 
 const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
+/** How often the shell re-reads the sidebar counts so pipeline-driven changes show without navigating. */
+const COUNTS_REFRESH_MS = 5_000;
 
 export function App() {
   const [nav, setNav] = useState<NavPage>('search');
@@ -150,6 +152,23 @@ export function App() {
 
   useEffect(() => {
     void refreshCounts();
+  }, [refreshCounts]);
+
+  // The pipeline changes counts on its own (an attempt starts, a submission lands) with no renderer
+  // action to hang a refresh on, so the sidebar and page headers would otherwise stay stale until
+  // the next navigation (#444). Cheap local read; paused while the window is hidden.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshCounts();
+    }, COUNTS_REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshCounts();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [refreshCounts]);
 
   const handleNavigate = useCallback((page: NavPage) => {

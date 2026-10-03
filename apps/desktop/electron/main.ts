@@ -474,6 +474,14 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     // ADI-22: hydrate the `close`-handler and background-scan-timer mirrors once, here, since
     // neither can await a fresh read at the moment they need the answer. Kept in sync afterward
     // by the `workspace:settings:update` handler.
+    // #444: give attempts that predate the tracker link (or whose row was never created) their
+    // Applications row. Local reads and writes only; nothing is contacted or resent. A failure here
+    // must never stop the workspace from opening.
+    try {
+      workspace.reconcileApplicationRows(db);
+    } catch (error) {
+      console.error('[workspace] could not reconcile application rows', error);
+    }
     const settings = workspace.getSettings(db);
     minimizeToTrayOnClose = settings.minimizeToTrayOnClose;
     autoScanEnabled = settings.autoScanEnabled;

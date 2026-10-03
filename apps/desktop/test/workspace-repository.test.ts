@@ -139,7 +139,8 @@ describe('settings', () => {
 
     expect(result.deleted).toEqual({
       savedJobs: 1,
-      applications: 1,
+      // The tracker row seeded by hand, plus the one the attempt now creates for itself (#444).
+      applications: 2,
       cvDocuments: 1,
       letters: 1,
       applicationAttempts: 1,

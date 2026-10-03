@@ -55,6 +55,9 @@ import { assessJdCompleteness } from '../generation-input.js';
 import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
+import { syncApplicationForAttempt } from './attempt-application-sync.js';
+
+export { reconcileApplicationRows } from './attempt-application-sync.js';
 import { deriveApplicationIdentity, type ApplicationIdentity } from './application-identity.js';
 import {
   appSettings,
@@ -365,7 +368,33 @@ export function listApplications(db: WorkspaceDb, filter: ApplicationFilter = 'a
     filter === 'all'
       ? query.all()
       : query.where(eq(applications.archived, filter === 'archived')).all();
-  return rows.map(toApplication);
+  if (rows.length === 0) return [];
+  // The newest attempt linked to each row, so the list can show where the application stands
+  // without a second call and link to the Review queue (#444).
+  const attempts = db
+    .select()
+    .from(applicationAttempts)
+    .where(inArray(applicationAttempts.applicationId, rows.map((row) => row.id)))
+    .orderBy(desc(applicationAttempts.createdAt))
+    .all();
+  const newest = new Map<string, ApplicationAttemptRow>();
+  for (const attempt of attempts) {
+    if (attempt.applicationId && !newest.has(attempt.applicationId)) newest.set(attempt.applicationId, attempt);
+  }
+  return rows.map((row) => {
+    const attempt = newest.get(row.id);
+    return {
+      ...toApplication(row),
+      attempt: attempt
+        ? {
+            attemptId: attempt.id,
+            checkpoint: attempt.checkpoint,
+            evidence: attempt.completionEvidence,
+            at: iso(attempt.submittedAt ?? attempt.updatedAt),
+          }
+        : null,
+    };
+  });
 }
 
 export function createApplication(db: WorkspaceDb, input: ApplicationInput): ApplicationRecord {
@@ -408,12 +437,17 @@ export function updateApplication(db: WorkspaceDb, id: string, values: Applicati
 }
 
 export function deleteApplication(db: WorkspaceDb, id: string): DeleteResult {
-  const removed = db
-    .delete(applications)
-    .where(eq(applications.id, id))
-    .returning({ id: applications.id })
-    .all();
-  return { deleted: removed.length > 0 };
+  return db.transaction((tx) => {
+    // The person removed this row on purpose: mark its attempts so the tracker sync does not bring
+    // it back (#444). Must precede the delete, because the foreign key then clears `application_id`.
+    tx.update(applicationAttempts).set({ applicationDetached: true }).where(eq(applicationAttempts.applicationId, id)).run();
+    const removed = tx
+      .delete(applications)
+      .where(eq(applications.id, id))
+      .returning({ id: applications.id })
+      .all();
+    return { deleted: removed.length > 0 };
+  });
 }
 
 // -------------------------------------------------------------------------- cv documents
@@ -2303,7 +2337,9 @@ export function createApplicationAttempt(db: WorkspaceDb, input: ApplicationAtte
       .returning()
       .all();
     if (!row) throw new Error('failed to insert application attempt');
-    return toApplicationAttempt(row);
+    // The Applications row and saved-job status follow the attempt from its first moment (#444).
+    syncApplicationForAttempt(tx, row.id);
+    return toApplicationAttempt(tx.select().from(applicationAttempts).where(eq(applicationAttempts.id, row.id)).get() ?? row);
   });
 }
 
@@ -2386,7 +2422,10 @@ export function updateApplicationAttempt(
 
     const [row] = tx.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
     if (!row) throw new WorkspaceNotFoundError('application attempt', id);
-    return toApplicationAttempt(row);
+    // Same transaction as the checkpoint write, so the tracker can never show a state the attempt
+    // does not have (#444).
+    syncApplicationForAttempt(tx, id);
+    return toApplicationAttempt(tx.select().from(applicationAttempts).where(eq(applicationAttempts.id, id)).get() ?? row);
   });
 }
 
@@ -2486,6 +2525,7 @@ export function restartApplicationTailoring(
       .returning()
       .all();
     if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+    syncApplicationForAttempt(tx, id);
     return toApplicationAttempt(row);
   });
 }

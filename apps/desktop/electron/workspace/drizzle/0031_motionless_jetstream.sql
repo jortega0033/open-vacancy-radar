@@ -1,0 +1,1 @@
+ALTER TABLE `application_attempts` ADD `application_detached` integer DEFAULT false NOT NULL;
