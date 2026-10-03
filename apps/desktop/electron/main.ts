@@ -2715,7 +2715,11 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
               }
             : {}),
         });
-        latestVacancyReport = result.report;
+        // A scan with no matches must not displace the last report that had some (#561): saved jobs
+        // and prepare still resolve rows against it, and the renderer keeps showing it.
+        if (result.report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
+          latestVacancyReport = result.report;
+        }
         return result.report;
         } finally {
           if (activeVacancyScan === scan) activeVacancyScan = undefined;
