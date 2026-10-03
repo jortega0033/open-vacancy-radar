@@ -24,6 +24,9 @@
 
 @import 'tailwindcss';
 
+/* Short windows (the default 1000x700 app window): Search drops secondary text so rows fit (#555). */
+@custom-variant short (@media (max-height: 800px));
+
 @plugin "daisyui" {
   themes: false;
 }

@@ -1394,14 +1394,14 @@ export function SearchPage({
             </WarningBanner>
           )}
           {worldwideReport && !singlePane && (
-            <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">
+            <p className="mx-6 mt-3 text-xs text-base-content/60 short:hidden" role="status">
               {visible.length.toLocaleString()} {visible.length === 1 ? 'vacancy' : 'vacancies'}
               {appliedFilters.query.trim() ? ` match '${appliedFilters.query.trim()}'` : ''} · scanned{' '}
               {new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </p>
           )}
           <div
-            className={`mt-3 flex min-h-0 flex-1 ${singlePane ? 'flex-col px-6' : 'flex-row'}`}
+            className={`mt-3 flex min-h-0 flex-1 short:mt-2 ${singlePane ? 'flex-col px-6' : 'flex-row'}`}
             aria-busy={scanning}
           >
             {showListPane && (
