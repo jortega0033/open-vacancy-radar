@@ -82,7 +82,7 @@ async function exportPdf(window: Page, electronApp: ElectronApplication, saveDir
   await stubNativeSurfaces(electronApp, saveDir);
   await pdf.getByRole('button', { name: 'Export as PDF' }).click();
   await expect(pdf.getByRole('status').first()).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
-  const text = (await pdf.innerText()).match(/(\d+) page\(s\)/);
+  const text = (await pdf.innerText()).match(/(\d+) pages?\b/);
   expect(text, 'the saved PDF reports its page count').not.toBeNull();
   const pages = Number(text![1]);
   return { pdf, pdfPath: `${saveDir}/${PDF_REVIEW_CV_NAME}.pdf`, pages };
@@ -169,7 +169,7 @@ test('the pages are drawn in the panel by the real renderer, and confirming wait
     await expect(region.getByText('Extracted text', { exact: true }), 'every page offers its text').toHaveCount(pages);
     expect(await paintedCanvases(window), 'every page has real pixels, not a blank canvas').toBe(pages);
     await expect(confirm).toBeEnabled();
-    await expect(pdf.getByLabel('Pages shown')).toHaveText(`All ${pages} page(s) were shown.`);
+    await expect(pdf.getByLabel('Pages shown')).toHaveText(`All ${pages} ${pages === 1 ? 'page was' : 'pages were'} shown.`);
 
     await confirm.click();
     await expect(pdf.getByRole('status').first()).toHaveText('Accepted');

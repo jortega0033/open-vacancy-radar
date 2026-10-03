@@ -163,11 +163,11 @@ export function CvPdfPageReview({ overlayId, artifact, onOverlayChange }: CvPdfP
       const opened = await openPdfForReview(bytes);
       if (opened.pageCount > MAX_REVIEW_PAGES) {
         await opened.destroy().catch(() => undefined);
-        throw new Error(`this PDF has ${opened.pageCount} pages. Pages can be shown here for CVs up to ${MAX_REVIEW_PAGES} pages. Lower the project limit in your CV review, approve again, then export`);
+        throw new Error(`this PDF is too long to preview here. Include fewer projects and export again`);
       }
       if (artifact.validation.pageCount !== undefined && opened.pageCount !== artifact.validation.pageCount) {
         await opened.destroy().catch(() => undefined);
-        throw new Error(`this PDF has ${opened.pageCount} page(s) but ${artifact.validation.pageCount} were recorded at export. Export it again`);
+        throw new Error(`this file changed since it was exported. Export it again`);
       }
       const previous = reviewRef.current;
       reviewRef.current = opened;
@@ -194,7 +194,7 @@ export function CvPdfPageReview({ overlayId, artifact, onOverlayChange }: CvPdfP
       {review && (
         <>
           <p className="text-xs text-base-content/60" role="status" aria-label="Pages shown">
-            {alreadyViewed ? `All ${pageCount} page(s) were shown.` : `Pages shown: ${Math.min(shown.size, pageCount)} of ${pageCount}. Scroll to read each one.`}
+            {alreadyViewed ? `All ${pageCount} ${pageCount === 1 ? 'page was' : 'pages were'} shown.` : `Page ${Math.min(shown.size, pageCount)} of ${pageCount}. Scroll to read each page.`}
           </p>
           <div
             className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto overflow-x-hidden rounded-box border border-base-300 p-2"

@@ -87,7 +87,7 @@ describe('JdReview (#419, step 4)', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     render(<JdReview cvId="cv-1" vacancy={ABSENT} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
 
-    expect(screen.getByText(/No posting text came with this vacancy/)).toBeInTheDocument();
+    expect(screen.getByText(/No job description came with this job/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Full job description text')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /paste job description/i })).toBeInTheDocument();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -121,7 +121,7 @@ describe('JdReview (#419, step 4)', () => {
       }),
     );
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(await screen.findByText(/Saved as revision 1/)).toHaveTextContent('Text check cccccccccccc');
+    expect(await screen.findByText(/^Saved on /)).toBeInTheDocument();
   });
 
   it('pasting a replacement hands the new text up and saves it as a new pasted revision', async () => {
@@ -165,7 +165,7 @@ describe('JdReview (#419, step 4)', () => {
     installWorkspaceBridge({ getCvEvidenceOverlay: vi.fn().mockResolvedValue(saved) });
     render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
 
-    await screen.findByText(/Saved as revision 1/);
+    await screen.findByText(/^Saved on /);
     expect(screen.queryByRole('checkbox', { name: /read the whole job description/i })).not.toBeInTheDocument();
   });
 
@@ -208,7 +208,7 @@ describe('CvAssistant job description handoff (#419, steps 1 and 4)', () => {
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]), createCvEvidenceOverlay });
     render(<CvAssistant vacancy={ABSENT} />);
 
-    expect(await screen.findByText(/No posting text came with this vacancy/)).toBeInTheDocument();
+    expect(await screen.findByText(/No job description came with this job/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /paste job description/i }));
     fireEvent.change(screen.getByLabelText('Job description text'), { target: { value: 'My pasted posting text.' } });
     fireEvent.click(screen.getByRole('button', { name: /use this text/i }));
@@ -265,7 +265,7 @@ describe('CvAssistant job description handoff (#419, steps 1 and 4)', () => {
     });
     render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
     await waitFor(() => expect(screen.getByLabelText('Full job description text')).toHaveTextContent('Stored replacement text.'));
-    expect(screen.getByRole('button', { name: /save as new revision/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
   });
 
   it('replacing the text writes exactly one update and no create', async () => {
@@ -297,7 +297,7 @@ describe('CvAssistant job description handoff (#419, steps 1 and 4)', () => {
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
     render(<CvAssistant vacancy={FOUND} />);
 
-    expect(await screen.findByText(/no reviewed structured source yet/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/check your cv details first/i)).length).toBeGreaterThan(0);
   });
 });
 
@@ -334,7 +334,7 @@ describe('JdReview confirms before a replacement clears reviews (#450)', () => {
     render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={onReplaceText} onSaved={vi.fn()} />);
     await waitFor(() => expect(screen.getByLabelText('Full job description text')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole('button', { name: /replace job description/i })).toBeEnabled());
-    await screen.findByText(/Saved as revision 1/);
+    await screen.findByText(/^Saved on /);
 
     openPaste('New posting text.');
 
@@ -365,7 +365,7 @@ describe('JdReview confirms before a replacement clears reviews (#450)', () => {
     });
     const onReplaceText = vi.fn();
     render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={onReplaceText} onSaved={vi.fn()} />);
-    await screen.findByText(/Saved as revision 1/);
+    await screen.findByText(/^Saved on /);
 
     openPaste('Draft I want to keep.');
     await screen.findByRole('alertdialog', { name: 'Replace the job description?' });
@@ -385,7 +385,7 @@ describe('JdReview confirms before a replacement clears reviews (#450)', () => {
       updateCvEvidenceOverlay,
     });
     render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
-    await screen.findByText(/Saved as revision 1/);
+    await screen.findByText(/^Saved on /);
 
     openPaste('Pasted text.');
 
@@ -400,7 +400,7 @@ describe('JdReview confirms before a replacement clears reviews (#450)', () => {
       updateCvEvidenceOverlay,
     });
     render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
-    await screen.findByText(/Saved as revision 1/);
+    await screen.findByText(/^Saved on /);
 
     openPaste(`  ${FULL_JD}  `);
 

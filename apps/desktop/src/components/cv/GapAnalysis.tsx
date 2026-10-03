@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import type { CvProfile, CvSourceDocument, SavedJobRecord } from '../../window.js';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
 import { buildGenerationPromptContext } from '../generation/prompts.js';
 import { AiOutput } from './AiOutput.js';
@@ -139,10 +138,9 @@ export function GapAnalysis({
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">ATS fit</div>
+        <div className="card-title text-base font-bold">Job fit check</div>
         <p className="text-sm text-base-content/60">
-          Compare this CV with the selected vacancy, including full-posting requirements and known
-          input gaps.
+          See how well your CV fits this job.
         </p>
 
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}
@@ -231,7 +229,6 @@ export function GapAnalysis({
           label="ATS fit result"
           idleHint="No analysis yet."
           busyLabel="Checking your CV against this vacancy…"
-          providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
           providerId={provider ?? 'claude'}
           onRetry={handleRun}
         />

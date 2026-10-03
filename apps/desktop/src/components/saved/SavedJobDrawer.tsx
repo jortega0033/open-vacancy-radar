@@ -171,7 +171,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm font-medium">Verification</span>
+            <span className="mb-1 block text-sm font-medium">Sponsor check</span>
             <input
               className="input w-full"
               type="text"
@@ -206,6 +206,12 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
             />
           </label>
 
+          {job?.matchPercent != null && (
+            <p className="text-sm">
+              <span className="font-medium">Match</span> <span className="text-base-content/70">{job.matchPercent}%</span>
+            </p>
+          )}
+
           {/*
             The kept gap analysis, when there is one. Read-only and outside the form's `FormState`
             on purpose: this is generated output the user chose to keep, not a field of the job,
@@ -215,9 +221,9 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
             rather than as a textarea, for the same reason.
           */}
           {job?.gapAnalysis && (
-            <section className="block" aria-label="Saved gap analysis">
+            <section className="block" aria-label="Saved fit check">
               <span className="mb-1 block text-sm font-medium">
-                Gap analysis
+                Fit check
                 {job.gapAnalysisAt && (
                   <span className="ml-2 font-normal text-base-content/60">
                     saved {formatKeptAt(job.gapAnalysisAt)}
@@ -228,7 +234,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
                 {job.gapAnalysis}
               </div>
               <p className="mt-1 text-xs text-base-content/60">
-                Kept on this computer. Deleting this saved job deletes it too.
+                Stored on this computer. Deleted with this job.
               </p>
             </section>
           )}

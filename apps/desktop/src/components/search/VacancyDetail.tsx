@@ -113,8 +113,8 @@ function FitSummary({ result }: { result: SearchResult }) {
       </div>
       <p className="mt-1 text-xs text-base-content/60">
         {score === null
-          ? 'This vacancy has no profile score, so no fit is shown. It is not a zero.'
-          : 'Scored against your search profile. It does not compare this vacancy to a CV.'}
+          ? 'Not scored yet.'
+          : 'Based on your search profile.'}
       </p>
       {(signals.length > 0 || gaps.length > 0) && (
         <div className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm text-base-content/70 sm:grid-cols-2">
@@ -150,30 +150,8 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
     { k: 'Company', v: result.company },
     { k: 'Location', v: orNotStated(result.location) },
     { k: 'Source', v: discoveryProviderLabel(result.provider) },
-    {
-      k: 'Salary source',
-      v:
-        vacancy.salaryProvider === null || vacancy.salaryProvider === undefined
-          ? 'Not recorded'
-          : `${discoveryProviderLabel(vacancy.salaryProvider)}${vacancy.salarySourceKey ? ` (${vacancy.salarySourceKey})` : ''}`,
-    },
     { k: 'Employment type', v: orNotStated(vacancy.employmentType) },
     { k: 'Advertised salary', v: result.salary ?? 'Not disclosed' },
-    {
-      k: 'Annualised minimum (USD)',
-      v:
-        vacancy.annualizedMinimumUsd == null
-          ? 'Not derivable'
-          : vacancy.annualizedMinimumUsd.toLocaleString(),
-    },
-    {
-      k: 'Comparable annual minimum',
-      v:
-        vacancy.normalizedAnnualMinimum == null || vacancy.normalizedCurrency == null
-          ? 'Not comparable'
-          : `${vacancy.normalizedCurrency} ${vacancy.normalizedAnnualMinimum.toLocaleString()}`,
-    },
-    { k: 'Normalization', v: vacancy.normalizationMethod?.replace(/_/g, ' ') ?? 'Not recorded' },
     {
       k: 'Posted',
       v: vacancy.postedAt
@@ -181,7 +159,6 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
           (isStalePosting(vacancy.postedAt) ? ' (over a month old)' : '')
         : 'Not stated by this source',
     },
-    { k: 'Discovery decision', v: vacancy.decision.replace(/_/g, ' ') },
   ];
 }
 
@@ -189,9 +166,6 @@ export interface VacancyDetailProps {
   result: SearchResult;
   /** Name of the CV marked default in the workspace library, or null when there is none. */
   defaultCvName: string | null;
-  /** Display name of the CLI the gap analysis actually runs through, e.g. "Claude Code" or "Codex"
-   * (see `PROVIDER_LABEL`): reflects the user's configured default provider, not a fixed one. */
-  providerLabel: string;
   saveState: SaveState;
   prepareState: PrepareState;
   /** False for streamed rows that are not in the main process's final trusted report yet. */
@@ -220,7 +194,6 @@ export interface VacancyDetailProps {
 export function VacancyDetail({
   result,
   defaultCvName,
-  providerLabel,
   saveState,
   prepareState,
   prepareAvailable = true,
@@ -352,7 +325,7 @@ export function VacancyDetail({
                 Open posting
               </a>
             ) : (
-              <span className="badge badge-outline badge-sm">Link withheld: unsafe URL</span>
+              <span className="badge badge-outline badge-sm">Link not available</span>
             )}
           </div>
         </div>
@@ -376,22 +349,10 @@ export function VacancyDetail({
           <Card label="CV match">
             <div className="mt-1.5 text-sm font-semibold">Not compared to your CV yet</div>
             <p className="mt-1 text-xs leading-relaxed text-base-content/60">
-              No score here compares this vacancy to your CV. {ASSISTANT_TOGGLE_LABELS.open} runs the
-              gap analysis against{' '}
-              {defaultCvName ? `your default CV (${defaultCvName})` : 'a CV you load'} using your own{' '}
-              {providerLabel} CLI.
+              {ASSISTANT_TOGGLE_LABELS.open} to see how you match. Uses your default CV{defaultCvName ? ` (${defaultCvName})` : ''}.
             </p>
           </Card>
 
-          <Card label="Vacancy source">
-            <div className="mt-1.5 break-words text-sm font-semibold">
-              {discoveryProviderLabel(result.provider)}
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-base-content/60">
-              Discovery feed. Most sources here do not report a posting date, so check freshness on
-              the vacancy itself when the date above is unknown.
-            </p>
-          </Card>
         </div>
 
         <section className="mt-6" aria-label="Profile score breakdown">
@@ -407,8 +368,7 @@ export function VacancyDetail({
 
           {result.profileScore === null ? (
             <p className="mt-3 text-sm text-base-content/70">
-              This vacancy has not been scored against your search profile. Use the AI gap analysis
-              for a real, detailed comparison against your CV.
+              Not scored yet. Use Compare with my CV for a detailed check.
             </p>
           ) : result.profileMatch ? (
             <div className="mt-3 space-y-4">
@@ -416,24 +376,7 @@ export function VacancyDetail({
                 <span className="font-semibold text-base-content">
                   Profile fit: {result.profileScore} out of 100.
                 </span>{' '}
-                How closely this vacancy&rsquo;s own text matches your configured search profile.
-                Not a CV match, an ATS score, or a comparison against other candidates.
-              </p>
-
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-                <Card label="Technical fit">
-                  <div className="mt-1.5 text-sm font-semibold">{result.profileMatch.technicalFit}</div>
-                </Card>
-                <Card label="Role fit">
-                  <div className="mt-1.5 text-sm font-semibold">{result.profileMatch.roleFit}</div>
-                </Card>
-                <Card label="Seniority fit">
-                  <div className="mt-1.5 text-sm font-semibold">{result.profileMatch.seniorityFit}</div>
-                </Card>
-              </div>
-
-              <p className="text-sm text-base-content/70">
-                Role classification: <span className="font-medium">{result.profileMatch.primaryFit}</span>
+                Based on your search profile.
               </p>
 
               {result.profileMatch.matchingSkills.length > 0 && (
@@ -462,37 +405,13 @@ export function VacancyDetail({
                 </div>
               )}
 
-              {result.profileMatch.reasons.length > 0 && (
-                <div>
-                  <div className="mb-1.5 text-xs font-semibold text-base-content/60">
-                    Scorer reasons
-                  </div>
-                  <ul className="list-disc pl-5 text-sm text-base-content/70">
-                    {result.profileMatch.reasons.map((reason, index) => (
-                      <li key={`${index}-${reason}`}>{reason}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
             </div>
           ) : (
             <p className="mt-3 text-sm text-base-content/70" role="status">
-              Breakdown unavailable for this older report. Rescan to generate it.
+              Details not available. Search again to see them.
             </p>
           )}
 
-          {result.reasons.length > 0 && (
-            <div className="mt-4">
-              <div className="mb-1.5 text-xs font-semibold text-base-content/60">
-                Why this row is in the report
-              </div>
-              <ul className="list-disc pl-5 text-sm text-base-content/70">
-                {result.reasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-            </div>
-          )}
         </section>
 
         <section className="mt-6">

@@ -28,7 +28,7 @@ describe('CvUpload', () => {
     });
     const onCvChange = vi.fn();
 
-    render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
+    render(<CvUpload cv={null} onCvChange={onCvChange} />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() =>
@@ -44,26 +44,26 @@ describe('CvUpload', () => {
       <CvUpload
         cv={{ fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }}
         onCvChange={onCvChange}
-        providerLabel="Claude Code"
+       
       />,
     );
     expect(await screen.findByText(/jake-cv\.pdf/)).toBeInTheDocument();
     expect(screen.getByText(/1,234 characters/)).toBeInTheDocument();
   });
 
-  it("names the actually-configured provider, not a hardcoded Claude Code, in the CLI disclosure", async () => {
+  it("says where the CV text goes without naming a tool", async () => {
     installBridges();
-    render(<CvUpload cv={null} onCvChange={vi.fn()} providerLabel="Codex" />);
+    render(<CvUpload cv={null} onCvChange={vi.fn()} />);
 
-    expect(screen.getByText(/your own Codex CLI/)).toBeInTheDocument();
-    expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
+    expect(screen.getByText(/sent only to the AI tool you set up/)).toBeInTheDocument();
+    expect(screen.queryByText(/CLI/)).not.toBeInTheDocument();
   });
 
   it('treats a cancelled dialog as a no-op: no CV change, no error banner', async () => {
     installBridges({ cv: { selectAndRead: vi.fn().mockResolvedValue(null) } });
     const onCvChange = vi.fn();
 
-    render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
+    render(<CvUpload cv={null} onCvChange={onCvChange} />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() => expect(screen.queryByText(/reading and extracting/i)).not.toBeInTheDocument());
@@ -84,7 +84,7 @@ describe('CvUpload', () => {
       },
     });
 
-    render(<CvUpload cv={null} onCvChange={vi.fn()} providerLabel="Claude Code" />);
+    render(<CvUpload cv={null} onCvChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     const alert = await screen.findByRole('alert');
@@ -98,7 +98,7 @@ describe('CvUpload', () => {
       <CvUpload
         cv={{ fileName: 'cv.md', text: 'Frontend architect, Angular.' }}
         onCvChange={vi.fn()}
-        providerLabel="Claude Code"
+       
       />,
     );
 
@@ -125,7 +125,7 @@ describe('CvUpload', () => {
     });
     const onCvChange = vi.fn();
 
-    render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
+    render(<CvUpload cv={null} onCvChange={onCvChange} />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
@@ -160,7 +160,7 @@ describe('CvUpload', () => {
       },
     });
 
-    render(<CvUpload cv={null} onCvChange={vi.fn()} providerLabel="Claude Code" />);
+    render(<CvUpload cv={null} onCvChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     const banner = await screen.findByRole('alert');

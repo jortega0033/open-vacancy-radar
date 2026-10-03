@@ -161,7 +161,7 @@ function AwaitingAnswerRow({ field, fieldIndex, fieldRef, savedAnswer, onConfirm
     const result = await onConfirmAnswer(fieldIndex, fieldRef!, savedAnswer.answer);
     setBusy(false);
     if (!result.ok) {
-      setError(result.detail ?? 'the page did not accept this answer');
+      setError('That answer was not accepted. Fill it in on the live page.');
       return;
     }
     // Best-effort bookkeeping, not load-bearing: the field is already filled and verified either
@@ -179,17 +179,17 @@ function AwaitingAnswerRow({ field, fieldIndex, fieldRef, savedAnswer, onConfirm
     const result = await onConfirmAnswer(fieldIndex, fieldRef!, value);
     if (!result.ok) {
       setBusy(false);
-      setError(result.detail ?? 'the page did not accept this answer');
+      setError('That answer was not accepted. Fill it in on the live page.');
       return;
     }
     if (saveForFuture && onSaveAnswer) {
       try {
         await onSaveAnswer({ label: field.label, controlType: field.controlType, answer: value });
-      } catch (err) {
+      } catch {
         // The field is filled either way -- committing to the live page is the part that must not
         // be lost to a save failure. Surfaced as its own message so it reads as "saved for reuse
         // didn't work", not "the field itself failed".
-        setError(err instanceof Error ? `Filled in, but could not save this answer for future applications: ${err.message}` : 'Filled in, but could not save this answer for future applications.');
+        setError('Filled in. We could not save it for next time.');
       }
     }
     setBusy(false);
@@ -292,22 +292,19 @@ export function ApplicationPreparedSummary({
     <div className="flex flex-col gap-3 border-b border-base-300 px-5 py-3.5">
       {attempt.checkpointDetail && (
         <div>
-          <h3 className="ovr-eyebrow">Tailoring and preparation</h3>
+          <h3 className="ovr-eyebrow">CV and documents</h3>
           <TailoringSummary detail={attempt.checkpointDetail} />
         </div>
       )}
       <div>
         <h3 className="ovr-eyebrow">Documents for this application</h3>
         {documents.length === 0 ? (
-          <p className="mt-1 text-xs text-base-content/60">No documents were prepared for this attempt.</p>
+          <p className="mt-1 text-xs text-base-content/60">No documents were prepared for this application.</p>
         ) : (
           <ul className="mt-1 flex flex-col gap-0.5">
             {documents.map((document) => (
               <li key={document.id} className="flex items-center justify-between gap-3 text-xs">
-                <span>
-                  <span className="font-medium">{DOCUMENT_LABEL[document.kind]}</span>{' '}
-                  <span className="text-base-content/60">{document.fileName}</span>
-                </span>
+                <span className="font-medium">{DOCUMENT_LABEL[document.kind]}</span>
                 {onOpenArtifact ? (
                   <button type="button" className="btn btn-ghost btn-xs" onClick={() => onOpenArtifact(document.id)}>
                     Review

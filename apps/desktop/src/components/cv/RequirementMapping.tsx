@@ -18,7 +18,6 @@ import type {
   CvSourceDocument,
 } from '../../window.js';
 import { jobDescriptionBody } from '../../../electron/generation-input.js';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { ClarificationForm } from './ClarificationForm.js';
 import { applyClarificationAnswer, type ClarificationAnswer } from './clarification-answer.js';
 import { sha256Hex, sha256HexOfSource } from './content-hash.js';
@@ -45,6 +44,10 @@ export interface RequirementMappingProps {
   provider?: ProviderId;
   /** Called when a save changes the case, so sibling panels that show its facts can reload. */
   onOverlayChanged?: () => void;
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function anchorLabel(source: CvSourceDocument | null | undefined, anchorParentId: string): string {
@@ -116,7 +119,6 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   const [rejectedProposals, setRejectedProposals] = useState<RejectedRequirementProposal[]>([]);
   /** Batches read in the current mapping run, and whether it stopped with more still owed. */
   const batchesRef = useRef(0);
-  const [batchNumber, setBatchNumber] = useState(0);
   /** Which requirement has its "not a requirement" reason box open, and the reason typed so far. */
   const [excludingId, setExcludingId] = useState<string | null>(null);
   const [exclusionReason, setExclusionReason] = useState('');
@@ -178,7 +180,6 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
     (alreadyListed: readonly string[]) => {
       if (!cv || !vacancy) return;
       batchesRef.current += 1;
-      setBatchNumber(batchesRef.current);
       run.reset();
       void run.start(buildRequirementMappingPrompt(cv, vacancy, sourceCv ?? null, undefined, alreadyListed), {
         ...(model ? { model } : {}),
@@ -434,21 +435,18 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div id="cv-step-requirements" tabIndex={-1} className="card-title text-base font-bold outline-none">Requirement mapping</div>
+        <div id="cv-step-requirements" tabIndex={-1} className="card-title text-base font-bold outline-none">Job requirements</div>
         <p className="text-sm text-base-content/60">
-          Every material requirement in this vacancy, mapped to what your reviewed CV actually
-          evidences. This decides what a tailored CV may claim. It is separate from the ATS fit check
-          above, which is advisory only.
+          Match each job requirement to your experience. A tailored CV only claims what you confirm here.
         </p>
 
         {!cvId && (
           <div className="text-sm text-base-content/60">
-            Select a saved CV from your library above to enable this. An uploaded CV that is not yet saved
-            has nowhere to keep this mapping.
+            Pick a saved CV above to use this.
           </div>
         )}
         {cvId && !vacancy && (
-          <div className="text-sm text-base-content/60">Select a vacancy to map its requirements.</div>
+          <div className="text-sm text-base-content/60">Select a job to match its requirements.</div>
         )}
 
         {loadError && (
@@ -458,11 +456,14 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         )}
         {jdGaps.length > 0 && (
           <div className="alert alert-warning text-sm" role="status">
-            <ul className="list-disc pl-4">
-              {jdGaps.map((gap) => (
-                <li key={gap}>This CV cannot reach approved status: {gap}.</li>
-              ))}
-            </ul>
+            <div>
+              <div className="font-medium">Before you can approve this CV:</div>
+              <ul className="list-disc pl-4">
+                {jdGaps.map((gap) => (
+                  <li key={gap}>{capitalize(gap)}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         )}
 
@@ -472,7 +473,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           </button>
           {overlay && coverageCurrent === 'partial' && (
             <button className="btn btn-outline" type="button" onClick={() => handleRun(true)} disabled={!canRun}>
-              Read the rest of the job description
+              Read the rest
             </button>
           )}
           <button className="btn btn-outline" type="button" onClick={() => void run.cancel()} disabled={!run.isBusy}>
@@ -485,8 +486,8 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
             <span className="loading loading-spinner loading-sm" aria-hidden="true" />
             <span>
               {run.status === 'starting'
-                ? `Starting ${PROVIDER_LABEL[provider ?? 'claude']}…`
-                : `Mapping requirements against your reviewed CV (batch ${batchNumber})…`}
+                ? 'Getting started…'
+                : 'Matching job requirements to your CV…'}
             </span>
           </div>
         )}
@@ -506,16 +507,21 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           <div className="alert alert-warning text-sm" role="status">
             <div>
               <p>
-                {rejectedProposals.length} proposed requirement(s) were not added because their quote is not an exact
-                passage of the job description. Add them yourself with a quote if they are real.
+                {rejectedProposals.length}{' '}
+                {rejectedProposals.length === 1 ? 'suggested requirement was' : 'suggested requirements were'} skipped
+                because {rejectedProposals.length === 1 ? 'it' : 'they'} could not be found in the job description. Add{' '}
+                {rejectedProposals.length === 1 ? 'it' : 'them'} yourself if {rejectedProposals.length === 1 ? 'it is' : 'they are'} real.
               </p>
-              <ul className="mt-1 list-disc pl-4 text-xs">
-                {rejectedProposals.map((proposal, index) => (
-                  <li key={`${proposal.text}-${index}`}>
-                    {proposal.text}: {proposal.reason}
-                  </li>
-                ))}
-              </ul>
+              <details className="mt-1 text-xs">
+                <summary className="cursor-pointer">See why</summary>
+                <ul className="mt-1 list-disc pl-4">
+                  {rejectedProposals.map((proposal, index) => (
+                    <li key={`${proposal.text}-${index}`}>
+                      {proposal.text}: {proposal.reason}
+                    </li>
+                  ))}
+                </ul>
+              </details>
             </div>
           </div>
         )}
@@ -524,29 +530,31 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           <div className="flex flex-col gap-2" aria-label="Requirement coverage">
             {requirementGaps.length > 0 ? (
               <div className="alert alert-warning text-sm" role="status">
-                <ul className="list-disc pl-4">
-                  {requirementGaps.map((gap) => (
-                    <li key={gap.reason}>
-                      {gap.requirementIds.length > 0 ? (
-                        <button type="button" className="link text-left" onClick={() => focusGapRow(gap)}>
-                          This list cannot back an approved CV yet: {gap.reason}.
-                        </button>
-                      ) : (
-                        <>This list cannot back an approved CV yet: {gap.reason}.</>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <div>
+                  <div className="font-medium">Before you can approve this CV:</div>
+                  <ul className="list-disc pl-4">
+                    {requirementGaps.map((gap) => (
+                      <li key={gap.reason}>
+                        {gap.requirementIds.length > 0 ? (
+                          <button type="button" className="link text-left" onClick={() => focusGapRow(gap)}>
+                            {capitalize(gap.reason)}
+                          </button>
+                        ) : (
+                          capitalize(gap.reason)
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             ) : (
               <div className="text-sm text-base-content/60">
-                Every requirement on this list is reviewed against the current job description.
+                All requirements are reviewed.
               </div>
             )}
             {coverageCurrent === 'partial' && overlay.requirementCoverage.batches > 0 && (
               <p className="text-sm text-base-content/70">
-                Read so far: {overlay.requirementCoverage.batches} {overlay.requirementCoverage.batches === 1 ? 'batch' : 'batches'} of the job
-                description. The rest has not been read yet.
+                Only part of the job description was read.
               </p>
             )}
             {coverageCurrent !== 'complete' && (
@@ -557,8 +565,8 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                 disabled={!overlay.jdSnapshot.trim()}
               >
                 {coverageCurrent === 'partial'
-                  ? 'I read the rest myself and added anything missing'
-                  : 'I read the whole job description and this list covers it'}
+                  ? 'I checked the rest myself'
+                  : 'This list covers the whole job description'}
               </button>
             )}
           </div>

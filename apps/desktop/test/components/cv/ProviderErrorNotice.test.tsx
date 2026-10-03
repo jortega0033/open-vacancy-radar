@@ -115,7 +115,6 @@ describe('AiOutput with a usage limit (#461)', () => {
         idleHint="idle"
         busyLabel="busy"
         label="analysis"
-        providerLabel="Claude Code"
         providerId="claude"
         onRetry={vi.fn()}
       />,

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { ArrowLeft } from '@phosphor-icons/react';
 import type { FormReadiness, FormSnapshot, SnapshotField } from '@agent-dock/application-executor';
 import type { ApplicationAnswerRecord, ApplicationArtifactSummary, ApplicationAttemptRecord, ConfirmApplicationAnswerResult } from '../../window.js';
 import { usePrefersReducedMotion } from '../../use-prefers-reduced-motion.js';
@@ -48,15 +47,15 @@ function describeBlocker(blocker: FormReadiness['blockers'][number]): string {
     case 'validation_error':
       return `"${blocker.label}": ${blocker.message}`;
     case 'value_mismatch':
-      return `"${blocker.label}" did not keep the value that was entered.`;
+      return `"${blocker.label}" did not save. Check it on the live page.`;
     case 'unverified_write':
-      return `"${blocker.label}" was filled in, but the page never confirmed what it kept.`;
+      return `"${blocker.label}" may not have saved. Check it on the live page.`;
     case 'attachment_missing':
       return `"${blocker.label}" needs a file and has none attached.`;
     case 'stale_page_state':
-      return 'The page changed since this review opened. Reopen it to see the current form.';
+      return 'The page changed. Reopen this review.';
     case 'challenge_detected':
-      return 'The page is showing a CAPTCHA. Open the live page to complete it yourself.';
+      return 'The page asks you to prove you are human. Open the live page to do it.';
   }
 }
 
@@ -88,31 +87,12 @@ function crossOriginFields(snapshot: FormSnapshot): SnapshotField[] {
 }
 
 /**
- * Plain-language text for one field `crossOriginFields` found, distinct from every
- * `describeBlocker` case above: this is not a form check that failed.
- *
- * Two genuinely different situations, told apart by `active`, because saying the wrong one is
- * worse than saying nothing:
- *  - `active: true` -- the form under review is itself inside the embed. Today the only way a
- *    snapshot reaches that state is the no-eligible-group fallback described on
- *    `crossOriginFields`, which means the policy refused every group, so nothing was typed here.
- *  - `active: false` -- the field is somewhere else on the page and is not part of the form under
- *    review. That covers an ordinary third-party widget and equally a vendor embed the policy
- *    *does* allowlist but which is not the winning group, so this wording says "not the form"
- *    rather than claiming a policy refusal the snapshot alone cannot establish.
- *
- * What this cannot see: neither a policy's `origins` allowlist nor its `allowedSubFrameOrigins`
- * crosses the IPC bridge, so "active plus a foreign origin" is read as not fillable. That is exact
- * for every policy this app ships today (`FIXTURE_REVIEW_POLICY` has `origins: []` and no
- * `allowedSubFrameOrigins`), and the day a real policy authorizes a sub-origin through either
- * mechanism, this needs that policy's allowed origins passed in rather than inferred.
+ * One plain line for the case where the form under review is itself inside an embed from another
+ * site. The write path refuses to type into such a frame, so the person has to finish it on the
+ * live page. A field in some other widget (a chat box, an ad) gets no notice at all.
  */
-function describeCrossOriginField(field: SnapshotField, topFrameOrigin: string): string {
-  const label = field.label || 'Unlabelled field';
-  if (field.active) {
-    return `"${label}" is part of a form embedded from ${field.frameOrigin}, which is not this page's own address (${topFrameOrigin}). This app does not type into a third-party embed, so nothing was entered here.`;
-  }
-  return `"${label}" was found in a different frame (${field.frameOrigin}) than this page (${topFrameOrigin}) and is not part of the form under review, so it was left untouched.`;
+function describeCrossOriginField(): string {
+  return 'Part of this form is hosted by another site, so the app left it blank. Use the live page to fill it in.';
 }
 
 /** The host a form will be sent to, read from the live page's own origin when the snapshot has one
@@ -253,21 +233,12 @@ export function ApplicationReviewSwipeCard({
     if (confirming) confirmationHeadingRef.current?.focus();
   }, [confirming]);
 
-  const { verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers } = readiness;
+  const { verifiedFilledCount, blockers } = readiness;
   const canSubmit = readiness.ready && !busy;
   const otherFrameFields = crossOriginFields(snapshot);
-  // True on the page shape the whole notice exists for: the form under review is itself inside an
-  // embed from somewhere else. The heading has to say that outright, because "also found in a
-  // different frame" would read as an aside about something unimportant on exactly the page where
-  // it is the form.
+  // The notice only matters when the form under review is itself inside an embed. A field in
+  // some other widget (a chat box, an ad) is not worth the person's attention.
   const formIsEmbedded = otherFrameFields.some((field) => field.active);
-  // The one field whose sentence the heading and the collapsed summary both speak about. Prefers an
-  // active field over an inactive one -- not just "the first field in snapshot order" -- so a
-  // page mixing an ordinary inactive widget (a chat box, say) with the actual embedded form never
-  // shows the "third-party embed" heading next to a sentence that's really about the chat box.
-  // Picked once and reused by identity (not by array index) everywhere below, so the field promoted
-  // into the one-sentence summary is never also duplicated in the expanded list.
-  const summarizedFrameField = otherFrameFields.find((field) => field.active) ?? otherFrameFields[0];
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (busy) return;
@@ -299,7 +270,6 @@ export function ApplicationReviewSwipeCard({
 
   const rotation = Math.max(-MAX_ROTATION_DEG, Math.min(MAX_ROTATION_DEG, dragX / 10));
   const skipOpacity = Math.min(1, Math.max(0, -dragX / SWIPE_THRESHOLD_PX));
-  const activeFields = snapshot.fields.filter((field) => field.active);
   const screenshotAlt = `Live application page preview for ${attempt.role} at ${attempt.company}`;
 
   return (
@@ -320,7 +290,6 @@ export function ApplicationReviewSwipeCard({
         data-testid="application-swipe-card"
         role="group"
         aria-label={`Application decision card for ${attempt.role} at ${attempt.company}`}
-        title="Drag left to skip"
         className={`relative z-10 col-start-1 row-start-1 mx-2 select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
         style={{
           // Reduced motion keeps the card following the pointer, but drops the tilt and the
@@ -353,62 +322,32 @@ export function ApplicationReviewSwipeCard({
           <h2 className="text-base font-semibold leading-snug">
             {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
           </h2>
-          <p className="mt-1 text-xs text-base-content/60">
-            {verifiedFilledCount} of {discoveredFieldCount} field{discoveredFieldCount === 1 ? '' : 's'} verified filled
-          </p>
-        </div>
-
-        <div className="grid grid-cols-3 divide-x divide-base-300 border-y border-base-300 bg-base-200/60">
-          <div className="px-3 py-2.5 text-center">
-            <p className="text-lg font-semibold leading-none">{verifiedFilledCount}</p>
-            <p className="mt-1 text-xs text-base-content/60">Verified</p>
-          </div>
-          <div className="px-3 py-2.5 text-center">
-            <p className="text-lg font-semibold leading-none">{documents.length}</p>
-            <p className="mt-1 text-xs text-base-content/60">Documents</p>
-          </div>
-          <div className="px-3 py-2.5 text-center">
-            <p className="text-lg font-semibold leading-none">{blockers.length}</p>
-            <p className="mt-1 text-xs text-base-content/60">Checks left</p>
-          </div>
         </div>
 
         <div className={`px-4 py-3 ${readiness.ready ? 'bg-success/10' : 'bg-warning/10'}`}>
           {blockers.length > 0 ? (
             <>
-              <p className="text-xs font-semibold">This form is not ready to submit</p>
-              <p className="mt-1 text-xs text-base-content/70">{describeBlocker(blockers[0]!)}</p>
-              {blockers.length > 1 ? <p className="mt-1 text-xs font-medium">+{blockers.length - 1} more in form checks</p> : null}
+              <p className="text-xs font-semibold">Some answers still need you.</p>
+              {blockers.length === 1 ? (
+                <p className="mt-1 text-xs text-base-content/70">{describeBlocker(blockers[0]!)}</p>
+              ) : (
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-base-content/70">
+                  {blockers.map((blocker, index) => (
+                    <li key={`${blocker.kind}-${index}`}>{describeBlocker(blocker)}</li>
+                  ))}
+                </ul>
+              )}
             </>
           ) : (
-            <>
-              <p className="text-xs font-semibold">Ready for your final confirmation</p>
-              <p className="mt-1 text-xs text-base-content/70">
-                {requiredFieldCount > 0
-                  ? `${requiredFieldsSatisfied} of ${requiredFieldCount} required answers verified.`
-                  : `${verifiedFilledCount} of ${discoveredFieldCount} fields verified filled.`}
-              </p>
-            </>
+            <p className="text-xs font-semibold">Everything required is filled in.</p>
           )}
         </div>
 
-        {otherFrameFields.length > 0 ? (
+        {formIsEmbedded ? (
           <div className="border-t border-base-300 bg-info/10 px-4 py-3">
-            <p className="text-xs font-semibold">
-              {formIsEmbedded ? 'This form is inside a third-party embed' : 'Also found in a different frame, not filled automatically'}
-            </p>
-            <p className="mt-1 text-xs text-base-content/70">
-              {describeCrossOriginField(summarizedFrameField!, snapshot.topFrameOrigin!)}
-            </p>
-            {otherFrameFields.length > 1 ? (
-              <p className="mt-1 text-xs font-medium">+{otherFrameFields.length - 1} more in another frame</p>
-            ) : null}
+            <p className="text-xs text-base-content/70">{describeCrossOriginField()}</p>
           </div>
         ) : null}
-
-        <div className="flex items-center border-t border-base-300 bg-base-100 px-4 py-2 text-xs font-semibold">
-          <span className="flex items-center gap-1 text-base-content/60"><ArrowLeft size={15} weight="bold" aria-hidden="true" />Drag left to skip</span>
-        </div>
       </div>
       </div>
 
@@ -511,48 +450,6 @@ export function ApplicationReviewSwipeCard({
           onConfirmAnswer={onConfirmAnswer}
           onSaveAnswer={onConfirmAnswer ? handleSaveAnswer : undefined}
         />
-      </details>
-
-      <details className="rounded-lg border border-base-300 bg-base-100">
-        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">
-          Form checks ({blockers.length}) and fields ({activeFields.length})
-          {otherFrameFields.length > 0 ? `, ${otherFrameFields.length} in another frame` : ''}
-        </summary>
-        <div className="border-t border-base-300 px-4 py-3">
-          {blockers.length > 1 ? (
-            <ul className="list-disc space-y-1 pl-4 text-xs text-base-content/70">
-              {blockers.slice(1).map((blocker, index) => (
-                <li key={`${blocker.kind}-${index + 1}`}>{describeBlocker(blocker)}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-base-content/60">
-              {blockers.length === 1 ? 'The remaining check is shown on the card.' : 'No remaining form blockers.'}
-            </p>
-          )}
-          {otherFrameFields.length > 1 ? (
-            // `summarizedFrameField` is already shown on the card itself (above); listed here is
-            // only what that summary omitted. Excluded by identity, not by array position: the
-            // summarized field is not always index 0 (it prefers an active field over whichever
-            // field happens to come first in snapshot order), so slicing off the front would risk
-            // showing it twice, or dropping whichever field actually was first instead.
-            <ul className="mt-3 list-disc space-y-1 border-t border-base-300 pt-3 pl-4 text-xs text-base-content/70">
-              {otherFrameFields
-                .filter((field) => field.fieldRef !== summarizedFrameField!.fieldRef)
-                .map((field) => (
-                  <li key={field.fieldRef}>{describeCrossOriginField(field, snapshot.topFrameOrigin!)}</li>
-                ))}
-            </ul>
-          ) : null}
-          <ul className="mt-3 list-disc space-y-1 border-t border-base-300 pt-3 pl-4 text-xs text-base-content/60">
-            {activeFields.map((field) => (
-              <li key={field.fieldRef}>
-                {field.label || 'Unlabelled field'} ({field.controlType}
-                {field.required ? ', required' : ''})
-              </li>
-            ))}
-          </ul>
-        </div>
       </details>
 
       {wide ? null : (

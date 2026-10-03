@@ -22,16 +22,13 @@ export interface AiOutputProps {
   /** What the spinner says while waiting, e.g. "Analyzing your CV against this vacancy…" */
   busyLabel: string;
   label: string;
-  /** Display name of the CLI this run actually goes through, e.g. "Claude Code" or "Codex" (see
-   * `PROVIDER_LABEL`): the "starting" message names the real provider instead of assuming one. */
-  providerLabel: string;
   /** With `onRetry`, a failed run gets the guided provider notice (usage limit, sign-in, unavailable)
    * instead of the raw message (#461). */
   providerId?: ProviderId;
   onRetry?: () => void;
 }
 
-export function AiOutput({ status, text, error, idleHint, busyLabel, label, providerLabel, providerId, onRetry }: AiOutputProps) {
+export function AiOutput({ status, text, error, idleHint, busyLabel, label, providerId, onRetry }: AiOutputProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isBusy = status === 'starting' || status === 'streaming';
 
@@ -46,7 +43,7 @@ export function AiOutput({ status, text, error, idleHint, busyLabel, label, prov
       {isBusy && (
         <div className="mb-3 flex items-center gap-3 text-sm text-base-content/70" role="status">
           <span className="loading loading-spinner loading-sm" aria-hidden="true" />
-          <span>{status === 'starting' ? `Starting ${providerLabel}…` : busyLabel}</span>
+          <span>{status === 'starting' ? 'Getting started…' : busyLabel}</span>
         </div>
       )}
 

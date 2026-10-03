@@ -148,13 +148,13 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Not exported');
   });
 
-  it('lists why a file failed its checks, with no way to accept it, and offers to export again', () => {
+  it('lists why a file needs fixing, with no way to accept it, and offers to export again', () => {
     const failed = overlayWith({
       artifacts: [artifact({ validation: { ok: false, reasons: ['page 2: text is clipped at the page edge'], pageCount: 2 }, savedPath: '' })],
     });
     installWorkspaceBridge();
     render(<CvArtifactPanel overlay={failed} onOverlayChange={vi.fn()} />);
-    expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Failed its checks');
+    expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Needs fixing');
     expect(within(pdfRow()).getByLabelText('PDF problems')).toHaveTextContent('page 2: text is clipped at the page edge');
     expect(within(pdfRow()).queryByRole('button', { name: /read every page/i })).not.toBeInTheDocument();
     expect(within(pdfRow()).getByRole('button', { name: /export pdf again/i })).toBeEnabled();
@@ -182,7 +182,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     });
     const { rerender } = render(<CvArtifactPanel overlay={current} onOverlayChange={onChange} />);
 
-    expect(within(pdfRow()).getByText(/2 page\(s\)/)).toBeInTheDocument();
+    expect(within(pdfRow()).getByText(/2 pages/)).toBeInTheDocument();
     const confirm = within(pdfRow()).getByRole('button', { name: /i read every page and it looks right/i });
     expect(confirm).toBeDisabled();
 
@@ -220,7 +220,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
     expect(await screen.findByLabelText('Page 1 of 2')).toBeInTheDocument();
     expect(screen.getByLabelText('Page 2 of 2')).toBeInTheDocument();
-    await waitFor(() => expect(within(pdfRow()).getByLabelText('Pages shown')).toHaveTextContent('Pages shown: 1 of 2'));
+    await waitFor(() => expect(within(pdfRow()).getByLabelText('Pages shown')).toHaveTextContent('Page 1 of 2'));
     expect(workspace.markCvArtifactPagesViewed).not.toHaveBeenCalled();
     expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeDisabled();
 
@@ -291,7 +291,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
         pdfPages.openPdfForReview.mockResolvedValue(fakeReview(50));
         return installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
       },
-      /50 pages. Pages can be shown here for CVs up to 12 pages. Lower the project limit in your CV review, approve again, then export/,
+      /too long to preview here/,
     ],
     [
       'its pages do not match the count recorded at export',
@@ -299,7 +299,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
         pdfPages.openPdfForReview.mockResolvedValue(fakeReview(3));
         return installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
       },
-      /3 page\(s\) but 2 were recorded/,
+      /file changed since it was exported/,
     ],
   ])('shows the reason and keeps confirming locked when %s', async (_name, setup, reason) => {
     const workspace = setup();
@@ -311,25 +311,25 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     expect(within(pdfRow()).getByRole('button', { name: /try showing the pages again/i })).toBeEnabled();
   });
 
-  it('names an action that can work when the PDF is longer than the viewer reads, without telling the candidate to export again', async () => {
+  it('names an action that can work when the PDF is longer than the viewer reads, without telling the candidate the file is stale', async () => {
     pdfPages.openPdfForReview.mockResolvedValue(fakeReview(14));
     installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
     render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact({ validation: { ok: true, reasons: [], pageCount: 14 } })] })} onOverlayChange={vi.fn()} />);
     fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
     const alert = await within(pdfRow()).findByRole('alert');
-    expect(alert).toHaveTextContent(/lower the project limit/i);
-    expect(alert).not.toHaveTextContent(/export it again/i);
+    expect(alert).toHaveTextContent(/too long to preview here/i);
+    expect(alert).toHaveTextContent(/include fewer projects/i);
   });
 
-  it('shows the export time in local time without any machine timestamp, and keeps the hash under File details', () => {
+  it('shows the export time in local time without any machine timestamp, and keeps the file location under a disclosure', () => {
     installWorkspaceBridge();
     render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact({ reviewOpenedAt: 'x', pagesViewedAt: 'x' })] })} onOverlayChange={vi.fn()} />);
     const row = pdfRow();
     expect(row).toHaveTextContent(/Exported .*2026/);
     expect(row.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000Z/);
-    const details = within(row).getByText('File details').closest('details')!;
+    const details = within(row).getByText('Show file location').closest('details')!;
     expect(details).not.toHaveAttribute('open');
-    expect(details).toHaveTextContent(/file check abcdef012345/i);
+    expect(row.textContent).not.toMatch(/file check|abcdef012345/i);
   });
 
   it.each([['', 'a missing'], ['not a date', 'a malformed']])('shows %j as an unknown time for %s export date', (value) => {
@@ -346,8 +346,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     const onChange = vi.fn();
     render(<CvArtifactPanel overlay={waiting} onOverlayChange={onChange} />);
 
-    expect(within(wordRow()).getByText(/nothing about page layout/i)).toBeInTheDocument();
-    expect(within(wordRow()).queryByText(/page\(s\)/i)).not.toBeInTheDocument();
+    expect(within(wordRow()).queryByText(/page layout/i)).not.toBeInTheDocument();
     fireEvent.click(within(wordRow()).getByRole('button', { name: /i reviewed this in my editor/i }));
     await waitFor(() => expect(workspace.confirmCvArtifact).toHaveBeenCalledWith('overlay-1', 'artifact-2'));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(accepted));
@@ -355,21 +354,19 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Not exported');
   });
 
-  it('shows an accepted file as accepted and says the record covers only the bytes saved at export', () => {
+  it('shows an accepted file as accepted and says it is not rechecked after later changes', () => {
     const accepted = overlayWith({ artifacts: [artifact({ reviewOpenedAt: 'x', pagesViewedAt: 'x', confirmedAt: '2026-10-01T11:06:00.000Z' })] });
     installWorkspaceBridge();
     render(<CvArtifactPanel overlay={accepted} onOverlayChange={vi.fn()} />);
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Accepted');
-    expect(within(pdfRow()).getByText(/not checked again/i)).toBeInTheDocument();
-    expect(within(pdfRow()).getByText(/file check abcdef012345/i)).toBeInTheDocument();
+    expect(within(pdfRow()).getByText(/not rechecked/i)).toBeInTheDocument();
   });
 
-  it('marks a file out of date once the approved version moved on, keeping its hash and offering no confirmation', () => {
+  it('marks a file out of date once the approved version moved on, offering no confirmation', () => {
     const old = artifact({ reviewOpenedAt: 'x', confirmedAt: '2026-10-01T11:06:00.000Z', snapshotDigest: 'e'.repeat(64) });
     installWorkspaceBridge();
     render(<CvArtifactPanel overlay={overlayWith({ artifacts: [old] })} onOverlayChange={vi.fn()} />);
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Out of date');
-    expect(within(pdfRow()).getByText(/file check abcdef012345/i)).toBeInTheDocument();
     expect(within(pdfRow()).queryByRole('button', { name: /i read every page/i })).not.toBeInTheDocument();
     expect(within(pdfRow()).getByRole('button', { name: /export pdf again/i })).toBeEnabled();
     expect(screen.getByText(/earlier files \(1\)/i)).toBeInTheDocument();
@@ -382,11 +379,11 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Out of date');
   });
 
-  it('shows a case an earlier version marked exported as not verified', () => {
+  it('shows a case an earlier version marked exported as needing a new export', () => {
     installWorkspaceBridge();
     render(<CvArtifactPanel overlay={overlayWith({ legacyUnverifiedExport: true })} onOverlayChange={vi.fn()} />);
-    expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Exported by an earlier version, not verified');
-    expect(within(wordRow()).getByRole('status')).toHaveTextContent('not verified');
+    expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Export again');
+    expect(within(wordRow()).getByRole('status')).toHaveTextContent('Export again');
   });
 
   it('copies the plain text of the approved snapshot', async () => {

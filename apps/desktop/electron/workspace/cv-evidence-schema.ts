@@ -632,24 +632,32 @@ export const CV_EVIDENCE_LIMITS = {
  * `currentSourceCvContentHash` is the *current* source's hash, supplied by the caller rather than
  * recomputed here (this file has no runtime crypto import, by design) -- see this module's header.
  */
+function plural(count: number, one: string, many: string): string {
+  return count === 1 ? one : many;
+}
+
 export function describeCvEvidenceOverlayGaps(
   overlay: CvEvidenceOverlay,
   currentSourceCvContentHash: string,
 ): string[] {
   const reasons: string[] = [];
   if (overlay.sourceCvContentHash !== currentSourceCvContentHash) {
-    reasons.push('the reviewed source CV has changed since this draft was built');
+    reasons.push('your CV changed since this draft was built, so update the tailoring');
   }
   reasons.push(...describeCvJdGaps(overlay));
   reasons.push(...describeCvRequirementGaps(overlay));
   const approvedVariants = overlay.wordingVariants.filter((variant) => variant.status === 'candidate_approved');
   const staleVariants = approvedVariants.filter((variant) => variant.sourceRevision !== overlay.sourceCvContentHash);
   if (staleVariants.length > 0) {
-    reasons.push(`${staleVariants.length} approved wording variant(s) were approved against a different source revision`);
+    reasons.push(
+      `${plural(staleVariants.length, '1 wording choice needs', `${staleVariants.length} wording choices need`)} approving again because your CV changed`,
+    );
   }
   const ungroundedVariants = approvedVariants.filter((variant) => variant.factIds.length === 0);
   if (ungroundedVariants.length > 0) {
-    reasons.push(`${ungroundedVariants.length} approved wording variant(s) cite no supporting fact`);
+    reasons.push(
+      `${plural(ungroundedVariants.length, '1 wording choice is', `${ungroundedVariants.length} wording choices are`)} not backed by a confirmed fact`,
+    );
   }
   const conflictedFactIds = conflictedFactIdSet(overlay.facts);
   const unusableBacking = approvedVariants.filter(
@@ -661,12 +669,14 @@ export function describeCvEvidenceOverlayGaps(
       }),
   );
   if (unusableBacking.length > 0) {
-    reasons.push(`${unusableBacking.length} approved wording variant(s) rest on a fact that is not approved or is in conflict`);
+    reasons.push(
+      `${plural(unusableBacking.length, '1 wording choice relies', `${unusableBacking.length} wording choices rely`)} on a fact you have not approved`,
+    );
   }
   if (conflictedFactIds.size > 0) {
-    reasons.push('your facts contradict each other: resolve or omit one of each conflicting pair');
+    reasons.push('some of your facts contradict each other, so fix or remove one of each pair');
   } else if (overlay.state === 'conflict') {
-    reasons.push('unresolved conflicting corrections remain');
+    reasons.push('some of your corrections contradict each other');
   }
   return reasons;
 }
@@ -700,38 +710,38 @@ export function describeCvRequirementGapRows(
   const currentRevisionId = currentCvJdRevisionId(overlay);
   const coverage = overlay.requirementCoverage;
   if (coverage.revisionId !== currentRevisionId || coverage.status === 'not_run') {
-    reasons.push({ reason: 'the requirements of the current job description have not been extracted and confirmed as a full list', requirementIds: [] });
+    reasons.push({ reason: 'the job requirements have not been read and confirmed as a full list', requirementIds: [] });
   } else if (coverage.status === 'partial') {
-    reasons.push({ reason: 'the requirement list is partial: more of the job description has not been read yet', requirementIds: [] });
+    reasons.push({ reason: 'some job requirements may be missing because only part of the job description was read', requirementIds: [] });
   }
   const active = overlay.requirements.filter((requirement) => !requirement.excluded);
   const stale = active.filter((requirement) => requirement.jdRevisionId !== currentRevisionId);
   if (stale.length > 0) {
-    reasons.push({ reason: `${stale.length} requirement(s) were reviewed against an older job description and need review again`, requirementIds: ids(stale) });
+    reasons.push({ reason: `${plural(stale.length, '1 job requirement was', `${stale.length} job requirements were`)} checked against an older job description and need another look`, requirementIds: ids(stale) });
   }
   const unquoted = active.filter((requirement) => requirement.quoteStart < 0);
   if (unquoted.length > 0) {
-    reasons.push({ reason: `${unquoted.length} requirement(s) have no exact quote from the job description`, requirementIds: ids(unquoted) });
+    reasons.push({ reason: `${plural(unquoted.length, '1 job requirement', `${unquoted.length} job requirements`)} could not be found in the job description`, requirementIds: ids(unquoted) });
   }
   const unreviewed = active.filter((requirement) => !requirement.reviewed);
   if (unreviewed.length > 0) {
-    reasons.push({ reason: `${unreviewed.length} requirement(s) have not been reviewed`, requirementIds: ids(unreviewed) });
+    reasons.push({ reason: `${plural(unreviewed.length, '1 job requirement has', `${unreviewed.length} job requirements have`)} not been reviewed`, requirementIds: ids(unreviewed) });
   }
   const unresolvedRequired = active.filter(
     (requirement) =>
       requirement.classification === 'required' && requirement.reviewed && requirement.evidenceClass === 'needs_verification',
   );
   if (unresolvedRequired.length > 0) {
-    reasons.push({ reason: `${unresolvedRequired.length} required item(s) still need verification`, requirementIds: ids(unresolvedRequired) });
+    reasons.push({ reason: `${plural(unresolvedRequired.length, '1 job requirement still needs', `${unresolvedRequired.length} job requirements still need`)} your answer`, requirementIds: ids(unresolvedRequired) });
   }
   const approvedFactIds = new Set(overlay.facts.filter((fact) => fact.approval === 'approved').map((fact) => fact.factId));
   const badLinks = active.filter((requirement) => requirement.factIds.some((factId) => !approvedFactIds.has(factId)));
   if (badLinks.length > 0) {
-    reasons.push({ reason: `${badLinks.length} requirement(s) link to a fact that is not approved`, requirementIds: ids(badLinks) });
+    reasons.push({ reason: `${plural(badLinks.length, '1 job requirement links', `${badLinks.length} job requirements link`)} to a fact you have not approved`, requirementIds: ids(badLinks) });
   }
   const contradictory = active.filter((requirement) => requirement.evidenceClass === 'candidate_confirmed_gap' && requirement.factIds.length > 0);
   if (contradictory.length > 0) {
-    reasons.push({ reason: `${contradictory.length} requirement(s) are marked as a gap you confirmed but also link a fact`, requirementIds: ids(contradictory) });
+    reasons.push({ reason: `${plural(contradictory.length, '1 job requirement is', `${contradictory.length} job requirements are`)} marked as a gap but also links a fact`, requirementIds: ids(contradictory) });
   }
   return reasons;
 }

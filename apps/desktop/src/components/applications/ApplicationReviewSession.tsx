@@ -48,6 +48,29 @@ type SessionState =
    * unlocks Try again after an outcome the app could not confirm. */
   | { phase: 'error'; failure: ReviewFailure; busy: boolean; checked: boolean };
 
+/** The stored sentence the pipeline writes when automatic tailoring stops (`application-pipeline.ts`
+ * matches on the same prefix). The raw reason after it is kept for a Details disclosure. */
+const TAILORING_STOPPED_PREFIX = 'Automatic CV tailoring stopped:';
+
+/** One plain sentence for a blocked preparation. The pipeline's own sentence is kept in a Details
+ * disclosure, since it names internal steps. */
+function describePreparationBlocker(message: string): string {
+  return /\b(?:cover|motivation) letter\b/iu.test(message)
+    ? 'Your cover letter still needs attention.'
+    : 'This application needs your attention.';
+}
+
+/** Raw detail text behind a collapsed disclosure, for the few people who need it. */
+function TechnicalDetails({ text, label }: { text: string; label: string }) {
+  if (!text) return null;
+  return (
+    <details className="text-xs text-base-content/70">
+      <summary className="cursor-pointer font-medium">{label}</summary>
+      <p className="mt-1 break-words">{text}</p>
+    </details>
+  );
+}
+
 function errorState(failure: ReviewFailure): SessionState {
   return { phase: 'error', failure, busy: false, checked: false };
 }
@@ -118,7 +141,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     void loadDocuments();
 
     async function start() {
-      if (attempt.checkpoint === 'needs_user' && attempt.checkpointDetail.startsWith('Automatic CV tailoring stopped:')) {
+      if (attempt.checkpoint === 'needs_user' && attempt.checkpointDetail.startsWith(TAILORING_STOPPED_PREFIX)) {
         setState({ phase: 'tailoring_blocked', message: attempt.checkpointDetail, busy: false });
         return;
       }
@@ -148,7 +171,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         openedRef.current = true;
         setState({ phase: 'ready', review });
       } catch (err) {
-        if (!cancelled) setState(errorState(notSentFailure('We could not open a review for this attempt.', errorText(err))));
+        if (!cancelled) setState(errorState(notSentFailure('We could not open this application.', errorText(err))));
       }
     }
     void start();
@@ -212,7 +235,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
       // Falling back to what was on screen before is wrong here: it would show a readiness reading
       // taken before the person touched the page. Surfacing the failure is the honest outcome.
       void review;
-      setState(errorState(notSentFailure('We could not re-read the page after the live view closed.', errorText(err))));
+      setState(errorState(notSentFailure('We could not reopen the page.', errorText(err))));
     }
   }, [attempt.id, attempt.canonicalUrl, state]);
 
@@ -444,8 +467,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
             Live application page for {state.role} at {state.company}
           </p>
           <p className="truncate text-xs text-base-content/60">
-            Sign in, solve the CAPTCHA, or finish anything the app could not fill, then come back. Press Escape to
-            return. Other pending applications are untouched.
+            Finish anything left on this page, then come back.
           </p>
         </div>
         <button type="button" className="btn btn-primary btn-sm shrink-0" onClick={() => void handleCloseLiveView()}>
@@ -483,7 +505,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         {(state.phase === 'resolving' || state.phase === 'opening') && (
           <div className="flex items-center gap-2 py-8 text-sm text-base-content/70">
             <span className="loading loading-spinner loading-sm" />
-            {state.phase === 'resolving' ? 'Checking eligibility…' : 'Opening a live review…'}
+            Getting your application ready…
           </div>
         )}
 
@@ -506,10 +528,11 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         {state.phase === 'tailoring_blocked' && (
           <div className="space-y-4">
             <WarningBanner>
-              {state.message}
+              We could not tailor your CV for this job.
             </WarningBanner>
+            <TechnicalDetails text={state.message.replace(TAILORING_STOPPED_PREFIX, '').trim()} label="Details" />
             <p className="text-sm text-base-content/70">
-              Retry the vacancy-specific tailoring, or explicitly continue with your unchanged reviewed CV.
+              Try again, or use your CV as it is.
             </p>
             <div className="flex gap-3">
               <button
@@ -518,7 +541,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
                 disabled={state.busy}
                 onClick={() => void handleTailoringRecovery('original')}
               >
-                Use original CV
+                Use my CV as it is
               </button>
               <button
                 type="button"
@@ -526,7 +549,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
                 disabled={state.busy}
                 onClick={() => void handleTailoringRecovery('retry')}
               >
-                {state.busy ? 'Restarting…' : 'Retry tailoring'}
+                {state.busy ? 'Restarting…' : 'Try again'}
               </button>
             </div>
           </div>
@@ -535,10 +558,11 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         {state.phase === 'preparation_blocked' && (
           <div className="space-y-4">
             <WarningBanner>
-              {state.message || 'Application preparation needs your attention.'}
+              {describePreparationBlocker(state.message)}
             </WarningBanner>
+            <TechnicalDetails text={state.message} label="Details" />
             <p className="text-sm text-base-content/70">
-              Open the vacancy to continue manually, or skip this attempt. No document is presented as ready until preparation succeeds.
+              Resume to try again, or skip this one.
             </p>
             <div className="flex flex-wrap gap-3">
               <button type="button" className="btn btn-outline flex-1" disabled={state.busy} onClick={() => void handleSkip()}>
@@ -568,12 +592,12 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
             >
               <div>
                 <p className="font-semibold">{state.failure.message}</p>
-                {state.failure.detail ? <p className="mt-1 text-xs">{state.failure.detail}</p> : null}
               </div>
             </div>
+            {state.failure.detail ? <TechnicalDetails text={state.failure.detail} label="Technical details" /> : null}
             {state.failure.outcome === 'unconfirmed' && !state.checked ? (
               <p className="text-xs text-base-content/70">
-                Try again unlocks after you open the employer page to check, or tell the app you applied yourself.
+                Check the employer site first. Then Try again unlocks.
               </p>
             ) : null}
             <div className="flex flex-wrap gap-3">

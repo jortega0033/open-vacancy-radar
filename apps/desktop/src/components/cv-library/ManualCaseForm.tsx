@@ -92,8 +92,7 @@ export function ManualCaseForm({ documents, onSubmit, onCancel }: ManualCaseForm
   return (
     <form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)} aria-label="Tailor for a job">
       <p className="text-sm text-base-content/60">
-        Paste the full job description for a role you are considering. It stays with this tailoring
-        case and is not added to your saved jobs. The link is optional and is not opened.
+        Paste the full job description. It is not added to your saved jobs. The link is optional.
       </p>
       <div className="block">
         <label htmlFor="manual-case-cv" className="mb-1 block text-sm font-medium">

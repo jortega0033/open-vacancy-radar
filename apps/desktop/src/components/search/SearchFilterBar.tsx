@@ -105,7 +105,7 @@ export function SearchFilterBar({
   }, [salaryOpen]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    // Enter always means "Run new scan"; an empty keyword still reaches the page's own guard message
+    // Enter always means "Search"; an empty keyword still reaches the page's own guard message
     // rather than starting anything. Ignored while busy so a repeated Enter cannot start a second run,
     // and while an IME composition is still being confirmed.
     if (event.key !== 'Enter' || event.nativeEvent.isComposing || busy || scanUnavailable) return;
@@ -116,7 +116,7 @@ export function SearchFilterBar({
     <div className="flex-none border-b border-base-300 pb-3">
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs font-medium text-base-content/70 md:max-w-96">
-          Role or keywords for next scan
+          Role or keywords
           <input
             className="input input-sm w-full text-sm font-normal text-base-content"
             type="text"
@@ -195,32 +195,32 @@ export function SearchFilterBar({
                 onChange={(event) => onFiltersChange({ includeUnknownSalary: event.target.checked })}
                 disabled={busy}
               />
-              <span>Include vacancies without comparable salary</span>
+              <span>Include jobs with no salary</span>
             </label>
             <p className="mt-2 text-xs text-base-content/60">
-              Gross annual compensation. Hourly values use the configured 40 hours/week and 52 weeks/year assumption.
+              Yearly gross pay. Hourly pay is converted.
             </p>
           </div>
         </details>
 
         <label
           className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70"
-          title={aiWebDiscoveryAvailable ? undefined : 'Fill in a search profile (target roles or strongest skills) to use this.'}
+          title={aiWebDiscoveryAvailable ? undefined : 'Fill in your search profile first.'}
         >
           <input
             className="checkbox checkbox-sm"
             type="checkbox"
-            aria-label="Include AI web search"
+            aria-label="Also search the web with AI"
             checked={aiWebDiscovery}
             onChange={(event) => onAiWebDiscoveryChange(event.target.checked)}
             disabled={busy || !aiWebDiscoveryAvailable}
           />
-          Include AI web search
+          Also search the web with AI
         </label>
 
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || scanUnavailable || !hasQuery}>
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
-          {hasReport ? 'Run new scan' : 'Run scan'}
+          Search
         </button>
 
         {!hasQuery && (
@@ -249,13 +249,13 @@ export function SearchFilterBar({
 
       {draftDiffersFromApplied && (
         <p id="search-draft-hint" className="mt-2 text-xs text-base-content/60" role="status">
-          Press Enter or Run new scan to search for &apos;{draftQuery}&apos;. The list still shows &apos;{appliedQueryText}&apos;.
+          Press Enter to search for &apos;{draftQuery}&apos;. Showing results for &apos;{appliedQueryText}&apos;.
         </p>
       )}
 
       {!hasQuery && (
         <p className="mt-2 text-xs text-base-content/60" role="status">
-          Enter a role or keyword to start a new scan. Existing reports remain available to browse and filter.
+          Enter a role to search.
         </p>
       )}
 
@@ -317,8 +317,7 @@ export function SearchFilterBar({
 
       {filters.postedWithin !== 'any' && (
         <p className="mt-2 text-xs text-base-content/60">
-          Vacancies with no known posting date are excluded while this filter is narrowed, so the
-          list means exactly what it says.
+          Jobs without a posting date are hidden.
         </p>
       )}
     </div>

@@ -50,9 +50,8 @@ export function CvLibraryTable({
             <th>Name</th>
             <th>Kind</th>
             <th>Target role</th>
-            <th>Uploaded</th>
             <th>Updated</th>
-            <th>Parse status</th>
+            <th>Status</th>
             <th>Ready for tailoring</th>
             <th>Default</th>
             <th className="text-right">Actions</th>
@@ -69,7 +68,7 @@ export function CvLibraryTable({
                     type="button"
                     className="text-left hover:underline"
                     onClick={() => onEdit(doc)}
-                    title="Edit parsed profile"
+                    title="Edit"
                   >
                     {doc.name}
                   </button>
@@ -87,19 +86,13 @@ export function CvLibraryTable({
                 </td>
                 <td
                   className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"
-                  data-label="Uploaded"
-                >
-                  {formatCvDate(doc.uploadedAt)}
-                </td>
-                <td
-                  className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"
                   data-label="Updated"
                 >
                   {formatCvDate(doc.updatedAt)}
                 </td>
                 <td
                   className={`ovr-responsive-table__cell whitespace-nowrap text-sm ${PARSE_STATUS_CLASS[parseStatus.tone]}`}
-                  data-label="Parse status"
+                  data-label="Status"
                 >
                   {parseStatus.label}
                 </td>

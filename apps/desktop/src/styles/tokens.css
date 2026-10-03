@@ -365,9 +365,8 @@
 }
 
 @container saved-jobs-table (width >= 71.875rem) {
-  /* One grid per row instead of eleven squeezed columns. Salary, Arrangement and Notes sit on a
-     second line under Role and Company so the first line keeps room for the status select and the
-     three row actions. The DOM is the same as the card layout, only the placement differs. */
+  /* One grid per row instead of six squeezed columns, so the status select and the three row
+     actions keep their room. The DOM is the same as the card layout, only the placement differs. */
   .saved-jobs-table,
   .saved-jobs-table thead,
   .saved-jobs-table tbody {
@@ -377,8 +376,7 @@
   .saved-jobs-table :is(thead, tbody) tr {
     display: grid;
     grid-template-columns:
-      minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1.4fr)
-      3.5rem 6.5rem 9.5rem 16.5rem;
+      minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.2fr) 9.5rem 6.5rem 16.5rem;
     column-gap: 0.75rem;
     align-items: start;
     padding-inline: 0.75rem;
@@ -387,64 +385,6 @@
   .saved-jobs-table :is(th, td) {
     padding-inline: 0;
     overflow-wrap: break-word;
-  }
-
-  /* Header and body cells share the same first-line tracks. */
-  .saved-jobs-table th:nth-child(1),
-  .saved-jobs-table td[data-label='Role'] {
-    grid-column: 1;
-  }
-  .saved-jobs-table th:nth-child(2),
-  .saved-jobs-table td[data-label='Company'] {
-    grid-column: 2;
-  }
-  .saved-jobs-table th:nth-child(3),
-  .saved-jobs-table td[data-label='Location'] {
-    grid-column: 3;
-  }
-  .saved-jobs-table th:nth-child(6),
-  .saved-jobs-table td[data-label='Verification'] {
-    grid-column: 4;
-  }
-  .saved-jobs-table th:nth-child(7),
-  .saved-jobs-table td[data-label='Match'] {
-    grid-column: 5;
-  }
-  .saved-jobs-table th:nth-child(8),
-  .saved-jobs-table td[data-label='Saved'] {
-    grid-column: 6;
-  }
-  .saved-jobs-table th:nth-child(10),
-  .saved-jobs-table td[data-label='Status'] {
-    grid-column: 7;
-  }
-  .saved-jobs-table th:nth-child(11),
-  .saved-jobs-table td[data-label='Actions'] {
-    grid-column: 8;
-  }
-
-  /* The folded columns have no header of their own: each value carries its label instead. */
-  .saved-jobs-table th:is(:nth-child(4), :nth-child(5), :nth-child(9)) {
-    display: none;
-  }
-  .saved-jobs-table td:is([data-label='Salary'], [data-label='Arrangement'], [data-label='Notes']) {
-    grid-row: 2;
-    padding-block: 0;
-    font-size: var(--text-xs);
-  }
-  .saved-jobs-table td[data-label='Salary'] {
-    grid-column: 1;
-  }
-  .saved-jobs-table td[data-label='Arrangement'] {
-    grid-column: 2;
-  }
-  .saved-jobs-table td[data-label='Notes'] {
-    grid-column: 3;
-  }
-  .saved-jobs-table td:is([data-label='Salary'], [data-label='Arrangement'])::before {
-    content: attr(data-label) ': ';
-    color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
-    font-weight: 600;
   }
 
   .saved-jobs-table .saved-job-status-cell .select {

@@ -122,8 +122,8 @@ export function ApplicationsPage({
       const rows = await window.workspace.listApplicationAttempts();
       setAttempts(rows);
       setAttemptsError(undefined);
-    } catch (err) {
-      setAttemptsError(describeError(err, 'could not load application attempts'));
+    } catch {
+      setAttemptsError('We could not load your applications.');
     }
   }, []);
 
@@ -183,8 +183,8 @@ export function ApplicationsPage({
           setAttempts(rows);
           setAttemptsError(undefined);
         }
-      } catch (err) {
-        if (!cancelled) setAttemptsError(describeError(err, 'could not load in-progress applications'));
+      } catch {
+        if (!cancelled) setAttemptsError('We could not load your applications.');
       }
     }
     void refresh();
@@ -303,8 +303,8 @@ export function ApplicationsPage({
     try {
       await window.applicationExecutor.cancelScheduledAutomaticSubmission(attempt.id);
       await refreshAttempts();
-    } catch (err) {
-      setAttemptsError(describeError(err, 'could not cancel the scheduled automatic submission'));
+    } catch {
+      setAttemptsError('We could not cancel the automatic send.');
     }
   }, [refreshAttempts]);
 
@@ -420,8 +420,8 @@ export function ApplicationsPage({
       setAttemptView('review');
       setFocusedAttemptId(undo.attempt.id);
       await refreshAttempts();
-    } catch (err) {
-      setAttemptsError(describeError(err, 'could not undo the skip'));
+    } catch {
+      setAttemptsError('We could not undo the skip.');
     }
   }, [pendingSkipUndo, refreshAttempts]);
 
@@ -543,8 +543,7 @@ export function ApplicationsPage({
           {!isAttemptsLoading && visibleAttempts.length === 0 && (
             <EmptyState
               illustration={emptyApplicationsIllustration}
-              title={attemptView === 'review' ? 'Nothing to review' : attemptView === 'preparing' ? 'Nothing preparing' : 'No attempt history'}
-              description="Prepared applications move here automatically as their status changes."
+              title={attemptView === 'review' ? 'Nothing to review' : attemptView === 'preparing' ? 'Nothing preparing' : 'No history yet'}
             />
           )}
 

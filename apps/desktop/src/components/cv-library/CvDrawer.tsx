@@ -372,7 +372,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     disabled={submitting || parseRun.isBusy}
                   >
                     {parseRun.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-                    Parse with AI
+                    Fill in from my CV
                   </button>
                   {parseRun.isBusy && (
                     <button
@@ -384,25 +384,22 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     </button>
                   )}
                   <span className="text-xs text-base-content/60">
-                    {canDeriveFromSource
-                      ? 'Fills in the fields below from the CV records you already have; skills and languages come from one short AI read.'
-                      : 'Reads the extracted text and fills in the fields below for you to review.'}
+                    Fills the fields below. You can edit them.
                   </span>
                 </div>
                 {derivedFields && (
                   <p className="mt-2 text-xs text-success" role="status">
-                    Filled in from your source CV records: {derivedFields.join(', ')}. Review before saving.
+                    Filled in from your CV: {derivedFields.join(', ')}. Check before saving.
                   </p>
                 )}
                 {noSkillsFound && (
                   <p className="mt-2 text-xs text-warning" role="status">
-                    No skills found in this CV. Add them in the Skills field, or tailoring cannot match any vacancy to
-                    your profile.
+                    No skills found in this CV. Add them in the Skills field so tailoring can match jobs to you.
                   </p>
                 )}
                 {parseSucceeded && !derivedFields && (
                   <p className="mt-2 text-xs text-success" role="status">
-                    Filled in from your CV: review before saving.
+                    Filled in from your CV. Check before saving.
                   </p>
                 )}
                 {(parseError ?? (parseRun.status === 'failed' ? parseRun.error : undefined)) && (
@@ -423,7 +420,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     disabled={submitting || sourceRun.isBusy}
                   >
                     {sourceRun.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-                    {source ? 'Read the CV again' : 'Read the full CV into records'}
+                    {source ? 'Read my CV again' : 'Read my full CV'}
                   </button>
                   {sourceRun.isBusy && (
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void sourceRun.cancel()}>
@@ -431,8 +428,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     </button>
                   )}
                   <span className="text-xs text-base-content/60">
-                    Keeps your real employers, dates, contact details, links and projects so exports and tailoring
-                    can use them.
+                    Saves your jobs, dates and projects for tailoring and exports.
                   </span>
                 </div>
                 {(sourceError ?? (sourceRun.status === 'failed' ? sourceRun.error : undefined)) && (
@@ -446,16 +442,15 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             {source && unmatchedRoles.length > 0 && (
               <div className="alert alert-warning text-sm" role="status">
                 <div>
-                  These roles could not be matched to a role in your saved record, so they were given new
-                  identities. Facts and approved wording you gave for an earlier role stay with that earlier
-                  role until you review them: {unmatchedRoles.join(', ')}.
+                  Some roles looked new, so earlier facts and wording stay with the old version until you review
+                  them: {unmatchedRoles.join(', ')}.
                 </div>
               </div>
             )}
             {source && <CvSourceReview ref={sourceReviewRef} source={source} disabled={submitting} onChange={setSource} />}
             {source && sourceGaps.length > 0 && (
               <p className="text-xs text-warning" role="status">
-                Saved, this CV still cannot be exported: {sourceGaps.join('; ')}.
+                Saved. This CV cannot be exported yet: {sourceGaps.join('; ')}.
               </p>
             )}
 

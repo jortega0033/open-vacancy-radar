@@ -12,7 +12,6 @@ const LOW_OPACITY_TEXT = /(?<![\w-])text-base-content\/(30|35|40|45|50)\b/;
 
 /** Decorative, aria-hidden graphics that are not text. Each entry is `file :: line fragment`. */
 const ALLOWLIST: ReadonlyArray<[file: string, fragment: string]> = [
-  ['components/applications/ApplicationReviewSwipeCard.tsx', 'ArrowsLeftRight'],
   ['components/search/VacancyDetail.tsx', 'FileDashed'],
   ['components/shell/EmptyState.tsx', 'inline-block size-36'],
 ];

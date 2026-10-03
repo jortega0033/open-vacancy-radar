@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { TabPanel, Tabs } from '../shell/index.js';
 import { AiOutput } from './AiOutput.js';
 import {
@@ -268,7 +267,6 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
           label={detail.output}
           idleHint={`No ${detail.label.replace(/^[A-Z](?![A-Z])/, (c) => c.toLowerCase())} yet.`}
           busyLabel={detail.busy}
-          providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
         />
         </TabPanel>
       </div>

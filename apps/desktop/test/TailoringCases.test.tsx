@@ -181,7 +181,7 @@ describe('reopening tailoring cases from the CV Library', () => {
     await waitFor(() => expect(getCvEvidenceOverlay).toHaveBeenCalledWith('cv-1', 'manual:abc-123'));
     expect(await screen.findByLabelText('Full job description text', undefined, SLOW)).toHaveTextContent('you will own the GraphQL gateway');
     expect(screen.getByText('Platform Engineer')).toBeInTheDocument();
-    expect(screen.getByText(/Saved as revision 1/)).toBeInTheDocument();
+    expect(screen.getByText(/^Saved on /)).toBeInTheDocument();
   });
 
   it('reopens a found-vacancy case on its stored text and its own CV, without saving anything', async () => {
@@ -235,7 +235,7 @@ describe('reopening tailoring cases from the CV Library', () => {
     expect(await screen.findByLabelText('Full job description text', undefined, SLOW)).toHaveTextContent('you will own the GraphQL gateway');
     expect(screen.getByRole('combobox', { name: /use saved cv/i })).toHaveValue('cv-2');
     expect(screen.getByText(/Text you pasted/)).toBeInTheDocument();
-    expect(screen.getByText(/Saved as revision 2/)).toBeInTheDocument();
+    expect(screen.getByText(/^Saved on /)).toBeInTheDocument();
     expect(updateCvEvidenceOverlay).not.toHaveBeenCalled();
     expect(createCvEvidenceOverlay).not.toHaveBeenCalled();
   });

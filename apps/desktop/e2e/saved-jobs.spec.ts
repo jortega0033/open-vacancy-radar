@@ -62,7 +62,7 @@ test.describe('Saved jobs', () => {
     await addDialog.getByLabel('Location').fill('Amsterdam, Netherlands and remote');
     await addDialog.getByLabel('Salary').fill('EUR 6,500 to 8,000 per month');
     await addDialog.getByLabel('Arrangement').fill('Remote-first with occasional travel');
-    await addDialog.getByLabel('Verification').fill('Recognised sponsor');
+    await addDialog.getByLabel('Sponsor check').fill('Recognised sponsor');
     await addDialog.getByRole('button', { name: /^save$/i }).click();
     await expect(addDialog).toBeHidden();
 

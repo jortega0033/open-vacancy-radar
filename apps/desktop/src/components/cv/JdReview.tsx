@@ -202,18 +202,20 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
 
         {!hasText && (
           <WarningBanner role="status">
-            No posting text came with this vacancy, so no requirements can be read from it. Paste the
-            job description below. Nothing is fetched from the link.
+            No job description came with this job. Paste it below.
           </WarningBanner>
         )}
 
         {hasText && (
           <>
-            <div className="text-xs text-base-content/60">
-              {ORIGIN_LABEL[origin]}
-              {shownUrl ? ` (${shownUrl})` : ''}
-              {shownRequisition ? `, requisition ${shownRequisition}` : ''}
-            </div>
+            <details className="text-xs text-base-content/60">
+              <summary className="cursor-pointer">Where this came from</summary>
+              <p className="mt-1">
+                {ORIGIN_LABEL[origin]}
+                {shownUrl ? ` (${shownUrl})` : ''}
+                {shownRequisition ? `, requisition ${shownRequisition}` : ''}
+              </p>
+            </details>
             <pre
               className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-box border border-base-300 bg-base-200/40 p-3 text-xs"
               aria-label="Full job description text"
@@ -258,26 +260,24 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
             disabled={!cvId || !hasText || busy || savedMatchesText}
             onClick={() => requestReplace({ text, origin, requisition: shownRequisition, fromPaste: false })}
           >
-            {overlay ? 'Save as new revision' : 'Save job description'}
+            {overlay ? 'Save changes' : 'Save job description'}
           </button>
           <button type="button" className="btn btn-outline btn-sm" onClick={() => setPasteOpen((open) => !open)}>
             {hasText ? 'Replace job description' : 'Paste job description'}
           </button>
         </div>
         {!cvId && (
-          <p className="text-xs text-base-content/60">Select a saved CV above to keep this job description with a case.</p>
+          <p className="text-xs text-base-content/60">Select a saved CV above to keep this job description.</p>
         )}
 
         {savedMatchesText && latest && (
           <p className="text-xs text-base-content/60">
-            Saved as revision {revisions.length} on {formatCapturedAt(latest.capturedAt)}. Text check{' '}
-            {latest.textHash.slice(0, 12)}.
+            Saved on {formatCapturedAt(latest.capturedAt)}.
           </p>
         )}
         {overlay && !savedMatchesText && hasText && (
           <p className="text-xs text-base-content/60">
-            The text above differs from the saved revision. Saving it creates a new revision and
-            clears your requirement reviews and approval.
+            Saving clears your requirement reviews and approval.
           </p>
         )}
 

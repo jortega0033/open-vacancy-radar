@@ -116,7 +116,7 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
 }
 
 function enterSearchQuery(value = 'frontend engineer') {
-  fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
     target: { value },
   });
 }
@@ -181,10 +181,10 @@ describe('SearchPage', () => {
     render(<SearchSessionHarness initialSession={initialSession} />);
 
     expect(screen.getByLabelText('Minimum annual salary')).toHaveValue('60 000');
-    expect(screen.getByLabelText('Include vacancies without comparable salary')).not.toBeChecked();
+    expect(screen.getByLabelText('Include jobs with no salary')).not.toBeChecked();
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Run scan' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeEnabled());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() =>
       expect(bridge.runScan).toHaveBeenCalledWith({
@@ -200,7 +200,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    const toggle = screen.getByRole('checkbox', { name: 'Include AI web search' });
+    const toggle = screen.getByRole('checkbox', { name: 'Also search the web with AI' });
     expect(toggle).toBeDisabled();
     expect(toggle).not.toBeChecked();
   });
@@ -216,14 +216,14 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    const toggle = await screen.findByRole('checkbox', { name: 'Include AI web search' });
+    const toggle = await screen.findByRole('checkbox', { name: 'Also search the web with AI' });
     await waitFor(() => expect(toggle).toBeEnabled());
 
     fireEvent.click(toggle);
     expect(toggle).toBeChecked();
 
     enterSearchQuery('frontend engineer');
-    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() =>
       expect(bridge.runScan).toHaveBeenCalledWith({
@@ -244,10 +244,10 @@ describe('SearchPage', () => {
     });
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Include AI web search' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Also search the web with AI' })).toBeEnabled());
 
     enterSearchQuery('frontend engineer');
-    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() =>
       expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'frontend engineer' }),
@@ -267,7 +267,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    const toggle = await screen.findByRole('checkbox', { name: 'Include AI web search' });
+    const toggle = await screen.findByRole('checkbox', { name: 'Also search the web with AI' });
     await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
 
@@ -285,13 +285,13 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    expect(screen.getByRole('button', { name: 'Run scan' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeDisabled();
-    expect(screen.getByText(/existing reports remain available to browse and filter/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeDisabled();
+    expect(screen.getByText(/enter a role to search/i)).toBeInTheDocument();
 
     enterSearchQuery('   ');
-    expect(screen.getByRole('button', { name: 'Run scan' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeDisabled();
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
@@ -306,7 +306,7 @@ describe('SearchPage', () => {
 
     enterSearchQuery('   ');
     expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Run new scan' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeDisabled();
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
@@ -408,7 +408,7 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
       enterSearchQuery('Role');
-      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
       expect(await screen.findByText('Checked 4 of 11 source groups')).toBeInTheDocument();
       expect(screen.getByText('212 vacancies so far')).toBeInTheDocument();
@@ -435,7 +435,7 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
       enterSearchQuery('Role');
-      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
       fireEvent.click(await screen.findByRole('button', { name: 'Stop scan' }));
 
       await waitFor(() => expect(cancelScan).toHaveBeenCalledWith('scan-42'));
@@ -456,7 +456,7 @@ describe('SearchPage', () => {
       render(<SearchPage />);
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
       enterSearchQuery('Role');
-      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
       expect(await screen.findByRole('button', { name: 'Stop scan' })).toBeDisabled();
     });
   });
@@ -480,9 +480,9 @@ describe('SearchPage', () => {
 
     render(<SearchPage />);
 
-    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
     // Search itself is blocked while reattached to that scan -- no way to double-trigger it.
-    expect(screen.getByRole('button', { name: 'Run scan' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeDisabled();
     expect(bridge.runScan).not.toHaveBeenCalled();
 
     vi.mocked(bridge.getReport).mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()]));
@@ -491,7 +491,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0), {
       timeout: 10_000,
     });
-    expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/searching job sites/i)).not.toBeInTheDocument();
   }, 15_000);
 
   it('a scan-already-running rejection stays in the scanning state instead of reporting itself as a failure', async () => {
@@ -512,10 +512,10 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Role');
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
-    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
-    expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
+    expect(screen.queryByText(/search failed/i)).not.toBeInTheDocument();
 
     let resolveFinalReport: (report: GlobalRemoteReport) => void = () => {};
     vi.mocked(bridge.getReport).mockReturnValue(new Promise((resolve) => {
@@ -523,7 +523,7 @@ describe('SearchPage', () => {
     }));
 
     await waitFor(() => expect(bridge.getReport).toHaveBeenCalledTimes(2), { timeout: 10_000 });
-    expect(screen.getByRole('button', { name: 'Run new scan' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeDisabled();
 
     resolveFinalReport({
       ...makeWorldwideReport([makeWorldwideVacancy({ title: 'Rescanned Role' })]),
@@ -532,7 +532,7 @@ describe('SearchPage', () => {
     });
 
     await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0), { timeout: 10_000 });
-    expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/searching job sites/i)).not.toBeInTheDocument();
   }, 15_000);
 
   it('reflects a background scan that finished while the window was hidden, once it becomes visible again', async () => {
@@ -579,7 +579,7 @@ describe('SearchPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
     const dialog = screen.getByRole('dialog', { name: /browse all vacancies/i });
-    expect(within(dialog).getByText(/capped at 5,000 rows/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/shows up to 5,000 jobs/i)).toBeInTheDocument();
     expect(bridge.runScan).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
@@ -607,7 +607,7 @@ describe('SearchPage', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'browse_all' }));
-    expect(await screen.findByText(/kept 5,000 of 5,001/i)).toBeInTheDocument();
+    expect(await screen.findByText(/showing the first 5,000 jobs only/i)).toBeInTheDocument();
     expect(screen.getByText(/browse-all cap 5,000 .* incomplete/i)).toBeInTheDocument();
   });
 
@@ -618,8 +618,8 @@ describe('SearchPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
     const dialog = screen.getByRole('dialog', { name: /browse all vacancies/i });
-    expect(within(dialog).getByText(/runs without role, country, employment, or salary/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/local display refinements/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/searches without a role or filters/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/local display refinements/i)).not.toBeInTheDocument();
   });
 
   it('does not filter live rows or the final report by leftover scoped query/country/employment/salary/sponsor criteria during a browse-all scan (issue #399)', async () => {
@@ -645,7 +645,7 @@ describe('SearchPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
-    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
     // A raw streamed batch, unfiltered by the backend: one row would satisfy every leftover
     // scoped criterion above (country/employment/salary/sponsor), the other satisfies none of
@@ -696,7 +696,7 @@ describe('SearchPage', () => {
       }),
     ]));
 
-    await waitFor(() => expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/searching job sites/i)).not.toBeInTheDocument());
     // Same leftover criteria must stay ignored for the final saved report, not just the live view.
     expect(screen.getAllByText('UK Unmatched Role').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Dutch Sponsor Role').length).toBeGreaterThan(0);
@@ -719,7 +719,7 @@ describe('SearchPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
-    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
     emit({
       sourceId: 'himalayas',
@@ -748,7 +748,7 @@ describe('SearchPage', () => {
       makeWorldwideVacancy({ key: 'himalayas-stale', title: 'Stale Himalayas Role', provider: 'himalayas', postedAt: stalePostedAt }),
     ]));
 
-    await waitFor(() => expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/searching job sites/i)).not.toBeInTheDocument());
     expect(screen.getAllByText('Himalayas Sourced Role').length).toBeGreaterThan(0);
     expect(screen.queryByText('Remotive Sourced Role')).not.toBeInTheDocument();
     expect(screen.queryByText('Stale Himalayas Role')).not.toBeInTheDocument();
@@ -780,8 +780,8 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
 
-    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
-    expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
+    expect(screen.queryByText(/search failed/i)).not.toBeInTheDocument();
     expect(bridge.runScan).toHaveBeenCalledTimes(1);
 
     let resolveFinalReport: (report: GlobalRemoteReport) => void = () => {};
@@ -801,7 +801,7 @@ describe('SearchPage', () => {
     });
 
     await waitFor(() => expect(screen.getAllByText('Rescanned Backend Role').length).toBeGreaterThan(0), { timeout: 10_000 });
-    expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/searching job sites/i)).not.toBeInTheDocument();
   }, 15_000);
 
   it('does not corrupt appliedFilters or the editable draft filters on a failed browse-all request (issue #399)', async () => {
@@ -822,7 +822,7 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
 
-    await waitFor(() => expect(screen.getByText(/scan failed/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/search failed/i)).toBeInTheDocument());
     expect(bridge.runScan).toHaveBeenCalledTimes(1);
     // The prior scoped report survives untouched: neither the applied filters that produced it nor
     // the editable draft were overwritten by this attempt's now-abandoned browse-all snapshot.
@@ -841,7 +841,7 @@ describe('SearchPage', () => {
     enterSearchQuery('frontend');
     fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
     fireEvent.change(screen.getByRole('combobox', { name: 'Employment type' }), { target: { value: 'full_time' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({
       mode: 'query', query: 'frontend', country: 'Germany', employment: 'full_time',
@@ -906,11 +906,9 @@ describe('SearchPage', () => {
     render(<SearchPage onOpenSearchProfile={onOpenSearchProfile} />);
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-    expect(screen.getByText(/vacancies were found, but were not scored against your Search Profile/i)).toBeInTheDocument();
-    // No query was submitted for this report (issue #395's query-match tier is a no-op here), so
-    // the banner must not claim an ordering that never happened.
-    expect(screen.getByText(/results are ordered by posting date\./i)).toBeInTheDocument();
-    expect(screen.queryByText(/submitted query match/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/results are not ranked for you yet/i)).toBeInTheDocument();
+    // The banner no longer describes the ordering at all, so it cannot claim one that never happened.
+    expect(screen.queryByText(/results are ordered by/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Fill search profile' }));
     expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
   });
@@ -927,7 +925,8 @@ describe('SearchPage', () => {
     render(<SearchSessionHarness initialSession={initialSession} />);
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-    expect(screen.getByText(/results are ordered by the submitted query match and posting date\./i)).toBeInTheDocument();
+    expect(screen.getByText(/results are not ranked for you yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/results are ordered by/i)).not.toBeInTheDocument();
   });
 
   it('ranks scoreless rows by query-match strength end to end once a query is submitted (issue #395)', async () => {
@@ -953,8 +952,8 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), { target: { value: 'frontend' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), { target: { value: 'frontend' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalled());
     await waitFor(() => expect(screen.getAllByText(/frontend/i).length).toBeGreaterThan(0));
@@ -983,13 +982,13 @@ describe('SearchPage', () => {
     render(<SearchPage />);
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-    await waitFor(() => expect(screen.getByText(/search profile is saved, but this report was generated before it could be scored/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/these results were found before your profile was saved/i)).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Fill search profile' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rescan and score' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search again' }));
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.queryByText(/generated before it could be scored/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/found before your profile was saved/i)).not.toBeInTheDocument());
     expect(screen.getAllByText('Profile fit 82/100').length).toBeGreaterThan(0);
   });
 
@@ -1005,9 +1004,9 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
     await waitFor(() =>
-      expect(screen.getByText(/could not check whether the current search profile can score this report/i)).toBeInTheDocument(),
+      expect(screen.getByText(/could not check your profile/i)).toBeInTheDocument(),
     );
-    expect(screen.getByText(/profile read failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/profile read failed/i)).not.toBeInTheDocument();
   });
 
   it('seeds the country filter from the persisted default search location on first load', async () => {
@@ -1055,7 +1054,7 @@ describe('SearchPage', () => {
     resolveSettings({ ...DEFAULT_SETTINGS, defaultLocation: 'Germany' });
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany'));
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('Remote');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Remote');
     expect(screen.getAllByText('Remote Engineer').length).toBeGreaterThan(0);
   });
 
@@ -1073,12 +1072,12 @@ describe('SearchPage', () => {
     );
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
     enterSearchQuery('Strict');
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() => expect(screen.getAllByText('Strict Mode Role').length).toBeGreaterThan(0));
   });
 
-  it('clicking Run new scan refreshes external sources while a report is already loaded', async () => {
+  it('clicking Search refreshes external sources while a report is already loaded', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
       runScan: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Rescanned Role' })])),
@@ -1088,7 +1087,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Role');
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0));
@@ -1104,7 +1103,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Remote');
-    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
       key: 'Enter',
       code: 'Enter',
     });
@@ -1119,7 +1118,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
-    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
       key: 'Enter',
       code: 'Enter',
     });
@@ -1137,7 +1136,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Remote');
-    const box = screen.getByRole('searchbox', { name: 'Role or keywords for next scan' });
+    const box = screen.getByRole('searchbox', { name: 'Role or keywords' });
     fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' });
     await waitFor(() => expect(box).toBeDisabled());
     fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' });
@@ -1154,17 +1153,17 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
     enterSearchQuery('Frontend Engineer');
-    expect(screen.getByText('Role or keywords for next scan')).toBeVisible();
+    expect(screen.getByText('Role or keywords')).toBeVisible();
     expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-    expect(screen.getByText('Role or keywords for next scan')).toBeVisible();
+    expect(screen.getByText('Role or keywords')).toBeVisible();
     expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
 
     enterSearchQuery('Backend Developer');
     expect(
-      screen.getByText("Press Enter or Run new scan to search for 'Backend Developer'. The list still shows 'Frontend Engineer'."),
+      screen.getByText("Press Enter to search for 'Backend Developer'. Showing results for 'Frontend Engineer'."),
     ).toBeInTheDocument();
 
     enterSearchQuery('Frontend Engineer');
@@ -1185,7 +1184,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
     expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
       target: { value: 'Remote' },
     });
 
@@ -1231,10 +1230,10 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
       target: { value: 'backend engineer' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'backend engineer' }));
   });
@@ -1260,7 +1259,7 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
   });
 
   it('paginates the results list instead of rendering every row at once', async () => {
@@ -1428,7 +1427,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
     enterSearchQuery('Frontend Engineer');
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     const time = new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     expect(await screen.findByText(`1 vacancy match 'Frontend Engineer' · scanned ${time}`)).toBeInTheDocument();
@@ -1482,16 +1481,16 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
     enterSearchQuery('Frontend');
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
-    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /run the first scan/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/no search yet/i)).not.toBeInTheDocument();
 
     resolveScan(makeWorldwideReport([makeWorldwideVacancy({ title: 'Frontend Developer' })]));
 
     await waitFor(() => expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0));
-    expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/searching job sites/i)).not.toBeInTheDocument();
     expect(bridge.runScan).toHaveBeenCalledTimes(1);
   });
 
@@ -1507,8 +1506,8 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
       enterSearchQuery('Frontend');
-      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       // Provably before `runScan`'s own promise resolves: nothing has resolved it yet.
       emit({
@@ -1518,14 +1517,14 @@ describe('SearchPage', () => {
 
       await waitFor(() => expect(screen.getAllByText('Streamed Frontend Role').length).toBeGreaterThan(0));
       // Honest "not yet scored" state, not a real-looking match percentage.
-      expect(screen.getByText(/showing vacancies as each source finishes/i)).toBeInTheDocument();
+      expect(screen.getByText(/new jobs appear as they are found/i)).toBeInTheDocument();
 
       resolveScan(makeWorldwideReport([makeWorldwideVacancy({ title: 'Frontend Developer' })]));
 
       await waitFor(() => expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0));
       // The final, non-streaming list is exactly what loaded -- no partial-only row survives.
       expect(screen.queryByText('Streamed Frontend Role')).not.toBeInTheDocument();
-      expect(screen.queryByText(/showing vacancies as each source finishes/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/new jobs appear as they are found/i)).not.toBeInTheDocument();
     });
 
     it('filters live rows by the just-submitted role and country instead of showing every raw streamed hit (issue #394)', async () => {
@@ -1540,8 +1539,8 @@ describe('SearchPage', () => {
 
       enterSearchQuery('frontend engineer');
       fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Netherlands' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       // A mixed batch, streamed before `runScan`'s own promise resolves: one matches the
       // just-submitted role+country, the rest match neither (a different role, or the right role
@@ -1578,7 +1577,7 @@ describe('SearchPage', () => {
       expect(screen.getByText(/^1 vacancy so far$/i)).toBeInTheDocument();
 
       resolveScan(makeWorldwideReport([makeWorldwideVacancy({ title: 'Frontend Engineer', location: 'Netherlands' })]));
-      await waitFor(() => expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByText(/searching job sites/i)).not.toBeInTheDocument());
     });
 
     it('keeps the salary note/count in sync with the live-filtered list instead of the stale applied filters (issue #394)', async () => {
@@ -1590,8 +1589,8 @@ describe('SearchPage', () => {
 
       enterSearchQuery('frontend engineer');
       fireEvent.change(screen.getByLabelText('Minimum annual salary'), { target: { value: '100000' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       emit({
         sourceId: 'himalayas',
@@ -1616,8 +1615,8 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
       enterSearchQuery('frontend');
-      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       emit({
         sourceId: 'himalayas',
@@ -1631,7 +1630,7 @@ describe('SearchPage', () => {
       // (empty, on a first scan) applied filters happen to be -- they are cleared along with its
       // now-abandoned pending criteria.
       await waitFor(() => expect(screen.queryByText('Frontend Doomed Role')).not.toBeInTheDocument());
-      expect(screen.getByText(/scan failed/i)).toBeInTheDocument();
+      expect(screen.getByText(/search failed/i)).toBeInTheDocument();
     });
 
     it('subscribes exactly once per mount and unsubscribes on unmount, so navigating away and back never duplicates the listener', async () => {
@@ -1656,7 +1655,7 @@ describe('SearchPage', () => {
       const { emit } = installProgressCapturingBridge({ getReport: vi.fn().mockResolvedValue(null), getScanStatus });
 
       render(<SearchPage />);
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       emit({
         sourceId: 'jobicy',
@@ -1677,8 +1676,8 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
 
       enterSearchQuery('Role');
-      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       // Provably before `runScan`'s own promise resolves: nothing has resolved it yet.
       emit({
@@ -1694,12 +1693,12 @@ describe('SearchPage', () => {
       expect(screen.getByText(/live · not yet scored/i)).toBeInTheDocument();
 
       // An explicit, discoverable way back to the saved report while the rescan keeps running.
-      fireEvent.click(screen.getByRole('button', { name: 'View saved report' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Show saved results' }));
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
       expect(screen.queryByText('Mid Rescan Streamed Role')).not.toBeInTheDocument();
 
       // And back to live from there.
-      fireEvent.click(screen.getByRole('button', { name: /view live results/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show live results/i }));
       await waitFor(() => expect(screen.getAllByText('Mid Rescan Streamed Role').length).toBeGreaterThan(0));
     });
 
@@ -1714,8 +1713,8 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
 
       enterSearchQuery('Role');
-      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       emit({
         sourceId: 'himalayas',
@@ -1759,8 +1758,8 @@ describe('SearchPage', () => {
       render(<SearchPage />);
       await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
       enterSearchQuery('frontend');
-      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       const streamed = makeWorldwideVacancy({ key: 'bjak-1', title: 'Frontend Engineer', company: 'Bjak', profileScore: null });
       emit({ sourceId: 'himalayas', vacancies: [streamed, { ...streamed }] });
@@ -1827,8 +1826,8 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
 
       enterSearchQuery('Role');
-      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
-      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
       // No page-wide "looks disabled" opacity over the results/detail pane while a rescan is in
       // flight -- the whole point of #363 is that this used to look locked while parts of it (the
@@ -1849,10 +1848,10 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
     enterSearchQuery();
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
-    await waitFor(() => expect(screen.getByText(/scan failed: network unreachable/i)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByText(/network unreachable/i)).toBeInTheDocument());
+    expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeEnabled();
   });
 
   it('keeps the existing report, selection, page and scroll after a rescan fails', async () => {
@@ -1881,9 +1880,9 @@ describe('SearchPage', () => {
     Object.defineProperty(detailScroller, 'scrollTop', { configurable: true, value: 128, writable: true });
     fireEvent.scroll(detailScroller);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
-    await waitFor(() => expect(screen.getByText(/scan failed: network unreachable/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/network unreachable/i)).toBeInTheDocument());
     expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
     expect(screen.getByLabelText('Vacancy results').scrollTop).toBe(84);
@@ -1905,8 +1904,8 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Previous Frontend Role').length).toBeGreaterThan(0));
     enterSearchQuery('Frontend');
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
-    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+    await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     resolveScan({
@@ -1916,7 +1915,7 @@ describe('SearchPage', () => {
     });
 
     await waitFor(() => expect(screen.getAllByText('Backend Role').length).toBeGreaterThan(0));
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
   });
 
   it('a scan-failure Retry button re-runs the scan and clears the error on success', async () => {
@@ -1929,13 +1928,13 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
     enterSearchQuery();
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
-    await waitFor(() => expect(screen.getByText(/scan failed: network unreachable/i)).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+    await waitFor(() => expect(screen.getByText(/network unreachable/i)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(runScan).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/search failed/i)).not.toBeInTheDocument());
     expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
   });
 
@@ -1969,7 +1968,7 @@ describe('SearchPage', () => {
     installAllBridges({ getStatus });
 
     render(<SearchPage />);
-    await waitFor(() => expect(screen.getByText(/the local job cache could not be started/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/searching is not available right now/i)).toBeInTheDocument());
     // An unclassified failure is never offered a destructive-looking fix.
     expect(screen.queryByRole('button', { name: /rebuild job cache/i })).not.toBeInTheDocument();
 
@@ -1977,7 +1976,7 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
     await waitFor(() =>
-      expect(screen.queryByText(/the local job cache could not be started/i)).not.toBeInTheDocument(),
+      expect(screen.queryByText(/searching is not available right now/i)).not.toBeInTheDocument(),
     );
   });
 
@@ -2000,7 +1999,7 @@ describe('SearchPage', () => {
       // The raw text is in the DOM only inside the closed disclosure.
       const disclosure = screen.getByText('Show technical details').closest('details');
       expect(disclosure).not.toHaveAttribute('open');
-      expect(screen.getByRole('button', { name: /run scan/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
       expect(screen.getByRole('button', { name: /browse all vacancies/i })).toBeDisabled();
       expect(screen.queryByRole('button', { name: /run the first scan/i })).not.toBeInTheDocument();
     });
@@ -2111,7 +2110,7 @@ describe('SearchPage', () => {
     expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
   });
 
-  it('shows the salary evidence provider and source key separately from the result provider', async () => {
+  it('keeps the salary evidence provider and source key out of the default detail view', async () => {
     installAllBridges({
       getReport: vi.fn().mockResolvedValue(
         makeWorldwideReport([
@@ -2131,7 +2130,7 @@ describe('SearchPage', () => {
 
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Remote Frontend Engineer' })).toBeInTheDocument());
-    expect(screen.getByText('Himalayas (himalayas:salary-copy)')).toBeInTheDocument();
+    expect(screen.queryByText('Himalayas (himalayas:salary-copy)')).not.toBeInTheDocument();
   });
 
   it('opens the CV assistant on demand for the selected vacancy', async () => {
@@ -2187,7 +2186,7 @@ describe('SearchPage live announcements (issue #456)', () => {
     expect(announcer()).toHaveTextContent('');
 
     enterSearchQuery('frontend');
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
     await waitFor(() => expect(announcer()).toHaveTextContent('Scan started'));
 
     // Under the step nothing new is spoken, so a trickle of arrivals does not flood the reader.
@@ -2210,7 +2209,7 @@ describe('SearchPage live announcements (issue #456)', () => {
     renderAnnounced();
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
     enterSearchQuery('frontend');
-    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
     await waitFor(() => expect(announcer()).toHaveTextContent('The scan stopped with an error'));
     expect(announcer()).not.toHaveTextContent(/finished/i);

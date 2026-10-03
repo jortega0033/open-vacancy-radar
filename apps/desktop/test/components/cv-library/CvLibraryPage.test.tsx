@@ -242,7 +242,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -293,9 +293,9 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
-    expect(await within(dialog).findByText(/filled in from your source cv records/i)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/filled in from your cv: title/i)).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
     expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
     // The source-CV review panel sitting above the form has a "Location" input of its own, so the
@@ -344,7 +344,7 @@ describe('CvLibraryPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -374,11 +374,10 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
-    expect(within(dialog).queryByText(/no ai run needed/i)).not.toBeInTheDocument();
   });
 
   it('falls back to the AI parse when the source CV has dates the app cannot read', async () => {
@@ -412,7 +411,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -441,7 +440,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() =>
@@ -461,7 +460,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -485,7 +484,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /fill in from my cv/i }));
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -770,15 +769,15 @@ describe('CvLibraryPage', () => {
       const rowOf = async (name: string) => (await screen.findByText(name)).closest('tr')!;
       const reviewedRow = await rowOf('Reviewed.pdf');
       expect(within(reviewedRow).getByText('Yes')).toBeInTheDocument();
-      expect(within(reviewedRow).getByText('Parsed')).toHaveClass('text-success');
+      expect(within(reviewedRow).getByText('Text found')).toHaveClass('text-success');
 
       const unreviewedRow = await rowOf('Unreviewed.pdf');
       expect(within(unreviewedRow).getByText('Needs your review')).toBeInTheDocument();
-      expect(within(unreviewedRow).getByText('Parsed')).not.toHaveClass('text-success');
+      expect(within(unreviewedRow).getByText('Text found')).not.toHaveClass('text-success');
 
       const unreadRow = await rowOf('Unread.pdf');
       expect(within(unreadRow).getByText('Not read yet')).toBeInTheDocument();
-      expect(within(unreadRow).getByText('Parsed')).not.toHaveClass('text-success');
+      expect(within(unreadRow).getByText('Text found')).not.toHaveClass('text-success');
     });
 
     it('opens the review from the readiness cell, and calls the save a confirmation when the drawer holds a source', async () => {
@@ -818,7 +817,7 @@ describe('CvLibraryPage', () => {
       fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
 
       await screen.findByRole('combobox', { name: /use saved cv/i });
-      const notice = await screen.findByText(/has no reviewed structured source yet|not ready for approval/i);
+      const notice = await screen.findByText(/check your CV details first/i);
       expect(notice).toBeInTheDocument();
       fireEvent.click(screen.getAllByRole('button', { name: 'Review this CV now' })[0]!);
 
@@ -827,7 +826,7 @@ describe('CvLibraryPage', () => {
 
       await waitFor(() => expect(updateCvDocument).toHaveBeenCalledTimes(1));
       // Still in the same case, with the notice gone.
-      await waitFor(() => expect(screen.queryByText(/not ready for approval|has no reviewed structured source/i)).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByText(/check your CV details first/i)).not.toBeInTheDocument());
       expect(screen.getByRole('button', { name: 'Back to CV library' })).toBeInTheDocument();
     });
   });
@@ -997,7 +996,7 @@ describe('CvLibraryPage', () => {
       const other = screen.getByLabelText('Other tools');
       expect(other.tagName).toBe('DETAILS');
       expect(other).not.toHaveAttribute('open');
-      expect(within(other).getByText(/ats fit/i, { selector: '.card-title, h3, div' })).toBeInTheDocument();
+      expect(within(other).getByText(/job fit check/i, { selector: '.card-title, h3, div' })).toBeInTheDocument();
       // The main path stays outside it.
       expect(within(other).queryByText('Requirement mapping')).not.toBeInTheDocument();
     });
