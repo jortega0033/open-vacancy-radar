@@ -60,7 +60,7 @@ export const GROUNDED_LETTER_UNAVAILABLE =
  * rather than from the letter.
  */
 export const GROUNDED_LETTER_DISCLOSURE =
-  'Assembled from facts you confirmed on your CV, with connecting lines written by this app in English. Nothing in it is written by the model: it only chooses which of your facts to cite.';
+  'Every sentence about you is your own wording from your confirmed CV. The model only picks which of your facts to cite, and this app writes the connecting lines in English.';
 
 const LABELS: GroundedSelectionLabels = {
   run: 'the letter generation run',
@@ -93,5 +93,8 @@ export function renderGroundedLetterFromSelection(raw: string, request: Grounded
     company: bundle.vacancy.company,
     candidateName: bundle.sourceCv?.contact.name ?? '',
     maxChars: bundle.constraints.maxChars,
+    requirements: bundle.vacancy.requirements?.length
+      ? bundle.vacancy.requirements
+      : bundle.criticalRequirements,
   });
 }
