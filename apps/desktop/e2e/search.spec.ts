@@ -2,7 +2,7 @@ import { expect, goto, test } from './fixtures.js';
 
 /**
  * Search e2e coverage is deliberately scoped to UI mechanics that need no real data: this suite
- * never triggers "Search" / "Run the first scan" (the two buttons that can start a scan; there is
+ * never clicks either "Search" button (the filter bar one and the empty-state one start a scan; there is
  * no separate, merely-filtering action), because both hit real external job-board APIs
  * (SearchPage.tsx's docstring: "Scanning hits real external feeds and can take a couple of
  * minutes"), which would be slow, flaky, and inappropriate for CI. `window.vacancyRadar.getStatus`/
@@ -20,9 +20,9 @@ test.describe('Search', () => {
     // the results list.
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
     await expect(
-      window.getByText(/No scan has been run yet, so there is nothing to filter/i),
+      window.getByText(/Enter a role and search to find jobs/i),
     ).toBeVisible();
-    await expect(window.getByRole('button', { name: /run the first scan/i })).toBeVisible();
+    await expect(window.getByRole('button', { name: 'Search', exact: true }).first()).toBeVisible();
     await expect(window.getByText('Salary shown only where advertised')).toBeVisible();
 
     // The plain country selector is always offered -- there is no separate pipeline switch any

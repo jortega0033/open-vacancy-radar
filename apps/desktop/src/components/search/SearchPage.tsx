@@ -5,8 +5,6 @@ import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
-import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
@@ -189,7 +187,6 @@ export function SearchPage({
   const session = controlledSession ?? localSession;
   const setSession = onSessionChange ?? setLocalSession;
   const [engineState, setEngineState] = useState<EngineState>('checking');
-  const [engineError, setEngineError] = useState<string>();
 
   const [worldwideReport, setWorldwideReport] = useSearchSessionField(session, setSession, 'report');
   const [reportHydrated, setReportHydrated] = useSearchSessionField(session, setSession, 'reportHydrated');
@@ -283,7 +280,6 @@ export function SearchPage({
   // Which CLI the gap-analysis offer below actually runs through (issue #400): the effective
   // provider, matching what CvAssistant itself resolves, so this copy never names a CLI the
   // analysis won't actually use.
-  const { provider: effectiveProvider } = useEffectiveProvider();
 
   const [engineCheckTick, setEngineCheckTick] = useState(0);
   const [checkingEngine, setCheckingEngine] = useState(false);
@@ -296,14 +292,10 @@ export function SearchPage({
         const status = await window.vacancyRadar.getStatus();
         if (cancelled) return;
         if (status.ready) setEngineState('ready');
-        else {
-          setEngineState('unavailable');
-          setEngineError(status.error ?? 'vacancy engine is not ready');
-        }
-      } catch (error) {
+        else setEngineState('unavailable');
+      } catch {
         if (cancelled) return;
         setEngineState('unavailable');
-        setEngineError(describeError(error, 'failed to reach the vacancy engine'));
       } finally {
         if (!cancelled) setCheckingEngine(false);
       }
@@ -996,7 +988,7 @@ export function SearchPage({
   const summary =
     hasReport || isStreamingPartial
       ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
-      : 'No report loaded';
+      : 'No results yet';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1036,8 +1028,7 @@ export function SearchPage({
               </button>
             }
           >
-            Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still be
-            shown, but no new scan can run.
+            Searching is not available right now. Your saved results are still here.
           </ErrorBanner>
         )}
         {scanning && (
@@ -1047,10 +1038,10 @@ export function SearchPage({
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
             <span className="flex-1">
               {showLiveResults
-                ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
+                ? 'Searching job sites. New jobs appear as they are found.'
                 : hasReport
-                ? `Scanning live sources in the background. The list below is your saved report filtered locally${hasLiveRows ? `; ${liveProgressCount.toLocaleString()} live ${liveProgressCount === 1 ? 'vacancy has' : 'vacancies have'} arrived so far` : ''}. It will switch when you choose to view them, or when the scan finishes.`
-                : 'Scanning live sources: this hits real external APIs and feeds, and can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.'}
+                ? `Searching job sites. Showing your last results meanwhile${hasLiveRows ? ` (${liveProgressCount.toLocaleString()} new so far)` : ''}.`
+                : 'Searching job sites. This can take a few minutes.'}
             </span>
             {hasReport && hasLiveRows && (
               <button
@@ -1058,7 +1049,7 @@ export function SearchPage({
                 className="btn btn-outline btn-xs flex-none"
                 onClick={() => setViewingSaved((current) => !current)}
               >
-                {showLiveResults ? 'View saved report' : `View live results (${liveProgressCount.toLocaleString()})`}
+                {showLiveResults ? 'Show saved results' : `Show live results (${liveProgressCount.toLocaleString()})`}
               </button>
             )}
           </div>
@@ -1077,7 +1068,11 @@ export function SearchPage({
               </button>
             }
           >
-            Scan failed: {scanError}
+            Search failed.
+            <details className="mt-1 text-xs">
+              <summary className="cursor-pointer">Details</summary>
+              <p className="mt-1 break-words">{scanError}</p>
+            </details>
           </ErrorBanner>
         )}
         {scanGuard && (
@@ -1095,15 +1090,14 @@ export function SearchPage({
                   setScanGuard(undefined);
                 }}
               >
-                Browse saved report
+                Show saved results
               </button>
             )}
           </div>
         )}
         {scanIncomplete && (
           <WarningBanner className="mt-3" role="status">
-            {scanBounds.completenessReason ??
-              `Browse-all scan is capped at ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} rows, so this report is not exhaustive.`}
+            Showing the first {scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} jobs only.
           </WarningBanner>
         )}
         {loadError && (
@@ -1129,7 +1123,7 @@ export function SearchPage({
         <>
           <div className="alert alert-info mx-6 mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            Loading the latest report…
+            Loading your results…
           </div>
           <SearchLoadingSkeleton />
         </>
@@ -1142,10 +1136,10 @@ export function SearchPage({
           <EmptyState
             illustration={emptySearchIllustration}
             title="No search yet"
-            description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
+            description="Enter a role and search to find jobs."
             action={
               <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
-                Run the first scan
+                Search
               </button>
             }
           />
@@ -1162,12 +1156,7 @@ export function SearchPage({
           {profileNotConfigured && (
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
-                {results.length.toLocaleString()} vacancies were found, but were not scored against
-                your search profile because no target roles or strongest skills are configured.
-                {effectiveFilters.query.trim()
-                  ? ' Results are ordered by the submitted query match and posting date.'
-                  : ' Results are ordered by posting date.'}{' '}
-                Fill your search profile to enable profile-based ranking on future scans.
+                Results are not ranked for you yet. Fill in your search profile to see how well each job fits.
               </span>
               {onOpenSearchProfile && (
                 <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>
@@ -1179,18 +1168,16 @@ export function SearchPage({
           {reportNeedsRescore && (
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
-                Search profile is saved, but this report was generated before it could be scored.
-                Cached vacancies remain browseable; rescan to score them with the current profile.
+                These results were found before your profile was saved. Search again to score them.
               </span>
               <button type="button" className="btn btn-warning btn-sm" onClick={handleRescore} disabled={busy || !currentProfileScanQuery}>
-                Rescan and score
+                Search again
               </button>
             </div>
           )}
           {profileScoringUnknown && (
             <WarningBanner className="mx-6 mt-3" role="status">
-              Cached vacancies are browseable, but the app could not check whether the current
-              search profile can score this report: {searchProfileError}
+              Could not check your profile.
             </WarningBanner>
           )}
           {worldwideReport && (
@@ -1224,7 +1211,6 @@ export function SearchPage({
               <VacancyDetail
                 result={selected}
                 defaultCvName={defaultCvName}
-                providerLabel={PROVIDER_LABEL[effectiveProvider]}
                 saveState={saveState}
                 prepareState={prepareState}
                 prepareAvailable={!selected.provisional}
@@ -1260,7 +1246,7 @@ export function SearchPage({
                 <EmptyState
                   illustration={emptySearchIllustration}
                   title="Select a vacancy"
-                  description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
+                  description="Pick a job from the list to see details."
                 />
               </div>
             )}
@@ -1275,12 +1261,7 @@ export function SearchPage({
               Browse all vacancies?
             </h3>
             <p className="mt-2 text-sm text-base-content/70">
-              This starts a broad live scan without a role or keyword. It can take longer and hit
-              more external sources. The saved report is capped at {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
-            </p>
-            <p className="mt-2 text-sm text-base-content/70">
-              Browse All runs without role, country, employment, or salary scan criteria. Local
-              display refinements such as source or posting date can still narrow what is shown.
+              This searches without a role or filters. It can take longer and shows up to {BROWSE_ALL_RESULT_CAP.toLocaleString()} jobs.
             </p>
             <div className="modal-action">
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
