@@ -596,13 +596,19 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             </p>
           )}
 
+          {source && (
+            <p className="border-t border-base-300 px-5 py-3 text-sm text-base-content/70">
+              Saving confirms these records are correct. Approved CVs are built only from them.
+            </p>
+          )}
+
           <div className="flex justify-end gap-2 border-t border-base-300 px-5 py-3.5">
             <button type="button" className="btn btn-outline" onClick={onCancel} disabled={submitting}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               {submitting && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
-              {isEdit ? 'Save changes' : 'Add CV'}
+              {source ? 'Confirm and save' : isEdit ? 'Save changes' : 'Add CV'}
             </button>
           </div>
         </form>

@@ -758,6 +758,80 @@ describe('CvLibraryPage', () => {
     await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
   });
 
+  describe('source-review readiness (#447)', () => {
+    it('keeps Parsed, structured source and reviewed source apart, and never shows green for an unreviewed upload', async () => {
+      const reviewed = makeCv({ id: 'r', name: 'Reviewed.pdf', kind: 'uploaded', text: 'text', source: makeSource() });
+      const unreviewed = makeCv({ id: 'u', name: 'Unreviewed.pdf', kind: 'uploaded', text: 'text', source: makeSource({ reviewedAt: '' }) });
+      const unread = makeCv({ id: 'n', name: 'Unread.pdf', kind: 'uploaded', text: 'text', source: null });
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([reviewed, unreviewed, unread]) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+
+      const rowOf = async (name: string) => (await screen.findByText(name)).closest('tr')!;
+      const reviewedRow = await rowOf('Reviewed.pdf');
+      expect(within(reviewedRow).getByText('Yes')).toBeInTheDocument();
+      expect(within(reviewedRow).getByText('Parsed')).toHaveClass('text-success');
+
+      const unreviewedRow = await rowOf('Unreviewed.pdf');
+      expect(within(unreviewedRow).getByText('Needs your review')).toBeInTheDocument();
+      expect(within(unreviewedRow).getByText('Parsed')).not.toHaveClass('text-success');
+
+      const unreadRow = await rowOf('Unread.pdf');
+      expect(within(unreadRow).getByText('Not read yet')).toBeInTheDocument();
+      expect(within(unreadRow).getByText('Parsed')).not.toHaveClass('text-success');
+    });
+
+    it('opens the review from the readiness cell, and calls the save a confirmation when the drawer holds a source', async () => {
+      const unreviewed = makeCv({ id: 'u', name: 'Unreviewed.pdf', kind: 'uploaded', text: 'text', source: makeSource({ reviewedAt: '' }) });
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([unreviewed]) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Review Unreviewed.pdf' }));
+      const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+      expect(within(dialog).getByRole('button', { name: 'Confirm and save' })).toBeInTheDocument();
+      expect(within(dialog).getByText(/saving confirms these records are correct/i)).toBeInTheDocument();
+    });
+
+    it('opens the exact CV from the tailoring workspace and returns to the same case after saving', async () => {
+      const unreviewed = makeCv({
+        id: 'u',
+        name: 'Unreviewed.pdf',
+        kind: 'uploaded',
+        text: 'Frontend engineer.',
+        isDefault: true,
+        source: makeSource({ reviewedAt: '' }),
+      });
+      const reviewedAfterSave = { ...unreviewed, source: makeSource() };
+      // The page and the workspace each read the library once on the way in; every later read is after the save.
+      const listCvDocuments = vi.fn().mockResolvedValueOnce([unreviewed]).mockResolvedValueOnce([unreviewed]).mockResolvedValue([reviewedAfterSave]);
+      const updateCvDocument = vi.fn().mockResolvedValue(reviewedAfterSave);
+      installWorkspaceBridge({ listCvDocuments, updateCvDocument, getCvEvidenceOverlay: vi.fn().mockResolvedValue(null), createCvEvidenceOverlay: vi.fn().mockResolvedValue(undefined) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /tailor for a job/i }));
+      const form = await screen.findByRole('form', { name: /tailor for a job/i });
+      fireEvent.change(within(form).getByLabelText('Role (required)'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company (required)'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText('Job description (required)'), { target: { value: 'Build the freight planner.' } });
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      await screen.findByRole('combobox', { name: /use saved cv/i });
+      const notice = await screen.findByText(/has no reviewed structured source yet|not ready for approval/i);
+      expect(notice).toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: 'Review this CV now' })[0]!);
+
+      const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm and save' }));
+
+      await waitFor(() => expect(updateCvDocument).toHaveBeenCalledTimes(1));
+      // Still in the same case, with the notice gone.
+      await waitFor(() => expect(screen.queryByText(/not ready for approval|has no reviewed structured source/i)).not.toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Back to CV library' })).toBeInTheDocument();
+    });
+  });
+
   describe('Tailor for a job (#419)', () => {
     async function openForm() {
       render(<CvLibraryPage />);

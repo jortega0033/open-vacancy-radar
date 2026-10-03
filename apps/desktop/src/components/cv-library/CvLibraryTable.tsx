@@ -2,6 +2,7 @@ import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
 import { Menu } from '../shell/index.js';
 import { CV_KIND_LABEL, cvParseStatus, formatCvDate, type ParseStatusTone } from './cv-profile.js';
 import { NotSet } from '../shell/NotSet.js';
+import { cvTailoringReadiness } from './cv-source-readiness.js';
 
 export interface CvLibraryTableProps {
   documents: readonly CvDocumentRecord[];
@@ -52,6 +53,7 @@ export function CvLibraryTable({
             <th>Uploaded</th>
             <th>Updated</th>
             <th>Parse status</th>
+            <th>Ready for tailoring</th>
             <th>Default</th>
             <th className="text-right">Actions</th>
           </tr>
@@ -59,6 +61,7 @@ export function CvLibraryTable({
         <tbody>
           {documents.map((doc) => {
             const parseStatus = cvParseStatus(doc);
+            const readiness = cvTailoringReadiness(doc);
             return (
               <tr key={doc.id} className="ovr-row hover:bg-base-200">
                 <td className="ovr-responsive-table__cell font-medium" data-label="Name">
@@ -99,6 +102,23 @@ export function CvLibraryTable({
                   data-label="Parse status"
                 >
                   {parseStatus.label}
+                </td>
+                <td className="ovr-responsive-table__cell whitespace-nowrap text-sm" data-label="Ready for tailoring">
+                  {readiness.state === 'ready' ? (
+                    <span className="text-success">{readiness.label}</span>
+                  ) : (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-warning">{readiness.label}</span>
+                      <button
+                        type="button"
+                        className="link text-xs"
+                        onClick={() => onEdit(doc)}
+                        aria-label={`${readiness.state === 'not_read' ? 'Read and review' : 'Review'} ${doc.name}`}
+                      >
+                        {readiness.state === 'not_read' ? 'Read and review' : 'Review now'}
+                      </button>
+                    </span>
+                  )}
                 </td>
                 <td className="ovr-responsive-table__cell" data-label="Default">
                   {doc.isDefault ? (

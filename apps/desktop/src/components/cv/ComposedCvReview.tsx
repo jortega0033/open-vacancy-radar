@@ -20,6 +20,8 @@ export interface ComposedCvReviewProps {
   vacancy: VacancyLead | null;
   sourceCv?: CvSourceDocument | null;
   profile?: CvProfile | null;
+  /** Opens this CV's review (#447). Without it the notice only describes what is missing. */
+  onReviewSource?: () => void;
 }
 
 /**
@@ -43,7 +45,7 @@ export interface ComposedCvReviewProps {
  * variant adds nothing to it. The approve actions send only the case id and revision: the main
  * process recomposes and re-verifies every gap itself before writing anything.
  */
-export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedCvReviewProps) {
+export function ComposedCvReview({ cvId, vacancy, sourceCv, profile, onReviewSource }: ComposedCvReviewProps) {
   const [overlay, setOverlay] = useState<CvEvidenceOverlayRecord | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [currentHash, setCurrentHash] = useState<string | null>(null);
@@ -252,7 +254,16 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
                   <li key={gap}>{gap}</li>
                 ))}
               </ul>
-              <p className="mt-1">Open this CV in the CV Library and review its source, then come back to this case.</p>
+              {onReviewSource ? (
+                <>
+                  <p className="mt-1">Review this CV's source to continue. You come back to this case afterwards.</p>
+                  <button type="button" className="btn btn-warning btn-sm mt-2" onClick={onReviewSource}>
+                    Review this CV now
+                  </button>
+                </>
+              ) : (
+                <p className="mt-1">Open this CV in the CV Library and review its source, then come back to this case.</p>
+              )}
             </div>
           </div>
         )}
@@ -393,7 +404,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
           </WarningBanner>
         )}
 
-        {overlay && isApproved && !needsReapproval && <CvArtifactPanel overlay={overlay} onOverlayChange={setOverlay} sourceGaps={sourceGaps} />}
+        {overlay && isApproved && !needsReapproval && <CvArtifactPanel overlay={overlay} onOverlayChange={setOverlay} sourceGaps={sourceGaps} {...(onReviewSource ? { onReviewSource } : {})} />}
 
         {composed && composed.blockers.length > 0 && (
           <div className="alert alert-warning text-sm" role="alert">
