@@ -18,6 +18,7 @@ import { TailoringProposalsPanel } from './TailoringProposalsPanel.js';
 import type { CvDocument, VacancyLead } from './types.js';
 import { caseKeyFor } from './vacancy-key.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
+import { CaseStepTracker } from './CaseStepTracker.js';
 
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
@@ -42,13 +43,16 @@ export interface CvAssistantProps {
   onReviewCv?: (cvId: string) => void;
   /** Bumped by the host after the CV library changed, so the source notices clear in place. */
   libraryRevision?: number;
+  /** Opened from "Tailor for a job" (#446): ATS fit, the quick draft and the cover letter move into a
+   * collapsed "Other tools" section below the steps. */
+  tailoringCase?: boolean;
 }
 
 function cvDocumentFromLibrary(doc: CvDocumentRecord): CvDocument {
   return { fileName: doc.name, text: doc.text };
 }
 
-export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBackToVacancy, initialCvId, onReviewCv, libraryRevision = 0 }: CvAssistantProps) {
+export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBackToVacancy, initialCvId, onReviewCv, libraryRevision = 0, tailoringCase = false }: CvAssistantProps) {
   const [cv, setCv] = useState<CvDocument | null>(null);
   const [libraryCvs, setLibraryCvs] = useState<CvDocumentRecord[]>([]);
   const [selectedLibraryCvId, setSelectedLibraryCvId] = useState('');
@@ -173,6 +177,37 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
         ? `This CV's structured source is not ready for approval: ${describeCvSourceGaps(selectedSourceCv).join(', ')}. Review it first.`
         : null;
 
+  const gapAnalysisTool = (
+    <GapAnalysis
+      cv={cv}
+      vacancy={vacancy}
+      sourceCv={selectedSourceCv}
+      profile={selectedProfile}
+      provider={provider}
+      {...(effectiveModel ? { model: effectiveModel } : {})}
+    />
+  );
+  const draftAndLetterTools = (
+    <>
+      <TailorCv
+        cv={cv}
+        vacancy={vacancy}
+        sourceCv={selectedSourceCv}
+        profile={selectedProfile}
+        provider={provider}
+        {...(effectiveModel ? { model: effectiveModel } : {})}
+      />
+      <CoverLetter
+        cv={cv}
+        vacancy={vacancy}
+        sourceCv={selectedSourceCv}
+        profile={selectedProfile}
+        provider={provider}
+        {...(effectiveModel ? { model: effectiveModel } : {})}
+      />
+    </>
+  );
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -262,6 +297,13 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
         </div>
       )}
 
+      <CaseStepTracker
+        cvId={selectedLibraryCv?.id ?? null}
+        vacancy={vacancy}
+        sourceCv={selectedSourceCv}
+        refreshKey={jdVersion + evidenceVersion + libraryRevision}
+      />
+
       {vacancy && sourceNotice && (
         <WarningBanner role="status">
           <span>{sourceNotice}</span>
@@ -326,14 +368,7 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
             Compare or draft for the selected vacancy.
           </p>
         </div>
-        <GapAnalysis
-          cv={cv}
-          vacancy={vacancy}
-          sourceCv={selectedSourceCv}
-          profile={selectedProfile}
-          provider={provider}
-          {...(effectiveModel ? { model: effectiveModel } : {})}
-        />
+        {!tailoringCase && gapAnalysisTool}
         <RequirementMapping
           key={`requirements-${jdVersion}`}
           cvId={selectedLibraryCv?.id ?? null}
@@ -365,22 +400,20 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
           profile={selectedProfile}
           {...(onReviewCv && selectedLibraryCv ? { onReviewSource: () => onReviewCv(selectedLibraryCv.id) } : {})}
         />
-        <TailorCv
-          cv={cv}
-          vacancy={vacancy}
-          sourceCv={selectedSourceCv}
-          profile={selectedProfile}
-          provider={provider}
-          {...(effectiveModel ? { model: effectiveModel } : {})}
-        />
-        <CoverLetter
-          cv={cv}
-          vacancy={vacancy}
-          sourceCv={selectedSourceCv}
-          profile={selectedProfile}
-          provider={provider}
-          {...(effectiveModel ? { model: effectiveModel } : {})}
-        />
+        {tailoringCase ? (
+          <details className="rounded-box border border-base-300 p-4" aria-label="Other tools">
+            <summary className="cursor-pointer text-base font-semibold">Other tools</summary>
+            <p className="mt-1 text-sm text-base-content/60">
+              Optional: ATS fit, a quick unapproved draft, and a cover letter. None of them is needed to approve your CV.
+            </p>
+            <div className="mt-3 flex flex-col gap-3">
+              {gapAnalysisTool}
+              {draftAndLetterTools}
+            </div>
+          </details>
+        ) : (
+          draftAndLetterTools
+        )}
       </section>
     </div>
   );

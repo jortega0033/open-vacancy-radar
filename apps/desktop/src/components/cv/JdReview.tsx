@@ -198,7 +198,7 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">Job description</div>
+        <div id="cv-step-job" tabIndex={-1} className="card-title text-base font-bold outline-none">Job description</div>
 
         {!hasText && (
           <WarningBanner role="status">

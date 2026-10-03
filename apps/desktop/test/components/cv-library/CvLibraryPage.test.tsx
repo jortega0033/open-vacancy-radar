@@ -981,6 +981,27 @@ describe('CvLibraryPage', () => {
       expect(await screen.findByRole('combobox', { name: /use saved cv/i })).toHaveValue('cv-b');
     });
 
+    it('puts ATS fit, the draft and the cover letter in a collapsed Other tools section under the steps (#446)', async () => {
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ id: 'cv-a', name: 'A.pdf', isDefault: true })]),
+        createCvEvidenceOverlay: vi.fn().mockResolvedValue(undefined),
+        getCvEvidenceOverlay: vi.fn().mockResolvedValue(null),
+      });
+      installCvBridge();
+      const form = await openForm();
+
+      fillForm(form);
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      expect(await screen.findByRole('navigation', { name: 'Tailoring steps' })).toBeInTheDocument();
+      const other = screen.getByLabelText('Other tools');
+      expect(other.tagName).toBe('DETAILS');
+      expect(other).not.toHaveAttribute('open');
+      expect(within(other).getByText(/ats fit/i, { selector: '.card-title, h3, div' })).toBeInTheDocument();
+      // The main path stays outside it.
+      expect(within(other).queryByText('Requirement mapping')).not.toBeInTheDocument();
+    });
+
     it('lists the case under Tailoring cases when the candidate leaves right after opening', async () => {
       const stored: unknown[] = [];
       const createCvEvidenceOverlay = vi.fn().mockImplementation(async (input: Record<string, unknown>) => {

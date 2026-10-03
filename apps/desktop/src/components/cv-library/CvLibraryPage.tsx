@@ -282,6 +282,7 @@ export function CvLibraryPage() {
             {...(tailoring.cvId ? { initialCvId: tailoring.cvId } : {})}
             onReviewCv={reviewCv}
             libraryRevision={libraryRevision}
+            tailoringCase
           />
         )}
         {drawer}

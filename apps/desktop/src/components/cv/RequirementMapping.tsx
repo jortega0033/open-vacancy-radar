@@ -433,7 +433,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">Requirement mapping</div>
+        <div id="cv-step-requirements" tabIndex={-1} className="card-title text-base font-bold outline-none">Requirement mapping</div>
         <p className="text-sm text-base-content/60">
           Every material requirement in this vacancy, mapped to what your reviewed CV actually
           evidences. This decides what a tailored CV may claim. It is separate from the ATS fit check
@@ -562,7 +562,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         )}
 
         {overlay && overlay.requirements.length > 0 && (
-          <div className="flex flex-wrap items-center gap-3" aria-label="Review progress">
+          <div id="cv-step-answers" tabIndex={-1} className="flex flex-wrap items-center gap-3 outline-none" aria-label="Review progress">
             <p className="text-sm font-medium">
               {reviewedCount} of {activeRequirements.length} reviewed.{openIds.size > 0 ? ` ${openIds.size} need your answer.` : ''}
             </p>

@@ -224,7 +224,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile, onReviewSou
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title flex flex-wrap items-center gap-2 text-base font-bold">
+        <div id="cv-step-approve" tabIndex={-1} className="card-title flex flex-wrap items-center gap-2 text-base font-bold outline-none">
           Your tailored CV
           {!isApproved ? (
             <span className="badge badge-warning badge-sm">Not approved yet</span>
@@ -336,7 +336,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile, onReviewSou
 
         {overlay && selectedProjects.length > 0 && (
           <section className="rounded-box border border-base-300 p-4 text-sm" aria-label="Project selection">
-            <h3 className="font-medium">Projects on this CV</h3>
+            <h3 id="cv-step-projects" tabIndex={-1} className="font-medium outline-none">Projects on this CV</h3>
             <p className="mt-1 text-base-content/70">
               Pinned projects always appear. The project limit in your reviewed CV
               {sourceCv && sourceCv.maxProjects > 0 ? ` (${sourceCv.maxProjects})` : ' (no limit)'} decides how many of the

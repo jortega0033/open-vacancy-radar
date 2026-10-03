@@ -132,7 +132,7 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [], onR
 
   return (
     <section className="flex flex-col gap-3 rounded-box border border-base-300 p-4 text-sm" aria-label="Exported files">
-      <h3 className="font-medium">Files</h3>
+      <h3 id="cv-step-files" tabIndex={-1} className="font-medium outline-none">Files</h3>
       <p className="text-base-content/70">
         Each format is exported from your approved CV and checked on its own. A file counts only after you have
         looked at it and confirmed it. Accepting a file says the document is right. Whether the vacancy is open, and
