@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import { App } from '../../../src/App.js';
@@ -425,6 +425,74 @@ describe('App shell sidebar collapse', () => {
     });
     render(<App />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument());
+  });
+});
+
+describe('App shell sidebar on a narrow window (#451)', () => {
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });
+  }
+
+  it('is the 64px rail at 760px wide and writes nothing when it is opened as an overlay', async () => {
+    setWindowWidth(760);
+    const bridge: WorkspaceBridge = installWorkspaceBridge();
+    render(<App />);
+
+    const toggle = await screen.findByRole('button', { name: 'Expand sidebar' });
+    expect(screen.queryByRole('button', { name: 'Collapse sidebar' })).not.toBeInTheDocument();
+    expect(document.querySelector('aside')).toHaveClass('ovr-sidebar-collapsed');
+
+    fireEvent.click(toggle);
+    const overlay = await screen.findByTestId('sidebar-overlay');
+    expect(within(overlay).getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+    expect(within(overlay).getByText('Saved jobs')).toBeInTheDocument();
+    // A transient overlay is not a saved preference.
+    expect(bridge.updateSettings).not.toHaveBeenCalledWith({ sidebarCollapsed: false });
+    expect(bridge.updateSettings).not.toHaveBeenCalledWith({ sidebarCollapsed: true });
+  });
+
+  it('closes the overlay on Escape, on the dimmed area and after choosing a page', async () => {
+    setWindowWidth(760);
+    installWorkspaceBridge();
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand sidebar' }));
+    await screen.findByTestId('sidebar-overlay');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('sidebar-overlay')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Close sidebar' }));
+    expect(screen.queryByTestId('sidebar-overlay')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+    const overlay = await screen.findByTestId('sidebar-overlay');
+    fireEvent.click(within(overlay).getByRole('button', { name: 'Saved jobs' }));
+    expect(screen.queryByTestId('sidebar-overlay')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
+  });
+
+  it('keeps the full sidebar at 1000px when the person pinned it expanded', async () => {
+    setWindowWidth(1000);
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, sidebarStart: 'expanded' }),
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument());
+    expect(document.querySelector('aside')).toHaveClass('ovr-sidebar');
+  });
+
+  it('is the rail at 1000px by default and the full sidebar from 1100px up', async () => {
+    setWindowWidth(1000);
+    installWorkspaceBridge();
+    const { unmount } = render(<App />);
+    await screen.findByRole('button', { name: 'Expand sidebar' });
+    unmount();
+
+    setWindowWidth(1100);
+    installWorkspaceBridge();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Collapse sidebar' });
   });
 });
 

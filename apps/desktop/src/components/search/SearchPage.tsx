@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { Info } from '@phosphor-icons/react';
+import { ArrowLeft, Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
@@ -19,6 +19,7 @@ import {
 } from './scan-announcements.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { ScanProgressPanel, useScanStatus } from './ScanProgressPanel.js';
+import { useElementWidth } from './useElementWidth.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
@@ -178,6 +179,11 @@ export interface SearchPageProps {
   onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
 }
 
+/** Below this much width for the page itself, the list and the detail take turns instead of
+ * sharing the row (#451). The width is the page's own, measured after the sidebar, so a 936px
+ * window with the rail still splits and a 1000px window with the full sidebar does not. */
+const SINGLE_PANE_BELOW_PX = 900;
+
 export function SearchPage({
   onOpenSearchProfile,
   onSavedJobsChanged,
@@ -246,6 +252,14 @@ export function SearchPage({
 
   const [hydrating, setHydrating] = useState(true);
   const [loadError, setLoadError] = useState<string>();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pageWidth = useElementWidth(rootRef);
+  /** True when the page is too narrow for two panes (#451). `null` width (not measured) reads as wide. */
+  const singlePane = pageWidth !== null && pageWidth < SINGLE_PANE_BELOW_PX;
+  /** In the single-pane flow, which pane is showing. The selected vacancy survives either. */
+  const [paneView, setPaneView] = useState<'list' | 'detail'>('list');
+  /** Where focus goes after the next pane change: the detail heading on select, the row on Back. */
+  const paneFocusRef = useRef<'detail' | 'row' | null>(null);
   const [scanning, setScanning] = useState(false);
   /** A stop was requested for the running scan and it has not wound down yet (#459). */
   const [stopping, setStopping] = useState(false);
@@ -1029,7 +1043,16 @@ export function SearchPage({
   const handleSelect = useCallback((result: SearchResult) => {
     setSelectedKey(result.key);
     setDetailScrollTop(0);
-  }, [setDetailScrollTop, setSelectedKey]);
+    if (singlePane) {
+      paneFocusRef.current = 'detail';
+      setPaneView('detail');
+    }
+  }, [setDetailScrollTop, setSelectedKey, singlePane]);
+
+  const handleBackToResults = useCallback(() => {
+    paneFocusRef.current = 'row';
+    setPaneView('list');
+  }, []);
 
   const handleSave = useCallback(async () => {
     if (!selected) return;
@@ -1097,13 +1120,38 @@ export function SearchPage({
     ? `${reportSalaryCounts.comparable.toLocaleString()} comparable · ${reportSalaryCounts.unknown.toLocaleString()} unknown`
     : SALARY_NOTE;
 
+  const showDetailPane = !!selected && (!singlePane || paneView === 'detail');
+  const showListPane = !singlePane || paneView === 'list' || !selected;
+
+  // Moves focus where the person just went: the detail heading after choosing a vacancy, the row
+  // they came from after Back (#451). Runs after the pane has rendered, once per change.
+  useEffect(() => {
+    const target = paneFocusRef.current;
+    if (!target || !singlePane) return;
+    paneFocusRef.current = null;
+    if (target === 'detail') {
+      const heading = document.querySelector<HTMLElement>('[data-vacancy-heading]');
+      heading?.focus({ preventScroll: false });
+      heading?.scrollIntoView?.({ block: 'start' });
+    } else if (selectedKey) {
+      const rows = document.querySelectorAll<HTMLElement>('[data-result-key]');
+      for (const row of rows) {
+        if (row.dataset.resultKey === selectedKey) {
+          row.focus({ preventScroll: true });
+          row.scrollIntoView?.({ block: 'nearest' });
+          break;
+        }
+      }
+    }
+  }, [paneView, singlePane, selectedKey]);
+
   const summary =
     hasReport || isStreamingPartial
       ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
       : 'No report loaded';
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <div className="px-6">
         <SearchFilterBar
           onLocationChange={handleLocationChange}
@@ -1340,34 +1388,49 @@ export function SearchPage({
               search profile can score this report: {searchProfileError}
             </WarningBanner>
           )}
-          {worldwideReport && (
+          {worldwideReport && !singlePane && (
             <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">
               {visible.length.toLocaleString()} {visible.length === 1 ? 'vacancy' : 'vacancies'}
               {appliedFilters.query.trim() ? ` match '${appliedFilters.query.trim()}'` : ''} · scanned{' '}
               {new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </p>
           )}
-          <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0" aria-busy={scanning}>
-            <SearchResultList
-              results={pageItems}
-              totalCount={results.length}
-              selectedKey={selectedKey}
-              onSelect={handleSelect}
-              savedKeys={savedKeys}
-              summary={summary}
-              scanActive={scanning}
-              unscoredCount={unscoredCount}
-              page={page}
-              pageCount={pageCount}
-              onPageChange={(nextPage) => {
-                setPage(nextPage);
-                setListScrollTop(0);
-              }}
-              scrollTop={listScrollTop}
-              onScrollTopChange={setListScrollTop}
-            />
+          <div
+            className={`mt-3 flex min-h-0 flex-1 ${singlePane ? 'flex-col px-6' : 'flex-row'}`}
+            aria-busy={scanning}
+          >
+            {showListPane && (
+              <SearchResultList
+                results={pageItems}
+                totalCount={results.length}
+                selectedKey={selectedKey}
+                onSelect={handleSelect}
+                savedKeys={savedKeys}
+                summary={summary}
+                scanActive={scanning}
+                unscoredCount={unscoredCount}
+                page={page}
+                pageCount={pageCount}
+                onPageChange={(nextPage) => {
+                  setPage(nextPage);
+                  setListScrollTop(0);
+                }}
+                scrollTop={listScrollTop}
+                onScrollTopChange={setListScrollTop}
+                split={!singlePane}
+              />
+            )}
 
-            {selected ? (
+            {showDetailPane && selected ? (
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {singlePane && (
+                  <div className="flex-none border-b border-base-300 px-1 py-2">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={handleBackToResults}>
+                      <ArrowLeft size={14} aria-hidden="true" />
+                      Back to results
+                    </button>
+                  </div>
+                )}
               <VacancyDetail
                 result={selected}
                 defaultCvName={defaultCvName}
@@ -1392,7 +1455,8 @@ export function SearchPage({
                   />
                 }
               />
-            ) : (
+              </div>
+            ) : singlePane ? null : (
               // `min-h-0` for the same reason `SearchResultList`'s own scroll pane needs it (see
               // that file's comment): below `lg` this pane stacks in a column flex above/below
               // `SearchResultList`, and without an explicit `min-h-0` a flex child's minimum height
@@ -1500,7 +1564,12 @@ export function SearchPage({
           )}
           {worldwideReport && (
             <details className="pb-1.5 text-xs text-base-content/60">
-              <summary className="cursor-pointer">Scan details</summary>
+              <summary className="cursor-pointer">
+                Scan details
+                {singlePane
+                  ? `: ${visible.length.toLocaleString()} ${visible.length === 1 ? 'vacancy' : 'vacancies'}, scanned ${new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                  : ''}
+              </summary>
               <p className="mt-1">
                 Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
                 {scanBounds?.mode === 'browse_all'

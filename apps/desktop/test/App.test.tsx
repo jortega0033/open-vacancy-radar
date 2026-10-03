@@ -161,7 +161,9 @@ describe('App', () => {
 
     expect(main).toHaveClass('overflow-hidden');
     expect(main).not.toHaveClass('px-6');
-    expect(workspace).toHaveClass('px-6', 'lg:px-0');
+    // Side by side on the width the page has, edge to edge, with no viewport breakpoint involved.
+    expect(workspace).toHaveClass('flex-row');
+    expect(workspace).not.toHaveClass('px-6');
     expect(resultsScroller).toHaveClass('overflow-y-auto');
     expect(detailScroller).toHaveClass('overflow-y-auto');
 

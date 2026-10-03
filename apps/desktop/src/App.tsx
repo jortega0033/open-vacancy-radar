@@ -32,6 +32,8 @@ type DaemonState = 'connecting' | 'ready' | 'unavailable';
 const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
 /** How often the shell re-reads the sidebar counts so pipeline-driven changes show without navigating. */
 const COUNTS_REFRESH_MS = 5_000;
+/** Below this window width the sidebar is the 64px rail unless the person pinned it open (#451). */
+const SIDEBAR_RAIL_BELOW_PX = 1100;
 
 export function App() {
   const [nav, setNav] = useState<NavPage>('search');
@@ -43,6 +45,29 @@ export function App() {
     lastNavRef.current = nav;
   }, [nav]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // The person chose "Expanded" as the sidebar's starting state: that is a pin, so a narrow window
+  // does not take it away. Everyone else gets the rail at narrow widths and an overlay on demand.
+  const [sidebarPinnedOpen, setSidebarPinnedOpen] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
+  const railForced = windowWidth < SIDEBAR_RAIL_BELOW_PX && !sidebarPinnedOpen;
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  useEffect(() => {
+    // Widening the window, or pinning the sidebar, leaves nothing for the overlay to cover.
+    if (!railForced) setSidebarOverlayOpen(false);
+  }, [railForced]);
+  useEffect(() => {
+    if (!sidebarOverlayOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSidebarOverlayOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sidebarOverlayOpen]);
   // `undefined` until the first successful fetch (issue #178): rendering a zeroed WorkspaceCounts
   // here made "not loaded yet" and "genuinely zero" the same badge/subtitle, indistinguishably.
   const [counts, setCounts] = useState<WorkspaceCounts | undefined>(undefined);
@@ -106,6 +131,7 @@ export function App() {
         applyDensity(settings.density);
         setDefaultProvider(settings.defaultProvider);
 
+        setSidebarPinnedOpen(settings.sidebarStart === 'expanded');
         if (settings.sidebarStart === 'expanded') setSidebarCollapsed(false);
         else if (settings.sidebarStart === 'collapsed') setSidebarCollapsed(true);
         else setSidebarCollapsed(settings.sidebarCollapsed);
@@ -269,12 +295,17 @@ export function App() {
   );
 
   const handleToggleSidebar = useCallback(() => {
+    if (railForced) {
+      // The rail is not a saved preference, so toggling it opens the overlay and writes nothing.
+      setSidebarOverlayOpen((open) => !open);
+      return;
+    }
     setSidebarCollapsed((previous) => {
       const next = !previous;
       void window.workspace?.updateSettings({ sidebarCollapsed: next }).catch(() => {});
       return next;
     });
-  }, []);
+  }, [railForced]);
 
   useEffect(() => {
     let cancelled = false;
@@ -364,12 +395,40 @@ export function App() {
       <AppSidebar
         active={nav}
         onNavigate={handleNavigate}
-        collapsed={sidebarCollapsed}
+        collapsed={sidebarCollapsed || railForced}
         onToggleCollapsed={handleToggleSidebar}
         counts={counts}
         runtimeLabel={PROVIDER_LABEL[defaultProvider]}
         runtimeState={providerRuntimeState}
       />
+
+      {/* The full sidebar over the content at narrow widths, without taking width from it (#451).
+          The rail stays in the layout; this is drawn above it and closes on Escape, on the dimmed
+          area, or after choosing a page. */}
+      {railForced && sidebarOverlayOpen && (
+        <div className="fixed inset-0 z-40 flex" data-testid="sidebar-overlay">
+          <div className="shadow-xl">
+            <AppSidebar
+              active={nav}
+              onNavigate={(page) => {
+                setSidebarOverlayOpen(false);
+                handleNavigate(page);
+              }}
+              collapsed={false}
+              onToggleCollapsed={() => setSidebarOverlayOpen(false)}
+              counts={counts}
+              runtimeLabel={PROVIDER_LABEL[defaultProvider]}
+              runtimeState={providerRuntimeState}
+            />
+          </div>
+          <button
+            type="button"
+            className="flex-1 cursor-default bg-base-content/30"
+            aria-label="Close sidebar"
+            onClick={() => setSidebarOverlayOpen(false)}
+          />
+        </div>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <WorkspaceHeader title={title} subtitle={subtitle} />
@@ -381,7 +440,7 @@ export function App() {
         />
 
         <main
-          className={`min-h-0 flex-1 py-6 ${
+          className={`min-h-0 flex-1 ${nav === 'search' ? 'pb-2 pt-4' : 'py-6'} ${
             nav === 'search' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-6'
           }`}
         >

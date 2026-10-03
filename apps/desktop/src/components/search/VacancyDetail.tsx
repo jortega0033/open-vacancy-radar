@@ -285,7 +285,9 @@ export function VacancyDetail({
       <div className="max-w-3xl px-6 py-5 pb-10">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="break-words text-xl font-semibold">{result.title}</h2>
+            <h2 data-vacancy-heading="" tabIndex={-1} className="break-words text-xl font-semibold outline-none">
+              {result.title}
+            </h2>
             <div className="mt-0.5 break-words text-sm font-medium text-base-content/80">
               {result.company}
             </div>

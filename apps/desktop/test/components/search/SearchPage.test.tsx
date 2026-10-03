@@ -322,6 +322,77 @@ describe('SearchPage', () => {
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
+  describe('single-pane flow on a narrow page (#451)', () => {
+    function stubPageWidth(width: number) {
+      class FakeResizeObserver {
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          this.callback([{ target, contentRect: { width } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+        }
+        unobserve() {}
+        disconnect() {}
+      }
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    }
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function twoVacancies() {
+      return makeWorldwideReport([
+        makeWorldwideVacancy({ key: 'a', title: 'Alpha Engineer', url: 'https://example.invalid/a' }),
+        makeWorldwideVacancy({ key: 'b', title: 'Beta Engineer', url: 'https://example.invalid/b' }),
+      ]);
+    }
+
+    it('shows the list or the detail, never both, and keeps the selection across the switch', async () => {
+      stubPageWidth(700);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      expect(await screen.findByLabelText('Vacancy results')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Vacancy details')).not.toBeInTheDocument();
+
+      fireEvent.click(await screen.findByRole('button', { name: /beta engineer/i }));
+
+      expect(screen.queryByLabelText('Vacancy results')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Vacancy details')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 2, name: 'Beta Engineer' })).toHaveFocus();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Back to results' }));
+
+      expect(screen.getByLabelText('Vacancy results')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Vacancy details')).not.toBeInTheDocument();
+      // Back returns to the row that was open, still marked as the current one.
+      const row = screen.getByRole('button', { name: /beta engineer/i });
+      expect(row).toHaveFocus();
+      expect(row).toHaveAttribute('aria-current', 'true');
+    });
+
+    it('keeps both panes side by side when the page is wide enough', async () => {
+      stubPageWidth(1000);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      expect(await screen.findByLabelText('Vacancy results')).toBeInTheDocument();
+      fireEvent.click(await screen.findByRole('button', { name: /beta engineer/i }));
+      expect(screen.getByLabelText('Vacancy results')).toBeInTheDocument();
+      expect(screen.getByLabelText('Vacancy details')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Back to results' })).not.toBeInTheDocument();
+    });
+
+    it('folds the count and scan time into one Scan details line on a narrow page', async () => {
+      stubPageWidth(700);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      const summary = await screen.findByText(/^Scan details: 2 vacancies, scanned/);
+      expect(summary.closest('details')).not.toHaveAttribute('open');
+      // The separate stats line above the list is gone, so the list gets that height.
+      expect(screen.queryByText(/ · scanned /)).not.toBeInTheDocument();
+    });
+  });
+
   describe('scan progress and Stop (#459)', () => {
     it('shows source groups finished, elapsed time and rows found from the main process, with an honest time range', async () => {
       let resolveScan: (report: GlobalRemoteReport) => void = () => {};
