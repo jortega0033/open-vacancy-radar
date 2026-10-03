@@ -75,10 +75,12 @@ test.describe('app shell', () => {
     await expect(window).toHaveScreenshot('search-page.png');
   });
 
-  test('has no visible menu bar and keeps the zoom shortcuts', async ({ electronApp }) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  test('has no visible menu bar and keeps the zoom shortcuts', async ({ electronApp, window }) => {
     // Regression guard: Electron's default File/Edit/View/Window menu is boilerplate this app
     // never wired any items into. main.ts installs a View menu holding only the zoom roles (so
     // Ctrl+=, Ctrl+- and Ctrl+0 keep working, WCAG 1.4.4) and auto-hides the menu bar.
+    // The `window` fixture ensures the first window is ready before this evaluate call.
     const state = await electronApp.evaluate(({ BrowserWindow, Menu }) => {
       const mainWindow = BrowserWindow.getAllWindows()[0];
       if (!mainWindow) throw new Error('Main window was not created');
