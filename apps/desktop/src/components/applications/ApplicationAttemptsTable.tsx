@@ -74,6 +74,7 @@ export function ApplicationAttemptsTable({ attempts, onOpen, onCancelScheduledAu
                       <button
                         type="button"
                         className="btn btn-outline btn-sm px-1.5"
+                        aria-label={`Cancel sending ${attempt.role} at ${attempt.company}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           onCancelScheduledAutomaticSubmission(attempt);

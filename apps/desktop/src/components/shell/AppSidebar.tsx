@@ -125,12 +125,16 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
       {items.map((item) => {
         const isActive = item.id === active;
         const count = badgeCount(counts, item.badge);
+        // Review work and scheduled sends sit on the Applications row so they are visible from
+        // every page, not only once the Review queue tab has been opened (#445).
+        const attention = item.id === 'applications' ? (counts?.needsReview ?? 0) + (counts?.scheduledSubmissions ?? 0) : 0;
+        const label = attention > 0 ? `${item.label}, ${attention} to review` : item.label;
         return (
           <button
             key={item.id}
             type="button"
-            aria-label={item.label}
-            title={item.label}
+            aria-label={label}
+            title={label}
             {...(isActive ? { 'aria-current': 'page' as const } : {})}
             onClick={() => onNavigate(item.id)}
             className={[
@@ -140,7 +144,7 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
               // so having both here left the collapsed icon pinned to the button's start edge
               // instead of centered in its 44px `ovr-nav-icon` box, overriding daisyUI's own
               // centered-by-default `.btn` layout.
-              collapsed ? 'ovr-nav-icon mx-auto justify-center px-0' : 'w-full justify-start',
+              collapsed ? 'ovr-nav-icon relative mx-auto justify-center px-0' : 'w-full justify-start',
               isActive ? 'bg-base-300 text-base-content' : 'text-base-content/70',
             ].join(' ')}
           >
@@ -148,10 +152,18 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
             {!collapsed && (
               <>
                 <span className="truncate">{item.label}</span>
+                {attention > 0 && (
+                  <span className="badge badge-warning badge-sm ml-auto font-semibold" aria-hidden="true">
+                    {attention} to review
+                  </span>
+                )}
                 {count !== undefined && (
-                  <span className="ml-auto text-xs font-normal text-base-content/60">{count}</span>
+                  <span className={`${attention > 0 ? '' : 'ml-auto '}text-xs font-normal text-base-content/60`}>{count}</span>
                 )}
               </>
+            )}
+            {collapsed && attention > 0 && (
+              <span className="absolute right-1 top-1 size-2 rounded-full bg-warning" aria-hidden="true" />
             )}
           </button>
         );

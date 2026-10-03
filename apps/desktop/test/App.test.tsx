@@ -563,6 +563,39 @@ describe('App', () => {
       await waitFor(() => expect(screen.getByText('5 saved')).toBeInTheDocument());
     });
 
+    it('shows the scheduled-send banner on any page from the stored attempts, and cancels the exact attempt (#445)', async () => {
+      const attempt = {
+        id: 'att-77',
+        company: 'Northwind',
+        role: 'Platform Engineer',
+        checkpoint: 'ready',
+        scheduledAutomaticSubmitAt: new Date(Date.now() + 150_000).toISOString(),
+      };
+      const cancelScheduledAutomaticSubmission = vi.fn().mockResolvedValue(undefined);
+      let cleared = false;
+      installWorkspaceBridge({
+        getCounts: vi.fn().mockImplementation(async () => ({
+          savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0, needsReview: 0, scheduledSubmissions: cleared ? 0 : 1,
+        })),
+        listApplicationAttempts: vi.fn().mockImplementation(async () => (cleared ? [] : [attempt])),
+        getApplicationAttempt: vi.fn().mockImplementation(async () => ({ ...attempt, scheduledAutomaticSubmitAt: null })),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        cancelScheduledAutomaticSubmission: vi.fn().mockImplementation(async (id: string) => {
+          await cancelScheduledAutomaticSubmission(id);
+          cleared = true;
+        }),
+      };
+
+      render(<App />);
+      // Search is the landing page: the banner is app-wide, not an Applications-tab feature.
+      const cancel = await screen.findByRole('button', { name: 'Cancel sending Platform Engineer at Northwind' });
+      fireEvent.click(cancel);
+
+      await waitFor(() => expect(cancelScheduledAutomaticSubmission).toHaveBeenCalledWith('att-77'));
+      expect(await screen.findByText('Sending cancelled. Platform Engineer is back in Review.')).toBeInTheDocument();
+    });
+
     it('QA regression: refreshes the "N active" header and sidebar badge right after creating an application, with no navigation', async () => {
       const getCounts = vi
         .fn()

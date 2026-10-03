@@ -3059,7 +3059,18 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
 
 /** Convenience for the badge counts the sidebar shows; one round trip instead of three lists. */
 export function getCounts(db: WorkspaceDb): WorkspaceCounts {
+  const waiting = db
+    .select({
+      checkpoint: applicationAttempts.checkpoint,
+      scheduled: applicationAttempts.scheduledAutomaticSubmitAt,
+    })
+    .from(applicationAttempts)
+    .where(inArray(applicationAttempts.checkpoint, ['ready', 'needs_user']))
+    .all();
+  const scheduledSubmissions = waiting.filter((row) => row.checkpoint === 'ready' && row.scheduled !== null).length;
   return {
+    needsReview: waiting.length - scheduledSubmissions,
+    scheduledSubmissions,
     savedJobs: db.select({ id: savedJobs.id }).from(savedJobs).all().length,
     activeApplications: db
       .select({ id: applications.id })

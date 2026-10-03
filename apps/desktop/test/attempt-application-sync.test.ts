@@ -181,4 +181,19 @@ describe('attempt to Applications row (#444)', () => {
 
     expect(workspace.listApplications(db)).toHaveLength(0);
   });
+
+  it('counts review work and scheduled sends from the stored attempts (#445)', () => {
+    const a = startAttempt('v-a', 'https://jobs.example.invalid/apply/a');
+    const b = startAttempt('v-b', 'https://jobs.example.invalid/apply/b');
+    const c = startAttempt('v-c', 'https://jobs.example.invalid/apply/c');
+    expect(workspace.getCounts(db)).toMatchObject({ needsReview: 0, scheduledSubmissions: 0 });
+
+    workspace.updateApplicationAttempt(db, a.id, { checkpoint: 'ready' });
+    workspace.updateApplicationAttempt(db, b.id, { checkpoint: 'needs_user', checkpointDetail: 'a question' });
+    workspace.updateApplicationAttempt(db, c.id, { checkpoint: 'ready', scheduledAutomaticSubmitAt: '2026-10-03T14:05:00.000Z' });
+    expect(workspace.getCounts(db)).toMatchObject({ needsReview: 2, scheduledSubmissions: 1 });
+
+    workspace.updateApplicationAttempt(db, c.id, { scheduledAutomaticSubmitAt: null });
+    expect(workspace.getCounts(db)).toMatchObject({ needsReview: 3, scheduledSubmissions: 0 });
+  });
 });

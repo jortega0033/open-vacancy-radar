@@ -102,6 +102,19 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('button', { name: 'Search' })).toHaveTextContent(/^Search$/);
   });
 
+  it('shows the review and scheduled-send count on Applications, named for assistive tech (#445)', () => {
+    render(<AppSidebar {...BASE} counts={{ ...BASE.counts, needsReview: 2, scheduledSubmissions: 1 }} />);
+    const button = screen.getByRole('button', { name: 'Applications, 3 to review' });
+    expect(button).toHaveTextContent('3 to review');
+    // No other row picks up the review badge.
+    expect(screen.getByRole('button', { name: 'Saved jobs' })).not.toHaveTextContent('to review');
+  });
+
+  it('shows no review badge when nothing is waiting', () => {
+    render(<AppSidebar {...BASE} counts={{ ...BASE.counts, needsReview: 0, scheduledSubmissions: 0 }} />);
+    expect(screen.getByRole('button', { name: 'Applications' })).not.toHaveTextContent('to review');
+  });
+
   it('marks the active destination with aria-current, and only that one', () => {
     render(<AppSidebar {...BASE} active="applications" />);
     expect(screen.getByRole('button', { name: 'Applications' })).toHaveAttribute('aria-current', 'page');

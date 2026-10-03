@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
-import type { WorkspaceCounts } from './window.js';
+import type { ApplicationAttemptRecord, WorkspaceCounts } from './window.js';
 import { PROVIDER_LABEL } from './provider-labels.js';
 import { SearchPage, createSearchSessionState } from './components/search/index.js';
 import { SavedJobsPage } from './components/saved/index.js';
@@ -17,9 +17,11 @@ import {
   AiHelperNotice,
   AppSidebar,
   LiveAnnouncerProvider,
+  ScheduledSendBanner,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
+  type CancelScheduledOutcome,
   type NavPage,
   type RuntimeState,
 } from './components/shell/index.js';
@@ -44,6 +46,8 @@ export function App() {
   // `undefined` until the first successful fetch (issue #178): rendering a zeroed WorkspaceCounts
   // here made "not loaded yet" and "genuinely zero" the same badge/subtitle, indistinguishably.
   const [counts, setCounts] = useState<WorkspaceCounts | undefined>(undefined);
+  /** Ready attempts with an automatic send scheduled, soonest first (#445). */
+  const [scheduledSends, setScheduledSends] = useState<ApplicationAttemptRecord[]>([]);
 
   // The one piece of cross-page state this shell carries: a vacancy handed off from the Search
   // page's "Generate Letter" action, waiting to be picked up by the Letters page. Cleared as soon
@@ -143,6 +147,18 @@ export function App() {
     try {
       const fresh = await window.workspace.getCounts();
       setCounts(fresh);
+      // The banner's deadlines come from the persisted attempts, read whenever the count says there
+      // are scheduled sends, so it is right at start-up and after a restart (#445).
+      if ((fresh.scheduledSubmissions ?? 0) > 0) {
+        const attempts = await window.workspace.listApplicationAttempts();
+        setScheduledSends(
+          attempts
+            .filter((attempt) => attempt.checkpoint === 'ready' && attempt.scheduledAutomaticSubmitAt !== null)
+            .sort((a, b) => Date.parse(a.scheduledAutomaticSubmitAt ?? '') - Date.parse(b.scheduledAutomaticSubmitAt ?? '')),
+        );
+      } else {
+        setScheduledSends((current) => (current.length === 0 ? current : []));
+      }
     } catch {
       // Leaves `counts` exactly as it was (undefined if never loaded, otherwise the last successful
       // fetch) rather than resetting to a fabricated zero -- not worth an error banner over the
@@ -233,6 +249,24 @@ export function App() {
     void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
     void refreshCounts();
   }, [refreshCounts]);
+
+  const handleCancelScheduledSend = useCallback(
+    async (attempt: ApplicationAttemptRecord): Promise<CancelScheduledOutcome> => {
+      try {
+        await window.applicationExecutor.cancelScheduledAutomaticSubmission(attempt.id);
+        // Confirmed against the stored attempt, not assumed: the cancel is a no-op once the
+        // deadline has passed, and the person must be told what really happened.
+        const fresh = await window.workspace.getApplicationAttempt(attempt.id);
+        await refreshCounts();
+        if (fresh.scheduledAutomaticSubmitAt === null && fresh.checkpoint === 'ready') return { status: 'cancelled' };
+        return { status: 'too_late', checkpoint: fresh.checkpoint };
+      } catch {
+        void refreshCounts();
+        return { status: 'failed' };
+      }
+    },
+    [refreshCounts],
+  );
 
   const handleToggleSidebar = useCallback(() => {
     setSidebarCollapsed((previous) => {
@@ -339,6 +373,12 @@ export function App() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <WorkspaceHeader title={title} subtitle={subtitle} />
+
+        <ScheduledSendBanner
+          attempts={scheduledSends}
+          onReview={handleViewApplicationAttempt}
+          onCancel={handleCancelScheduledSend}
+        />
 
         <main
           className={`min-h-0 flex-1 py-6 ${

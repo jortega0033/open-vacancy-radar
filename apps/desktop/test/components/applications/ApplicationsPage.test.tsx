@@ -968,7 +968,7 @@ describe('ApplicationsPage', () => {
       const row = screen.getByRole('row', { name: /senior frontend engineer/i });
       expect(within(row).getByText(/submitting automatically at/i)).toBeInTheDocument();
 
-      fireEvent.click(within(row).getByRole('button', { name: /^cancel$/i }));
+      fireEvent.click(within(row).getByRole('button', { name: /^cancel sending senior frontend engineer/i }));
 
       await waitFor(() => expect(cancelScheduledAutomaticSubmission).toHaveBeenCalledWith(attempt.id));
       // Clicking Cancel must not also open the review session -- it's a distinct action on the row.

@@ -999,6 +999,14 @@ export interface WorkspaceCounts {
   activeApplications: number;
   letters: number;
   cvDocuments: number;
+  /**
+   * Attempts waiting on a person (`ready` or `needs_user`) with no automatic send scheduled, read
+   * from the persisted attempt store so the sidebar is right at start-up without the Review queue
+   * ever having mounted (#445). Always present from main; optional so older stubs still type.
+   */
+  needsReview?: number;
+  /** Ready attempts with an automatic send scheduled and not yet fired (#445). */
+  scheduledSubmissions?: number;
 }
 
 /** Result of the main-process-owned destructive reset. */

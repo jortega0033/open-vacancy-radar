@@ -39,3 +39,5 @@ export { Tabs, TabPanel, tabId, tabPanelId } from './Tabs.js';
 export type { TabsProps, TabPanelProps, TabItem } from './Tabs.js';
 export { Menu } from './Menu.js';
 export type { MenuProps, MenuItem } from './Menu.js';
+export { ScheduledSendBanner } from './ScheduledSendBanner.js';
+export type { CancelScheduledOutcome, ScheduledSendBannerProps } from './ScheduledSendBanner.js';
