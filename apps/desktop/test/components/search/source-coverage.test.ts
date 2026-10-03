@@ -57,6 +57,23 @@ describe('summarizeSourceCoverage', () => {
     expect(coverage.summary).toBe('5 sources returned partial or no results. Results from the other source are complete.');
   });
 
+  it('groups repeated provider names with feed counts', () => {
+    const coverage = summarizeSourceCoverage([
+      source(),
+      source({ id: 'jobicy:all-1', provider: 'jobicy', status: 'partial', complete: false }),
+      source({ id: 'jobicy:all-2', provider: 'jobicy', status: 'partial', complete: false }),
+      source({ id: 'dice:roster', provider: 'dice', status: 'error', complete: false, error: 'HTTP 500' }),
+      source({ id: 'dice:all', provider: 'dice', status: 'error', complete: false, error: 'HTTP 500' }),
+    ]);
+    expect(coverage.warnings).toHaveLength(4);
+    const incompleteGroup = coverage.groups.find((g) => g.kind === 'incomplete');
+    expect(incompleteGroup).toBeDefined();
+    expect(incompleteGroup?.providers).toEqual([{ name: 'Jobicy', count: 2 }]);
+    const failedGroup = coverage.groups.find((g) => g.kind === 'failed');
+    expect(failedGroup).toBeDefined();
+    expect(failedGroup?.providers).toEqual([{ name: 'Dice', count: 2 }]);
+  });
+
   it('does not claim other sources are complete when every source needs attention', () => {
     const coverage = summarizeSourceCoverage([source({ status: 'error', complete: false })]);
     expect(coverage.summary).toBe('1 source returned partial or no results.');
