@@ -156,7 +156,7 @@ describe('migration 0026 adds requirement coverage and keeps older rows meaningf
       const overlay = workspace.getCvEvidenceOverlayById(db, 'overlay-draft');
       expect(overlay.requirementCoverage).toEqual({ status: 'not_run', revisionId: '', batches: 0 });
       expect(describeCvEvidenceOverlayGaps(overlay, HASH)).toEqual(
-        expect.arrayContaining([expect.stringContaining('not been extracted and confirmed')]),
+        expect.arrayContaining([expect.stringContaining('not been read and confirmed')]),
       );
     } finally {
       close();

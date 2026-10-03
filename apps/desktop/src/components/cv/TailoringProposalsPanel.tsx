@@ -54,6 +54,14 @@ function describeProposal(payload: CvProposalPayload, source: CvSourceDocument |
  * MCP client, and an empty "Proposals" card on every CV assistant screen would be noise for all of
  * them.
  */
+const PROPOSAL_KIND_LABEL: Record<CvProposalPayload['kind'], string> = {
+  requirement: 'Requirement',
+  evidence_link: 'Link to a fact',
+  clarification_question: 'Question',
+  fact: 'Fact',
+  wording: 'Wording',
+};
+
 export function TailoringProposalsPanel({ cvId, vacancy, sourceCv, onAccepted }: TailoringProposalsPanelProps) {
   const [overlayId, setOverlayId] = useState<string | null>(null);
   const [proposals, setProposals] = useState<CvTailoringProposalRecord[]>([]);
@@ -110,11 +118,10 @@ export function TailoringProposalsPanel({ cvId, vacancy, sourceCv, onAccepted }:
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">Proposals from connected clients</div>
+        <div className="card-title text-base font-bold">Suggestions from another app</div>
         <p className="text-sm text-base-content/60">
-          An authorized local AI client suggested these. Nothing here affects your CV until you
-          accept it below. An accepted fact or wording still needs your approval in the facts and
-          wording review.
+          Nothing changes in your CV until you accept it. Accepted facts and wording still need your
+          approval below.
         </p>
 
         {error && (
@@ -127,7 +134,7 @@ export function TailoringProposalsPanel({ cvId, vacancy, sourceCv, onAccepted }:
           {proposals.map((proposal) => (
             <li key={proposal.id} className="ovr-row flex items-start justify-between gap-3 border-b border-base-300">
               <div className="min-w-0">
-                <span className="badge badge-ghost badge-sm">{proposal.payload.kind.replace(/_/gu, ' ')}</span>
+                <span className="badge badge-ghost badge-sm">{PROPOSAL_KIND_LABEL[proposal.payload.kind]}</span>
                 <p className="mt-1 text-sm">{describeProposal(proposal.payload, sourceCv)}</p>
               </div>
               <div className="flex flex-none gap-2">

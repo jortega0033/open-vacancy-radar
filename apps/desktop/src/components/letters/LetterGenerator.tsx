@@ -851,7 +851,6 @@ export function LetterGenerator({
             label="letter being generated"
             idleHint="No document yet."
             busyLabel={`Choosing which of your CV facts belong in this ${typeLabel.toLowerCase()}…`}
-            providerLabel={PROVIDER_LABEL[provider]}
           />
         )}
 

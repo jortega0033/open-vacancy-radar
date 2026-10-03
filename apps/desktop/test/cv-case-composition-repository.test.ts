@@ -306,7 +306,7 @@ describe('a case saved before these fields existed (#419)', () => {
     workspace.updateCvDocument(db, cv.id, { source: { ...SOURCE, projects: [], summary: 'Changed summary.' } });
     // Without an earlier copy the source hash mismatch is all there is to go on.
     expect(workspace.previewCvEvidenceRebase(db, overlay.id)).toMatchObject({ baselineKnown: false, inputsChanged: true });
-    expect(() => approve(overlay.id)).toThrow(/source CV has changed/);
+    expect(() => approve(overlay.id)).toThrow(/your CV changed/);
 
     rebase(overlay.id);
     const approved = approve(overlay.id);

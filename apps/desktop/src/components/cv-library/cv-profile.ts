@@ -35,10 +35,10 @@ export interface ParseStatus {
  * is a real success/warning distinction worth the state hue per DESIGN-TOKENS.md.
  */
 export function cvParseStatus(doc: CvDocumentRecord): ParseStatus {
-  if (doc.kind === 'manual') return { label: 'Manual entry', tone: 'neutral' };
+  if (doc.kind === 'manual') return { label: 'Ready', tone: 'neutral' };
   return doc.text.trim().length > 0
-    ? { label: 'Parsed', tone: 'success' }
-    : { label: 'No text extracted', tone: 'warning' };
+    ? { label: 'Ready', tone: 'success' }
+    : { label: 'No text found. Try a different file.', tone: 'warning' };
 }
 
 export function formatCvDate(iso: string): string {

@@ -284,8 +284,7 @@ describe('acceptance 2: a long CV either gets processed or is reported incomplet
 
     const blockers = describeCvExportBlockers(workspace.getCvDocument(db, created.id));
     expect(blockers).toHaveLength(1);
-    expect(blockers[0]).toContain('incomplete');
-    expect(blockers[0]).toContain('only the first 200,000 characters could be read');
+    expect(blockers[0]).toContain('only partly read');
   });
 
   it('allows the export once the source is complete and reviewed', () => {
@@ -297,7 +296,7 @@ describe('acceptance 2: a long CV either gets processed or is reported incomplet
     const extracted = parseSourceCvResponse(EXTRACTION_ANSWER, CV_TEXT);
     expect(extracted.reviewedAt).toBe('');
     expect(describeCvSourceGaps(extracted)).toEqual([
-      'the extracted source CV has not been reviewed and confirmed yet',
+      'your CV details have not been checked yet',
     ]);
   });
 });

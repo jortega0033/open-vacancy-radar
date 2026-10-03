@@ -26,31 +26,28 @@ const FORMATS: { format: CvExportFormat; label: string; exportLabel: string }[] 
 const STATUS_TEXT = {
   not_exported: 'Not exported',
   awaiting_review: 'Exported, waiting for your review',
-  qa_failed: 'Failed its checks',
+  qa_failed: 'Needs fixing',
   accepted: 'Accepted',
   stale: 'Out of date',
-  legacy_unverified: 'Exported by an earlier version, not verified',
+  legacy_unverified: 'Export again',
 } as const;
 
 const STATUS_NOTE = {
   not_exported: '',
   awaiting_review: 'Look at the file before you accept it.',
-  qa_failed: 'The file was not saved. Fix what is listed, then export it again. Your approved facts are unchanged.',
-  accepted: 'You confirmed this file. The record covers the bytes saved at export. If you edit or replace the file afterwards, it is not checked again.',
-  stale: 'Your CV, job description, facts, wording, projects or the document format changed after this file was made. It stays on disk and no longer counts as the current CV.',
-  legacy_unverified: 'An earlier version of the app recorded this export without checking the file. Export it again to get a verified file.',
+  qa_failed: 'This file was not saved. Fix the items below and export again. Your approved facts are unchanged.',
+  accepted: 'You confirmed this file. If you change it later, it is not rechecked.',
+  stale: 'Your CV or job details changed after this file was made, so it is out of date. Export again.',
+  legacy_unverified: 'Export this file again to make sure it is up to date.',
 } as const;
 
-function shortHash(hash: string): string {
-  return hash.slice(0, 12);
-}
-
-/** The recorded fingerprint of a saved file, kept out of the default view. */
-function FileDetails({ artifact }: { artifact: CvArtifactRecord }) {
+/** The saved file location, kept out of the default view. */
+function FileLocation({ artifact }: { artifact: CvArtifactRecord }) {
+  if (!artifact.savedPath) return null;
   return (
     <details className="mt-1">
-      <summary className="cursor-pointer">File details</summary>
-      <p>File check {shortHash(artifact.contentHash)}</p>
+      <summary className="cursor-pointer">Show file location</summary>
+      <p>{artifact.savedPath}</p>
     </details>
   );
 }
@@ -131,22 +128,18 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
   return (
     <section className="flex flex-col gap-3 rounded-box border border-base-300 p-4 text-sm" aria-label="Exported files">
       <h3 className="font-medium">Files</h3>
-      <p className="text-base-content/70">
-        Each format is exported from your approved CV and checked on its own. A file counts only after you have
-        looked at it and confirmed it. Accepting a file says the document is right. Whether the vacancy is open, and
-        when to apply, is checked elsewhere in the app.
-      </p>
+      <p className="text-base-content/70">Export your approved CV, open it, and confirm it looks right.</p>
 
       {exportBlocked && (
-        <div className="alert alert-warning text-sm" role="alert" aria-label="Export blocked by the source CV">
+        <div className="alert alert-warning text-sm" role="alert" aria-label="Export blocked until your CV details are reviewed">
           <div>
-            <div className="font-medium">These files cannot be exported until your source CV is reviewed</div>
+            <div className="font-medium">These files cannot be exported until you check your CV details</div>
             <ul className="list-disc pl-4">
               {sourceGaps.map((gap) => (
                 <li key={gap}>{gap}</li>
               ))}
             </ul>
-            <p className="mt-1">Open this CV in the CV Library, review its source, then approve this CV again.</p>
+            <p className="mt-1">Check your CV details first. Open this CV in the CV Library, review what was read from it, and confirm.</p>
           </div>
         </div>
       )}
@@ -170,16 +163,19 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
 
             {status === 'stale' && latest && (
               <div className="text-xs text-base-content/60">
-                Last file: {latest.savedPath || 'not saved'}, exported {formatCvDateTime(latest.exportedAt)}.
-                <FileDetails artifact={latest} />
+                Last file exported {formatCvDateTime(latest.exportedAt)}.
+                <FileLocation artifact={latest} />
               </div>
             )}
 
             {current && (
               <div className="text-xs text-base-content/60">
-                {current.savedPath ? `Saved to ${current.savedPath}. ` : ''}Exported {formatCvDateTime(current.exportedAt)}
-                {current.validation.pageCount !== undefined ? `, ${current.validation.pageCount} page(s)` : ''}.
-                <FileDetails artifact={current} />
+                Exported {formatCvDateTime(current.exportedAt)}
+                {current.validation.pageCount !== undefined
+                  ? `, ${current.validation.pageCount} ${current.validation.pageCount === 1 ? 'page' : 'pages'}`
+                  : ''}
+                .
+                <FileLocation artifact={current} />
               </div>
             )}
 
@@ -217,13 +213,7 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
               )}
             </div>
             {format === 'pdf' && current && current.validation.ok && status === 'awaiting_review' && !current.pagesViewedAt && (
-              <p className="text-xs text-base-content/60">Confirming unlocks after every page has been shown here.</p>
-            )}
-            {format === 'docx' && status !== 'not_exported' && (
-              <p className="text-xs text-base-content/60">
-                The checks read the text, sections, links, contact details and projects back from the file. They say
-                nothing about page layout, which depends on your editor.
-              </p>
+              <p className="text-xs text-base-content/60">Scroll through every page to unlock confirming.</p>
             )}
           </div>
         );
@@ -242,9 +232,8 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
             {earlier.map((artifact) => (
               <li key={artifact.artifactId}>
                 {artifact.format.toUpperCase()}, exported {formatCvDateTime(artifact.exportedAt)}
-                {artifact.validation.ok ? '' : ', failed its checks'}
-                {artifact.savedPath ? `, ${artifact.savedPath}` : ''}
-                <FileDetails artifact={artifact} />
+                {artifact.validation.ok ? '' : ', needs fixing'}
+                <FileLocation artifact={artifact} />
               </li>
             ))}
           </ul>

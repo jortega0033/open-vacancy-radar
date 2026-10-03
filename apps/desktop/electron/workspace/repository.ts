@@ -974,7 +974,7 @@ function bumpCaseRevision(current: string): string {
 function assertCvSourceReviewed(source: CvSourceDocument): void {
   const gaps = describeCvSourceGaps(source);
   if (gaps.length > 0) {
-    throw new Error(`this CV cannot be approved yet: ${gaps.join('; ')}. Review the source CV in the CV Library first`);
+    throw new Error(`this CV cannot be approved yet: ${gaps.join('; ')}. Check your CV details in the CV Library first`);
   }
 }
 
@@ -1187,14 +1187,14 @@ export function checkCvCaseExportReadiness(
     blockers.push('the job description on record does not match its digest, so review it and approve this CV again');
   }
   if (!doc.source) {
-    blockers.push('this CV has no reviewed source, so there is nothing to export it against');
+    blockers.push('your CV details have not been checked yet, so there is nothing to export it against');
   } else {
     // A legacy case approved against a source that is incomplete or unreviewed must not export.
     for (const gap of describeCvSourceGaps(doc.source)) {
-      blockers.push(`${gap}. Review the source CV in the CV Library, then approve this CV again`);
+      blockers.push(`${gap}. Check your CV details in the CV Library, then approve this CV again`);
     }
     if (computeSourceCvContentHash(doc.source) !== overlay.sourceCvContentHash) {
-      blockers.push('your reviewed CV changed since this case was approved, so review the changes and approve this CV again');
+      blockers.push('your CV changed since this tailoring was approved, so review the changes and approve this CV again');
     }
     const projects = selectSourceProjects(doc.source);
     if (projects.length > 0) {

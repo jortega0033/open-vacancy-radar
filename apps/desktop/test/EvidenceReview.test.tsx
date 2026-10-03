@@ -158,15 +158,15 @@ describe('EvidenceReview (#419, step 7)', () => {
     expect(within(facts).getByText('Shared with a team')).toBeInTheDocument();
     expect(within(facts).getByText('Angular and RxJS')).toBeInTheDocument();
     expect(within(facts).getByText('fewer support calls')).toBeInTheDocument();
-    expect(within(facts).getByText(/12 percent \(basis: a report my manager sent\)/)).toBeInTheDocument();
-    expect(within(facts).getByText('Self-reported by you')).toBeInTheDocument();
+    expect(within(facts).getByText('12 percent')).toBeInTheDocument();
+    expect(within(facts).getByText('You told us')).toBeInTheDocument();
     expect(within(facts).getByText(/not approved yet/i)).toBeInTheDocument();
   });
 
-  it('says a repository revision corroborates implementation but not authorship or production use', async () => {
+  it('says a repository revision was found in the project files', async () => {
     install(overlay({ facts: [makeFact({ sourceKind: 'repository_inspection', verification: 'corroborated' })] }));
     renderReview();
-    expect(await screen.findByText(/cannot prove|but not that you wrote it or that it ran in production/i)).toBeInTheDocument();
+    expect(await screen.findByText('Found in your project files')).toBeInTheDocument();
   });
 
   it('approves a fact only when the candidate asks, and rejects on request', async () => {

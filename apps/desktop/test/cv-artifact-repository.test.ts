@@ -154,7 +154,7 @@ describe('what is checked before an approved case is rendered', () => {
     // stands on its own, not only on the state.
     workspace.updateCvDocument(db, cv.id, { source: { ...SOURCE, summary: 'A different summary.' } });
     db.update(cvEvidenceOverlays).set({ state: 'candidate_approved' }).where(eq(cvEvidenceOverlays.id, overlay.id)).run();
-    expect(workspace.checkCvCaseExportReadiness(db, overlay.id).blockers.join(' ')).toMatch(/reviewed CV changed/);
+    expect(workspace.checkCvCaseExportReadiness(db, overlay.id).blockers.join(' ')).toMatch(/your CV changed/);
   });
 
   it('refuses when the approved project selection no longer matches the CV', () => {
@@ -367,21 +367,21 @@ describe('the reviewed-source gate in the main process', () => {
   it('refuses to approve the case or its projects against an unreviewed source', () => {
     const { overlay } = preparedCase(SOURCE, { approve: false, sourcePatch: { reviewedAt: '' } });
     const revision = read(overlay.id).caseRevision;
-    expect(() => workspace.approveCvProjectSelection(db, overlay.id, revision)).toThrow(/has not been reviewed and confirmed/);
-    expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/has not been reviewed and confirmed/);
+    expect(() => workspace.approveCvProjectSelection(db, overlay.id, revision)).toThrow(/have not been checked yet/);
+    expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/have not been checked yet/);
     expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/CV Library/);
     expect(read(overlay.id).state).not.toBe('candidate_approved');
     expect(read(overlay.id).projectSelection).toBeNull();
   });
 
-  it('refuses a source flagged as truncated, naming how much was read', () => {
+  it('refuses a source flagged as truncated', () => {
     const { overlay } = preparedCase(SOURCE, {
       approve: false,
       sourcePatch: { complete: false, incompleteReason: '', coveredChars: 4000, sourceChars: 9000 },
     });
     const revision = read(overlay.id).caseRevision;
-    expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/incomplete: only 4,000 of 9,000 characters/);
-    expect(() => workspace.approveCvProjectSelection(db, overlay.id, revision)).toThrow(/incomplete/);
+    expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/only partly read/);
+    expect(() => workspace.approveCvProjectSelection(db, overlay.id, revision)).toThrow(/only partly read/);
   });
 
   it('still approves and exports a reviewed, complete source', () => {
@@ -394,13 +394,13 @@ describe('the reviewed-source gate in the main process', () => {
     const { cv, overlay } = approvedCase();
     forceSource(cv.id, { complete: false, incompleteReason: 'the last page was never read' });
     const readiness = workspace.checkCvCaseExportReadiness(db, overlay.id);
-    expect(readiness.blockers.join(' ')).toMatch(/the last page was never read/);
-    expect(readiness.blockers.join(' ')).toMatch(/Review the source CV in the CV Library/);
+    expect(readiness.blockers.join(' ')).toMatch(/only partly read/);
+    expect(readiness.blockers.join(' ')).toMatch(/Check your CV details in the CV Library/);
   });
 
   it('blocks export of an already approved case whose source is no longer reviewed', () => {
     const { cv, overlay } = approvedCase();
     forceSource(cv.id, { reviewedAt: '' });
-    expect(workspace.checkCvCaseExportReadiness(db, overlay.id).blockers.join(' ')).toMatch(/has not been reviewed and confirmed/);
+    expect(workspace.checkCvCaseExportReadiness(db, overlay.id).blockers.join(' ')).toMatch(/have not been checked yet/);
   });
 });

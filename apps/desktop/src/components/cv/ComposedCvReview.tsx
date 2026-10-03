@@ -141,7 +141,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
       const fresh = await refresh();
       setCurrentHash(await sha256HexOfSource(sourceCv));
       if (!fresh) {
-        setError('Map this vacancy’s requirements above first, so there is something to compose from.');
+        setError('Match the job requirements above first.');
         return;
       }
       setPreviewing(true);
@@ -233,92 +233,94 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
           )}
         </div>
         <p className="text-sm text-base-content/60">
-          Built only from your unchanged reviewed CV and wording you approved one by one in the facts
-          and wording review. The quick draft below is separate text that is never approved.
+          Built from your CV and the wording you approved. The quick draft below is separate and is never
+          approved.
         </p>
 
         {!overlay && (
           <div className="text-sm text-base-content/60">
-            Map this vacancy&rsquo;s requirements above first, so there is something to compose from.
+            Match the job requirements above first.
           </div>
         )}
 
         {overlay && sourceBlocked && (
-          <div className="alert alert-warning text-sm" role="alert" aria-label="Source CV not ready">
+          <div className="alert alert-warning text-sm" role="alert" aria-label="CV details not checked">
             <div>
-              <div className="font-medium">Your source CV is not ready for approval or export</div>
+              <div className="font-medium">Check your CV details before approving or exporting</div>
               <ul className="list-disc pl-4">
                 {sourceGaps.map((gap) => (
                   <li key={gap}>{gap}</li>
                 ))}
               </ul>
-              <p className="mt-1">Open this CV in the CV Library and review its source, then come back to this case.</p>
+              <p className="mt-1">Check your CV details first. Open this CV in the CV Library, review what was read from it, and confirm.</p>
             </div>
           </div>
         )}
 
         {overlay && needsRebase && rebasePlan && (
-          <section className="rounded-box border border-warning p-4 text-sm" aria-label="Changes since this case was started">
-            <h3 className="font-medium">Your CV changed after this case was started</h3>
+          <section className="rounded-box border border-warning p-4 text-sm" aria-label="Changes since this tailoring was started">
+            <h3 className="font-medium">Your CV changed</h3>
             <p className="mt-1 text-base-content/70">
-              Approval is on hold. Read what changed, then move this case onto your current CV. Facts
-              and wording that still fit are kept. Wording whose role or project is gone, or whose
-              source text changed, is dropped and stays in the history.
+              Update this tailoring to your current CV. What still fits is kept.
             </p>
-            {rebasePlan.changes.length > 0 ? (
-              <ul className="mt-2 list-disc pl-5">
-                {rebasePlan.changes.map((change) => (
-                  <li key={`${change.area}-${change.detail}`}>
-                    <span className="font-medium">{change.area}:</span> {change.detail}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2">
-                {rebasePlan.baselineKnown
-                  ? 'Your CV was saved or reviewed again, with no difference in the fields this case reads.'
-                  : 'This case has no earlier copy of your CV, so the changes cannot be listed.'}
-              </p>
-            )}
-            {rebasePlan.droppedVariants.length > 0 && (
-              <div className="mt-2">
-                <div className="font-medium">Wording that would be dropped</div>
-                <ul className="list-disc pl-5">
-                  {rebasePlan.droppedVariants.map((variant) => (
-                    <li key={variant.variantId}>
-                      {variant.text} ({variant.reason})
+            <details className="mt-2">
+              <summary className="cursor-pointer font-medium">See what changes</summary>
+              {rebasePlan.changes.length > 0 ? (
+                <ul className="mt-2 list-disc pl-5">
+                  {rebasePlan.changes.map((change) => (
+                    <li key={`${change.area}-${change.detail}`}>
+                      <span className="font-medium">{change.area}:</span> {change.detail}
                     </li>
                   ))}
                 </ul>
-              </div>
-            )}
-            {rebasePlan.orphanedFactIds.length > 0 && (
-              <p className="mt-2">
-                {rebasePlan.orphanedFactIds.length} fact(s) belong to a role or project that is gone. They are kept but
-                cannot back a bullet until you decide what they belong to.
-              </p>
-            )}
-            {rebasePlan.staleFacts.length > 0 && (
-              <div className="mt-2">
-                <div className="font-medium">Facts that need your review again</div>
-                <ul className="list-disc pl-5">
-                  {rebasePlan.staleFacts.map((stale) => (
-                    <li key={stale.factId}>
-                      {stale.activity || 'A fact'} ({stale.reason})
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {rebasePlan.requirementIdsToReview.length > 0 && (
-              <p className="mt-2">
-                {rebasePlan.requirementIdsToReview.length} requirement(s) pointed at a role or project that is gone and
-                need review again.
-              </p>
-            )}
+              ) : (
+                <p className="mt-2">
+                  {rebasePlan.baselineKnown
+                    ? 'Your CV was saved or reviewed again, with nothing different that matters here.'
+                    : 'There is no earlier copy of your CV, so the changes cannot be listed.'}
+                </p>
+              )}
+              {rebasePlan.droppedVariants.length > 0 && (
+                <div className="mt-2">
+                  <div className="font-medium">Wording that would be dropped</div>
+                  <ul className="list-disc pl-5">
+                    {rebasePlan.droppedVariants.map((variant) => (
+                      <li key={variant.variantId}>
+                        {variant.text} ({variant.reason})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {rebasePlan.orphanedFactIds.length > 0 && (
+                <p className="mt-2">
+                  {rebasePlan.orphanedFactIds.length}{' '}
+                  {rebasePlan.orphanedFactIds.length === 1 ? 'fact no longer matches' : 'facts no longer match'} a role or
+                  project.
+                </p>
+              )}
+              {rebasePlan.staleFacts.length > 0 && (
+                <div className="mt-2">
+                  <div className="font-medium">Facts that need your review again</div>
+                  <ul className="list-disc pl-5">
+                    {rebasePlan.staleFacts.map((stale) => (
+                      <li key={stale.factId}>
+                        {stale.activity || 'A fact'} ({stale.reason})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {rebasePlan.requirementIdsToReview.length > 0 && (
+                <p className="mt-2">
+                  {rebasePlan.requirementIdsToReview.length}{' '}
+                  {rebasePlan.requirementIdsToReview.length === 1 ? 'requirement needs' : 'requirements need'} another look.
+                </p>
+              )}
+            </details>
             <button type="button" className="btn btn-warning mt-3" onClick={() => void handleRebase()} disabled={rebasing}>
               {rebasing && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-              Use my current CV for this case
+              Update to my current CV
             </button>
           </section>
         )}
