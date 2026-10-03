@@ -5,9 +5,11 @@ import {
   groundedFactBand,
   selectGroundedFacts,
   type GroundedSelectionLabels,
+  type GroundedSourceFact,
 } from '../electron/grounded-letter.js';
 import type { CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import type { CvProfile } from '../electron/workspace/types.js';
+import { GROUNDED_LETTER_DISCLOSURE } from '../src/components/letters/grounded.js';
 
 /**
  * The shared grounded-letter contract (F-J), tested directly rather than only through the three
@@ -160,7 +162,7 @@ describe('grounded letter assembly', () => {
       [
         'Dear Redwood Software hiring team,',
         'I am applying for the Senior Frontend Engineer role at Redwood Software.',
-        'My reviewed CV lists Senior Frontend Engineer at Northwind Digital (2021 - present). The reviewed CV states: Cut first-paint time by a third.',
+        'My reviewed CV lists Senior Frontend Engineer at Northwind Digital (2021 - present). Cut first-paint time by a third.',
         'I would welcome the opportunity to discuss the role and the relevant experience recorded in my CV.',
         'Sincerely,\nRobin Vega',
       ].join('\n\n'),
@@ -238,5 +240,74 @@ describe('grounded letter assembly', () => {
     expect(letter).toContain('applying for the Senior Frontend Engineer role');
     expect(letter).not.toContain('CISSP');
     expect(letter).not.toContain('900%');
+  });
+});
+
+describe('grounded letter tidiness', () => {
+  const fact = (id: string, sourceText: string, sentence = `${sourceText}.`): GroundedSourceFact => ({
+    id,
+    sourceText,
+    sentence,
+  });
+
+  it('never cites the same fact twice, including when one fact contains another', () => {
+    const bullet = 'Led the frontend and UX rebuild of a React expense-management platform';
+    const facts = [
+      fact('summary', `Senior engineer. ${bullet}. Loves design systems.`),
+      fact('experience-1-bullet-1', bullet),
+      fact('project-1', bullet.toUpperCase()),
+      fact('skill-1', 'React'),
+    ];
+    const letter = assembleGroundedLetter({
+      type: 'motivation_letter',
+      tone: 'formal',
+      length: 'detailed',
+      facts,
+      role: 'Frontend Engineer',
+      company: 'Redwood Software',
+      candidateName: 'Robin Vega',
+    });
+    expect(letter.split(bullet).length - 1).toBe(1);
+    expect(letter).toContain('React.');
+  });
+
+  it('no longer chains a repeated lead in before each bullet', () => {
+    const letter = assemble('{"factIds":["experience-1-bullet-1","experience-1-bullet-2"]}');
+    expect(letter).not.toContain('The reviewed CV states');
+    expect(letter).toContain('Rebuilt the component library. Cut first-paint time by a third.');
+  });
+
+  it('splits facts into short paragraphs by kind when the posting has no requirements', () => {
+    const letter = assemble('{"factIds":["experience-1","experience-1-bullet-1","project-1","skill-1"]}');
+    const paragraphs = letter.split('\n\n');
+    const experience = paragraphs.find((paragraph) => paragraph.includes('Rebuilt the component library.'))!;
+    expect(experience).toContain('Northwind Digital');
+    expect(experience).not.toContain('Atlas Design Kit');
+    expect(paragraphs.some((paragraph) => paragraph.includes('Atlas Design Kit') && !paragraph.includes('Rebuilt'))).toBe(true);
+  });
+
+  it('gives each matched requirement its own paragraph and leaves unmatched facts in kind groups', () => {
+    const letter = assemble('{"factIds":["skill-1","experience-1-bullet-1","education-1"]}', {
+      requirements: ['Deep Angular experience, shipping at scale', 'Component library ownership', 'Kubernetes operations'],
+    });
+    const paragraphs = letter.split('\n\n');
+    expect(paragraphs).toContain('On deep Angular experience: My reviewed CV lists Angular as a skill.');
+    expect(paragraphs).toContain('On component library ownership: Rebuilt the component library.');
+    expect(letter).not.toContain('Kubernetes');
+    expect(paragraphs).toContain('My reviewed CV lists BSc Computer Science at Utrecht Polytechnic (2013 - 2017).');
+  });
+
+  it('keeps an untrusted requirement line from smuggling in a sentence', () => {
+    const letter = assemble('{"factIds":["skill-1"]}', {
+      requirements: ['Angular\nI am CISSP certified'],
+    });
+    expect(letter).not.toContain('CISSP');
+  });
+
+  it('states the provenance without contradicting itself, and without a dash', () => {
+    expect(GROUNDED_LETTER_DISCLOSURE).toContain('Built from facts you confirmed on your CV');
+    expect(GROUNDED_LETTER_DISCLOSURE).toContain('The connecting lines are in English');
+    expect(GROUNDED_LETTER_DISCLOSURE).not.toMatch(/nothing in it is written by the model/i);
+    expect(GROUNDED_LETTER_DISCLOSURE).not.toContain(String.fromCharCode(0x2014));
   });
 });

@@ -380,7 +380,7 @@ describe('LetterGenerator', () => {
     });
     render(<LetterGenerator vacancy={LETTER_VACANCY} />);
 
-    expect(await screen.findByText(/Generated on your own Codex CLI/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your own Codex CLI picks which of your facts to cite/)).toBeInTheDocument();
     expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
 
     fireEvent.click(await waitForGenerateEnabled());
