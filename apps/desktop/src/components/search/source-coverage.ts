@@ -11,8 +11,8 @@ export interface SourceCoverageGroup {
   title: string;
   /** What the group means for the candidate. */
   description: string;
-  /** Display names of the sources in this group. */
-  providers: string[];
+  /** Display names of the sources in this group, grouped by name with counts. */
+  providers: Array<{ name: string; count: number }>;
 }
 
 export interface SourceCoverage {
@@ -57,20 +57,33 @@ function sourceWord(count: number): string {
  */
 export function summarizeSourceCoverage(sources: DiscoverySource[]): SourceCoverage {
   const warnings: DiscoverySource[] = [];
-  const byKind: Record<SourceCoverageKind, string[]> = { not_set_up: [], failed: [], incomplete: [] };
+  const byKind: Record<SourceCoverageKind, Map<string, number>> = {
+    not_set_up: new Map(),
+    failed: new Map(),
+    incomplete: new Map()
+  };
+
   for (const source of sources) {
     const kind = classify(source);
     if (kind === null) continue;
     warnings.push(source);
-    byKind[kind].push(discoveryProviderLabel(source.provider));
+    const label = discoveryProviderLabel(source.provider);
+    const count = byKind[kind].get(label) ?? 0;
+    byKind[kind].set(label, count + 1);
   }
   const completeCount = sources.length - warnings.length;
 
   const groups: SourceCoverageGroup[] = [];
   const add = (kind: SourceCoverageKind, label: string, description: string) => {
-    const providers = byKind[kind];
-    if (providers.length === 0) return;
-    groups.push({ kind, title: `${providers.length} ${sourceWord(providers.length)} ${label}`, description, providers });
+    const providerMap = byKind[kind];
+    if (providerMap.size === 0) return;
+    const providers = Array.from(providerMap.entries()).map(([name, count]) => ({ name, count }));
+    groups.push({
+      kind,
+      title: `${providerMap.size} ${sourceWord(providerMap.size)} ${label}`,
+      description,
+      providers
+    });
   };
   add('not_set_up', 'not set up', 'These need the ATS company list, which has not been downloaded yet.');
   add('failed', 'failed', 'These could not be reached or returned an error. Run a new scan to try them again.');
@@ -85,7 +98,7 @@ export function summarizeSourceCoverage(sources: DiscoverySource[]): SourceCover
     warnings,
     groups,
     completeCount,
-    rosterMissing: byKind.not_set_up.length > 0,
+    rosterMissing: byKind.not_set_up.size > 0,
     summary: lead,
   };
 }
