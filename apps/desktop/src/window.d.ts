@@ -4,7 +4,6 @@ import type {
   AtsRosterStatus,
   CandidateProfile,
   GlobalRemoteReport,
-  ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 

@@ -30,6 +30,7 @@ import type { CvDocument, VacancyLead } from './types.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
 import { ErrorBanner } from '../shell/index.js';
+import { ProviderErrorNotice } from './ProviderErrorNotice.js';
 
 export interface RequirementMappingProps {
   /** The CV Library record this session's evidence belongs to. This feature needs a persisted CV
@@ -490,9 +491,11 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           </div>
         )}
         {run.status === 'failed' && run.error && (
-          <ErrorBanner>
-            {run.error}
-          </ErrorBanner>
+          <ProviderErrorNotice
+            error={run.error}
+            providerId={provider ?? 'claude'}
+            onRetry={() => handleRun(batchesRef.current > 1)}
+          />
         )}
         {saveError && (
           <ErrorBanner>

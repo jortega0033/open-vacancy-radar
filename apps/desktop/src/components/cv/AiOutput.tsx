@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { AgentRunStatus } from './useAgentRun.js';
+import type { ProviderId } from '@agent-dock/shared';
 import { ErrorBanner } from '../shell/index.js';
+import { ProviderErrorNotice } from './ProviderErrorNotice.js';
 
 /**
  * The streaming answer surface, shared by both AI features: a bordered, fixed-height, scrolling
@@ -23,9 +25,13 @@ export interface AiOutputProps {
   /** Display name of the CLI this run actually goes through, e.g. "Claude Code" or "Codex" (see
    * `PROVIDER_LABEL`): the "starting" message names the real provider instead of assuming one. */
   providerLabel: string;
+  /** With `onRetry`, a failed run gets the guided provider notice (usage limit, sign-in, unavailable)
+   * instead of the raw message (#461). */
+  providerId?: ProviderId;
+  onRetry?: () => void;
 }
 
-export function AiOutput({ status, text, error, idleHint, busyLabel, label, providerLabel }: AiOutputProps) {
+export function AiOutput({ status, text, error, idleHint, busyLabel, label, providerLabel, providerId, onRetry }: AiOutputProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isBusy = status === 'starting' || status === 'streaming';
 
@@ -45,9 +51,13 @@ export function AiOutput({ status, text, error, idleHint, busyLabel, label, prov
       )}
 
       {status === 'failed' && error && (
-        <ErrorBanner className="mb-3">
-          {error}
-        </ErrorBanner>
+        providerId && onRetry ? (
+          <ProviderErrorNotice className="mb-3" error={error} providerId={providerId} onRetry={onRetry} />
+        ) : (
+          <ErrorBanner className="mb-3">
+            {error}
+          </ErrorBanner>
+        )
       )}
 
       {status === 'cancelled' && (

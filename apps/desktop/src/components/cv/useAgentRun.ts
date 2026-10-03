@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentEvent, ProviderId } from '@agent-dock/shared';
+import { classifyProviderError } from '../../provider-error.js';
+import { clearProviderLimit, recordProviderLimit } from '../../provider-limits.js';
 
 /**
  * One-shot "send a prompt, stream the answer back" runner on top of the AgentDock bridge.
@@ -80,6 +82,8 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
   const [error, setError] = useState<string>();
 
   const sessionIdRef = useRef<string>();
+  /** The provider this run goes through, so its failure can be recorded against the right one. */
+  const providerRef = useRef<ProviderId>('claude');
   const textRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
   // Bumped by `start`, `cancel`, `reset`, and unmount (issue #362): the one thing that lets `start`
@@ -92,6 +96,19 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
   // object every render, and the effect must not resubscribe on every render because of it.
   const chunkSeparatorRef = useRef(options.chunkSeparator ?? '\n\n');
   chunkSeparatorRef.current = options.chunkSeparator ?? '\n\n';
+
+  /** Records a usage limit against the provider that hit it, so the sidebar and provider card can
+   * show it too (#461). Any other failure says nothing about the provider's limit. */
+  const noteFailure = useCallback((message: string) => {
+    const info = classifyProviderError(message);
+    if (info.kind !== 'usage_limit') return;
+    recordProviderLimit({
+      provider: providerRef.current,
+      reachedAt: Date.now(),
+      ...(info.resetLabel ? { resetLabel: info.resetLabel } : {}),
+      ...(info.resetAt !== undefined ? { resetAt: info.resetAt } : {}),
+    });
+  }, []);
 
   const clearWatchdog = useCallback(() => {
     if (timeoutRef.current !== undefined) clearTimeout(timeoutRef.current);
@@ -138,6 +155,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           sessionIdRef.current = undefined;
           setStatus('failed');
           setError(event.message);
+          noteFailure(event.message);
           break;
         }
         case 'session.completed': {
@@ -148,6 +166,8 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
             setError((current) => current ?? 'the agent finished without returning any text');
           } else {
             setStatus('completed');
+            // A run that finished is proof the provider is answering again.
+            clearProviderLimit(providerRef.current);
           }
           break;
         }
@@ -156,6 +176,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           sessionIdRef.current = undefined;
           setStatus('failed');
           setError(event.message || 'the agent session failed');
+          noteFailure(event.message || '');
           break;
         }
         case 'session.cancelled': {
@@ -177,7 +198,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
       generationRef.current += 1;
       if (sessionIdRef.current) cancelSessionBestEffort(sessionIdRef.current);
     };
-  }, [cancelSessionBestEffort, clearWatchdog]);
+  }, [cancelSessionBestEffort, clearWatchdog, noteFailure]);
 
   const start = useCallback(
     async (prompt: string, options: AgentRunOptions = {}) => {
@@ -188,6 +209,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
       setText('');
       setError(undefined);
       setStatus('starting');
+      providerRef.current = options.provider ?? 'claude';
 
       try {
         // `cwd` is not a field this call can send (issue #175): main pins every session to its own

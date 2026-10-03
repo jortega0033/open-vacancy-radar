@@ -115,6 +115,12 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('button', { name: 'Applications' })).not.toHaveTextContent('to review');
   });
 
+  it('shows a usage limit as its own runtime state, not as ready (#461)', () => {
+    render(<AppSidebar {...BASE} runtimeState="limit-reached" />);
+    expect(screen.getByText(/claude code usage limit reached/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ready/i)).not.toBeInTheDocument();
+  });
+
   it('marks the active destination with aria-current, and only that one', () => {
     render(<AppSidebar {...BASE} active="applications" />);
     expect(screen.getByRole('button', { name: 'Applications' })).toHaveAttribute('aria-current', 'page');

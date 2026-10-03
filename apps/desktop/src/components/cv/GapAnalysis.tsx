@@ -232,6 +232,8 @@ export function GapAnalysis({
           idleHint="No analysis yet."
           busyLabel="Checking your CV against this vacancy…"
           providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
+          providerId={provider ?? 'claude'}
+          onRetry={handleRun}
         />
       </div>
     </div>

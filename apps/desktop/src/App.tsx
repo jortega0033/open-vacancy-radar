@@ -26,6 +26,7 @@ import {
   type RuntimeState,
 } from './components/shell/index.js';
 import { applyDensity, applyTheme } from './theme.js';
+import { activeProviderLimit, useProviderLimits, useProviderOverride } from './provider-limits.js';
 
 type DaemonState = 'connecting' | 'ready' | 'unavailable';
 
@@ -386,6 +387,13 @@ export function App() {
     };
   }, [daemonState, defaultProvider]);
 
+  // A provider that answered "usage limit" is not ready, whatever its install and sign-in say (#461).
+  const providerLimits = useProviderLimits();
+  const providerInUse = useProviderOverride() ?? defaultProvider;
+  const providerLimited = providerLimits.has(providerInUse) && activeProviderLimit(providerInUse) !== undefined;
+  const shownRuntimeState: RuntimeState =
+    providerRuntimeState === 'ready' && providerLimited ? 'limit-reached' : providerRuntimeState;
+
   const { title, subtitle } = headerCopy(nav, counts);
 
   return (
@@ -398,8 +406,8 @@ export function App() {
         collapsed={sidebarCollapsed || railForced}
         onToggleCollapsed={handleToggleSidebar}
         counts={counts}
-        runtimeLabel={PROVIDER_LABEL[defaultProvider]}
-        runtimeState={providerRuntimeState}
+        runtimeLabel={PROVIDER_LABEL[providerInUse]}
+        runtimeState={shownRuntimeState}
       />
 
       {/* The full sidebar over the content at narrow widths, without taking width from it (#451).
@@ -417,8 +425,8 @@ export function App() {
               collapsed={false}
               onToggleCollapsed={() => setSidebarOverlayOpen(false)}
               counts={counts}
-              runtimeLabel={PROVIDER_LABEL[defaultProvider]}
-              runtimeState={providerRuntimeState}
+              runtimeLabel={PROVIDER_LABEL[providerInUse]}
+              runtimeState={shownRuntimeState}
             />
           </div>
           <button

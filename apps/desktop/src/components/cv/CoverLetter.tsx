@@ -208,6 +208,8 @@ export function CoverLetter({ cv, vacancy, sourceCv, profile, model, provider }:
           idleHint="No draft yet."
           busyLabel="Choosing which of your CV facts belong in this letter…"
           providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
+          providerId={provider ?? 'claude'}
+          onRetry={handleRun}
         />
       </div>
     </div>

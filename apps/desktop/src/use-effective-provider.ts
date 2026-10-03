@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import { resolveEffectiveProvider } from './resolve-effective-provider.js';
+import { useProviderOverride } from './provider-limits.js';
 
 export interface EffectiveProvider {
   provider: ProviderId;
@@ -52,6 +53,8 @@ export function useEffectiveProvider(): EffectiveProvider {
     };
   }, []);
 
-  const provider = providers ? resolveEffectiveProvider(preferred, providers) : preferred;
+  // "Use Codex for now" after Claude Code hit its limit: this session only, never saved (#461).
+  const override = useProviderOverride();
+  const provider = override ?? (providers ? resolveEffectiveProvider(preferred, providers) : preferred);
   return { provider, providerStatus: providers?.find((status) => status.id === provider), providers };
 }

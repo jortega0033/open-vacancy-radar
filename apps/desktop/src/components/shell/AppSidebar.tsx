@@ -11,6 +11,7 @@ const RUNTIME_TEXT: Record<RuntimeState, string> = {
   unavailable: 'unavailable',
   'not-installed': 'not installed',
   'not-authenticated': 'not authenticated',
+  'limit-reached': 'usage limit reached',
 };
 
 export interface AppSidebarProps {
