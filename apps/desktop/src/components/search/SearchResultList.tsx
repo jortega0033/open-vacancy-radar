@@ -131,6 +131,8 @@ export interface SearchResultListProps {
   summary: string;
   /** Whether a scan is running right now; passed through to each row's "Live" badge. */
   scanActive?: boolean;
+  /** Listings the loaded report checked, for the zero-match hint. */
+  checkedCount?: number;
   /** How many rows in the whole filtered list lack a score. Defaults to the count on this page. */
   unscoredCount?: number;
   /** 0-indexed. */
@@ -152,6 +154,7 @@ export const SearchResultList = memo(function SearchResultList({
   savedKeys,
   summary,
   scanActive = false,
+  checkedCount,
   unscoredCount,
   page,
   pageCount,
@@ -183,11 +186,15 @@ export const SearchResultList = memo(function SearchResultList({
         {results.length === 0 ? (
           <EmptyState
             illustration={noResultsIllustration}
-            title="No vacancies found"
+            title={scanActive ? 'Searching job sites' : 'No vacancies found'}
             description={
-              totalCount > 0
-                ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
-                : 'The latest report contains no vacancies.'
+              scanActive
+                ? 'Jobs appear here as they are found.'
+                : totalCount > 0
+                  ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
+                  : checkedCount
+                    ? `Checked ${checkedCount.toLocaleString()} listings, none matched. Try fewer words or a related title.`
+                    : 'The latest report contains no vacancies.'
             }
           />
         ) : (

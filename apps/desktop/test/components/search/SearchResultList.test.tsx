@@ -558,4 +558,27 @@ describe('SearchResultList', () => {
     );
     expect(document.querySelector('[data-result-key="1"]')).not.toBeNull();
   });
+
+  const emptyProps = {
+    results: [],
+    selectedKey: null,
+    onSelect: vi.fn(),
+    savedKeys: new Set<string>(),
+    summary: '0 vacancies',
+    page: 0,
+    pageCount: 1,
+    onPageChange: vi.fn(),
+  };
+
+  it('says how many listings were checked and suggests broadening when a finished scan matched nothing (#561)', () => {
+    render(<SearchResultList {...emptyProps} totalCount={0} checkedCount={13310} />);
+    expect(screen.getByText('No vacancies found')).toBeInTheDocument();
+    expect(screen.getByText(/Checked 13,310 listings, none matched\. Try fewer words or a related title\./)).toBeInTheDocument();
+  });
+
+  it('never says "No vacancies found" while a scan is still running (#561)', () => {
+    render(<SearchResultList {...emptyProps} totalCount={0} checkedCount={0} scanActive />);
+    expect(screen.queryByText('No vacancies found')).not.toBeInTheDocument();
+    expect(screen.getByText('Searching job sites')).toBeInTheDocument();
+  });
 });
