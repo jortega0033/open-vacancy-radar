@@ -1211,7 +1211,7 @@ export function SearchPage({
             details={engineFailure?.details}
             detailsLabel="Show technical details"
             action={
-              <div className="ml-auto flex flex-none flex-wrap gap-2">
+              <>
                 {engineFailure?.canRebuild && (
                   <button
                     type="button"
@@ -1235,7 +1235,7 @@ export function SearchPage({
                 <button type="button" className="btn btn-ghost btn-xs" onClick={() => void copyEngineDiagnostics()}>
                   {diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}
                 </button>
-              </div>
+              </>
             }
           >
             Searching is not available right now.{' '}
