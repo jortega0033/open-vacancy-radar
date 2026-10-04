@@ -23,7 +23,7 @@ import { publishEngineHealth } from '../../engine-health.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
 import { describeAiWebSearchFailure } from './ai-web-search-notice.js';
-import { recordProviderLimit } from '../../provider-limits.js';
+import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
 import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
 import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
@@ -54,6 +54,8 @@ const PAGE_SIZE = 25;
 
 const SALARY_NOTE = 'Salary shown only where advertised';
 const BROWSE_ALL_RESULT_CAP = 5_000;
+/** A Claude limit with no reset time is not recorded from a report older than its usage window. */
+const UNTIMED_LIMIT_MAX_AGE_MS = 5 * 60 * 60 * 1000;
 
 function useSearchSessionField<K extends keyof SearchSessionState>(
   session: SearchSessionState,
@@ -795,21 +797,28 @@ export function SearchPage({
   );
   const sourceWarnings = sourceCoverage?.warnings ?? [];
   const aiWebSearchNotice = useMemo(
-    () => (worldwideReport ? describeAiWebSearchFailure(worldwideReport.discoverySources) : null),
+    () => (worldwideReport ? describeAiWebSearchFailure(worldwideReport.discoverySources, worldwideReport.generatedAt) : null),
     [worldwideReport],
   );
   // A usage limit hit by AI web search is Claude's, whatever the default tool is: shown on the AI
-  // runtime page too, the same way any other Claude limit is.
+  // runtime page too, the same way any other Claude limit is. The report may be a saved one from
+  // days ago, so a limit is recorded only while it can still be in force (its reset is ahead, or,
+  // with no reset time, the report is under five hours old) and never over a newer Claude limit.
   const aiLimitResetLabel = aiWebSearchNotice?.limit?.resetLabel;
   const aiLimitResetAt = aiWebSearchNotice?.limit?.resetAt;
   const aiLimitHit = aiWebSearchNotice?.limit !== undefined;
   const reportGeneratedAt = worldwideReport?.generatedAt;
   useEffect(() => {
     if (!aiLimitHit) return;
-    const reachedAt = reportGeneratedAt ? Date.parse(reportGeneratedAt) : NaN;
+    const now = Date.now();
+    const parsed = reportGeneratedAt ? Date.parse(reportGeneratedAt) : NaN;
+    const reachedAt = Number.isNaN(parsed) ? now : parsed;
+    if (aiLimitResetAt !== undefined ? aiLimitResetAt <= now : now - reachedAt > UNTIMED_LIMIT_MAX_AGE_MS) return;
+    const existing = activeProviderLimit('claude', now);
+    if (existing && existing.reachedAt >= reachedAt) return;
     recordProviderLimit({
       provider: 'claude',
-      reachedAt: Number.isNaN(reachedAt) ? Date.now() : reachedAt,
+      reachedAt,
       ...(aiLimitResetLabel ? { resetLabel: aiLimitResetLabel } : {}),
       ...(aiLimitResetAt !== undefined ? { resetAt: aiLimitResetAt } : {}),
     });

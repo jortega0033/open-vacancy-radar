@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
 import { getEngineHealth } from '../../../src/engine-health.js';
-import { activeProviderLimit, resetProviderLimitsForTest } from '../../../src/provider-limits.js';
+import { activeProviderLimit, recordProviderLimit, resetProviderLimitsForTest } from '../../../src/provider-limits.js';
 import { LiveAnnouncerProvider } from '../../../src/components/shell/index.js';
 import {
   SearchPage,
@@ -1457,20 +1457,59 @@ describe('SearchPage', () => {
       );
     });
 
-    it('names Claude and its reset time when the cause was a usage limit, and records the limit', async () => {
+    const limitReport = (error: string, generatedAt: string) => ({
+      ...makeWorldwideReport([makeWorldwideVacancy()], [aiSource(error, 'Incomplete: the session failed.')]),
+      generatedAt,
+    });
+
+    it('names Claude and its reset time for a fresh report, and records the limit', async () => {
       installAllBridges({
-        getReport: vi.fn().mockResolvedValue(
-          makeWorldwideReport([makeWorldwideVacancy()], [
-            aiSource("You've hit your session limit · resets 10:10pm", 'Incomplete: the session failed.'),
-          ]),
-        ),
+        getReport: vi.fn().mockResolvedValue(limitReport("You've hit your session limit · resets 11:59pm", new Date().toISOString())),
       });
       render(<SearchPage />);
 
       expect(await screen.findByTestId('ai-web-search-notice')).toHaveTextContent(
-        'AI web search did not run: Claude has reached its usage limit until 10:10pm.',
+        'AI web search did not run: Claude has reached its usage limit until 11:59pm.',
       );
-      await waitFor(() => expect(activeProviderLimit('claude')).toMatchObject({ resetLabel: '10:10pm' }));
+      await waitFor(() => expect(activeProviderLimit('claude')).toMatchObject({ resetLabel: '11:59pm' }));
+    });
+
+    it('records nothing for an old saved report whose reset has passed, and does not call the limit current', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(limitReport("You've hit your session limit · resets 10:10pm", '2026-08-29T11:00:00.000Z')),
+      });
+      render(<SearchPage />);
+
+      const notice = await screen.findByTestId('ai-web-search-notice');
+      expect(notice).toHaveTextContent('AI web search did not run in this scan: Claude was at its usage limit.');
+      expect(notice).not.toHaveTextContent(/until/);
+      expect(activeProviderLimit('claude')).toBeUndefined();
+    });
+
+    it('records nothing for a report older than five hours with no reset time', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          limitReport("You've hit your session limit", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()),
+        ),
+      });
+      render(<SearchPage />);
+
+      await screen.findByTestId('ai-web-search-notice');
+      expect(activeProviderLimit('claude')).toBeUndefined();
+    });
+
+    it('never overwrites a newer Claude limit', async () => {
+      const newer = { provider: 'claude' as const, reachedAt: Date.now(), resetLabel: 'newer', resetAt: Date.now() + 60 * 60 * 1000 };
+      recordProviderLimit(newer);
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          limitReport("You've hit your session limit · resets 11:59pm", new Date(Date.now() - 60_000).toISOString()),
+        ),
+      });
+      render(<SearchPage />);
+
+      await screen.findByTestId('ai-web-search-notice');
+      expect(activeProviderLimit('claude')).toEqual(newer);
     });
 
     it('names a missing sign-in', async () => {
