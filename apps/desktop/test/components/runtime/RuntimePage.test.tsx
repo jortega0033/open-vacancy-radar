@@ -69,6 +69,18 @@ describe('RuntimePage', () => {
     expect(screen.getByRole('button', { name: 'Trying again…' })).toBeDisabled();
   });
 
+  it('says plainly which features always use Claude Code (#546)', async () => {
+    installAgentDockBridge();
+    installWorkspaceBridge();
+    render(<RuntimePage daemonState="ready" />);
+
+    const note = screen.getByTestId('claude-only-features');
+    expect(note).toHaveTextContent('Preparing an application and AI web search always use Claude Code.');
+    expect(note).toHaveTextContent('Everything else uses the tool you pick here.');
+    expect(note.textContent).not.toContain('—');
+    await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
+  });
+
   it('renders real provider cards (sign-in, version under Details), not the old prompt runner', async () => {
     installAgentDockBridge();
     installWorkspaceBridge();
