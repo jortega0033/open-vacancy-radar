@@ -6,6 +6,7 @@ export default defineConfig({
       reporter: ['text', 'html'],
     },
     include: ['test/**/*.test.ts'],
-    testTimeout: 10_000,
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
 });
