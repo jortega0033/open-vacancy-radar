@@ -10,6 +10,7 @@ import {
   profileFitSpoken,
   profileFitText,
   type SearchResult,
+  workArrangementOf,
 } from './results.js';
 
 export interface SearchResultRowProps {
@@ -19,6 +20,14 @@ export interface SearchResultRowProps {
   saved: boolean;
   /** Whether a scan is running right now. A provisional row only reads "Live" while this is true. */
   scanActive?: boolean;
+}
+
+/** Chip for a detected on-site or hybrid hint. Remote and unknown get none, to keep rows quiet. */
+function arrangementChip(result: SearchResult): { text: string; tone: null } | null {
+  const arrangement = workArrangementOf(result).arrangement;
+  if (arrangement === 'hybrid') return { text: 'Hybrid', tone: null };
+  if (arrangement === 'onsite') return { text: 'On-site', tone: null };
+  return null;
 }
 
 export const SearchResultRow = memo(function SearchResultRow({
@@ -48,6 +57,7 @@ export const SearchResultRow = memo(function SearchResultRow({
     // scan is actually running: the badge claims the row is still arriving (issue #464).
     result.provisional && scanActive ? { text: 'Live · not yet scored', tone: 'warning' as const } : null,
     result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
+    arrangementChip(result),
     result.employmentType ? { text: result.employmentType, tone: null } : null,
     result.salary ? { text: result.salary, tone: null } : null,
   ].filter((badge): badge is { text: string; tone: 'success' | 'warning' | null } => badge !== null);

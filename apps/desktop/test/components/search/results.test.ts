@@ -22,6 +22,7 @@ import {
   worldwideVerification,
   WORLDWIDE_VERIFICATION,
   type SearchResult,
+  workArrangementOf,
 } from '../../../src/components/search/results.js';
 import { selectedVacancyFor, toVacancyLead } from '../../../src/components/search/SearchPage.js';
 import { UNSPECIFIED_LOCATION } from '../../../src/components/search/countries.js';
@@ -188,6 +189,33 @@ describe('filterResults: sponsorOnly', () => {
 
     const filtered = filterResults([matched, unmatched], { ...DEFAULT_FILTERS, sponsorOnly: true });
     expect(filtered.map((r) => r.key)).toEqual(['1']);
+  });
+});
+
+describe('work arrangement hint (#565a)', () => {
+  const hybridText = 'Work from the Toronto office three days per week and remotely two days per week.';
+
+  it('derives the hint when mapping, including from an old report row without the field', () => {
+    const [row] = toPartialResults([discoveryVacancy({ description: hybridText, location: 'Canada' })]);
+    expect(row?.workArrangement).toBeUndefined();
+    expect(workArrangementOf(row!).arrangement).toBe('hybrid');
+    expect(workArrangementOf(row!).evidence).toContain('three days per week');
+  });
+
+  it('hides on-site and hybrid rows only when the toggle is on, and keeps unknown and remote', () => {
+    const rows = toPartialResults([
+      discoveryVacancy({ key: 'h', description: hybridText }),
+      discoveryVacancy({ key: 'o', description: 'This is an on-site role.' }),
+      discoveryVacancy({ key: 'r', location: 'Remote', description: 'Fully remote.' }),
+      discoveryVacancy({ key: 'u', description: 'Build things.' }),
+    ]);
+    expect(filterResults(rows, DEFAULT_FILTERS).map((r) => r.key)).toEqual(['h', 'o', 'r', 'u']);
+    expect(filterResults(rows, { ...DEFAULT_FILTERS, hideOnsiteHybrid: true }).map((r) => r.key)).toEqual(['r', 'u']);
+  });
+
+  it('treats a row with no computed hint as unknown', () => {
+    const row = worldwideResult({ key: 'x', location: null });
+    expect(filterResults([row], { ...DEFAULT_FILTERS, hideOnsiteHybrid: true })).toHaveLength(1);
   });
 });
 
