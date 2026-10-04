@@ -14,6 +14,8 @@ import { FULL_JD } from '../test/fixtures/job-description.js';
  * nothing to strip from a packaged build.
  */
 export const SEEDED_CV_NAME = 'Jamie Rivera CV';
+/** Default export file name for the seeded case: the CV name plus the case company (#565). */
+export const SEEDED_EXPORT_NAME = `${SEEDED_CV_NAME} - Northwind Freight`;
 export const SEEDED_CASE_LABEL = 'Logistics Platform Engineer at Northwind Freight';
 export const SEEDED_APPROVED_BULLET = 'Built the booking screens, using Angular';
 

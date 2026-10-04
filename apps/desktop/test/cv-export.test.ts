@@ -106,6 +106,11 @@ describe('sanitizeCvExportFileName (#156, #565e)', () => {
     expect(sanitizeCvExportFileName('///')).toBe('cv');
   });
 
+  it('keeps dots that are not a document extension', () => {
+    expect(sanitizeCvExportFileName('Resume for Acme Inc. Senior role')).toBe('Resume for Acme Inc. Senior role');
+    expect(sanitizeCvExportFileName('CV v2.0')).toBe('CV v2.0');
+  });
+
   it('falls back to "cv" when left with only an extension', () => {
     expect(sanitizeCvExportFileName('.docx')).toBe('cv');
     expect(sanitizeCvExportFileName('.pdf')).toBe('cv');

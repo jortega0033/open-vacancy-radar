@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { ensureLightTheme, launchApp } from './fixtures.js';
-import { PDF_REVIEW_CASE_LABEL, PDF_REVIEW_CV_NAME, seedPdfReviewCase } from './seed-pdf-review-case.js';
+import { PDF_REVIEW_CASE_LABEL, PDF_REVIEW_EXPORT_NAME, seedPdfReviewCase } from './seed-pdf-review-case.js';
 
 /**
  * Reading a saved PDF inside the app (#434), in the real built app. The case is seeded through the
@@ -85,7 +85,7 @@ async function exportPdf(window: Page, electronApp: ElectronApplication, saveDir
   const text = (await pdf.innerText()).match(/(\d+) pages?\b/);
   expect(text, 'the saved PDF reports its page count').not.toBeNull();
   const pages = Number(text![1]);
-  return { pdf, pdfPath: `${saveDir}/${PDF_REVIEW_CV_NAME}.pdf`, pages };
+  return { pdf, pdfPath: `${saveDir}/${PDF_REVIEW_EXPORT_NAME}.pdf`, pages };
 }
 
 /** Scrolls the page list a screen at a time until the end, as a candidate reading it would. */

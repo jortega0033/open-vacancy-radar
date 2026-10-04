@@ -15,6 +15,8 @@ import { FULL_JD } from '../test/fixtures/job-description.js';
  * one page. A single-page file cannot show that confirming waits for every page.
  */
 export const PDF_REVIEW_CV_NAME = 'Jamie Rivera CV';
+/** Default export file name for the seeded case: the CV name plus the case company (#565). */
+export const PDF_REVIEW_EXPORT_NAME = `${PDF_REVIEW_CV_NAME} - Northwind Freight`;
 export const PDF_REVIEW_CASE_LABEL = 'Logistics Platform Engineer at Northwind Freight';
 export const PDF_REVIEW_APPROVED_BULLET = 'Built the booking screens, using Angular';
 

@@ -81,8 +81,8 @@ export function describeCvExportBlockers(doc: CvDocumentRecord): string[] {
  * renderer's own bundle, and electron/ never imports from it). Also strips any file extension
  * (e.g., ".docx", ".pdf") from the name since the extension will be added per the export format. */
 export function sanitizeCvExportFileName(name: string): string {
-  // First strip any file extension (anything after the last dot)
-  const withoutExtension = name.replace(/\.[^.]*$/, '');
+  // Strip a trailing document extension only, so other dots in the name ("Inc. Senior") survive.
+  const withoutExtension = name.trim().replace(/\.(docx?|pdf|odt|rtf|txt|md)$/i, '');
 
   const cleaned = withoutExtension
     .replace(/[\\/:*?"<>|]/g, ' ')
@@ -118,12 +118,11 @@ export function buildCvCaseExportFileName(cvName: string, company: string | unde
   if (combined.length > 200) {
     // Truncate intelligently: keep CV name intact if possible, truncate company
     if (cvBaseName.length > 100) {
-      return cvBaseName.substring(0, 200);
+      return cvBaseName.substring(0, 200).replace(/[\s.]+$/, '');
     }
     const maxCompanyLength = 200 - cvBaseName.length - 3; // 3 for " - "
-    if (maxCompanyLength > 0) {
-      return `${cvBaseName} - ${sanitizedCompany.substring(0, maxCompanyLength)}`;
-    }
+    const truncatedCompany = sanitizedCompany.substring(0, maxCompanyLength).replace(/[\s.]+$/, '');
+    return truncatedCompany ? `${cvBaseName} - ${truncatedCompany}` : cvBaseName;
   }
 
   return combined;
