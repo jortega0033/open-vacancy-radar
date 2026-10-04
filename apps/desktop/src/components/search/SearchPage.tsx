@@ -32,10 +32,12 @@ import {
   browseAllViewFilters,
   buildSearchResultIndex,
   dedupeResultsByKey,
+  describeReportSummary,
   duplicateResultKeys,
   employmentOptions,
   filterSearchResultIndex,
   isWebUrl,
+  reportSearchContext,
   salaryCounts,
   sortSearchResultIndex,
   sourceOptions,
@@ -223,6 +225,8 @@ export function SearchPage({
   // would clobber a selection the user already made, so hydration only ever writes the filter if
   // the user hasn't touched it yet.
   const hasEditedLocationRef = useRef(false);
+  // Same rule for the role field: a delayed report load must not overwrite what the user typed.
+  const hasEditedQueryRef = useRef(false);
 
   // `filters` is editable form state; `appliedFilters` drives the current report. Local-only
   // refinements sync immediately, while scan criteria commit with a successful report.
@@ -412,6 +416,25 @@ export function SearchPage({
         const report = await window.vacancyRadar.getReport();
         if (cancelled || requestGeneration !== reportRequestGenerationRef.current) return;
         setWorldwideReport(report);
+        if (report) {
+          // Show the saved search's own role and country in the form, but only fields the report
+          // records, and only while the user has not typed anything and no scan is running.
+          const context = reportSearchContext(report);
+          // A newer scan or an older request is already ruled out by the generation check above.
+          const restoreQuery = Boolean(context.role) && !hasEditedQueryRef.current;
+          const restoreCountry = Boolean(context.country) && !hasEditedLocationRef.current;
+          const restore = (current: SearchFilters): SearchFilters => ({
+            ...current,
+            ...(restoreQuery ? { query: context.role ?? '' } : {}),
+            ...(restoreCountry ? { country: context.country ?? current.country } : {}),
+          });
+          if (restoreQuery || restoreCountry) {
+            setFilters(restore);
+            setAppliedFilters(restore);
+            // The report's country beats the saved default, which must not land on top of it later.
+            if (restoreCountry) hasEditedLocationRef.current = true;
+          }
+        }
         // A report kept from before a zero-match scan gets the same notice as in-session (#577).
         if (report && report.discoveryAudit.length > 0) {
           try {
@@ -435,7 +458,7 @@ export function SearchPage({
     return () => {
       cancelled = true;
     };
-  }, [reloadTick, setReportHydrated, setWorldwideReport]);
+  }, [reloadTick, setAppliedFilters, setFilters, setReportHydrated, setWorldwideReport]);
 
   const retryLoad = useCallback(() => {
     hasHydrated.current = false;
@@ -1077,6 +1100,7 @@ export function SearchPage({
   }, [engineState]);
 
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
+    if (typeof patch.query === 'string') hasEditedQueryRef.current = true;
     if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
     setFilters((current) => ({ ...current, ...patch }));
     const changesScanCriteria =
@@ -1487,9 +1511,7 @@ export function SearchPage({
           )}
           {worldwideReport && !singlePane && (
             <p className="mx-6 mt-3 text-xs text-base-content/60 short:hidden" role="status">
-              {visible.length.toLocaleString()} {visible.length === 1 ? 'vacancy' : 'vacancies'}
-              {appliedFilters.query.trim() ? ` match '${appliedFilters.query.trim()}'` : ''} · scanned{' '}
-              {new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {describeReportSummary(worldwideReport, visible.length)}
             </p>
           )}
           <div

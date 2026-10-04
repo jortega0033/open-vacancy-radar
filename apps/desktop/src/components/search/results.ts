@@ -460,6 +460,53 @@ export function browseAllViewFilters(filters: SearchFilters): SearchFilters {
   return { ...filters, query, country, employment, salaryMinimum, salaryCurrency, includeUnknownSalary, sponsorOnly };
 }
 
+/** What a saved report itself records about the search that produced it. */
+export interface ReportSearchContext {
+  /** `unknown` is a legacy report that recorded neither a scan mode nor focused criteria. */
+  mode: 'focused' | 'browse_all' | 'unknown';
+  role: string | null;
+  country: string | null;
+}
+
+/**
+ * Read the report's own search criteria. The per-source `focusedScan.requested` record holds the
+ * role and country the scan was actually asked for. Nothing is guessed: a field the report does not
+ * record stays `null`.
+ */
+export function reportSearchContext(report: GlobalRemoteReport): ReportSearchContext {
+  const requested = report.discoverySources
+    .map((source) => source.focusedScan?.requested)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  if (report.scanBounds?.mode === 'browse_all') return { mode: 'browse_all', role: null, country: null };
+  const role = requested.find((entry) => entry.role?.trim())?.role?.trim() ?? null;
+  const country = requested.find((entry) => entry.country?.trim())?.country?.trim() ?? null;
+  if (report.scanBounds?.mode === 'focused' || requested.length > 0) return { mode: 'focused', role, country };
+  return { mode: 'unknown', role: null, country: null };
+}
+
+/** Local "2 Oct, 00:23" style stamp for when a report was generated. */
+export function formatReportTimestamp(generatedAt: string): string {
+  const date = new Date(generatedAt);
+  if (Number.isNaN(date.getTime())) return '';
+  const day = date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${day}, ${time}`;
+}
+
+/** The primary results line: what is shown, which saved search produced it, and when. */
+export function describeReportSummary(report: GlobalRemoteReport, visibleCount: number): string {
+  const context = reportSearchContext(report);
+  const noun = visibleCount === 1 ? 'vacancy' : 'vacancies';
+  let text = `${visibleCount.toLocaleString()} ${noun}`;
+  if (context.mode === 'browse_all') text += ' · browse all';
+  else {
+    if (context.role) text += ` for ${context.role}`;
+    if (context.country) text += ` in ${context.country}`;
+  }
+  const stamp = formatReportTimestamp(report.generatedAt);
+  return stamp ? `${text} · searched ${stamp}` : text;
+}
+
 export function salaryCriteriaFromFilters(filters: SearchFilters): SalaryFilterCriteria | null {
   const minimumAnnual = parseMinimumAnnualSalary(filters.salaryMinimum ?? '');
   if (minimumAnnual === null) return null;
