@@ -789,7 +789,7 @@ export function SearchPage({
   );
   const sourceWarnings = sourceCoverage?.warnings ?? [];
 
-  const [scanLogCopied, setScanLogCopied] = useState(false);
+  const [copiedScanLogRunId, setCopiedScanLogRunId] = useState<string>();
   // The full run log is not shown on the Search page; it is copied on demand (#562).
   const copyScanLog = useCallback(async () => {
     if (!worldwideReport) return;
@@ -804,9 +804,9 @@ export function SearchPage({
     ];
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
-      setScanLogCopied(true);
+      setCopiedScanLogRunId(worldwideReport.runId);
     } catch {
-      setScanLogCopied(false);
+      setCopiedScanLogRunId(undefined);
     }
   }, [worldwideReport, sourceWarnings]);
   const scanBounds = worldwideReport?.scanBounds;
@@ -1576,7 +1576,7 @@ export function SearchPage({
                         </div>
                       )}
                       <button type="button" className="btn btn-ghost btn-xs" onClick={() => void copyScanLog()}>
-                        {scanLogCopied ? 'Copied' : 'Copy diagnostics'}
+                        {copiedScanLogRunId === worldwideReport?.runId ? 'Copied' : 'Copy diagnostics'}
                       </button>
                     </div>
                   ) : null}
