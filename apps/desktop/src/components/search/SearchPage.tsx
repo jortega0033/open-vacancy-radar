@@ -1258,10 +1258,13 @@ export function SearchPage({
     }
   }, [paneView, singlePane, selectedKey]);
 
+  // The list header is visible in every layout, so it carries the saved search's role and date.
   const summary =
-    hasReport || isStreamingPartial
-      ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
-      : 'No results yet';
+    worldwideReport && !isStreamingPartial
+      ? describeReportSummary(worldwideReport, visible.length)
+      : hasReport || isStreamingPartial
+        ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
+        : 'No results yet';
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col">
@@ -1508,11 +1511,6 @@ export function SearchPage({
             <WarningBanner className="mx-6 mt-3" role="status">
               Could not check your profile.
             </WarningBanner>
-          )}
-          {worldwideReport && !singlePane && (
-            <p className="mx-6 mt-3 text-xs text-base-content/60 short:hidden" role="status">
-              {describeReportSummary(worldwideReport, visible.length)}
-            </p>
           )}
           <div
             className={`mt-3 flex min-h-0 flex-1 short:mt-2 ${singlePane ? 'flex-col px-6' : 'flex-row'}`}

@@ -497,7 +497,7 @@ export function formatReportTimestamp(generatedAt: string): string {
 export function describeReportSummary(report: GlobalRemoteReport, visibleCount: number): string {
   const context = reportSearchContext(report);
   const noun = visibleCount === 1 ? 'vacancy' : 'vacancies';
-  let text = `${visibleCount.toLocaleString()} ${noun}`;
+  let text = `${visibleCount} ${noun}`;
   if (context.mode === 'browse_all') text += ' · browse all';
   else {
     if (context.role) text += ` for ${context.role}`;

@@ -418,8 +418,8 @@ describe('SearchPage', () => {
 
       await screen.findByLabelText('Vacancy results');
       expect(screen.queryByText(/Scan details/)).not.toBeInTheDocument();
-      // The separate stats line above the list is gone, so the list gets that height.
-      expect(screen.queryByText(/ · searched /)).not.toBeInTheDocument();
+      // No separate stats line above the list; the list header carries the role and date (#538).
+      expect(screen.getAllByText(/ · searched /)).toHaveLength(1);
     });
   });
 
