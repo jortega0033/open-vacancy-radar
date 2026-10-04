@@ -630,45 +630,64 @@ describe('SafeHttpClient resource bounds and caching', () => {
   });
 
   it('releases the scheduler slot after a timeout', async () => {
-    const scheduler = new RequestScheduler(1, 1);
-    const fetchFn = vi.fn(
-      asFetch((input) => {
-        const url = new URL(input instanceof Request ? input.url : input.toString());
-        if (url.pathname === '/stuck') return new Promise<Response>(() => undefined);
-        return Promise.resolve(new Response('next'));
-      }),
-    );
-    const client = createClient({ scheduler, fetchFn, timeoutMs: 20, maxRetries: 0 });
+    vi.useFakeTimers();
+    try {
+      const scheduler = new RequestScheduler(1, 1);
+      const fetchFn = vi.fn(
+        asFetch((input) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString());
+          if (url.pathname === '/stuck') return new Promise<Response>(() => undefined);
+          return Promise.resolve(new Response('next'));
+        }),
+      );
+      const client = createClient({ scheduler, fetchFn, timeoutMs: 20, maxRetries: 0 });
 
-    await expect(client.get('https://jobs.example.com/stuck')).rejects.toMatchObject({
-      category: 'timeout',
-      code: 'request_timeout',
-    });
-    const next = client.get('https://jobs.example.com/next');
-    await expect(next).resolves.toHaveProperty('status', 200);
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(scheduler.snapshot()).toMatchObject({ activeGlobal: 0, queued: 0 });
+      const stuck = expect(client.get('https://jobs.example.com/stuck')).rejects.toMatchObject({
+        category: 'timeout',
+        code: 'request_timeout',
+      });
+      await vi.advanceTimersByTimeAsync(20);
+      await stuck;
+      const next = expect(client.get('https://jobs.example.com/next')).resolves.toHaveProperty(
+        'status',
+        200,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await next;
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(scheduler.snapshot()).toMatchObject({ activeGlobal: 0, queued: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('times out while queued and never fetches after the expired task is released', async () => {
-    const scheduler = new RequestScheduler(1, 1);
-    let releaseHolder: (() => void) | undefined;
-    const holder = scheduler.run(
-      'jobs.example.com',
-      () => new Promise<void>((resolve) => (releaseHolder = resolve)),
-    );
-    const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('unexpected'))));
-    const client = createClient({ scheduler, fetchFn, timeoutMs: 10, maxRetries: 0 });
+    vi.useFakeTimers();
+    try {
+      const scheduler = new RequestScheduler(1, 1);
+      let releaseHolder: (() => void) | undefined;
+      const holder = scheduler.run(
+        'jobs.example.com',
+        () => new Promise<void>((resolve) => (releaseHolder = resolve)),
+      );
+      const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('unexpected'))));
+      const client = createClient({ scheduler, fetchFn, timeoutMs: 10, maxRetries: 0 });
 
-    await expect(client.get('https://jobs.example.com/queued')).rejects.toMatchObject({
-      category: 'timeout',
-      code: 'request_timeout',
-    });
-    expect(fetchFn).not.toHaveBeenCalled();
-    releaseHolder?.();
-    await holder;
-    await vi.waitFor(() => expect(scheduler.snapshot().queued).toBe(0));
-    expect(fetchFn).not.toHaveBeenCalled();
+      const queued = expect(client.get('https://jobs.example.com/queued')).rejects.toMatchObject({
+        category: 'timeout',
+        code: 'request_timeout',
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await queued;
+      expect(fetchFn).not.toHaveBeenCalled();
+      releaseHolder?.();
+      await holder;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scheduler.snapshot().queued).toBe(0);
+      expect(fetchFn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uses validators and reuses the cached body after 304', async () => {
@@ -1129,44 +1148,54 @@ describe('SafeHttpClient streaming GET', () => {
   });
 
   it('aborts a stalled stream at the per-request deadline and releases the scheduler slot', async () => {
-    const scheduler = new RequestScheduler(1, 1);
-    const cancel = vi.fn();
-    let request = 0;
-    const fetchFn = vi.fn(
-      asFetch(() => {
-        request += 1;
-        if (request > 1) return Promise.resolve(new Response('next'));
-        return Promise.resolve(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              pull: () => new Promise(() => undefined),
-              cancel,
-            }),
-          ),
-        );
-      }),
-    );
-    const client = createClient({ scheduler, fetchFn, timeoutMs: 500 });
+    vi.useFakeTimers();
+    try {
+      const scheduler = new RequestScheduler(1, 1);
+      const cancel = vi.fn();
+      let request = 0;
+      const fetchFn = vi.fn(
+        asFetch(() => {
+          request += 1;
+          if (request > 1) return Promise.resolve(new Response('next'));
+          return Promise.resolve(
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull: () => new Promise(() => undefined),
+                cancel,
+              }),
+            ),
+          );
+        }),
+      );
+      const client = createClient({ scheduler, fetchFn, timeoutMs: 500 });
 
-    await expect(
-      client.streamGet('https://jobs.example.com/stalled', {
-        ...streamOptions,
-        timeoutMs: 20,
-        onChunk: vi.fn(),
-      }),
-    ).rejects.toMatchObject({
-      category: 'timeout',
-      code: 'request_timeout',
-      message: expect.stringContaining('20ms'),
-    });
-    await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
-    expect(scheduler.snapshot()).toMatchObject({ activeGlobal: 0, queued: 0 });
+      const stalled = expect(
+        client.streamGet('https://jobs.example.com/stalled', {
+          ...streamOptions,
+          timeoutMs: 20,
+          onChunk: vi.fn(),
+        }),
+      ).rejects.toMatchObject({
+        category: 'timeout',
+        code: 'request_timeout',
+        message: expect.stringContaining('20ms'),
+      });
+      await vi.advanceTimersByTimeAsync(20);
+      await stalled;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancel).toHaveBeenCalled();
+      expect(scheduler.snapshot()).toMatchObject({ activeGlobal: 0, queued: 0 });
 
-    await expect(
-      client.streamGet('https://jobs.example.com/next', {
-        ...streamOptions,
-        onChunk: vi.fn(),
-      }),
-    ).resolves.toMatchObject({ status: 200 });
+      const next = expect(
+        client.streamGet('https://jobs.example.com/next', {
+          ...streamOptions,
+          onChunk: vi.fn(),
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      await vi.advanceTimersByTimeAsync(0);
+      await next;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
