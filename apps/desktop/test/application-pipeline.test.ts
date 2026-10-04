@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { jsPDF } from 'jspdf';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CdpDomNode } from '@agent-dock/application-executor';
+import { classifyProviderError } from '../src/provider-error.js';
 
 /**
  * The end-to-end proof for issue #272: one vacancy carried through the *production* entry point --
@@ -1048,6 +1049,21 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     const second = await pipeline.runNextApplicationAttempt(deps);
     expect(second.result?.outcome).toBe('ready');
     expect(generateTailoredResume).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a usage-limit reason intact so the review dialog can show the limit notice (#546)', async () => {
+    const limitMessage = "You've hit your session limit · resets 10:10pm (Europe/Amsterdam)";
+    generateTailoredResume.mockResolvedValueOnce({ ok: false, text: '', error: limitMessage });
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    const first = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(first.result?.outcome).toBe('needs_user');
+    const detail = workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail;
+    expect(detail.startsWith('Automatic CV tailoring stopped:')).toBe(true);
+    expect(detail).toContain(limitMessage);
+    expect(classifyProviderError(detail)).toMatchObject({ kind: 'usage_limit', resetLabel: '10:10pm (Europe/Amsterdam)' });
+    // Nothing else spent a Claude session after the limit.
+    expect(generateCoverLetter).not.toHaveBeenCalled();
   });
 
   it('requeues a preparation blocker after the person addresses it', async () => {

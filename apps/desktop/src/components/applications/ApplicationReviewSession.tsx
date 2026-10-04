@@ -9,6 +9,8 @@ import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
 import { WarningBanner } from '../shell/index.js';
+import { classifyProviderError, type ProviderErrorInfo } from '../../provider-error.js';
+import { recordProviderLimit } from '../../provider-limits.js';
 import {
   alreadySentFailure,
   describeSubmitRefusal,
@@ -69,6 +71,47 @@ function TechnicalDetails({ text, label }: { text: string; label: string }) {
       <p className="mt-1 break-words">{text}</p>
     </details>
   );
+}
+
+/**
+ * A usage limit behind a blocked preparation (#546). Application preparation always runs on Claude
+ * (`applicationPipelineDeps` in `main.ts`), so a limit there is Claude's whatever tool the person
+ * picked. The reset time is placed relative to when the attempt last changed, not to now, so a
+ * stored message read hours later does not move the reset into the future.
+ */
+function pipelineLimit(message: string, updatedAt: string): ProviderErrorInfo | null {
+  const when = Date.parse(updatedAt);
+  const info = classifyProviderError(message, Number.isNaN(when) ? new Date() : new Date(when));
+  return info.kind === 'usage_limit' ? info : null;
+}
+
+function formatClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Re-renders every 30 seconds while a reset time is still ahead, so Try again unlocks on time. */
+function useNowUntil(resetAt: number | undefined): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (resetAt === undefined || resetAt <= Date.now()) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [resetAt]);
+  return now;
+}
+
+function PipelineLimitNotice({ info }: { info: ProviderErrorInfo }) {
+  return (
+    <WarningBanner>
+      Claude has reached its usage limit{info.resetLabel ? ` until ${info.resetLabel}` : ''}. Preparing an
+      application needs Claude, so try again once the limit resets.
+    </WarningBanner>
+  );
+}
+
+function retryLabel(info: ProviderErrorInfo | null, waiting: boolean, idle: string): string {
+  if (!info || !waiting || info.resetAt === undefined) return idle;
+  return `Try again after ${formatClock(info.resetAt)}`;
 }
 
 function errorState(failure: ReviewFailure): SessionState {
@@ -441,6 +484,27 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     || (state.phase === 'ineligible' && state.busy)
     || (state.phase === 'error' && state.busy);
 
+  const blockedMessage = state.phase === 'tailoring_blocked' || state.phase === 'preparation_blocked' ? state.message : null;
+  const limit = blockedMessage === null ? null : pipelineLimit(blockedMessage, liveAttempt.updatedAt);
+  const limitNow = useNowUntil(limit?.resetAt);
+  const waitingForReset = limit?.resetAt !== undefined && limit.resetAt > limitNow;
+  // So the AI runtime page shows Claude's limit too, not only this dialog. Keyed on plain values,
+  // since `limit` is rebuilt every render.
+  const limited = limit !== null;
+  const limitResetLabel = limit?.resetLabel;
+  const limitResetAt = limit?.resetAt;
+  const limitUpdatedAt = liveAttempt.updatedAt;
+  useEffect(() => {
+    if (!limited) return;
+    const reachedAt = Date.parse(limitUpdatedAt);
+    recordProviderLimit({
+      provider: 'claude',
+      reachedAt: Number.isNaN(reachedAt) ? Date.now() : reachedAt,
+      ...(limitResetLabel ? { resetLabel: limitResetLabel } : {}),
+      ...(limitResetAt !== undefined ? { resetAt: limitResetAt } : {}),
+    });
+  }, [limited, limitResetLabel, limitResetAt, limitUpdatedAt]);
+
   // Only while the live page is handed over: the dialog below owns Escape for every other phase, and
   // the banner shown during a handoff is not a dialog.
   useEscapeToClose(() => onClose('dismissed'), closeDisabled || state.phase !== 'handoff');
@@ -527,13 +591,19 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
         {state.phase === 'tailoring_blocked' && (
           <div className="space-y-4">
-            <WarningBanner>
-              We could not tailor your CV for this job.
-            </WarningBanner>
+            {limit ? (
+              <PipelineLimitNotice info={limit} />
+            ) : (
+              <WarningBanner>
+                We could not tailor your CV for this job.
+              </WarningBanner>
+            )}
             <TechnicalDetails text={state.message.replace(TAILORING_STOPPED_PREFIX, '').trim()} label="Details" />
-            <p className="text-sm text-base-content/70">
-              Try again, or use your CV as it is.
-            </p>
+            {!limit && (
+              <p className="text-sm text-base-content/70">
+                Try again, or use your CV as it is.
+              </p>
+            )}
             <div className="flex gap-3">
               <button
                 type="button"
@@ -546,10 +616,10 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
               <button
                 type="button"
                 className="btn btn-primary flex-1"
-                disabled={state.busy}
+                disabled={state.busy || waitingForReset}
                 onClick={() => void handleTailoringRecovery('retry')}
               >
-                {state.busy ? 'Restarting…' : 'Try again'}
+                {state.busy ? 'Restarting…' : retryLabel(limit, waitingForReset, 'Try again')}
               </button>
             </div>
           </div>
@@ -557,13 +627,19 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
         {state.phase === 'preparation_blocked' && (
           <div className="space-y-4">
-            <WarningBanner>
-              {describePreparationBlocker(state.message)}
-            </WarningBanner>
+            {limit ? (
+              <PipelineLimitNotice info={limit} />
+            ) : (
+              <WarningBanner>
+                {describePreparationBlocker(state.message)}
+              </WarningBanner>
+            )}
             <TechnicalDetails text={state.message} label="Details" />
-            <p className="text-sm text-base-content/70">
-              Resume to try again, or skip this one.
-            </p>
+            {!limit && (
+              <p className="text-sm text-base-content/70">
+                Resume to try again, or skip this one.
+              </p>
+            )}
             <div className="flex flex-wrap gap-3">
               <button type="button" className="btn btn-outline flex-1" disabled={state.busy} onClick={() => void handleSkip()}>
                 Skip
@@ -577,8 +653,8 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
                   Open vacancy
                 </button>
               )}
-              <button type="button" className="btn btn-primary flex-1" disabled={state.busy} onClick={() => void handleResume()}>
-                {state.busy ? 'Resuming…' : 'Resume'}
+              <button type="button" className="btn btn-primary flex-1" disabled={state.busy || waitingForReset} onClick={() => void handleResume()}>
+                {state.busy ? 'Resuming…' : retryLabel(limit, waitingForReset, 'Resume')}
               </button>
             </div>
           </div>
