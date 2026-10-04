@@ -5,6 +5,8 @@ import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-va
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { buildSearchProfileFromCvPrompt } from '../cv/profile-bridge-prompts.js';
+import { ProviderErrorNotice } from '../cv/ProviderErrorNotice.js';
+import { classifyProviderError } from '../../provider-error.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
 import { Dialog } from '../shell/Dialog.js';
@@ -251,6 +253,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   const runFailure = run.status === 'failed' ? run.error : undefined;
   const runError = parseError ?? (runFailure ? 'Could not read your CV this time. Try again or fill the fields yourself.' : undefined);
   const runErrorDetails = parseError ? undefined : runFailure;
+  const limitFailure = !parseError && runFailure && classifyProviderError(runFailure).kind !== 'other' ? runFailure : undefined;
 
   return (
     <Dialog
@@ -341,7 +344,9 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
               </>
             )}
 
-            {runError && (
+            {limitFailure && <ProviderErrorNotice error={limitFailure} providerId={provider} onRetry={handleRead} />}
+
+            {runError && !limitFailure && (
               <div className="text-sm text-error" role="alert">
                 <p>{runError}</p>
                 {runErrorDetails && (

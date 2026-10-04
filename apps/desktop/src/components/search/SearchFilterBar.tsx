@@ -113,10 +113,10 @@ export function SearchFilterBar({
   }
 
   return (
-    <div className="flex-none border-b border-base-300 pb-3">
+    <div className="flex-none border-b border-base-300 pb-3 short:pb-2">
       <div className="flex flex-wrap items-end gap-2">
-        <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs font-medium text-base-content/70 md:max-w-96">
-          Role or keywords
+        <label className="flex min-w-52 flex-1 flex-col gap-1 short:min-w-40 text-xs font-medium text-base-content/70 md:max-w-96">
+          <span className="short:sr-only">Role or keywords</span>
           <input
             className="input input-sm w-full text-sm font-normal text-base-content"
             type="text"
@@ -131,7 +131,7 @@ export function SearchFilterBar({
         </label>
 
         <select
-          className="select select-sm w-48"
+          className="select select-sm w-48 short:w-36"
           aria-label="Country"
           value={filters.country}
           onChange={(event) => onLocationChange(event.target.value)}
@@ -259,7 +259,7 @@ export function SearchFilterBar({
         </p>
       )}
 
-      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5 short:mt-1.5">
         <select
           className="select select-xs w-36"
           aria-label="Posted within"

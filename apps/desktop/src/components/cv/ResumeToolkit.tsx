@@ -267,6 +267,8 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
           label={detail.output}
           idleHint={`No ${detail.label.replace(/^[A-Z](?![A-Z])/, (c) => c.toLowerCase())} yet.`}
           busyLabel={detail.busy}
+          providerId={provider ?? 'claude'}
+          onRetry={handleRun}
         />
         </TabPanel>
       </div>

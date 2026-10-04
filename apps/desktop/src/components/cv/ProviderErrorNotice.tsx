@@ -70,7 +70,19 @@ export function ProviderErrorNotice({ error, providerId, onRetry, className }: P
   }, [info.resetAt]);
 
   if (info.kind === 'other') {
-    return <ErrorBanner {...(className ? { className } : {})}>{error}</ErrorBanner>;
+    return (
+      <ErrorBanner
+        {...(className ? { className } : {})}
+        details={info.details}
+        action={onRetry && (
+          <button type="button" className="btn btn-outline btn-xs" onClick={onRetry}>
+            Try again
+          </button>
+        )}
+      >
+        {label} could not finish this step.
+      </ErrorBanner>
+    );
   }
 
   const details = (

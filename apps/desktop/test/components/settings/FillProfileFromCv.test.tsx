@@ -11,12 +11,13 @@ import {
   SearchProfileSection,
   type SearchProfileSectionProps,
 } from '../../../src/components/settings/SearchProfileSection.js';
-import { installBridges } from '../../cv-bridges.js';
+import { CLAUDE_INSTALLED, installBridges } from '../../cv-bridges.js';
 import {
   DEFAULT_CANDIDATE_PROFILE,
   installVacancyRadarBridge,
   installWorkspaceBridge,
 } from '../../workspace-bridge.js';
+import { resetProviderLimitsForTest, setProviderOverride } from '../../../src/provider-limits.js';
 
 const CV: CvDocumentRecord = {
   id: 'cv-1',
@@ -94,6 +95,9 @@ async function runExtraction(bridges: ReturnType<typeof installBridges>, raw: st
   bridges.emit('sess-cv-1', { type: 'assistant.message', text: raw });
   bridges.emit('sess-cv-1', { type: 'session.completed' });
 }
+
+const CODEX_READY = { ...CLAUDE_INSTALLED, id: 'codex', name: 'Codex' } as typeof CLAUDE_INSTALLED;
+const LIMIT = "You've hit your session limit, resets 11:59pm (Europe/Amsterdam)";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -461,4 +465,22 @@ describe('SearchProfileSection: filling from a CV merges into the profile', () =
     expect(screen.getByLabelText('Name')).toHaveValue('Jane Doe');
     expect(onSaved).toHaveBeenCalled();
   });
+
+  it('shows the guided limit notice with a switch action when Fill from CV hits a usage limit (#547)', async () => {
+    resetProviderLimitsForTest();
+    setProviderOverride(null);
+    const bridges = installBridges({ agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED, CODEX_READY]) } });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
+    render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Read CV' }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+    bridges.emit('sess-cv-1', { type: 'session.failed', message: LIMIT });
+
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent('usage limit until 11:59pm (Europe/Amsterdam)');
+    expect(await screen.findByRole('button', { name: 'Use Codex for now' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    setProviderOverride(null);
+  });
+
 });

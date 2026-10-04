@@ -382,15 +382,33 @@ describe('SearchPage', () => {
       expect(screen.queryByRole('button', { name: 'Back to results' })).not.toBeInTheDocument();
     });
 
-    it('folds the count and scan time into one Scan details line on a narrow page', async () => {
+    it('has no Scan details line on a narrow page', async () => {
       stubPageWidth(700);
       installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
       render(<SearchPage />);
 
-      const summary = await screen.findByText(/^Scan details: 2 vacancies, scanned/);
-      expect(summary.closest('details')).not.toHaveAttribute('open');
+      await screen.findByLabelText('Vacancy results');
+      expect(screen.queryByText(/Scan details/)).not.toBeInTheDocument();
       // The separate stats line above the list is gone, so the list gets that height.
       expect(screen.queryByText(/ · scanned /)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('detail follows the list (#562)', () => {
+    it('shows the empty state instead of a vacancy that is not on the visible page', async () => {
+      const vacancies = Array.from({ length: 30 }, (_, index) =>
+        makeWorldwideVacancy({ key: `page-vacancy-${index}`, title: `Paged Engineer ${index}` }),
+      );
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(makeWorldwideReport(vacancies)) });
+      render(<SearchPage />);
+
+      await screen.findByLabelText('Vacancy results');
+      const detail = await screen.findByLabelText('Vacancy details');
+      expect(within(detail).getAllByText(/Paged Engineer/).length).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await waitFor(() => expect(screen.queryByLabelText('Vacancy details')).not.toBeInTheDocument());
+      expect(screen.getByRole('heading', { name: 'Select a vacancy' })).toBeInTheDocument();
     });
   });
 
@@ -608,7 +626,7 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'browse_all' }));
     expect(await screen.findByText(/showing the first 5,000 jobs only/i)).toBeInTheDocument();
-    expect(screen.getByText(/browse-all cap 5,000 .* incomplete/i)).toBeInTheDocument();
+    expect(screen.queryByText('Scan details')).not.toBeInTheDocument();
   });
 
   it('states in the confirmation dialog which scan criteria browse-all ignores and which local refinements still apply (issue #399)', async () => {
@@ -868,14 +886,17 @@ describe('SearchPage', () => {
     expect(screen.queryByText(/matching the focused scan/i)).not.toBeInTheDocument();
   });
 
-  it('renders raw and focused counts supplied by the engine', async () => {
+  it('does not show the run log on the Search page (#562)', async () => {
     const report = makeWorldwideReport([makeWorldwideVacancy()]);
     report.statistics.rawRowsFetched = 12;
     report.statistics.focusedMatches = 3;
     installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
 
     render(<SearchPage />);
-    expect(await screen.findByText(/12 listings fetched, 1 unique vacancies, 3 matching the focused scan/i)).toBeInTheDocument();
+    await screen.findAllByText('Remote Frontend Engineer');
+    expect(screen.queryByText('Scan details')).not.toBeInTheDocument();
+    expect(screen.queryByText(/listings fetched/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Run /)).not.toBeInTheDocument();
   });
 
   it('does not re-fetch a large report when the window returns visible and no new report exists', async () => {
@@ -1357,19 +1378,22 @@ describe('SearchPage', () => {
     render(<SearchPage />);
 
     await waitFor(() => expect(screen.getByText(/some sources could not be checked/i)).toBeInTheDocument());
-    // Collapsed by default; the summary only appears once the toggle is opened, and the raw reason
-    // with the provider id lives in the "Scan details" disclosure rather than the default panel.
+    // Collapsed by default; the summary only appears once the toggle is opened. The raw reason with
+    // the provider id is not shown at all, only copied through "Copy diagnostics" (#562).
     expect(screen.queryByText(/returned partial or no results/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /some sources could not be checked/i }));
     expect(screen.getByText('1 source returned partial or no results.')).toBeInTheDocument();
     expect(screen.getByText('1 source stopped early.')).toBeInTheDocument();
     expect(screen.getByText('Workable')).toBeInTheDocument();
     expect(screen.queryByText(/Results from the other/i)).not.toBeInTheDocument();
-    expect(screen.getByText(`Workable (workable_global:all-customers, partial): ${warning}`)).not.toBeVisible();
-    expect(screen.getByText(/^Run ww-run-1/)).not.toBeVisible();
-    fireEvent.click(screen.getByText('Scan details'));
-    expect(screen.getByText(/^Run ww-run-1/)).toBeVisible();
-    expect(screen.getByText(`Workable (workable_global:all-customers, partial): ${warning}`)).toBeVisible();
+    expect(screen.queryByText(/workable_global:all-customers/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Run ww-run-1/)).not.toBeInTheDocument();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0]![0]).toContain(`Workable (workable_global:all-customers, partial): ${warning}`);
+    expect(writeText.mock.calls[0]![0]).toContain('Run ww-run-1');
   });
 
   it('groups failed, stopped and not-set-up sources and only claims the rest are complete when they are', async () => {
@@ -1415,7 +1439,7 @@ describe('SearchPage', () => {
     expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the match count with the applied query and scan time, and keeps raw counts in the details', async () => {
+  it('shows the match count with the applied query and scan time, and no run log', async () => {
     const report = makeWorldwideReport([makeWorldwideVacancy()]);
     report.statistics.rawRowsFetched = 12;
     report.statistics.focusedMatches = 3;
@@ -1432,7 +1456,7 @@ describe('SearchPage', () => {
     const time = new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     expect(await screen.findByText(`1 vacancy match 'Frontend Engineer' · scanned ${time}`)).toBeInTheDocument();
     expect(bridge.runScan).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/12 listings fetched, 1 unique vacancies, 3 matching the focused scan/i)).not.toBeVisible();
+    expect(screen.queryByText(/listings fetched/i)).not.toBeInTheDocument();
   });
 
   it('reports the missing verification as absent for a vacancy with no sponsor match', async () => {
