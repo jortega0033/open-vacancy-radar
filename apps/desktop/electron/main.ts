@@ -318,6 +318,7 @@ let vacancyScanLock: ScanLock | undefined;
 /** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
 let vacancyEngineFailure: VacancyEngineFailure | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
+let lastVacancyScanAt: string | undefined;
 
 /**
  * Guards the vacancy scan against overlapping with itself. See electron/scan-guard.ts for why the
@@ -2692,6 +2693,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         if (scan.controller.signal.aborted) throw new ScanCancelledError();
         const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
           signal: scan.controller.signal,
+          preserveNonEmptyLatest: true,
           ...(request.mode === 'query'
             ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
             : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
@@ -2717,6 +2719,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         });
         // A scan with no matches must not displace the last report that had some (#561): saved jobs
         // and prepare still resolve rows against it, and the renderer keeps showing it.
+        lastVacancyScanAt = result.report.generatedAt;
         if (result.report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
           latestVacancyReport = result.report;
         }
@@ -2807,7 +2810,7 @@ const BACKGROUND_SCAN_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 function scheduleBackgroundScanTick(): void {
   setInterval(() => {
     if (!autoScanEnabled) return;
-    if (!shouldRunScheduledScan(latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
+    if (!shouldRunScheduledScan(lastVacancyScanAt ?? latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
     void candidateProfilePath()
       .then((path) => loadCandidateProfile(path))
       .then((profile) => {
