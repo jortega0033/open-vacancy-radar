@@ -10,6 +10,12 @@ describe('classifyProviderError (#461)', () => {
     expect(info.resetLabel).toBe('12:10pm (Europe/Amsterdam)');
   });
 
+  it('drops a sentence-ending dot after the time so "until X." never doubles it', () => {
+    const info = classifyProviderError("You've hit your session limit · resets 11:59pm.", now);
+    expect(info.resetLabel).toBe('11:59pm');
+    expect(info.resetAt).toBe(new Date(2026, 9, 3, 23, 59).getTime());
+  });
+
   it('places a reset time only when the zone is this machine\'s or unnamed', () => {
     const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const same = classifyProviderError(`usage limit reached, resets 12:10pm (${local})`, now);
