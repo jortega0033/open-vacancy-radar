@@ -227,7 +227,13 @@ export function VacancyDetail({
       if (!heading) return;
       heading.tabIndex = -1;
       heading.focus({ preventScroll: true });
-      heading.scrollIntoView?.({ block: 'start' });
+      // Scroll only the details scroller: scrollIntoView would also scroll the app shell (#550).
+      const scroller = scrollRef.current;
+      if (scroller) {
+        const offset =
+          heading.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        scroller.scrollTop += offset;
+      }
       return;
     }
     const before = openedFrom.current;

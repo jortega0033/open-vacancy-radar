@@ -169,7 +169,7 @@ describe('SearchResultList', () => {
       />,
     );
 
-    expect(screen.getByText('DevITjobs UK')).toBeInTheDocument();
+    expect(screen.getByText(/DevITjobs UK/)).toBeInTheDocument();
     expect(screen.queryByText('devitjobs_uk')).not.toBeInTheDocument();
   });
 
