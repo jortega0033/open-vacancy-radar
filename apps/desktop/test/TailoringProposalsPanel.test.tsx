@@ -132,7 +132,8 @@ describe('TailoringProposalsPanel (#421)', () => {
     render(<TailoringProposalsPanel cvId="cv-1" vacancy={TEST_VACANCY} sourceCv={SOURCE} />);
     await screen.findByText(/new requirement/i);
     fireEvent.click(screen.getByRole('button', { name: /^accept$/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/case has changed/i);
+    // #564: the internal revision wording is never shown; the candidate is told to try again.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your last change did not save. Try again.');
     expect(screen.getByText(/new requirement/i)).toBeInTheDocument();
   });
 });

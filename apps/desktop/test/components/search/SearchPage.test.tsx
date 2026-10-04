@@ -2397,6 +2397,36 @@ describe('SearchPage live announcements (issue #456)', () => {
     expect(screen.queryByText('No vacancies found')).not.toBeInTheDocument();
   });
 
+  it('issue #577: after a restart the kept report is shown with the zero-match notice', async () => {
+    const kept = makeWorldwideReport([makeWorldwideVacancy({ key: 'old-1', title: 'Earlier Frontend Role' })]);
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(kept),
+      getReportSummary: vi.fn().mockResolvedValue({
+        runId: kept.runId,
+        generatedAt: kept.generatedAt,
+        vacancyCount: 1,
+        keptAfterZeroMatch: { checked: 13_310 },
+      }),
+    });
+    render(<SearchPage />);
+
+    expect((await screen.findAllByText('Earlier Frontend Role')).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/Checked 13,310 listings\. Try fewer words or a related title\./)).toBeInTheDocument();
+    expect(screen.getByText(/Your previous results are still shown/)).toBeInTheDocument();
+  });
+
+  it('issue #577: a normal start shows no zero-match notice', async () => {
+    const report = makeWorldwideReport([makeWorldwideVacancy({ key: 'old-1', title: 'Earlier Frontend Role' })]);
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(report),
+      getReportSummary: vi.fn().mockResolvedValue({ runId: report.runId, generatedAt: report.generatedAt, vacancyCount: 1 }),
+    });
+    render(<SearchPage />);
+
+    expect((await screen.findAllByText('Earlier Frontend Role')).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Your previous results are still shown/)).not.toBeInTheDocument();
+  });
+
   it('issue #561: a first zero-match scan shows the checked count in the empty state', async () => {
     const empty = makeWorldwideReport([]);
     empty.statistics.rawRowsFetched = 500;

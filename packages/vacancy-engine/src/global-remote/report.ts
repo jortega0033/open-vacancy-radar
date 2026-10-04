@@ -16,6 +16,8 @@ export type GlobalRemoteReportFiles = {
   latestHtml: string;
   latestJson: string;
   latestAudit: string;
+  /** Present only when this report has vacancies: the copy kept for a later zero-match scan. */
+  latestNonEmptyJson?: string;
   timestampedHtml: string;
   timestampedJson: string;
   timestampedAudit: string;
@@ -208,6 +210,8 @@ function safeOutputDirectory(projectRoot: string): string {
   return output;
 }
 
+const NON_EMPTY_REPORT_FILE = 'latest-nonempty.json';
+
 export async function writeGlobalRemoteReport(
   report: GlobalRemoteReport,
   projectRoot = process.cwd(),
@@ -243,6 +247,11 @@ export async function writeGlobalRemoteReport(
     [timestampedJson, `${timestampedJson}${suffix}`, json],
     [timestampedAudit, `${timestampedAudit}${suffix}`, audit],
   ];
+  // Keep the last report that had vacancies next to latest.json, so a later zero-match scan (which
+  // overwrites latest.json with an empty report) does not lose them across a restart (#577).
+  const latestNonEmptyJson = path.join(output, NON_EMPTY_REPORT_FILE);
+  const keepNonEmpty = report.discoveryAudit.length > 0 && !preserveLatest;
+  if (keepNonEmpty) latestFiles.push([latestNonEmptyJson, `${latestNonEmptyJson}${suffix}`, json]);
   const files = preserveLatest ? timestampedFiles : [...latestFiles, ...timestampedFiles];
   try {
     await Promise.all(files.map(([, temporary, contents]) => writeFile(temporary, contents, 'utf8')));
@@ -253,7 +262,15 @@ export async function writeGlobalRemoteReport(
   } finally {
     await Promise.all(files.map(([, temporary]) => rm(temporary, { force: true })));
   }
-  return { latestHtml, latestJson, latestAudit, timestampedHtml, timestampedJson, timestampedAudit };
+  return {
+    latestHtml,
+    latestJson,
+    latestAudit,
+    ...(keepNonEmpty ? { latestNonEmptyJson } : {}),
+    timestampedHtml,
+    timestampedJson,
+    timestampedAudit,
+  };
 }
 
 /**
@@ -313,4 +330,38 @@ export async function readGlobalRemoteReport(projectRoot = process.cwd()): Promi
   } catch {
     return undefined;
   }
+}
+
+export type LoadedGlobalRemoteReport = {
+  report: GlobalRemoteReport;
+  /** Set when `latest.json` had no vacancies and the kept earlier report was returned instead. */
+  keptPrevious?: { checked: number };
+};
+
+/**
+ * Like `readGlobalRemoteReport`, but when `latest.json` has zero vacancies it returns the last
+ * non-empty report kept in `latest-nonempty.json` (#577), with how many listings the empty scan
+ * checked. A missing, corrupt or empty kept file just means no fallback: the empty latest report is
+ * returned as-is.
+ */
+export async function readGlobalRemoteReportWithFallback(
+  projectRoot = process.cwd(),
+): Promise<LoadedGlobalRemoteReport | undefined> {
+  const latest = await readGlobalRemoteReport(projectRoot);
+  if (latest && latest.discoveryAudit.length > 0) return { report: latest };
+  let kept: GlobalRemoteReport | undefined;
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(safeOutputDirectory(projectRoot), NON_EMPTY_REPORT_FILE), 'utf8'),
+    ) as GlobalRemoteReport;
+    if (Array.isArray(parsed?.discoveryAudit) && parsed.discoveryAudit.length > 0) kept = parsed;
+  } catch {
+    // Missing or corrupt: no fallback.
+  }
+  if (!kept) return latest ? { report: latest } : undefined;
+  if (!latest) return { report: kept };
+  return {
+    report: kept,
+    keptPrevious: { checked: latest.statistics?.rawRowsFetched ?? latest.statistics?.discoveryListings ?? 0 },
+  };
 }

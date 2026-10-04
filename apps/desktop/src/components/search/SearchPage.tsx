@@ -412,6 +412,16 @@ export function SearchPage({
         const report = await window.vacancyRadar.getReport();
         if (cancelled || requestGeneration !== reportRequestGenerationRef.current) return;
         setWorldwideReport(report);
+        // A report kept from before a zero-match scan gets the same notice as in-session (#577).
+        if (report && report.discoveryAudit.length > 0) {
+          try {
+            const kept = (await window.vacancyRadar.getReportSummary())?.keptAfterZeroMatch;
+            if (cancelled || requestGeneration !== reportRequestGenerationRef.current) return;
+            if (kept) setZeroMatchNotice({ checked: kept.checked, keptPrevious: true });
+          } catch {
+            // The notice is optional; the report itself loaded.
+          }
+        }
         hasHydrated.current = true;
         setReportHydrated(true);
       } catch (error) {

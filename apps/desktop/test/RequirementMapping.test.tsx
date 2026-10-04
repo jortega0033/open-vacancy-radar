@@ -122,6 +122,23 @@ describe('RequirementMapping (#419)', () => {
     expect(screen.getByText(/1 job requirements? ha(?:s|ve) not been reviewed/i)).toBeInTheDocument();
   });
 
+  it('does not save a finished run again when the vacancy or CV object is replaced (#564)', async () => {
+    const bridges = installBridges();
+    const workspace = installStatefulOverlayBridge();
+    const { rerender } = render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} sourceCv={SOURCE} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /map requirements/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    emitAnswer(bridges, { requirements: [{ text: 'Angular experience', jdAnchor: QUOTE_ANGULAR }] });
+    await screen.findByText('Angular experience');
+    await waitFor(() => expect(workspace.updateCvEvidenceOverlay).toHaveBeenCalledTimes(1));
+
+    // A new scan hands down an equal but new vacancy object, and a reloaded library a new source.
+    rerender(<RequirementMapping cvId="cv-1" cv={CV} vacancy={{ ...TEST_VACANCY }} sourceCv={{ ...SOURCE }} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(workspace.updateCvEvidenceOverlay).toHaveBeenCalledTimes(1);
+  });
+
   it('turns away a proposal whose quote is not in the job description, and shows that it did', async () => {
     const bridges = installBridges();
     installStatefulOverlayBridge();
@@ -545,6 +562,17 @@ describe('RequirementMapping (#419)', () => {
       const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
       expect(lastPatch?.facts?.[0]).toMatchObject({ verification: 'candidate_confirmed_gap' });
       expect(lastPatch?.requirements?.[0]).toMatchObject({ evidenceClass: 'candidate_confirmed_gap' });
+    });
+
+    it('"I don\'t know" closes the question as a confirmed gap, with no fact, so the CV never claims it', async () => {
+      const workspace = await seedOneNeedsVerificationRequirement();
+      fireEvent.click(screen.getByRole('button', { name: /^answer$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /i don.t know$/i }));
+
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^answer$/i })).not.toBeInTheDocument());
+      const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
+      expect(lastPatch?.facts ?? []).toHaveLength(0);
+      expect(lastPatch?.requirements?.[0]).toMatchObject({ evidenceClass: 'candidate_confirmed_gap', reviewed: true, factIds: [] });
     });
 
     it('"skip" closes the form and saves nothing', async () => {
