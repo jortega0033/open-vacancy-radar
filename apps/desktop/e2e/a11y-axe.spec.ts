@@ -86,6 +86,31 @@ test.describe('axe accessibility audit (issue #501)', () => {
     });
   }
 
+  test('Saved jobs first-run hint meets contrast rules in both themes', async ({ window }) => {
+    test.setTimeout(120_000);
+    await goto(window, 'Saved jobs');
+    await window.getByRole('button', { name: /add job manually/i }).first().click();
+    const addDialog = window.getByRole('dialog', { name: /add saved job/i });
+    await addDialog.getByLabel('Role').fill('Frontend Engineer');
+    await addDialog.getByLabel('Company').fill('Example Company');
+    await addDialog.getByRole('button', { name: /^save$/i }).click();
+    await expect(addDialog).toBeHidden();
+
+    const hint = window.getByRole('note').filter({ hasText: 'Prepare application' });
+    await expect(hint).toBeVisible();
+    for (const theme of ['openvacancyradar', 'openvacancyradar-dark']) {
+      await window.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      const results = await new AxeBuilder({ page: window })
+        .setLegacyMode(true)
+        .include('[role="note"]')
+        .withTags(TAGS)
+        .analyze();
+      expect(results.violations, `${theme} first-run hint accessibility violations`).toEqual([]);
+    }
+  });
+
   test('baseline has no stale entries', () => {
     if (process.env.AXE_RECORD) {
       console.log('AXE_OBSERVED', JSON.stringify(Object.fromEntries(PAGES.map((p) => [p, [...(observed[p] ?? [])].sort()]))));

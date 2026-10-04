@@ -24,6 +24,9 @@
 
 @import 'tailwindcss';
 
+/* Short windows (the default 1000x700 app window): Search drops secondary text so rows fit (#555). */
+@custom-variant short (@media (max-height: 800px));
+
 @plugin "daisyui" {
   themes: false;
 }
@@ -376,7 +379,7 @@
   .saved-jobs-table :is(thead, tbody) tr {
     display: grid;
     grid-template-columns:
-      minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.2fr) 9.5rem 6.5rem 16.5rem;
+      minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.2fr) 9rem 10.5rem 5.5rem 16rem;
     column-gap: 0.75rem;
     align-items: start;
     padding-inline: 0.75rem;
@@ -401,6 +404,15 @@
 
   .saved-job-actions-cell {
     padding-inline: 0 !important;
+  }
+
+  /* One line, cut off with an ellipsis. The full text is in the badge title. */
+  .saved-jobs-table .saved-job-application-badge {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
@@ -469,6 +481,14 @@
  * Accessibility sweep (#455, #496). Kept in its own block so it does not collide with other
  * edits to this file.
  */
+
+/* The document never scrolls: the shell is a fixed-height frame and its panes own their scroll (#550). */
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
 
 /* Muted text floor: 60% of base-content reaches 4.5:1 on base-100 and base-200 in both themes.
    Use `text-base-content/60` in markup, or this token where a plain colour is needed. */

@@ -254,7 +254,7 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
                 <span className="truncate">{item.label}</span>
                 {attention > 0 && (
                   <span className="badge badge-warning badge-sm ml-auto font-semibold" aria-hidden="true">
-                    {attention} to review
+                    {attention}
                   </span>
                 )}
                 {count !== undefined && (
