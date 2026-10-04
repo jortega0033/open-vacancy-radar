@@ -61,7 +61,7 @@ jobs:
         run: pnpm typecheck
 
       - name: Test
-        run: pnpm --workspace-concurrency=1 test
+        run: pnpm -r --workspace-concurrency=1 --filter='./packages/*' --filter='./apps/*' run test
 
       # ADI-04. Already covered by `pnpm test` above, but run again as a named step so a provider
       # conformance regression is identifiable from the job summary alone, rather than being one
