@@ -122,6 +122,23 @@ describe('RequirementMapping (#419)', () => {
     expect(screen.getByText(/1 job requirements? ha(?:s|ve) not been reviewed/i)).toBeInTheDocument();
   });
 
+  it('does not save a finished run again when the vacancy or CV object is replaced (#564)', async () => {
+    const bridges = installBridges();
+    const workspace = installStatefulOverlayBridge();
+    const { rerender } = render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} sourceCv={SOURCE} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /map requirements/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    emitAnswer(bridges, { requirements: [{ text: 'Angular experience', jdAnchor: QUOTE_ANGULAR }] });
+    await screen.findByText('Angular experience');
+    await waitFor(() => expect(workspace.updateCvEvidenceOverlay).toHaveBeenCalledTimes(1));
+
+    // A new scan hands down an equal but new vacancy object, and a reloaded library a new source.
+    rerender(<RequirementMapping cvId="cv-1" cv={CV} vacancy={{ ...TEST_VACANCY }} sourceCv={{ ...SOURCE }} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(workspace.updateCvEvidenceOverlay).toHaveBeenCalledTimes(1);
+  });
+
   it('turns away a proposal whose quote is not in the job description, and shows that it did', async () => {
     const bridges = installBridges();
     installStatefulOverlayBridge();

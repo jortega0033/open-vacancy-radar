@@ -413,6 +413,34 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeEnabled());
     });
 
+    it('re-reads the case and tries once more when another panel saved a moment earlier (#564)', async () => {
+      const hash = await hashOf(WITH_PROJECTS);
+      const workspace = bridge(baseOverlay({ sourceCvContentHash: hash }));
+      let calls = 0;
+      vi.mocked(workspace.approveCvProjectSelection).mockImplementation(async (_id: string, expected: string) => {
+        calls += 1;
+        // The first attempt carries the revision read before a sibling save; the case is at 2 now.
+        if (calls === 1) throw new Error(`Error invoking remote method 'x': CvEvidenceOverlayRevisionConflictError: case has changed since it was last read (current revision: 2)`);
+        return { ...baseOverlay({ sourceCvContentHash: hash, caseRevision: String(Number(expected) + 1) }), projectSelection: { projectIds: ['project-1'], maxProjects: 1, approvedAt: '2026-10-01T00:00:00.000Z' } };
+      });
+      render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={WITH_PROJECTS} />);
+      fireEvent.click(await screen.findByRole('button', { name: /approve these projects/i }));
+      expect(await screen.findByRole('button', { name: /projects approved/i })).toBeDisabled();
+      expect(workspace.approveCvProjectSelection).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText(/current revision/i)).not.toBeInTheDocument();
+    });
+
+    it('shows plain words, never the revision, when the retry also fails (#564)', async () => {
+      const hash = await hashOf(WITH_PROJECTS);
+      const workspace = bridge(baseOverlay({ sourceCvContentHash: hash }));
+      vi.mocked(workspace.approveCvProjectSelection).mockRejectedValue(new Error('case has changed since it was last read (current revision: 44)'));
+      render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={WITH_PROJECTS} />);
+      fireEvent.click(await screen.findByRole('button', { name: /approve these projects/i }));
+      expect(await screen.findByText('Your last change did not save. Try again.')).toBeInTheDocument();
+      expect(screen.queryByText(/current revision/i)).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole('button', { name: /approve these projects/i })).toBeEnabled());
+    });
+
     it('says when the selection changed after it was approved', async () => {
       const hash = await hashOf(WITH_PROJECTS);
       bridge(baseOverlay({ sourceCvContentHash: hash, projectSelection: { projectIds: ['project-2'], maxProjects: 0, approvedAt: '2026-10-01T00:00:00.000Z' } }));
