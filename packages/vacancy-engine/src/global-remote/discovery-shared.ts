@@ -66,7 +66,30 @@ export function locations(value: unknown, emptyFallback = 'Worldwide'): string {
   return names.length === 0 ? emptyFallback : names.join(', ');
 }
 
-const MARKUP_PATTERN = /<\/?[a-z][^>]*>|&(?:[a-z]+|#\d+|#x[0-9a-f]+);/iu;
+function hasMarkup(value: string): boolean {
+  const isLetter = (character: string | undefined): boolean => {
+    if (!character) return false;
+    const code = character.toLowerCase().charCodeAt(0);
+    return code >= 97 && code <= 122;
+  };
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '<') {
+      const next = value[index + 1] === '/' ? value[index + 2] : value[index + 1];
+      if (isLetter(next)) return true;
+    }
+    if (character === '&') {
+      const next = value[index + 1];
+      if (next === '#' || isLetter(next)) {
+        for (let end = index + 2; end <= index + 32 && end < value.length; end += 1) {
+          if (value[end] === ';') return true;
+          if (value[end] === ' ' || value[end] === '&') break;
+        }
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * Some sources (Remote First Jobs, Remote OK) deliver the description as HTML. Convert it once here
@@ -77,7 +100,7 @@ const MARKUP_PATTERN = /<\/?[a-z][^>]*>|&(?:[a-z]+|#\d+|#x[0-9a-f]+);/iu;
 export function plainDescription(
   description: string | null | undefined,
 ): string | null | undefined {
-  if (typeof description !== 'string' || !MARKUP_PATTERN.test(description)) return description;
+  if (typeof description !== 'string' || !hasMarkup(description)) return description;
   return htmlToText(description.replace(/<li\b[^>]*>/giu, '<li>- ')).replace(/\n{2,}(?=- )/gu, '\n');
 }
 
