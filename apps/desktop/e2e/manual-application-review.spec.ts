@@ -75,10 +75,12 @@ test('Search opens a compact manual swipe review with equivalent controls', asyn
   const userDataDir = await mkdtemp(join(tmpdir(), 'ovr-manual-review-'));
   const vacancyEngineDataRoot = await mkdtemp(join(tmpdir(), 'ovr-manual-review-engine-'));
   const reportDirectory = join(vacancyEngineDataRoot, 'reports', 'global-remote');
+  const artifactPath = join(userDataDir, 'Northstar-Frontend-CV.pdf');
 
   try {
     await mkdir(reportDirectory, { recursive: true });
     await writeFile(join(reportDirectory, 'latest.json'), JSON.stringify(REPORT), 'utf8');
+    await writeFile(artifactPath, '%PDF-1.4', 'utf8');
 
     const seeded = createWorkspaceDb(userDataDir);
     try {
@@ -108,6 +110,7 @@ test('Search opens a compact manual swipe review with equivalent controls', asyn
         mimeType: 'application/pdf',
         byteSize: 128,
         contentHash: 'artifact-content-hash',
+        storagePath: artifactPath,
       });
     } finally {
       seeded.close();
@@ -135,6 +138,22 @@ test('Search opens a compact manual swipe review with equivalent controls', asyn
       await expect(skipButton).toBeEnabled();
       await expect(continueButton).toBeEnabled();
       await expect(dialog.getByText('Submit', { exact: true })).toHaveCount(0);
+
+      // A real click on Review passes through the card's swipe handlers (#565). The swipe's pointer
+      // capture must not swallow it, so the document reaches the system viewer.
+      await electronApp.evaluate(({ shell }) => {
+        const record = globalThis as unknown as { __opened: string[] };
+        record.__opened = [];
+        shell.openPath = async (path: string) => {
+          record.__opened.push(path);
+          return '';
+        };
+      });
+      await dialog.getByRole('button', { name: 'Review', exact: true }).click();
+      await expect
+        .poll(() => electronApp.evaluate(() => (globalThis as unknown as { __opened: string[] }).__opened))
+        .toEqual([artifactPath]);
+      await expect(card).toBeVisible();
 
       for (const bounds of [
         { width: 1200, height: 800 },

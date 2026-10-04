@@ -107,6 +107,26 @@ describe('ManualApplicationReviewCard', () => {
     expect(screen.queryByText('resume.pdf')).not.toBeInTheDocument();
   });
 
+  it('does not start a swipe from a press on a button inside the card (#565)', () => {
+    const actions = renderCard();
+    const review = screen.getByRole('button', { name: 'Review' });
+    const card = screen.getByTestId('manual-application-swipe-card');
+    const capture = vi.fn();
+    card.setPointerCapture = capture;
+
+    function pointer(target: Element, type: string, clientX: number) {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, { clientX: { value: clientX }, pointerId: { value: 7 } });
+      fireEvent(target, event);
+    }
+
+    pointer(review, 'pointerdown', 100);
+    pointer(card, 'pointermove', 260);
+    pointer(card, 'pointerup', 260);
+    expect(capture).not.toHaveBeenCalled();
+    expect(actions.onContinue).not.toHaveBeenCalled();
+  });
+
   it('maps right and left drags to the same visible decisions', () => {
     const actions = renderCard();
     const card = screen.getByText('You send this one yourself. Your documents are ready.').closest('div[class*="select-none"]');
