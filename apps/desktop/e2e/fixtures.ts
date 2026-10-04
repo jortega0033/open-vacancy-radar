@@ -64,7 +64,7 @@ export const test = base.extend<Fixtures>({
     const app = await launchApp(userDataDir, { vacancyEngineDataRoot });
     await use(app);
     await app.close();
-    rmSync(userDataDir, { recursive: true, force: true });
+    rmSync(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   },
 
   window: async ({ electronApp }, use) => {
