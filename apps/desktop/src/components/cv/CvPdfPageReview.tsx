@@ -200,6 +200,9 @@ export function CvPdfPageReview({ overlayId, artifact, onOverlayChange }: CvPdfP
             className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto overflow-x-hidden rounded-box border border-base-300 p-2"
             role="region"
             aria-label="PDF pages"
+            // A scrollable region must be focusable so keyboard users can scroll it (WCAG 2.1.1).
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0}
           >
             {Array.from({ length: pageCount }, (_unused, index) => (
               <ReviewPage key={index + 1} review={review} pageNumber={index + 1} onDrawn={onDrawn} onFailed={onFailed} />
