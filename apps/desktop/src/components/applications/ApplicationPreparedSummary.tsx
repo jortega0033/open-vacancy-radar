@@ -232,6 +232,7 @@ function AwaitingAnswerRow({ field, fieldIndex, fieldRef, savedAnswer, onConfirm
                   checked={saveForFuture}
                   onChange={(event) => setSaveForFuture(event.target.checked)}
                   disabled={busy}
+                  aria-label="Save for future applications"
                 />
                 Save for future applications
               </label>

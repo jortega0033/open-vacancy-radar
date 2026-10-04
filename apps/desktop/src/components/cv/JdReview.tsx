@@ -242,6 +242,7 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
               className="checkbox checkbox-sm mt-0.5"
               checked={overlay.jdConfirmedComplete}
               onChange={(event) => void handleConfirm(event.currentTarget.checked)}
+              aria-label="I read the whole job description and it is complete as it stands"
             />
             <span>I read the whole job description and it is complete as it stands.</span>
           </label>
@@ -291,6 +292,7 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
               className="textarea min-h-40 w-full text-sm"
               value={draft}
               onChange={(event) => setDraft(event.currentTarget.value)}
+              aria-label="Job description text"
             />
             <label className="block text-sm font-medium" htmlFor="jd-review-requisition">
               Requisition or reference number (optional)
@@ -301,6 +303,7 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
               className="input input-sm w-full"
               value={draftRequisition}
               onChange={(event) => setDraftRequisition(event.currentTarget.value)}
+              aria-label="Requisition or reference number"
             />
             <div className="flex gap-2">
               <button
