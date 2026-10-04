@@ -897,7 +897,13 @@ export async function attachLetterToAttempt(
   attemptId: string,
 ): Promise<AttachLetterResult> {
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
-  if (attempt.checkpoint !== 'needs_user' || attempt.submittedAt !== null || !attempt.vacancyKey) {
+  // Only an attempt stopped on its cover letter. `needs_user` also covers tailoring failures, page
+  // problems and the like, whose detail must not be replaced; and once a letter is attached the
+  // detail no longer names a letter blocker, so a second save does not stage it again.
+  const waitingOnLetter =
+    attempt.checkpointDetail.includes('Cover letter blocker:') ||
+    attempt.checkpointDetail.startsWith('Automatic cover letter preparation stopped:');
+  if (attempt.checkpoint !== 'needs_user' || attempt.submittedAt !== null || !attempt.vacancyKey || !waitingOnLetter) {
     return { ok: false, attemptId, detail: 'this application is not waiting on a letter' };
   }
   const letter = workspace

@@ -1020,12 +1020,24 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(attempt.checkpoint).toBe('needs_user');
     expect(attempt.checkpointDetail).toContain('Your application documents are ready.');
     expect(attempt.checkpointDetail).not.toMatch(/cover letter/iu);
+
+    // A second save does not stage the letter again: the blocker is gone.
+    await expect(pipeline.attachLetterToAttempt(deps, attemptId)).resolves.toMatchObject({ ok: false });
+    expect(workspace.listApplicationArtifacts(db, attemptId)).toHaveLength(2);
   });
 
   it('refuses to link a letter to an attempt that is not waiting on one (#552)', async () => {
     const attemptId = await prepareOneApplication();
     workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'ready', checkpointDetail: '' });
     await expect(pipeline.attachLetterToAttempt(deps, attemptId)).resolves.toMatchObject({ ok: false });
+  });
+
+  it('never replaces a different needs-user blocker with a letter (#552)', async () => {
+    const attemptId = await prepareOneApplication();
+    const detail = 'Automatic CV tailoring stopped: the session failed';
+    workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: detail });
+    await expect(pipeline.attachLetterToAttempt(deps, attemptId)).resolves.toMatchObject({ ok: false });
+    expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(detail);
   });
 
   it('warns at start and never calls the CV ready when the profile has no skills (#521)', async () => {
