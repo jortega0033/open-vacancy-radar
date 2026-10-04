@@ -27,7 +27,7 @@ export interface ErrorBannerProps {
  */
 export function ErrorBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel, details, detailsLabel = 'Details' }: ErrorBannerProps) {
   return (
-    <div className={['alert', 'alert-error', 'alert-soft', 'text-sm', className].filter(Boolean).join(' ')} role={role} aria-label={ariaLabel}>
+    <div className={['alert', 'alert-error', 'alert-soft', 'text-sm', 'flex flex-wrap items-start gap-3', className].filter(Boolean).join(' ')} role={role} aria-label={ariaLabel}>
       {details ? (
         <div className="min-w-0 flex-1">
           <span>{children}</span>
@@ -39,7 +39,7 @@ export function ErrorBanner({ children, className, action, role = 'alert', 'aria
       ) : (
         <span>{children}</span>
       )}
-      {action}
+      {action && <div className="flex flex-none flex-wrap items-center gap-2">{action}</div>}
     </div>
   );
 }

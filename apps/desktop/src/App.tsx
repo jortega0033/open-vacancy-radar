@@ -418,7 +418,7 @@ export function App() {
   return (
     <LiveAnnouncerProvider>
     <SupportPromptProvider page={nav} welcomeOpen={showWelcome}>
-    <div className="flex h-screen overflow-hidden font-sans text-base text-base-content">
+    <div className="flex h-screen overflow-clip font-sans text-base text-base-content">
       <AppSidebar
         active={nav}
         onNavigate={handleNavigate}

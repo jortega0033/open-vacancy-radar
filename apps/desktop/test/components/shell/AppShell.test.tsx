@@ -107,7 +107,9 @@ describe('AppSidebar', () => {
   it('shows the review and scheduled-send count on Applications, named for assistive tech (#445)', () => {
     render(<AppSidebar {...BASE} counts={{ ...BASE.counts, needsReview: 2, scheduledSubmissions: 1 }} />);
     const button = screen.getByRole('button', { name: 'Applications, 3 to review' });
-    expect(button).toHaveTextContent('3 to review');
+    // The badge shows only the count so it never wraps; the full wording is the accessible name and tooltip.
+    expect(button).toHaveAttribute('title', 'Applications, 3 to review');
+    expect(button).toHaveTextContent('3');
     // No other row picks up the review badge.
     expect(screen.getByRole('button', { name: 'Saved jobs' })).not.toHaveTextContent('to review');
   });
