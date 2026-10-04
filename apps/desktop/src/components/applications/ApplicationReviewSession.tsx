@@ -10,7 +10,7 @@ import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
 import { WarningBanner } from '../shell/index.js';
 import { classifyProviderError, type ProviderErrorInfo } from '../../provider-error.js';
-import { recordProviderLimit } from '../../provider-limits.js';
+import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
 import {
   alreadySentFailure,
   describeSubmitRefusal,
@@ -78,10 +78,24 @@ function TechnicalDetails({ text, label }: { text: string; label: string }) {
  * (`applicationPipelineDeps` in `main.ts`), so a limit there is Claude's whatever tool the person
  * picked. The reset time is placed relative to when the attempt last changed, not to now, so a
  * stored message read hours later does not move the reset into the future.
+ *
+ * Only the text the pipeline wrote after one of its provider-run markers is classified, never the
+ * whole checkpoint detail, so a blocker about the form or the page that happens to mention "429"
+ * or "rate limit" is not mistaken for Claude's limit.
  */
+const PROVIDER_FAILURE_MARKERS = [
+  TAILORING_STOPPED_PREFIX,
+  // `application-pipeline.ts`: the cover letter and field-map generation runs.
+  'automatic cover letter generation stopped:',
+  'working out what goes in each field did not finish:',
+] as const;
+
 function pipelineLimit(message: string, updatedAt: string): ProviderErrorInfo | null {
+  const marker = PROVIDER_FAILURE_MARKERS.find((candidate) => message.includes(candidate));
+  if (!marker) return null;
+  const providerText = message.slice(message.indexOf(marker) + marker.length);
   const when = Date.parse(updatedAt);
-  const info = classifyProviderError(message, Number.isNaN(when) ? new Date() : new Date(when));
+  const info = classifyProviderError(providerText, Number.isNaN(when) ? new Date() : new Date(when));
   return info.kind === 'usage_limit' ? info : null;
 }
 
@@ -89,16 +103,28 @@ function formatClock(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-/** Re-renders every 30 seconds while a reset time is still ahead, so Try again unlocks on time. */
-function useNowUntil(resetAt: number | undefined): number {
-  const [now, setNow] = useState(() => Date.now());
+/** Longest single wait between re-checks, so a sleeping laptop or a clock change is caught soon. */
+const RESET_RECHECK_MAX_MS = 60_000;
+
+/**
+ * Whether `resetAt` is still ahead, read from the clock at render time (never a value cached at
+ * mount, so a new attempt with a long-past reset is unlocked at once). While it is ahead, one timer
+ * re-renders just after the reset, re-armed in steps of at most a minute, and none runs after.
+ */
+function useWaitingForReset(resetAt: number | undefined): boolean {
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (resetAt === undefined || resetAt <= Date.now()) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, [resetAt]);
-  return now;
+    if (resetAt === undefined) return;
+    const remaining = resetAt - Date.now();
+    if (remaining <= 0) return;
+    const timer = window.setTimeout(() => setTick((value) => value + 1), Math.min(remaining + 100, RESET_RECHECK_MAX_MS));
+    return () => window.clearTimeout(timer);
+  }, [resetAt, tick]);
+  return resetAt !== undefined && resetAt > Date.now();
 }
+
+/** A limit with no reset time is not recorded once it is older than Claude's usage window. */
+const UNTIMED_LIMIT_MAX_AGE_MS = 5 * 60 * 60 * 1000;
 
 function PipelineLimitNotice({ info }: { info: ProviderErrorInfo }) {
   return (
@@ -486,20 +512,25 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
   const blockedMessage = state.phase === 'tailoring_blocked' || state.phase === 'preparation_blocked' ? state.message : null;
   const limit = blockedMessage === null ? null : pipelineLimit(blockedMessage, liveAttempt.updatedAt);
-  const limitNow = useNowUntil(limit?.resetAt);
-  const waitingForReset = limit?.resetAt !== undefined && limit.resetAt > limitNow;
+  const waitingForReset = useWaitingForReset(limit?.resetAt);
   // So the AI runtime page shows Claude's limit too, not only this dialog. Keyed on plain values,
-  // since `limit` is rebuilt every render.
+  // since `limit` is rebuilt every render. An old attempt never overrides a newer limit, and a limit
+  // that has already passed is not recorded at all.
   const limited = limit !== null;
   const limitResetLabel = limit?.resetLabel;
   const limitResetAt = limit?.resetAt;
   const limitUpdatedAt = liveAttempt.updatedAt;
   useEffect(() => {
     if (!limited) return;
-    const reachedAt = Date.parse(limitUpdatedAt);
+    const now = Date.now();
+    const parsed = Date.parse(limitUpdatedAt);
+    const reachedAt = Number.isNaN(parsed) ? now : parsed;
+    if (limitResetAt !== undefined ? limitResetAt <= now : now - reachedAt > UNTIMED_LIMIT_MAX_AGE_MS) return;
+    const existing = activeProviderLimit('claude', now);
+    if (existing && existing.reachedAt >= reachedAt) return;
     recordProviderLimit({
       provider: 'claude',
-      reachedAt: Number.isNaN(reachedAt) ? Date.now() : reachedAt,
+      reachedAt,
       ...(limitResetLabel ? { resetLabel: limitResetLabel } : {}),
       ...(limitResetAt !== undefined ? { resetAt: limitResetAt } : {}),
     });
