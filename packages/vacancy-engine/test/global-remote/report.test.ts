@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readGlobalRemoteReport, writeGlobalRemoteReport } from '../../src/global-remote/report.js';
+import { discoveryAudit } from '../../src/global-remote/discovery-shared.js';
 import type { GlobalRemoteReport } from '../../src/global-remote/models.js';
 
 /**
@@ -74,6 +75,35 @@ describe('readGlobalRemoteReport', () => {
 
     const read = await readGlobalRemoteReport(projectRoot);
     expect(read).toEqual(report);
+  });
+
+  it('keeps a previous non-empty latest report after an empty desktop scan', async () => {
+    const previous = sampleReport();
+    previous.discoveryAudit = [
+      discoveryAudit({
+        key: 'remote_first_jobs:1',
+        provider: 'remote_first_jobs',
+        company: 'Example',
+        title: 'Earlier Role',
+        url: 'https://example.com/jobs/1',
+        location: 'Remote',
+        employmentType: null,
+        currency: null,
+        salaryPeriod: null,
+        advertisedMinimum: null,
+        raw: { id: '1' },
+        minimumAnnualBaseUsd: null,
+      }),
+    ];
+    await writeGlobalRemoteReport(previous, projectRoot);
+
+    const empty = { ...sampleReport(), runId: 'run-2', generatedAt: '2026-01-02T00:00:00.000Z' };
+    const files = await writeGlobalRemoteReport(empty, projectRoot, {
+      preserveNonEmptyLatest: true,
+    });
+
+    expect(JSON.parse(await readFile(files.timestampedJson, 'utf8'))).toEqual(empty);
+    expect(await readGlobalRemoteReport(projectRoot)).toEqual(previous);
   });
 
   it('writes browse-all cap state into the HTML report', async () => {

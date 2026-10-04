@@ -2238,4 +2238,38 @@ describe('SearchPage live announcements (issue #456)', () => {
     await waitFor(() => expect(announcer()).toHaveTextContent('The scan stopped with an error'));
     expect(announcer()).not.toHaveTextContent(/finished/i);
   });
+
+  it('issue #561: a zero-match scan keeps the previous report and says what it checked', async () => {
+    const previous = makeWorldwideReport([makeWorldwideVacancy({ key: 'old-1', title: 'Earlier Frontend Role' })]);
+    const empty = makeWorldwideReport([]);
+    empty.statistics.rawRowsFetched = 13_310;
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(previous),
+      runScan: vi.fn().mockResolvedValue(empty),
+    });
+    render(<SearchPage />);
+
+    expect((await screen.findAllByText('Earlier Frontend Role')).length).toBeGreaterThan(0);
+    enterSearchQuery('Senior Frontend Developer React TypeScript');
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeEnabled());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+
+    expect(await screen.findByText(/Checked 13,310 listings\. Try fewer words or a related title\./)).toBeInTheDocument();
+    expect(screen.getByText(/Your previous results are still shown/)).toBeInTheDocument();
+    expect(screen.getAllByText('Earlier Frontend Role').length).toBeGreaterThan(0);
+    expect(screen.queryByText('No vacancies found')).not.toBeInTheDocument();
+  });
+
+  it('issue #561: a first zero-match scan shows the checked count in the empty state', async () => {
+    const empty = makeWorldwideReport([]);
+    empty.statistics.rawRowsFetched = 500;
+    installAllBridges({ getReport: vi.fn().mockResolvedValue(null), runScan: vi.fn().mockResolvedValue(empty) });
+    render(<SearchPage />);
+
+    enterSearchQuery('very narrow phrase');
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Search' })[0]!).toBeEnabled());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+
+    expect(await screen.findByText(/Checked 500 listings, none matched/)).toBeInTheDocument();
+  });
 });

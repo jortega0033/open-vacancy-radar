@@ -211,9 +211,12 @@ function safeOutputDirectory(projectRoot: string): string {
 export async function writeGlobalRemoteReport(
   report: GlobalRemoteReport,
   projectRoot = process.cwd(),
+  options: { preserveNonEmptyLatest?: boolean } = {},
 ): Promise<GlobalRemoteReportFiles> {
   const output = safeOutputDirectory(projectRoot);
   await mkdir(output, { recursive: true });
+  const preserveLatest = options.preserveNonEmptyLatest && report.discoveryAudit.length === 0 &&
+    ((await readGlobalRemoteReport(projectRoot))?.discoveryAudit.length ?? 0) > 0;
   const timestamp = report.generatedAt.replaceAll(':', '-').replaceAll('.', '-');
   const latestHtml = path.join(output, 'latest.html');
   const latestJson = path.join(output, 'latest.json');
@@ -230,18 +233,23 @@ export async function writeGlobalRemoteReport(
     ...report.officialAudit.map((value) => JSON.stringify({ kind: 'official_vacancy', ...value })),
   ].join('\n').concat('\n');
   const suffix = `.tmp-${process.pid}-${randomUUID()}`;
-  const files: [string, string, string][] = [
+  const latestFiles: [string, string, string][] = [
     [latestHtml, `${latestHtml}${suffix}`, html],
     [latestJson, `${latestJson}${suffix}`, json],
     [latestAudit, `${latestAudit}${suffix}`, audit],
+  ];
+  const timestampedFiles: [string, string, string][] = [
     [timestampedHtml, `${timestampedHtml}${suffix}`, html],
     [timestampedJson, `${timestampedJson}${suffix}`, json],
     [timestampedAudit, `${timestampedAudit}${suffix}`, audit],
   ];
+  const files = preserveLatest ? timestampedFiles : [...latestFiles, ...timestampedFiles];
   try {
     await Promise.all(files.map(([, temporary, contents]) => writeFile(temporary, contents, 'utf8')));
-    await Promise.all(files.slice(3).map(([target, temporary]) => rename(temporary, target)));
-    for (const [target, temporary] of files.slice(0, 3)) await rename(temporary, target);
+    await Promise.all(timestampedFiles.map(([target, temporary]) => rename(temporary, target)));
+    if (!preserveLatest) {
+      for (const [target, temporary] of latestFiles) await rename(temporary, target);
+    }
   } finally {
     await Promise.all(files.map(([, temporary]) => rm(temporary, { force: true })));
   }
