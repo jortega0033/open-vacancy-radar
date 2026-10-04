@@ -106,7 +106,7 @@ test.describe('Letters', () => {
       await expect(markdownOption).toBeVisible();
       await markdownOption.click();
       // The confirmation names the written file (#554).
-      await expect(window.getByText('Saved letter.md.')).toBeVisible();
+      await expect(window.getByLabel('Generator').getByText('Saved letter.md.')).toBeVisible();
 
       // Keyboard path: Enter opens the menu on its first item, ArrowDown moves to the next one, and
       // Escape closes it and returns focus to the trigger.
