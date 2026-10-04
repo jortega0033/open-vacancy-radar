@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
 import { getEngineHealth } from '../../../src/engine-health.js';
+import { activeProviderLimit, recordProviderLimit, resetProviderLimitsForTest } from '../../../src/provider-limits.js';
 import { LiveAnnouncerProvider } from '../../../src/components/shell/index.js';
 import {
   SearchPage,
@@ -434,6 +435,25 @@ describe('SearchPage', () => {
       expect(screen.getByText(/usually takes 2 to 5 minutes/i)).toBeInTheDocument();
       expect(screen.getByRole('progressbar', { name: 'Scan progress' })).toHaveAttribute('value', '36');
       expect(screen.queryByText(/about ten seconds/i)).not.toBeInTheDocument();
+      resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
+    });
+
+    it('shows the AI web search step state while the scan runs (#559)', async () => {
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise((resolve) => { resolveScan = resolve; })),
+        getScanProgress: vi.fn().mockResolvedValue({
+          scanning: true, scanId: 'scan-ai', startedAt: Date.now(), aiWebSearch: 'running',
+        }),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+      expect(await screen.findByTestId('ai-web-search-step')).toHaveTextContent('AI web search: running');
       resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
     });
 
@@ -1394,6 +1414,123 @@ describe('SearchPage', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0]![0]).toContain(`Workable (workable_global:all-customers, partial): ${warning}`);
     expect(writeText.mock.calls[0]![0]).toContain('Run ww-run-1');
+  });
+
+  describe('AI web search failure notice (#559)', () => {
+    const aiSource = (error: string, completenessReason: string, status: 'error' | 'blocked' = 'error') => ({
+      id: 'ai_web_search',
+      provider: 'ai_web_search' as const,
+      url: 'https://github.com/jortega0033/open-vacancy-radar/issues/398',
+      requests: 0,
+      listings: 0,
+      status,
+      error,
+      networkAttempts: 0,
+      retries: 0,
+      complete: false,
+      completenessReason,
+      continuationCursor: null,
+    });
+
+    afterEach(() => resetProviderLimitsForTest());
+
+    it('says outright that AI web search could not start, and copies the real reason', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          makeWorldwideReport([makeWorldwideVacancy()], [
+            aiSource('Could not start the AI web discovery session: not found (daemon answered 404)', 'Incomplete: the session failed to start.'),
+          ]),
+        ),
+      });
+      render(<SearchPage />);
+
+      const notice = await screen.findByTestId('ai-web-search-notice');
+      expect(notice).toHaveTextContent('AI web search could not start, so these results are from job sites only.');
+      // Visible without opening the collapsed source list.
+      expect(screen.queryByText(/returned partial or no results/i)).not.toBeInTheDocument();
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+      fireEvent.click(within(notice).getByRole('button', { name: 'Copy diagnostics' }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      expect(writeText.mock.calls[0]![0]).toContain(
+        'AI Web Search (ai_web_search, error): Incomplete: the session failed to start. Could not start the AI web discovery session: not found (daemon answered 404)',
+      );
+    });
+
+    const limitReport = (error: string, generatedAt: string) => ({
+      ...makeWorldwideReport([makeWorldwideVacancy()], [aiSource(error, 'Incomplete: the session failed.')]),
+      generatedAt,
+    });
+
+    it('names Claude and its reset time for a fresh report, and records the limit', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(limitReport("You've hit your session limit · resets 11:59pm", new Date().toISOString())),
+      });
+      render(<SearchPage />);
+
+      expect(await screen.findByTestId('ai-web-search-notice')).toHaveTextContent(
+        'AI web search did not run: Claude has reached its usage limit until 11:59pm.',
+      );
+      await waitFor(() => expect(activeProviderLimit('claude')).toMatchObject({ resetLabel: '11:59pm' }));
+    });
+
+    it('records nothing for an old saved report whose reset has passed, and does not call the limit current', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(limitReport("You've hit your session limit · resets 10:10pm", '2026-08-29T11:00:00.000Z')),
+      });
+      render(<SearchPage />);
+
+      const notice = await screen.findByTestId('ai-web-search-notice');
+      expect(notice).toHaveTextContent('AI web search did not run in this scan: Claude was at its usage limit.');
+      expect(notice).not.toHaveTextContent(/until/);
+      expect(activeProviderLimit('claude')).toBeUndefined();
+    });
+
+    it('records nothing for a report older than five hours with no reset time', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          limitReport("You've hit your session limit", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()),
+        ),
+      });
+      render(<SearchPage />);
+
+      await screen.findByTestId('ai-web-search-notice');
+      expect(activeProviderLimit('claude')).toBeUndefined();
+    });
+
+    it('never overwrites a newer Claude limit', async () => {
+      const newer = { provider: 'claude' as const, reachedAt: Date.now(), resetLabel: 'newer', resetAt: Date.now() + 60 * 60 * 1000 };
+      recordProviderLimit(newer);
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          limitReport("You've hit your session limit · resets 11:59pm", new Date(Date.now() - 60_000).toISOString()),
+        ),
+      });
+      render(<SearchPage />);
+
+      await screen.findByTestId('ai-web-search-notice');
+      expect(activeProviderLimit('claude')).toEqual(newer);
+    });
+
+    it('names a missing sign-in', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          makeWorldwideReport([makeWorldwideVacancy()], [
+            aiSource('Claude Code is not signed in, so AI web discovery was skipped for this scan.', 'Skipped: Claude Code is not signed in.', 'blocked'),
+          ]),
+        ),
+      });
+      render(<SearchPage />);
+
+      expect(await screen.findByTestId('ai-web-search-notice')).toHaveTextContent('AI web search did not run: Claude Code is not signed in.');
+    });
+
+    it('stays away when the scan did not include AI web search', async () => {
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])) });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+      expect(screen.queryByTestId('ai-web-search-notice')).not.toBeInTheDocument();
+    });
   });
 
   it('groups failed, stopped and not-set-up sources and only claims the rest are complete when they are', async () => {

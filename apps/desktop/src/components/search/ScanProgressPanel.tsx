@@ -47,6 +47,14 @@ export function useScanStatus(active: boolean): { status: VacancyScanStatus | un
   return { status, now };
 }
 
+/** The AI web search step runs before the job sites are checked, so it gets its own line (#559). */
+const AI_WEB_SEARCH_STEP: Record<NonNullable<VacancyScanStatus['aiWebSearch']>, string> = {
+  waiting: 'AI web search: waiting',
+  running: 'AI web search: running',
+  done: 'AI web search: done',
+  failed: 'AI web search: failed',
+};
+
 export interface ScanProgressPanelProps {
   status: VacancyScanStatus | undefined;
   now: number;
@@ -77,6 +85,11 @@ export function ScanProgressPanel({ status, now, stopping, onStop }: ScanProgres
         aria-label="Scan progress"
         aria-valuetext={valueText}
       />
+      {status?.aiWebSearch && (
+        <span className="text-xs text-base-content/70" data-testid="ai-web-search-step">
+          {AI_WEB_SEARCH_STEP[status.aiWebSearch]}
+        </span>
+      )}
       <span className="text-xs text-base-content/70">
         Usually takes 2 to 5 minutes. You can keep browsing while it runs. Stopping keeps your previous report.
       </span>

@@ -270,6 +270,35 @@ describe('runAiWebDiscovery', () => {
     expect(result.sourceAudit.reasonCode).toBe('provider_unavailable');
   });
 
+  it('Claude Code installed but not signed in: blocked/provider_unavailable, no session started (#559)', async () => {
+    const client = fakeClient([{ type: 'session.completed' }]);
+    client.providers.list.mockResolvedValue([
+      { id: 'claude', name: 'Claude Code', installed: true, authenticated: 'unauthenticated', capabilities: {} },
+    ]);
+    const result = await runAiWebDiscovery(client as never, { profile: CONFIGURED_PROFILE, cwd: CWD });
+    expect(result.sourceAudit).toMatchObject({ status: 'blocked', reasonCode: 'provider_unavailable' });
+    expect(result.sourceAudit.completenessReason).toBe('Skipped: Claude Code is not signed in.');
+    expect(client.sessions.createVacancyWebDiscovery).not.toHaveBeenCalled();
+  });
+
+  it('createVacancyWebDiscovery throwing keeps the real reason and the daemon status in the result (#559)', async () => {
+    const client = fakeClient([{ type: 'session.completed' }]);
+    client.sessions.createVacancyWebDiscovery.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
+    const result = await runAiWebDiscovery(client as never, { profile: CONFIGURED_PROFILE, cwd: CWD });
+    expect(result.vacancies).toEqual([]);
+    expect(result.sourceAudit.status).toBe('error');
+    expect(result.sourceAudit.completenessReason).toBe('Incomplete: the session failed to start.');
+    expect(result.sourceAudit.error).toBe('Could not start the AI web discovery session: not found (daemon answered 404)');
+    expect(client.sessions.events).not.toHaveBeenCalled();
+  });
+
+  it('a usage-limit refusal at session start stays readable as a usage limit (#559)', async () => {
+    const client = fakeClient([{ type: 'session.completed' }]);
+    client.sessions.createVacancyWebDiscovery.mockRejectedValue(new Error("You've hit your session limit · resets 10:10pm"));
+    const result = await runAiWebDiscovery(client as never, { profile: CONFIGURED_PROFILE, cwd: CWD });
+    expect(result.sourceAudit.error).toContain("You've hit your session limit · resets 10:10pm");
+  });
+
   it('a clean completion with one valid candidate is accepted (status success)', async () => {
     const client = fakeClient([
       { type: 'assistant.message', text: `Some notes.\n${fencedJson({ candidates: [candidate()], queriesUsed: ['frontend engineer netherlands'] })}` },
