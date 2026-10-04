@@ -16,7 +16,7 @@ export {
   type GlobalRemoteScanOptions,
   type GlobalRemoteScanResult,
 } from './pipeline/global-remote.js';
-export { readGlobalRemoteReport } from './global-remote/report.js';
+export { readGlobalRemoteReport, readGlobalRemoteReportWithFallback, type LoadedGlobalRemoteReport } from './global-remote/report.js';
 export { createDatabaseBackedAtsHttpClient } from './pipeline/ats-http-client.js';
 export {
   fetchJobgetherOfferDetail,

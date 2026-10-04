@@ -95,7 +95,13 @@ export type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-e
 import type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-engine-recovery.js';
 import type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 export type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from './vacancy-scan-progress-types.js';
-export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
+export type VacancyReportSummary = {
+  runId: string;
+  generatedAt: string;
+  vacancyCount: number;
+  /** Set when the report on screen was kept from before a zero-match scan the app loaded at start. */
+  keptAfterZeroMatch?: { checked: number };
+};
 export type VacancyScanRequest =
   | string
   | {
