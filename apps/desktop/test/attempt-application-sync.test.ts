@@ -97,7 +97,13 @@ describe('attempt to Applications row (#444)', () => {
     });
     const [row] = workspace.listApplications(db);
     expect(row).toMatchObject({ status: 'applied' });
-    expect(row?.nextStep).toMatch(/^Reported by you 2026-10-03/);
+    const day = new Date('2026-10-03T09:00:00.000Z').toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+    expect(row?.nextStep).toBe(`You said you applied on ${day}. The app did not see a confirmation.`);
+    expect(row?.nextStep).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     expect(row?.attempt?.evidence).toBe('user_reported');
   });
 

@@ -12,7 +12,7 @@ describe('describeScanProgress (#459)', () => {
     expect(view.headline).toBe('Checked 4 of 11 source groups');
     expect(view.fraction).toBeCloseTo(4 / 11);
     expect(view.elapsed).toBe('1:42');
-    expect(view.vacancies).toBe('212 vacancies so far');
+    expect(view.vacancies).toBe('212 listings checked');
   });
 
   it('is indeterminate before the first event, rather than inventing a fraction', () => {
@@ -30,7 +30,7 @@ describe('describeScanProgress (#459)', () => {
     );
     expect(view.fraction).toBeNull();
     expect(view.headline).toMatch(/all 11 source groups checked/i);
-    expect(view.vacancies).toBe('1 vacancy so far');
+    expect(view.vacancies).toBe('1 listing checked');
   });
 
   it('says it is stopping, and shows no fraction, while a stop winds down', () => {

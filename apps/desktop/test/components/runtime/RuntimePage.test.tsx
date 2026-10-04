@@ -44,6 +44,20 @@ afterEach(() => {
 });
 
 describe('RuntimePage', () => {
+  it('shows a status while the AI tools load, then the cards', async () => {
+    let resolveProviders: (list: ProviderStatus[]) => void = () => {};
+    installAgentDockBridge({
+      listProviders: vi.fn().mockReturnValue(new Promise<ProviderStatus[]>((resolve) => (resolveProviders = resolve))),
+    });
+    installWorkspaceBridge();
+    render(<RuntimePage daemonState="ready" />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Checking your AI tools');
+    resolveProviders([CLAUDE, CODEX_NOT_INSTALLED]);
+    await waitFor(() => expect(screen.queryByText(/checking your ai tools/i)).not.toBeInTheDocument());
+    expect((await screen.findAllByText('Claude Code')).length).toBeGreaterThan(0);
+  });
+
   it('shows the plain-language helper notice instead of any provider content, with the raw error only under Details', () => {
     installAgentDockBridge();
     installWorkspaceBridge();

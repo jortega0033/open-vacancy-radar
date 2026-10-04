@@ -182,6 +182,7 @@ export function RuntimePage({
       </p>
 
       {daemonState === 'connecting' && <PageLoading label="Starting the AI helper…" />}
+      {daemonState === 'ready' && !providers && !providersError && <PageLoading label="Checking your AI tools…" />}
       {providersError && (
         <ErrorBanner className="mt-4" {...(providersError.details ? { details: providersError.details } : {})}>
           {providersError.message}
