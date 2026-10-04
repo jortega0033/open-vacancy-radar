@@ -22,6 +22,7 @@ export interface ManualApplicationReviewCardProps {
 }
 
 const SWIPE_THRESHOLD_PX = 120;
+const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, summary, [role="button"]';
 
 const DOCUMENT_LABEL: Record<ApplicationArtifactSummary['kind'], string> = {
   cv_pdf: 'Tailored CV',
@@ -93,7 +94,9 @@ export function ManualApplicationReviewCard({
             touchAction: 'pan-y',
           }}
           onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
-            if (busy) return;
+            // A press on a control inside the card is a click, not a drag. Capturing it would send
+            // the click to the card instead, so Review and Save copy did nothing (#565).
+            if (busy || (event.target as Element).closest?.(INTERACTIVE_SELECTOR)) return;
             originRef.current = event.clientX;
             event.currentTarget.setPointerCapture?.(event.pointerId);
           }}
