@@ -184,13 +184,8 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
               );
               const results = resultsScroller?.parentElement?.getBoundingClientRect();
               const detail = detailScroller?.getBoundingClientRect();
-              const workspace =
-                resultsScroller?.parentElement?.parentElement?.getBoundingClientRect();
               const summaryGrid =
                 detailScroller?.querySelector<HTMLElement>(':scope > div > div.grid');
-              const footer = [...document.querySelectorAll('p')]
-                .find((element) => element.textContent?.startsWith('Run e2e-search-layout'))
-                ?.parentElement?.getBoundingClientRect();
               if (!main || !controls || !resultsScroller || !results)
                 throw new Error('Search layout is incomplete');
               // Below 900px of page width the list and the details are one pane at a time (#451), so
@@ -220,7 +215,8 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
                 listScrollTop: resultsScroller.scrollTop,
                 detailScrollTop: detailScroller?.scrollTop ?? 0,
                 mainScrollTop: document.querySelector('main')?.scrollTop ?? -1,
-                footerGap: workspace && footer ? footer.top - workspace.bottom : -1,
+                // #562: the run log is not part of the Search page.
+                noRunLog: !document.body.textContent?.includes('Scan details'),
                 listOverflow: getComputedStyle(resultsScroller).overflowY,
                 detailOverflow: detailScroller ? getComputedStyle(detailScroller).overflowY : 'auto',
               };
@@ -233,7 +229,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
             expect(geometry.listScrollTop).toBeGreaterThan(0);
             if (geometry.twoPane) expect(geometry.detailScrollTop).toBeGreaterThan(0);
             expect(geometry.mainScrollTop).toBe(0);
-            expect(geometry.footerGap).toBeGreaterThanOrEqual(0);
+            expect(geometry.noRunLog).toBe(true);
             expect(geometry.listOverflow).toBe('auto');
             expect(geometry.detailOverflow).toBe('auto');
             if (geometry.twoPane && viewport.name === 'expanded-details' && !collapsed)
@@ -283,6 +279,30 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeHidden();
       await window.locator('summary', { hasText: 'Quick draft to read' }).click();
       await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeVisible();
+
+      // #550: opening the assistant must not scroll the document or the shell.
+      for (const size of [
+        { width: 1000, height: 700 },
+        { width: 1440, height: 900 },
+      ]) {
+        await electronApp.evaluate(
+          ({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds(bounds),
+          size,
+        );
+        await window.waitForTimeout(150);
+        const shell = await window.evaluate(() => {
+          const shellEl = document.querySelector('#root > div') as HTMLElement | null;
+          return {
+            docScrollTop: document.scrollingElement?.scrollTop ?? -1,
+            shellScrollTop: shellEl?.scrollTop ?? -1,
+            shellHeight: shellEl?.getBoundingClientRect().height ?? -1,
+            windowHeight: globalThis.innerHeight,
+          };
+        });
+        expect(shell.docScrollTop).toBe(0);
+        expect(shell.shellScrollTop).toBe(0);
+        expect(Math.round(shell.shellHeight)).toBe(shell.windowHeight);
+      }
 
       for (const viewport of [
         { name: 'assistant-minimum', width: 640, height: 480 },

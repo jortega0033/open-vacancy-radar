@@ -104,7 +104,12 @@ export function SavedJobsTable({
                 </select>
               </td>
               <td data-label="Application">
-                <span className={TONE_BADGE[application.tone]}>{application.label}</span>
+                <span
+                  className={`${TONE_BADGE[application.tone]} saved-job-application-badge`}
+                  title={application.label}
+                >
+                  {application.label}
+                </span>
               </td>
               <td data-label="Saved" className="text-base-content/60">
                 {formatSavedAt(job.savedAt)}

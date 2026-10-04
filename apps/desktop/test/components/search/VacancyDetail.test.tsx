@@ -310,7 +310,7 @@ describe('VacancyDetail CV assistant opening (issue #453)', () => {
     expect(screen.queryByRole('button', { name: 'Compare with my CV' })).not.toBeInTheDocument();
   });
 
-  it('scrolls the assistant heading into view and moves focus to it', () => {
+  it('focuses the assistant heading and scrolls only the details pane, never the shell (#550)', () => {
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     render(<AssistantHarness />);
@@ -319,8 +319,7 @@ describe('VacancyDetail CV assistant opening (issue #453)', () => {
 
     const heading = screen.getByRole('heading', { name: 'CV assistant' });
     expect(heading).toHaveFocus();
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
-    expect(scrollIntoView.mock.contexts[0]).toBe(heading);
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it('on close restores the earlier scroll position and returns focus to the opener, whichever control closed it', () => {
