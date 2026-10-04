@@ -177,4 +177,21 @@ describe('deriveCaseProgress (#446)', () => {
     expect(progress.next).toMatch(/^Next: /);
     expect(progress.complete).toBe(false);
   });
+
+  it('says why when a case that was approved once is no longer approved (#564)', () => {
+    const base = {
+      requirementCoverage: { status: 'complete' as const, revisionId: FIXTURE_REVISION_ID, batches: 1 },
+      requirements: [makeRequirement()],
+      facts: [makeFact()],
+      state: 'draft' as const,
+    };
+    const never = deriveCaseProgress({ overlay: overlay(base), sourceCv: REVIEWED, cvChanged: false });
+    expect(never.steps.find((step) => step.id === 'approve')?.detail).toBe('Not approved yet');
+
+    const snapshot = { renderContractVersion: 1, resume: {} as never, digest: 'd'.repeat(64), approvedAt: '2026-10-01T10:00:00.000Z', caseRevision: '1' };
+    const revoked = deriveCaseProgress({ overlay: overlay({ ...base, approvedResumeSnapshot: snapshot }), sourceCv: REVIEWED, cvChanged: false });
+    const step = revoked.steps.find((entry) => entry.id === 'approve');
+    expect(step?.state).toBe('needs_you');
+    expect(step?.detail).toBe('Changed since you approved it: approve again');
+  });
 });

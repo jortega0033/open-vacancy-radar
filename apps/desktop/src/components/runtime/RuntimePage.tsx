@@ -174,6 +174,12 @@ export function RuntimePage({
         The AI features run through Claude Code or Codex, already signed in on this computer. Your
         login details are never read or stored by this app.
       </p>
+      {/* Both are pinned to Claude in the main process (`applicationPipelineDeps` in main.ts and
+          vacancy-web-discovery.ts), whatever the default below says (#546). */}
+      <p className="mt-2 text-sm text-base-content/70" data-testid="claude-only-features">
+        Preparing an application and AI web search always use Claude Code. Everything else uses the
+        tool you pick here.
+      </p>
 
       {daemonState === 'connecting' && <PageLoading label="Starting the AI helper…" />}
       {providersError && (

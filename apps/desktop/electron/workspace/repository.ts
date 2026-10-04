@@ -839,6 +839,36 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
   });
 }
 
+/** The stored fields an approval was built on: a real change to any of them drops the approval. */
+const APPROVAL_INPUT_FIELDS = [
+  'sourceCvContentHash',
+  'jdSnapshot',
+  'jdSnapshotHash',
+  'jdComplete',
+  'jdConfirmedComplete',
+  'requirements',
+  'requirementCoverage',
+  'facts',
+  'wordingVariants',
+] as const satisfies readonly (keyof CvEvidenceOverlayRow & keyof CvEvidenceOverlayRecord)[];
+
+/** Deep equality for stored JSON values, independent of object key order. */
+function sameStoredValue(a: unknown, b: unknown): boolean {
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value !== null && typeof value === 'object') {
+      const sorted: Record<string, unknown> = {};
+      for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+        const entry = (value as Record<string, unknown>)[key];
+        if (entry !== undefined) sorted[key] = sortKeys(entry);
+      }
+      return sorted;
+    }
+    return value;
+  };
+  return JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
+}
+
 export function updateCvEvidenceOverlay(
   db: WorkspaceDb,
   id: string,
@@ -931,16 +961,12 @@ export function updateCvEvidenceOverlay(
   // approval"). `CvEvidenceOverlayPatch['state']` excludes `'candidate_approved'` at the type level
   // (#421: that transition only happens through `approveCvEvidenceOverlay` below), so this can only
   // ever move state to something else.
-  const touchesInputs =
-    values.sourceCvContentHash !== undefined ||
-    values.jdSnapshot !== undefined ||
-    values.jdSnapshotHash !== undefined ||
-    values.jdComplete !== undefined ||
-    values.jdConfirmedComplete !== undefined ||
-    values.requirements !== undefined ||
-    values.requirementCoverage !== undefined ||
-    values.facts !== undefined ||
-    values.wordingVariants !== undefined;
+  // #564: only a value that actually differs from what is stored counts. A panel that saves the same
+  // requirements, facts or text again (a re-render, a repeated save) changed nothing the approval
+  // depended on, so it must not quietly revoke it.
+  const touchesInputs = APPROVAL_INPUT_FIELDS.some(
+    (field) => set[field] !== undefined && !sameStoredValue(set[field], existing[field]),
+  );
   if (values.state !== undefined) {
     set.state = values.state;
   } else if (touchesInputs) {

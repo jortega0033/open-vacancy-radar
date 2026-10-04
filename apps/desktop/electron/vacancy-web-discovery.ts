@@ -86,6 +86,18 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * Why the daemon refused to start the session, kept whole for the scan result (#559). The client's
+ * `DaemonError` carries the HTTP status the daemon answered with; it is the only thing that tells a
+ * daemon without this route (404, e.g. an older daemon build) from a busy one (409, the
+ * active-session cap) or a crash (500), so it is appended rather than dropped.
+ */
+function sessionStartFailure(error: unknown): string {
+  const message = errorMessage(error).trim() || 'no reason given';
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? `${message} (daemon answered ${status})` : message;
+}
+
+/**
  * The ONLY slice of `CandidateProfile` this feature is allowed to put in front of the model --
  * issue #398's "bounded, minimal, non-sensitive profile projection" requirement. Everything else on
  * `CandidateProfile` (name, current role, location, salary floor, language/Dutch/relocation
@@ -330,6 +342,15 @@ export async function runAiWebDiscovery(
       'provider_unavailable',
     );
   }
+  // Only a definite "not signed in" skips the run; 'unknown' still tries, as it always has.
+  if (claudeStatus.authenticated === 'unauthenticated') {
+    return failureOutcome(
+      'blocked',
+      'Claude Code is not signed in, so AI web discovery was skipped for this scan.',
+      'Skipped: Claude Code is not signed in.',
+      'provider_unavailable',
+    );
+  }
 
   // Captured in its own const so every closure below (including `handleEvent`) sees a definitely-
   // defined client without repeated non-null assertions -- TypeScript's flow narrowing on the
@@ -345,7 +366,7 @@ export async function runAiWebDiscovery(
   } catch (error) {
     return failureOutcome(
       'error',
-      `Could not start the AI web discovery session: ${errorMessage(error)}`,
+      `Could not start the AI web discovery session: ${sessionStartFailure(error)}`,
       'Incomplete: the session failed to start.',
     );
   }

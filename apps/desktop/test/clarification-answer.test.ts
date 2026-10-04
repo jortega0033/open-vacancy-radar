@@ -36,10 +36,10 @@ describe('applyClarificationAnswer (#419, step 3)', () => {
     expect(result.fact).toBeNull();
   });
 
-  it('"I don\'t know" marks the requirement reviewed but leaves its evidence class a gap', () => {
+  it('"I don\'t know" marks the requirement a confirmed gap and reviewed, with no fact', () => {
     const result = applyClarificationAnswer(requirement(), { kind: 'unknown' });
     expect(result.requirement.reviewed).toBe(true);
-    expect(result.requirement.evidenceClass).toBe('needs_verification');
+    expect(result.requirement.evidenceClass).toBe('candidate_confirmed_gap');
     expect(result.fact).toBeNull();
   });
 

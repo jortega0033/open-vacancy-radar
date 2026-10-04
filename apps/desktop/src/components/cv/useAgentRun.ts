@@ -67,7 +67,18 @@ export const RUN_TIMEOUT_MS = 240_000;
  * IPC rejections arrive as "Error invoking remote method 'x': Error: <the real message>". Showing
  * that verbatim buries the one part the user can act on.
  */
+/** What the candidate sees when a case changed between reading it and saving to it (#564). */
+export const CASE_CONFLICT_MESSAGE = 'Your last change did not save. Try again.';
+
+/** True for the main process's stale case revision error (`CvEvidenceOverlayRevisionConflictError`). */
+export function isCaseRevisionConflict(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  return /CvEvidenceOverlayRevisionConflictError|case has changed since it was last read/u.test(message);
+}
+
 export function describeError(err: unknown, fallback: string): string {
+  // The internal revision wording means nothing to the candidate (#564).
+  if (isCaseRevisionConflict(err)) return CASE_CONFLICT_MESSAGE;
   const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
   if (!message) return fallback;
   const match = /Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?(.*)$/s.exec(

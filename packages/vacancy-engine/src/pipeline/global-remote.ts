@@ -52,7 +52,7 @@ import {
   WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
   WORKABLE_GLOBAL_TIMEOUT_MS,
 } from '../global-remote/workable-global-discovery.js';
-import { pruneGlobalRemoteReports, writeGlobalRemoteReport, type GlobalRemoteReportFiles } from '../global-remote/report.js';
+import { pruneGlobalRemoteReports, readGlobalRemoteReportWithFallback, writeGlobalRemoteReport, type GlobalRemoteReportFiles } from '../global-remote/report.js';
 import { recordDiscoveryRun } from '../global-remote/discovery-runs-repository.js';
 import { createDatabaseBackedHttpClients } from './ats-http-client.js';
 
@@ -869,8 +869,10 @@ async function loadPreviousDiscovery(projectRoot: string): Promise<{
   sources: DiscoverySourceAudit[];
   vacancies: DiscoveryVacancyAudit[];
 }> {
-  const file = path.resolve(projectRoot, 'reports', 'global-remote', 'latest.json');
-  const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<GlobalRemoteReport>;
+  // A zero-match latest.json falls back to the kept non-empty report (#577), so reuse still has rows.
+  const loaded = await readGlobalRemoteReportWithFallback(projectRoot);
+  if (!loaded) throw new Error('No previous global remote report exists');
+  const parsed: Partial<GlobalRemoteReport> = loaded.report;
   if (!Array.isArray(parsed.discoverySources) || !Array.isArray(parsed.discoveryAudit)) {
     throw new Error('Previous global remote report does not contain reusable discovery audit data');
   }

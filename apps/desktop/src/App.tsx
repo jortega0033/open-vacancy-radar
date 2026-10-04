@@ -81,6 +81,8 @@ export function App() {
   // search profile", the first-launch checklist). Held here, not in SettingsPage, so it survives
   // that page remounting; a plain sidebar visit clears it in `handleNavigate`.
   const [settingsTarget, setSettingsTarget] = useState<{ tab: SettingsTab; focusSection?: SettingsFocusSection }>();
+  // Bumped on every jump to a Settings target so an already-mounted Settings page remounts onto it.
+  const [settingsTargetKey, setSettingsTargetKey] = useState(0);
   const [searchSession, setSearchSession] = useState(createSearchSessionState);
   const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
   const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
@@ -89,6 +91,8 @@ export function App() {
   // flag has never been set, *and* the CV library is actually empty. Anything less would flash a
   // "welcome, upload a CV" modal at an upgrading user who has had one in the library for months.
   const [showWelcome, setShowWelcome] = useState(false);
+  // "Finish setup" in Settings: the same checklist, opened on purpose. Never touches `welcomeSeen`.
+  const [showSetup, setShowSetup] = useState(false);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
@@ -234,6 +238,7 @@ export function App() {
   const handleOpenSearchProfile = useCallback(() => {
     handleNavigate('settings');
     setSettingsTarget({ tab: 'search', focusSection: 'search-profile' });
+    setSettingsTargetKey((key) => key + 1);
   }, [handleNavigate]);
 
   const handleGenerateApplicationLetter = useCallback((vacancy: SelectedVacancy, attemptId: string) => {
@@ -525,7 +530,9 @@ export function App() {
           )}
           {nav === 'settings' && (
             <SettingsPage
+              key={settingsTargetKey}
               onNavigateToRuntime={() => handleNavigate('runtime')}
+              onOpenSetup={() => setShowSetup(true)}
               currentPage={nav}
               {...(previousNav ? { previousPage: previousNav } : {})}
               {...(settingsTarget ? { initialTab: settingsTarget.tab } : {})}
@@ -553,6 +560,20 @@ export function App() {
 
       {/* Overlays whichever page happens to be showing, the way FillProfileFromCvDrawer overlays
           Settings: the gate above decides *whether* it appears, never which page it appears over. */}
+      {showSetup && !showWelcome && (
+        <WelcomeModal
+          reopened
+          onClose={() => setShowSetup(false)}
+          onOpenSettings={() => {
+            setShowSetup(false);
+            handleOpenSearchProfile();
+          }}
+          onOpenRuntime={() => {
+            setShowSetup(false);
+            handleNavigate('runtime');
+          }}
+        />
+      )}
       {showWelcome && (
         <WelcomeModal
           onClose={handleWelcomeClosed}

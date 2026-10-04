@@ -19,6 +19,30 @@ export interface WelcomeModalProps {
   onOpenSettings: () => void;
   /** The AI runtime item's "Open AI runtime": the caller closes the modal and opens that page. */
   onOpenRuntime: () => void;
+  /** Opened on purpose from Settings ("Finish setup"), not as the first-run welcome. Same checklist,
+   * different heading and exit wording; skips are never remembered and nothing is persisted. */
+  reopened?: boolean;
+}
+
+/** Live read of the CV count. Fresh on every mount, so a reopened checklist never tells someone
+ * with a CV to add one. `unavailable` is shown as such rather than guessed. */
+function useCvCheck() {
+  const [state, setState] = useState<'checking' | 'unavailable' | 'has-cv' | 'no-cv'>('checking');
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getCounts()
+      .then((counts) => {
+        if (!cancelled) setState(counts.cvDocuments > 0 ? 'has-cv' : 'no-cv');
+      })
+      .catch(() => {
+        if (!cancelled) setState('unavailable');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return state;
 }
 
 type CvStep = 'invite' | 'loading-profile' | 'fill-profile';
@@ -116,7 +140,7 @@ function ChecklistItem({ title, status, done, detail, skipLabel, onSkip, childre
  * Completed work is never repeated: the CV item reads as done once saved, and the company list reads
  * its status from the saved import, so reopening this modal does not offer the download again.
  */
-export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: WelcomeModalProps) {
+export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened = false }: WelcomeModalProps) {
   const [step, setStep] = useState<CvStep>('invite');
   const [cvSaved, setCvSaved] = useState(false);
   const [profile, setProfile] = useState<CandidateProfile>();
@@ -124,6 +148,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
   const [skipped, setSkipped] = useState({ cv: false, runtime: false, roster: false });
   const [rosterError, setRosterError] = useState<string>();
 
+  const cvCheck = useCvCheck();
   const { check, run: recheckRuntime } = useRuntimeCheck();
   const clearRosterError = useCallback(() => setRosterError(undefined), []);
   const roster = useAtsRoster({ onRefreshed: clearRosterError, onRefreshError: setRosterError });
@@ -164,9 +189,11 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
     );
   }
 
-  const cvDone = cvSaved;
+  const cvDone = cvSaved || cvCheck === 'has-cv';
   const runtimeDone = check.kind === 'ready';
   const rosterDone = roster.loaded && roster.status !== null;
+  const rosterUnknown = roster.loaded && !roster.status && Boolean(roster.loadError);
+  const title = reopened ? 'Finish setup' : 'Welcome to Open Vacancy Radar';
   const allAddressed =
     (cvDone || skipped.cv) && (runtimeDone || skipped.runtime) && (rosterDone || skipped.roster);
   const busy = step === 'loading-profile';
@@ -187,10 +214,10 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
   })();
 
   return (
-    <Dialog aria-label="Welcome to Open Vacancy Radar" boxClassName="p-0" closeDisabled={busy} onClose={onClose}>
+    <Dialog aria-label={title} boxClassName="p-0" closeDisabled={busy} onClose={onClose}>
       <div>
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
-          <h2 className="text-sm font-semibold">Welcome to Open Vacancy Radar</h2>
+          <h2 className="text-sm font-semibold">{title}</h2>
           <button type="button" aria-label="Close" className="btn btn-ghost btn-sm btn-circle" onClick={onClose}>
             <X size={16} weight="bold" aria-hidden="true" />
           </button>
@@ -198,17 +225,23 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
 
         <div className="flex-1 px-5 py-4">
           <p className="text-sm">
-            {runtimeDone ? 'Two' : 'Three'} quick steps. Skip any and come back later.
+            {reopened
+              ? 'Pick up where you left off.'
+              : `${runtimeDone ? 'Two' : 'Three'} quick steps. Skip any and come back later.`}
           </p>
 
           <ul className="mt-2" aria-label="Setup checklist">
             <ChecklistItem
               title="Add a CV"
-              status={cvDone ? 'Done' : skipped.cv ? 'Skipped' : 'To do'}
+              status={
+                cvDone ? 'Done' : cvCheck === 'checking' ? 'Checking' : cvCheck === 'unavailable' ? 'Unknown' : skipped.cv ? 'Skipped' : 'To do'
+              }
               done={cvDone}
               detail={
                 cvDone
                   ? 'CV saved to your library.'
+                  : cvCheck === 'unavailable'
+                  ? 'Could not check. You can still add one.'
                   : 'Used to rank jobs for you and fill in your search profile. Stays on this computer.'
               }
               skipLabel="Skip adding a CV"
@@ -273,11 +306,13 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
 
             <ChecklistItem
               title="Download the company list"
-              status={rosterDone ? 'Done' : skipped.roster ? 'Skipped' : 'To do'}
+              status={rosterDone ? 'Done' : rosterUnknown ? 'Unknown' : skipped.roster ? 'Skipped' : 'To do'}
               done={rosterDone}
               detail={
                 !roster.loaded
                   ? 'Checking…'
+                  : rosterUnknown
+                  ? 'Could not check. You can still download it.'
                   : roster.status
                   ? `${roster.status.totalEntries.toLocaleString()} companies ready.`
                   : 'Needed once so searches can find companies that hire directly.'
@@ -309,7 +344,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
 
         <div className="flex flex-wrap justify-end gap-2 border-t border-base-300 px-5 py-3.5">
           <button type="button" className="btn btn-outline btn-sm" onClick={onClose} disabled={busy}>
-            {allAddressed ? 'Done' : 'Skip for now'}
+            {reopened ? 'Close' : allAddressed ? 'Done' : 'Skip for now'}
           </button>
         </div>
       </div>
