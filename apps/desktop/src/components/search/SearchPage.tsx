@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { ArrowLeft, Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
-import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput, VacancyEngineStatus } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
@@ -265,6 +265,7 @@ export function SearchPage({
   const [stopping, setStopping] = useState(false);
   const stopRequestedRef = useRef(false);
   const [stopNotice, setStopNotice] = useState<string>();
+  const [zeroMatchNotice, setZeroMatchNotice] = useState<{ checked: number; keptPrevious: boolean }>();
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
   const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
@@ -642,6 +643,8 @@ export function SearchPage({
     };
   }, []);
 
+  const worldwideReportRef = useRef(worldwideReport);
+  worldwideReportRef.current = worldwideReport;
   const hasReport = worldwideReport !== null;
   const liveProgressCount = partialVacancies.length;
   const hasLiveRows = liveProgressCount > 0;
@@ -818,6 +821,34 @@ export function SearchPage({
   const isStreamingPartial = showLiveResults;
   const busy = hydrating || scanning;
 
+  // A finished scan with no matches must not wipe the last report that had some (#561): the old
+  // report stays on screen and a notice says what the scan checked. With nothing to keep, the new
+  // empty report is shown so its empty state can report the same numbers.
+  const acceptScanReport = useCallback(
+    (report: GlobalRemoteReport) => {
+      const noMatches = report.discoveryAudit.length === 0;
+      const checked = report.statistics.rawRowsFetched ?? report.statistics.discoveryListings;
+      setSession((current) => {
+        const keepPrevious = noMatches && (current.report?.discoveryAudit.length ?? 0) > 0;
+        return {
+          ...current,
+          report: keepPrevious ? current.report : report,
+          reportHydrated: true,
+          appliedFilters: keepPrevious ? current.appliedFilters : (current.pendingScanFilters ?? current.appliedFilters),
+          pendingScanFilters: null,
+          selectedKey: keepPrevious ? current.selectedKey : null,
+          page: keepPrevious ? current.page : 0,
+          listScrollTop: keepPrevious ? current.listScrollTop : 0,
+          detailScrollTop: keepPrevious ? current.detailScrollTop : 0,
+        };
+      });
+      setZeroMatchNotice(
+        noMatches ? { checked, keptPrevious: (worldwideReportRef.current?.discoveryAudit.length ?? 0) > 0 } : undefined,
+      );
+    },
+    [setSession],
+  );
+
   const runScan = useCallback(async (queryOverride?: string) => {
     if (engineState === 'unavailable') return;
     const scanFilters = queryOverride === undefined ? filters : { ...filters, query: queryOverride };
@@ -839,6 +870,7 @@ export function SearchPage({
     stopRequestedRef.current = false;
     setStopping(false);
     setStopNotice(undefined);
+    setZeroMatchNotice(undefined);
     setScanning(true);
     setScanError(undefined);
     setScanGuard(undefined);
@@ -871,17 +903,7 @@ export function SearchPage({
         ...(aiWebDiscovery ? { aiWebDiscovery: true } : {}),
       });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
-      setSession((current) => ({
-        ...current,
-        report,
-        reportHydrated: true,
-        appliedFilters: current.pendingScanFilters ?? current.appliedFilters,
-        pendingScanFilters: null,
-        selectedKey: null,
-        page: 0,
-        listScrollTop: 0,
-        detailScrollTop: 0,
-      }));
+      acceptScanReport(report);
       hasHydrated.current = true;
       setScanning(false);
       setPartialVacancies([]);
@@ -917,7 +939,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [aiWebDiscovery, engineState, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [acceptScanReport, aiWebDiscovery, engineState, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const runBrowseAllScan = useCallback(async () => {
     const requestGeneration = ++reportRequestGenerationRef.current;
@@ -925,6 +947,7 @@ export function SearchPage({
     stopRequestedRef.current = false;
     setStopping(false);
     setStopNotice(undefined);
+    setZeroMatchNotice(undefined);
     setScanning(true);
     setScanError(undefined);
     setScanGuard(undefined);
@@ -938,17 +961,7 @@ export function SearchPage({
         ...(aiWebDiscovery ? { aiWebDiscovery: true } : {}),
       });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
-      setSession((current) => ({
-        ...current,
-        report,
-        reportHydrated: true,
-        appliedFilters: current.pendingScanFilters ?? current.appliedFilters,
-        pendingScanFilters: null,
-        selectedKey: null,
-        page: 0,
-        listScrollTop: 0,
-        detailScrollTop: 0,
-      }));
+      acceptScanReport(report);
       hasHydrated.current = true;
       setScanning(false);
       setPartialVacancies([]);
@@ -978,7 +991,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [aiWebDiscovery, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [acceptScanReport, aiWebDiscovery, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const handleRescore = useCallback(() => {
     const query = currentProfileScanQuery;
@@ -1276,6 +1289,17 @@ export function SearchPage({
             )}
           </div>
         )}
+        {zeroMatchNotice && !scanning && zeroMatchNotice.keptPrevious && (
+          <div className="alert alert-info alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+            <span>
+              No match this time. Checked {zeroMatchNotice.checked.toLocaleString()} listings. Try fewer words or a
+              related title. Your previous results are still shown.
+            </span>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setZeroMatchNotice(undefined)}>
+              Dismiss
+            </button>
+          </div>
+        )}
         {stopNotice && !scanning && (
           <div className="alert alert-info alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
             <span>{stopNotice}</span>
@@ -1436,6 +1460,7 @@ export function SearchPage({
                 savedKeys={savedKeys}
                 summary={summary}
                 scanActive={scanning}
+                checkedCount={worldwideReport?.statistics.rawRowsFetched ?? worldwideReport?.statistics.discoveryListings}
                 unscoredCount={unscoredCount}
                 page={page}
                 pageCount={pageCount}

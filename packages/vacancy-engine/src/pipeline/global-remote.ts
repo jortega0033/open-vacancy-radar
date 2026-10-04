@@ -703,6 +703,8 @@ export type GlobalRemoteScanResult = {
 export type GlobalRemoteScanOptions = {
   officialOnly?: boolean;
   offlineReclassify?: boolean;
+  /** Keep the previous non-empty latest report when this scan has no results. */
+  preserveNonEmptyLatest?: boolean;
   browseAll?: boolean;
   browseAllResultCap?: number;
   /**
@@ -1244,7 +1246,9 @@ export async function runGlobalRemoteScan(
       .filter((source) => source.state === 'active')
       .map((source) => ({ name: source.name, url: source.url })),
   };
-  const files = await writeGlobalRemoteReport(report, projectRoot);
+  const files = await writeGlobalRemoteReport(report, projectRoot, {
+    ...(options.preserveNonEmptyLatest ? { preserveNonEmptyLatest: true } : {}),
+  });
   // Indexes the files just written -- never inserted first, so a scan that fails before this point
   // (including inside `writeGlobalRemoteReport` itself) leaves no row rather than one pointing at
   // files that were never finished. A failure here is logged, not thrown: the report itself is
