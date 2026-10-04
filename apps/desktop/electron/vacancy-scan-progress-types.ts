@@ -21,7 +21,12 @@ export interface VacancyScanStatus {
   vacanciesSoFar?: number;
   /** True once a stop was requested and the run is winding down. */
   stopping?: boolean;
+  /** Where the optional AI web search step is (#559). Absent when the run did not ask for it. */
+  aiWebSearch?: VacancyScanAiWebSearchState;
 }
+
+/** `failed` covers a skipped step too (not installed, not signed in, no search profile). */
+export type VacancyScanAiWebSearchState = 'waiting' | 'running' | 'done' | 'failed';
 
 export interface VacancyScanCancelResult {
   /** False when there was no such active run (it finished first, or the id belonged to another run). */

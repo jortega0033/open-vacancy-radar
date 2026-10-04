@@ -122,7 +122,7 @@ import {
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
-import type { VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
+import type { VacancyScanAiWebSearchState, VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 import {
   describeVacancyEngineFailure,
   rebuildVacancyEngineDatabase,
@@ -2564,6 +2564,8 @@ interface ActiveVacancyScan {
   doneSources: Set<string>;
   total: number;
   vacancies: number;
+  /** Only set when this run was asked to also search the web with AI (#559). */
+  aiWebSearch?: VacancyScanAiWebSearchState;
 }
 let activeVacancyScan: ActiveVacancyScan | undefined;
 
@@ -2581,6 +2583,7 @@ guardedIpc.handle('vacancy:get-scan-progress', (): VacancyScanStatus => {
     sourcesDone: scan.doneSources.size,
     sourcesTotal: scan.total,
     vacanciesSoFar: scan.vacancies,
+    ...(scan.aiWebSearch ? { aiWebSearch: scan.aiWebSearch } : {}),
     ...(scan.controller.signal.aborted ? { stopping: true } : {}),
   };
 });
@@ -2655,6 +2658,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
           doneSources: new Set(),
           total: SCAN_PROGRESS_SOURCE_IDS.length,
           vacancies: 0,
+          ...(request.aiWebDiscovery === true ? { aiWebSearch: 'waiting' as const } : {}),
         };
         activeVacancyScan = scan;
         try {
@@ -2675,10 +2679,19 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
           // if `request.aiWebDiscovery` had been false), never abort the whole scan.
           try {
             const profile = await loadCandidateProfile(await candidateProfilePath());
+            scan.aiWebSearch = 'running';
             aiWebDiscovery = await runAiWebDiscovery(client, {
               profile,
               cwd: await ensureAiWorkspaceDir(),
             });
+            const aiAudit = aiWebDiscovery.sourceAudit;
+            const aiFailed = aiAudit.status === 'error' || aiAudit.status === 'blocked';
+            scan.aiWebSearch = aiFailed ? 'failed' : 'done';
+            // At warn, not only debug: a failed AI step used to leave no trace outside the report (#559).
+            if (aiFailed) {
+              logger.warn({ sourceAudit: aiAudit }, 'AI web discovery did not run to completion');
+              console.warn(`[ai-web-search] ${aiAudit.status}: ${aiAudit.error ?? aiAudit.completenessReason ?? 'no reason given'}`);
+            }
             // Issue #398: "the actual queries used in a run are persisted/reportable" -- logged here,
             // alongside the resulting source audit, since Phase 1 needs no dedicated DB persistence
             // for this (see `runAiWebDiscovery`'s own doc comment on `queriesUsed`).
@@ -2687,6 +2700,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
               'AI web discovery pass finished',
             );
           } catch (error) {
+            scan.aiWebSearch = 'failed';
             logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
           }
         }
