@@ -36,6 +36,10 @@ export interface DerivedApplicationState {
 
 const isoDay = (date: Date): string => date.toISOString().slice(0, 10);
 
+/** Same format as the Applied column in the tracker, so one row never mixes date styles. */
+export const displayDay = (date: Date): string =>
+  date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
 /** Every sentence this module writes into `next_step`. Anything else there is the person's own. */
 const AUTO_NEXT_STEPS = [
   'Preparing the application.',
@@ -46,6 +50,7 @@ const AUTO_NEXT_STEPS = [
   'Skipped from the Review queue.',
   'Sent, but no confirmation was seen.',
   'Sent ',
+  'You said you applied on ',
   'Reported by you ',
 ] as const;
 
@@ -77,7 +82,7 @@ export function deriveApplicationState(
         status: 'applied',
         appliedAt: when,
         archived: false,
-        nextStep: `Reported by you ${isoDay(when)}: this app did not see a confirmation.`,
+        nextStep: `You said you applied on ${displayDay(when)}. The app did not see a confirmation.`,
         savedJobStatus: 'applied',
       };
     case 'submission_unknown':
