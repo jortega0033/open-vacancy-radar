@@ -16,6 +16,7 @@ function renderCard(
     busy?: boolean;
     attempt?: ApplicationAttemptRecord;
     onGenerateLetter?: () => void;
+    onRetryLetter?: () => void;
   } = {},
 ) {
   const actions = {
@@ -40,6 +41,7 @@ function renderCard(
       busy={overrides.busy ?? false}
       continued={overrides.continued ?? false}
       onGenerateLetter={overrides.onGenerateLetter}
+      onRetryLetter={overrides.onRetryLetter}
       {...actions}
     />,
   );
@@ -98,13 +100,55 @@ describe('ManualApplicationReviewCard', () => {
       onGenerateLetter,
     });
 
-    expect(
-      screen.getByText(/Your CV is ready\. The cover letter still needs attention/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Your CV is ready. The cover letter could not be written.')).toBeInTheDocument();
+    expect(screen.getByText('unsupported source facts')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
     expect(onGenerateLetter).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Tailored CV')).toBeInTheDocument();
     expect(screen.queryByText('resume.pdf')).not.toBeInTheDocument();
+  });
+
+  it('says Claude hit its limit and holds Try again until the reset (#565)', () => {
+    const onRetryLetter = vi.fn();
+    renderCard({
+      attempt: {
+        ...attempt,
+        updatedAt: new Date().toISOString(),
+        checkpointDetail:
+          "Tailored. Your CV is ready. Cover letter blocker: automatic cover letter generation stopped: You've hit your session limit · resets 11:59pm. Use Generate letter to create and review one, then return here, or provide one on the employer site.",
+      } as ApplicationAttemptRecord,
+      onGenerateLetter: vi.fn(),
+      onRetryLetter,
+    });
+
+    expect(
+      screen.getByText('Your CV is ready. Claude has reached its usage limit until 11:59pm, so the cover letter was not written.'),
+    ).toBeInTheDocument();
+    const retry = screen.getByRole('button', { name: /^Try again after / });
+    expect(retry).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Generate letter' })).toBeEnabled();
+  });
+
+  it('offers Try again for a letter that failed for another reason', () => {
+    const onRetryLetter = vi.fn();
+    renderCard({
+      attempt: {
+        ...attempt,
+        checkpointDetail:
+          'Your CV is ready. Cover letter blocker: automatic cover letter generation stopped: provider exited with code 1. Use Generate letter to create and review one.',
+      },
+      onRetryLetter,
+    });
+
+    expect(screen.getByText('Your CV is ready. The cover letter could not be written.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onRetryLetter).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no letter recovery when the documents are complete', () => {
+    renderCard({ onRetryLetter: vi.fn(), onGenerateLetter: vi.fn() });
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Details')).not.toBeInTheDocument();
   });
 
   it('maps right and left drags to the same visible decisions', () => {

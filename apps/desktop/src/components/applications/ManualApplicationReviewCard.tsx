@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { usePrefersReducedMotion } from '../../use-prefers-reduced-motion.js';
+import { describeLetterBlocker } from './letter-blocker.js';
+import { retryLabel, useWaitingForReset } from './provider-reset.js';
 
 export interface ManualApplicationReviewCardProps {
   attempt: ApplicationAttemptRecord;
@@ -15,6 +17,8 @@ export interface ManualApplicationReviewCardProps {
   onSaveArtifact: (artifactId: string) => void;
   onOpenArtifact: (artifactId: string) => void;
   onGenerateLetter?: () => void;
+  /** Runs preparation again so the cover letter is retried. Shown only when the letter is missing. */
+  onRetryLetter?: () => void;
 }
 
 const SWIPE_THRESHOLD_PX = 120;
@@ -38,6 +42,7 @@ export function ManualApplicationReviewCard({
   onSaveArtifact,
   onOpenArtifact,
   onGenerateLetter,
+  onRetryLetter,
 }: ManualApplicationReviewCardProps) {
   const [dragX, setDragX] = useState(0);
   const reducedMotion = usePrefersReducedMotion();
@@ -47,6 +52,9 @@ export function ManualApplicationReviewCard({
     !documents.some(
       (document) => document.kind === 'cover_letter_pdf' || document.kind === 'combined_pdf',
     ) && /\b(?:cover|motivation) letter\b/iu.test(attempt.checkpointDetail);
+  const letterBlocker = letterBlocked ? describeLetterBlocker(attempt.checkpointDetail, attempt.updatedAt) : null;
+  const waitingForReset = useWaitingForReset(letterBlocker?.limit?.resetAt);
+  const letterReason = letterBlocker?.message ?? 'The cover letter still needs attention.';
 
   function endDrag() {
     if (originRef.current === null) return;
@@ -124,10 +132,16 @@ export function ManualApplicationReviewCard({
             <p className="mt-1 text-xs text-base-content/60">
               {letterBlocked
                 ? attempt.checkpointDetail.includes('Your CV was prepared without any skills.')
-                  ? 'Your CV has no skills to match this vacancy. The cover letter still needs attention.'
-                  : 'Your CV is ready. The cover letter still needs attention.'
+                  ? `Your CV has no skills to match this vacancy. ${letterReason}`
+                  : `Your CV is ready. ${letterReason}`
                 : 'You send this one yourself. Your documents are ready.'}
             </p>
+            {letterBlocker?.detail ? (
+              <details className="mt-1 text-xs text-base-content/60">
+                <summary className="cursor-pointer">Details</summary>
+                <p className="mt-1 break-words">{letterBlocker.detail}</p>
+              </details>
+            ) : null}
           </div>
 
           <div className="space-y-2 px-5 py-4">
@@ -169,15 +183,29 @@ export function ManualApplicationReviewCard({
         </div>
       </div>
 
-      {letterBlocked && onGenerateLetter && (
-        <button
-          type="button"
-          className="btn btn-primary w-full"
-          disabled={busy}
-          onClick={onGenerateLetter}
-        >
-          Generate letter
-        </button>
+      {letterBlocked && (onGenerateLetter || onRetryLetter) && (
+        <div className="flex gap-3">
+          {onRetryLetter && (
+            <button
+              type="button"
+              className="btn btn-outline flex-1"
+              disabled={busy || waitingForReset}
+              onClick={onRetryLetter}
+            >
+              {retryLabel(letterBlocker?.limit, waitingForReset, 'Try again')}
+            </button>
+          )}
+          {onGenerateLetter && (
+            <button
+              type="button"
+              className="btn btn-primary flex-1"
+              disabled={busy}
+              onClick={onGenerateLetter}
+            >
+              Generate letter
+            </button>
+          )}
+        </div>
       )}
 
       {!continued ? (
