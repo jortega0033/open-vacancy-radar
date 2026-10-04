@@ -89,6 +89,8 @@ export function App() {
   // flag has never been set, *and* the CV library is actually empty. Anything less would flash a
   // "welcome, upload a CV" modal at an upgrading user who has had one in the library for months.
   const [showWelcome, setShowWelcome] = useState(false);
+  // "Finish setup" in Settings: the same checklist, opened on purpose. Never touches `welcomeSeen`.
+  const [showSetup, setShowSetup] = useState(false);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
@@ -526,6 +528,7 @@ export function App() {
           {nav === 'settings' && (
             <SettingsPage
               onNavigateToRuntime={() => handleNavigate('runtime')}
+              onOpenSetup={() => setShowSetup(true)}
               currentPage={nav}
               {...(previousNav ? { previousPage: previousNav } : {})}
               {...(settingsTarget ? { initialTab: settingsTarget.tab } : {})}
@@ -553,6 +556,20 @@ export function App() {
 
       {/* Overlays whichever page happens to be showing, the way FillProfileFromCvDrawer overlays
           Settings: the gate above decides *whether* it appears, never which page it appears over. */}
+      {showSetup && !showWelcome && (
+        <WelcomeModal
+          reopened
+          onClose={() => setShowSetup(false)}
+          onOpenSettings={() => {
+            setShowSetup(false);
+            handleOpenSearchProfile();
+          }}
+          onOpenRuntime={() => {
+            setShowSetup(false);
+            handleNavigate('runtime');
+          }}
+        />
+      )}
       {showWelcome && (
         <WelcomeModal
           onClose={handleWelcomeClosed}

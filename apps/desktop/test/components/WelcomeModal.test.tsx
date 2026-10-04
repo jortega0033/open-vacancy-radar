@@ -146,7 +146,7 @@ describe('first-launch welcome modal', () => {
     expect(within(checklist).getByText('Add a CV')).toBeInTheDocument();
     expect(within(checklist).getByText('Connect your AI tool')).toBeInTheDocument();
     expect(within(checklist).getByText('Download the company list')).toBeInTheDocument();
-    expect(within(checklist).getAllByText('To do').length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(within(checklist).getAllByText('To do').length).toBeGreaterThanOrEqual(2));
     expect(within(checklist).getByRole('button', { name: 'Skip adding a CV' })).toBeInTheDocument();
     expect(within(checklist).getByRole('button', { name: 'Skip connecting your AI tool' })).toBeInTheDocument();
     expect(within(checklist).getByRole('button', { name: 'Skip downloading the company list' })).toBeInTheDocument();
@@ -602,5 +602,102 @@ describe('first-launch checklist: search profile could not be loaded', () => {
 
     expect(screen.queryByText(/Could not fill your profile automatically/)).not.toBeInTheDocument();
     expect(welcomeDialog()).toBeInTheDocument();
+  });
+});
+
+describe('Finish setup (reopening the checklist, #539)', () => {
+  const SEEN_SETTINGS = { ...DEFAULT_SETTINGS, welcomeSeen: true };
+
+  async function openFinishSetup() {
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    const opener = await screen.findByRole('button', { name: 'Finish setup' });
+    opener.focus();
+    fireEvent.click(opener);
+    return { opener, dialog: await screen.findByRole('dialog', { name: 'Finish setup' }) };
+  }
+
+  it('after Welcome was skipped, reopens the checklist with honest to-do states and no persisted change', async () => {
+    const workspace = installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS),
+      listCvDocuments: vi.fn().mockResolvedValue([]),
+    });
+    render(<App />);
+    const { dialog } = await openFinishSetup();
+
+    const checklist = within(dialog).getByRole('list', { name: 'Setup checklist' });
+    await waitFor(() => expect(within(checklist).getAllByText('To do').length).toBeGreaterThanOrEqual(2));
+    expect(within(checklist).getByText('Add a CV')).toBeInTheDocument();
+    expect(within(checklist).getByText('Download the company list')).toBeInTheDocument();
+    expect(workspace.updateSettings).not.toHaveBeenCalledWith({ welcomeSeen: true });
+  });
+
+  it('shows the CV as done for an upgrading user and still offers the company list', async () => {
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS),
+      getCounts: vi.fn().mockResolvedValue({ ...DEFAULT_COUNTS, cvDocuments: 1 }),
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
+    });
+    render(<App />);
+    const { dialog } = await openFinishSetup();
+
+    await waitFor(() => expect(within(dialog).getByText('CV saved to your library.')).toBeInTheDocument());
+    expect(within(dialog).queryByRole('button', { name: /upload cv/i })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Download company list' })).toBeInTheDocument();
+  });
+
+  it('shows a finished company list as done after a restart (saved status read again)', async () => {
+    installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS) });
+    installVacancyRadarBridge({
+      getAtsRosterStatus: vi
+        .fn()
+        .mockResolvedValue({ importedAt: '2026-09-01T00:00:00.000Z', totalEntries: 1200, sourceCounts: {} }),
+    });
+    render(<App />);
+    const { dialog } = await openFinishSetup();
+
+    await waitFor(() => expect(within(dialog).getByText('1,200 companies ready.')).toBeInTheDocument());
+    expect(within(dialog).queryByRole('button', { name: 'Download company list' })).not.toBeInTheDocument();
+  });
+
+  it('says so when a status cannot be read, and still offers the action', async () => {
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS),
+      getCounts: vi.fn().mockRejectedValue(new Error('db down')),
+    });
+    installVacancyRadarBridge({ getAtsRosterStatus: vi.fn().mockRejectedValue(new Error('nope')) });
+    render(<App />);
+    const { dialog } = await openFinishSetup();
+
+    await waitFor(() =>
+      expect(within(dialog).getByText('Could not check. You can still add one.')).toBeInTheDocument(),
+    );
+    expect(within(dialog).getByText('Could not check. You can still download it.')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('Unknown')).toHaveLength(2);
+    expect(within(dialog).getByRole('button', { name: /upload cv/i })).toBeInTheDocument();
+  });
+
+  it('Escape closes it, returns focus to the opener, and does not reset anything', async () => {
+    const workspace = installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS) });
+    render(<App />);
+    const { opener, dialog } = await openFinishSetup();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(workspace.updateSettings).not.toHaveBeenCalledWith(expect.objectContaining({ welcomeSeen: false }));
+  });
+
+  it('never auto-opens for a dismissed user, and the entry stays once everything is done', async () => {
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS),
+      getCounts: vi.fn().mockResolvedValue({ ...DEFAULT_COUNTS, cvDocuments: 1 }),
+    });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Settings' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    const { dialog } = await openFinishSetup();
+    expect(within(dialog).getAllByRole('button', { name: 'Close' }).length).toBeGreaterThan(0);
   });
 });

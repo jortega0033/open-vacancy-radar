@@ -162,6 +162,8 @@ export interface SettingsPageProps {
   /** Rendered as the "AI runtime" section's "Manage in AI runtime" button. Optional so the page
    * still works standalone (e.g. in isolation tests) without a real router behind it. */
   onNavigateToRuntime?: () => void;
+  /** Reopens the setup checklist ("Finish setup"). Hidden when not provided. */
+  onOpenSetup?: () => void;
   /** The tab to open on. The shell keeps this in its own state, so it survives the page remounting. */
   initialTab?: SettingsTab;
   /** A section to scroll to and focus once its tab is showing. Only the search profile today. */
@@ -184,6 +186,7 @@ const SETTINGS_TABS: ReadonlyArray<{ readonly id: SettingsTab; readonly label: s
 
 export function SettingsPage({
   onNavigateToRuntime,
+  onOpenSetup,
   initialTab,
   focusSection,
   currentPage,
@@ -405,6 +408,15 @@ export function SettingsPage({
       <TabPanel idPrefix="settings" id={activeTab}>
       {activeTab === 'general' && (
         <>
+          {onOpenSetup && (
+            <SettingsSection title="Setup">
+              <SettingsRow label="Finish setup" description="CV, AI tool and company list.">
+                <button type="button" className="btn btn-outline btn-sm" onClick={onOpenSetup}>
+                  Finish setup
+                </button>
+              </SettingsRow>
+            </SettingsSection>
+          )}
           <SettingsSection title="Startup">
             <SettingsRow
               label="Launch at login"
