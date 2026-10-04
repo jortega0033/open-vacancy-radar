@@ -58,7 +58,7 @@ export const SearchResultRow = memo(function SearchResultRow({
       aria-current={selected}
       data-result-key={result.key}
       onClick={() => onSelect(result)}
-      className={`ovr-row flex w-full gap-2.5 border-b border-base-300 px-4 text-left ${
+      className={`ovr-row flex w-full gap-2.5 border-b border-base-300 px-4 text-left short:[--ovr-row-padding:0.4375rem] ${
         selected ? 'ovr-row-selected' : 'hover:bg-base-200'
       }`}
     >
@@ -72,48 +72,47 @@ export const SearchResultRow = memo(function SearchResultRow({
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-sm font-semibold">{result.title}</span>
         </div>
-        <div className="truncate text-xs font-medium text-base-content/70">
-          {result.company} · {orNotStated(result.location)}
-        </div>
-
-        {excerpt && <p className="mt-1 line-clamp-2 text-xs text-base-content/60">{excerpt}</p>}
-
-        {(result.profileScore != null || badges.length > 0) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            {result.profileScore != null && (
-              <span
-                className="badge badge-xs badge-soft badge-primary font-mono"
-                title="Deterministic score against your search profile. It does not compare this vacancy to a CV."
-              >
-                <span aria-hidden="true">{profileFitText(result.profileScore)}</span>
-                <span className="sr-only">{profileFitSpoken(result.profileScore)}</span>
-              </span>
-            )}
-            {badges.map((badge) => (
-              <span
-                key={badge.text}
-                className={`badge badge-sm font-normal ${
-                  badge.tone === 'success'
-                    ? 'badge-success badge-soft'
-                    : badge.tone === 'warning'
-                      ? 'badge-warning badge-soft'
-                      : 'badge-ghost'
-                }`}
-              >
-                {badge.text}
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-1.5 flex items-center justify-between gap-2">
-          <span className={`flex-none text-xs ${stale ? 'text-warning' : 'text-base-content/60'}`}>
+        <div className="flex items-baseline justify-between gap-2 text-xs">
+          <span className="truncate font-medium text-base-content/70">
+            {result.company} · {orNotStated(result.location)}
+          </span>
+          <span className={`flex-none ${stale ? 'text-warning' : 'text-base-content/60'}`}>
             {saved ? 'Saved · ' : ''}
             {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'}
             {stale ? ' (over a month old)' : ''}
+            <span className="short:hidden"> · {discoveryProviderLabel(result.provider)}</span>
           </span>
-          <span className="flex-none text-xs text-base-content/60">{discoveryProviderLabel(result.provider)}</span>
         </div>
+
+        {excerpt && <p className="mt-1 line-clamp-2 text-xs text-base-content/60 short:hidden">{excerpt}</p>}
+
+        {(result.profileScore != null || badges.length > 0) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 short:mt-1 short:flex-nowrap short:overflow-hidden">
+          {result.profileScore != null && (
+            <span
+              className="badge badge-xs badge-soft badge-primary font-mono"
+              title="Deterministic score against your search profile. It does not compare this vacancy to a CV."
+            >
+              <span aria-hidden="true">{profileFitText(result.profileScore)}</span>
+              <span className="sr-only">{profileFitSpoken(result.profileScore)}</span>
+            </span>
+          )}
+          {badges.map((badge) => (
+            <span
+              key={badge.text}
+              className={`badge badge-sm flex-none whitespace-nowrap font-normal ${
+                badge.tone === 'success'
+                  ? 'badge-success badge-soft'
+                  : badge.tone === 'warning'
+                    ? 'badge-warning badge-soft'
+                    : 'badge-ghost'
+              }`}
+            >
+              {badge.text}
+            </span>
+          ))}
+        </div>
+        )}
       </div>
     </button>
   );
