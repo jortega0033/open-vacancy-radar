@@ -782,7 +782,7 @@ describe('ApplicationsPage', () => {
       const dialog = await screen.findByRole('dialog');
       expect(await within(dialog).findByText('Tailored CV')).toBeInTheDocument();
       expect(within(dialog).queryByText('resume.pdf')).not.toBeInTheDocument();
-      expect(within(dialog).getByText(/Your CV is ready\. The cover letter still needs attention/i)).toBeInTheDocument();
+      expect(within(dialog).getByText('Your CV is ready. The cover letter could not be written.')).toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Generate letter' }));
       expect(onGenerateLetter).toHaveBeenCalledWith(expect.objectContaining({ key: attempt.vacancyKey }), attempt.id);
     });

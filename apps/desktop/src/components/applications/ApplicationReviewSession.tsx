@@ -8,6 +8,7 @@ import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
+import { retryLabel, useWaitingForReset } from './provider-reset.js';
 import { WarningBanner } from '../shell/index.js';
 import { classifyProviderError, type ProviderErrorInfo } from '../../provider-error.js';
 import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
@@ -99,30 +100,6 @@ function pipelineLimit(message: string, updatedAt: string): ProviderErrorInfo | 
   return info.kind === 'usage_limit' ? info : null;
 }
 
-function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-/** Longest single wait between re-checks, so a sleeping laptop or a clock change is caught soon. */
-const RESET_RECHECK_MAX_MS = 60_000;
-
-/**
- * Whether `resetAt` is still ahead, read from the clock at render time (never a value cached at
- * mount, so a new attempt with a long-past reset is unlocked at once). While it is ahead, one timer
- * re-renders just after the reset, re-armed in steps of at most a minute, and none runs after.
- */
-function useWaitingForReset(resetAt: number | undefined): boolean {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    if (resetAt === undefined) return;
-    const remaining = resetAt - Date.now();
-    if (remaining <= 0) return;
-    const timer = window.setTimeout(() => setTick((value) => value + 1), Math.min(remaining + 100, RESET_RECHECK_MAX_MS));
-    return () => window.clearTimeout(timer);
-  }, [resetAt, tick]);
-  return resetAt !== undefined && resetAt > Date.now();
-}
-
 /** A limit with no reset time is not recorded once it is older than Claude's usage window. */
 const UNTIMED_LIMIT_MAX_AGE_MS = 5 * 60 * 60 * 1000;
 
@@ -133,11 +110,6 @@ function PipelineLimitNotice({ info }: { info: ProviderErrorInfo }) {
       application needs Claude, so try again once the limit resets.
     </WarningBanner>
   );
-}
-
-function retryLabel(info: ProviderErrorInfo | null, waiting: boolean, idle: string): string {
-  if (!info || !waiting || info.resetAt === undefined) return idle;
-  return `Try again after ${formatClock(info.resetAt)}`;
 }
 
 function errorState(failure: ReviewFailure): SessionState {
@@ -617,6 +589,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
             onSaveArtifact={(artifactId) => void handleSaveArtifact(artifactId)}
             onOpenArtifact={(artifactId) => void handleOpenArtifact(artifactId)}
             onGenerateLetter={onGenerateLetter ? handleGenerateLetter : undefined}
+            onRetryLetter={() => void handleResume()}
           />
         )}
 
