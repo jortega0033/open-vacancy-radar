@@ -3,6 +3,7 @@ import {
   discoveryAudit,
   isoPostedAt,
   isoPostedAtFromUnixSeconds,
+  plainDescription,
   parseSalaryText,
   stringValue,
 } from '../../src/global-remote/discovery-shared.js';
@@ -244,5 +245,55 @@ describe('parseSalaryText', () => {
       currency: null,
       period: null,
     });
+  });
+});
+
+describe('plainDescription and discoveryAudit descriptions (issue #560)', () => {
+  const html =
+    '<p>As a <strong>Senior Frontend Developer (React.js / Next.js)</strong>, you will:</p>' +
+    '<ul><li>Architect &amp; build robust apps</li><li>Review code</li></ul>' +
+    '<p>Pay&nbsp;is fair. Apply today.</p>';
+
+  it('turns HTML into plain text with paragraph breaks and list bullets', () => {
+    const text = plainDescription(html);
+    expect(text).toBe(
+      [
+        'As a Senior Frontend Developer (React.js / Next.js), you will:',
+        '- Architect & build robust apps',
+        '- Review code',
+        '',
+        'Pay is fair. Apply today.',
+      ].join('\n'),
+    );
+  });
+
+  it('keeps paragraphs separate and leaves plain text untouched', () => {
+    expect(plainDescription('<p>One</p><p>Two</p>')).toBe('One\n\nTwo');
+    expect(plainDescription('Plain text with 5 < 6 and no tags.')).toBe(
+      'Plain text with 5 < 6 and no tags.',
+    );
+    expect(plainDescription(null)).toBeNull();
+    expect(plainDescription(undefined)).toBeUndefined();
+  });
+
+  it('stores the converted text on the audit row and in its searchable text', () => {
+    const audit = discoveryAudit({
+      key: 'remote_first_jobs:1',
+      provider: 'remote_first_jobs',
+      company: 'Mejuri',
+      title: 'Senior Frontend Developer',
+      url: 'https://remotefirstjobs.com/jobs/1',
+      location: 'Remote',
+      employmentType: null,
+      currency: null,
+      salaryPeriod: null,
+      advertisedMinimum: null,
+      raw: { id: '1' },
+      minimumAnnualBaseUsd: null,
+      description: html,
+    });
+    expect(audit.description).not.toMatch(/<[a-z/]/u);
+    expect(audit.description).toContain('- Review code');
+    expect(audit.searchableText?.[0] ?? '').not.toMatch(/<[a-z/]/u);
   });
 });
