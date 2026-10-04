@@ -191,7 +191,7 @@ export function ManualApplicationReviewCard({
             disabled={busy}
             onClick={onContinue}
           >
-            Open employer site
+            Open the posting
           </button>
         </div>
       ) : (
