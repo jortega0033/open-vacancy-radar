@@ -311,7 +311,7 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
       )}
 
       {hasAnyJobs && !explained && (
-        <div className="alert alert-info alert-soft mt-4 flex items-start justify-between gap-3 text-sm" role="note">
+        <div className="alert alert-info mt-4 flex items-start justify-between gap-3 text-sm" role="note">
           <span>
             <strong>Prepare application</strong> tailors your CV to the job and fills in the employer&apos;s form,
             then stops for your review.{' '}

@@ -109,6 +109,40 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       await expect(window.getByText('AI features cannot start.')).toHaveCount(0);
       await expect(window.getByLabel('Vacancy details')).toBeVisible();
 
+      // #555: at the default 1000x700 window at least 4 result rows are fully visible.
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setBounds({ width: 1000, height: 700 });
+      });
+      await window.waitForTimeout(200);
+      const rowFit = await window.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('[aria-label="Vacancy results"]');
+        if (!scroller) throw new Error('No results list');
+        const box = scroller.getBoundingClientRect();
+        const rows = [...scroller.querySelectorAll<HTMLElement>('[data-result-key]')];
+        const fully = rows.filter((row) => {
+          const rect = row.getBoundingClientRect();
+          return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1;
+        });
+        const badgeClipped = fully.some((row) =>
+          [...row.querySelectorAll<HTMLElement>('.badge')].some((badge) => {
+            if (getComputedStyle(badge).display === 'none') return false;
+            const rowEdge = badge.parentElement?.getBoundingClientRect().right ?? 0;
+            return badge.getBoundingClientRect().right > rowEdge + 1 ||
+              badge.scrollWidth > badge.clientWidth + 1 || badge.scrollHeight > badge.clientHeight + 1;
+          }),
+        );
+        return {
+          fully: fully.length,
+          badgeClipped,
+          listHeight: Math.round(box.height),
+          rowHeight: Math.round(rows[0]?.getBoundingClientRect().height ?? 0),
+          docScrollTop: document.scrollingElement?.scrollTop ?? -1,
+        };
+      });
+      expect(rowFit.fully).toBeGreaterThanOrEqual(4);
+      expect(rowFit.badgeClipped).toBe(false);
+      expect(rowFit.docScrollTop).toBe(0);
+
       let sidebarCollapsed = false;
       for (const theme of ['openvacancyradar', 'openvacancyradar-dark']) {
         await window.evaluate((nextTheme) => {
@@ -130,7 +164,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
             sidebarCollapsed = collapsed;
           }
           for (const viewport of [
-            { name: 'default', width: 1000, height: 720 },
+            { name: 'default', width: 1000, height: 700 },
             { name: 'expanded-details', width: 800, height: 600 },
             { name: 'wide', width: 1440, height: 900 },
             { name: 'narrow', width: 760, height: 820 },
@@ -160,13 +194,8 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
               );
               const results = resultsScroller?.parentElement?.getBoundingClientRect();
               const detail = detailScroller?.getBoundingClientRect();
-              const workspace =
-                resultsScroller?.parentElement?.parentElement?.getBoundingClientRect();
               const summaryGrid =
                 detailScroller?.querySelector<HTMLElement>(':scope > div > div.grid');
-              const footer = [...document.querySelectorAll('p')]
-                .find((element) => element.textContent?.startsWith('Run e2e-search-layout'))
-                ?.parentElement?.getBoundingClientRect();
               if (!main || !controls || !resultsScroller || !results)
                 throw new Error('Search layout is incomplete');
               // Below 900px of page width the list and the details are one pane at a time (#451), so
@@ -196,7 +225,8 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
                 listScrollTop: resultsScroller.scrollTop,
                 detailScrollTop: detailScroller?.scrollTop ?? 0,
                 mainScrollTop: document.querySelector('main')?.scrollTop ?? -1,
-                footerGap: workspace && footer ? footer.top - workspace.bottom : -1,
+                // #562: the run log is not part of the Search page.
+                noRunLog: !document.body.textContent?.includes('Scan details'),
                 listOverflow: getComputedStyle(resultsScroller).overflowY,
                 detailOverflow: detailScroller ? getComputedStyle(detailScroller).overflowY : 'auto',
               };
@@ -209,7 +239,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
             expect(geometry.listScrollTop).toBeGreaterThan(0);
             if (geometry.twoPane) expect(geometry.detailScrollTop).toBeGreaterThan(0);
             expect(geometry.mainScrollTop).toBe(0);
-            expect(geometry.footerGap).toBeGreaterThanOrEqual(0);
+            expect(geometry.noRunLog).toBe(true);
             expect(geometry.listOverflow).toBe('auto');
             expect(geometry.detailOverflow).toBe('auto');
             if (geometry.twoPane && viewport.name === 'expanded-details' && !collapsed)
@@ -259,6 +289,30 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeHidden();
       await window.locator('summary', { hasText: 'Quick draft to read' }).click();
       await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeVisible();
+
+      // #550: opening the assistant must not scroll the document or the shell.
+      for (const size of [
+        { width: 1000, height: 700 },
+        { width: 1440, height: 900 },
+      ]) {
+        await electronApp.evaluate(
+          ({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds(bounds),
+          size,
+        );
+        await window.waitForTimeout(150);
+        const shell = await window.evaluate(() => {
+          const shellEl = document.querySelector('#root > div') as HTMLElement | null;
+          return {
+            docScrollTop: document.scrollingElement?.scrollTop ?? -1,
+            shellScrollTop: shellEl?.scrollTop ?? -1,
+            shellHeight: shellEl?.getBoundingClientRect().height ?? -1,
+            windowHeight: globalThis.innerHeight,
+          };
+        });
+        expect(shell.docScrollTop).toBe(0);
+        expect(shell.shellScrollTop).toBe(0);
+        expect(Math.round(shell.shellHeight)).toBe(shell.windowHeight);
+      }
 
       for (const viewport of [
         { name: 'assistant-minimum', width: 640, height: 480 },
