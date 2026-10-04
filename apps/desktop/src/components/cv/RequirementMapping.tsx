@@ -119,6 +119,9 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   const [rejectedProposals, setRejectedProposals] = useState<RejectedRequirementProposal[]>([]);
   /** Batches read in the current mapping run, and whether it stopped with more still owed. */
   const batchesRef = useRef(0);
+  /** The answer of the run last saved, so a re-render with a new vacancy or CV object (a new scan, a
+   * reloaded library) does not save the same finished run again over a case reviewed since (#564). */
+  const savedRunTextRef = useRef<string | null>(null);
   /** Which requirement has its "not a requirement" reason box open, and the reason typed so far. */
   const [excludingId, setExcludingId] = useState<string | null>(null);
   const [exclusionReason, setExclusionReason] = useState('');
@@ -180,6 +183,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
     (alreadyListed: readonly string[]) => {
       if (!cv || !vacancy) return;
       batchesRef.current += 1;
+      savedRunTextRef.current = null;
       run.reset();
       void run.start(buildRequirementMappingPrompt(cv, vacancy, sourceCv ?? null, undefined, alreadyListed), {
         ...(model ? { model } : {}),
@@ -207,6 +211,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   // overlay, create the overlay on a first visit or patch it on a later one.
   useEffect(() => {
     if (run.status !== 'completed' || !cvId || !vacancy || !vacancyKey) return;
+    if (savedRunTextRef.current === run.text) return;
     let cancelled = false;
     void (async () => {
       // The stored latest revision is the source of truth for the case's text (#419). When one
@@ -251,7 +256,9 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
             ? { requirementCoverage: { status: batch.hasMore ? ('partial' as const) : ('complete' as const), batches: batchesRef.current } }
             : {}),
         });
+        // Marked only once this pass carries on, so a pass cut short still gets to start the next batch.
         if (cancelled) return;
+        savedRunTextRef.current = run.text;
         setOverlay(updated);
         setRejectedProposals((previous) => [...previous, ...batch.rejected]);
         // Carry on with the next batch while the model says more remain and this one still added

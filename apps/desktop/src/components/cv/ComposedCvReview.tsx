@@ -11,7 +11,7 @@ import type {
 import { sha256HexOfSource } from './content-hash.js';
 import { CvArtifactPanel } from './CvArtifactPanel.js';
 import type { VacancyLead } from './types.js';
-import { describeError } from './useAgentRun.js';
+import { describeError, isCaseRevisionConflict } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
@@ -153,7 +153,11 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile, onReviewSou
   }, [cvId, vacancyKey, sourceCv, refresh]);
 
   const runCaseAction = useCallback(
-    async (action: (record: CvEvidenceOverlayRecord) => Promise<CvEvidenceOverlayRecord>, fallback: string) => {
+    async (
+      action: (record: CvEvidenceOverlayRecord) => Promise<CvEvidenceOverlayRecord>,
+      fallback: string,
+      retryOnConflict = false,
+    ) => {
       if (!overlay) return null;
       setError(undefined);
       try {
@@ -162,8 +166,22 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile, onReviewSou
         await loadPlan(updated);
         return updated;
       } catch (err) {
+        const fresh = await refresh().catch(() => null);
+        // #564: another panel saved to the case a moment earlier. An action whose result the main
+        // process works out on its own is tried once more against the case as it is now.
+        if (retryOnConflict && fresh && isCaseRevisionConflict(err)) {
+          try {
+            const updated = await action(fresh);
+            setOverlay(updated);
+            await loadPlan(updated);
+            return updated;
+          } catch (retryErr) {
+            setError(describeError(retryErr, fallback));
+            await refresh().catch(() => null);
+            return null;
+          }
+        }
         setError(describeError(err, fallback));
-        await refresh();
         return null;
       }
     },
@@ -174,7 +192,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile, onReviewSou
     setApprovingProjects(true);
     setApproved(false);
     try {
-      await runCaseAction((record) => window.workspace.approveCvProjectSelection(record.id, record.caseRevision), 'could not approve the project selection');
+      await runCaseAction((record) => window.workspace.approveCvProjectSelection(record.id, record.caseRevision), 'could not approve the project selection', true);
     } finally {
       setApprovingProjects(false);
     }
