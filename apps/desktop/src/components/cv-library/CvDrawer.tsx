@@ -464,6 +464,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 onChange={(e) => set('name', e.target.value)}
                 disabled={submitting}
                 placeholder="e.g. Tech CV, Sales CV"
+                aria-label="Name"
               />
             </label>
 
@@ -477,6 +478,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 onChange={(e) => set('targetRole', e.target.value)}
                 disabled={submitting}
                 placeholder="e.g. Nurse, Data analyst"
+                aria-label="Target role"
               />
             </label>
 
@@ -490,6 +492,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                   value={form.title}
                   onChange={(e) => set('title', e.target.value)}
                   disabled={submitting}
+                  aria-label="Title"
                 />
               </label>
               <label className="block">
@@ -501,6 +504,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                   value={form.years}
                   onChange={(e) => set('years', e.target.value)}
                   disabled={submitting}
+                  aria-label="Years of experience"
                 />
               </label>
             </div>
@@ -515,6 +519,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                   value={form.location}
                   onChange={(e) => set('location', e.target.value)}
                   disabled={submitting}
+                  aria-label="Location"
                 />
               </label>
               <label className="block">
@@ -527,6 +532,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                   onChange={(e) => set('languages', e.target.value)}
                   disabled={submitting}
                   placeholder="e.g. Dutch (B2), English (native)"
+                  aria-label="Languages"
                 />
               </label>
             </div>
@@ -541,6 +547,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 onChange={(e) => set('skillsText', e.target.value)}
                 disabled={submitting}
                 placeholder="Comma-separated, e.g. Angular, TypeScript, RxJS"
+                aria-label="Skills"
               />
             </label>
 
@@ -554,6 +561,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 onChange={(e) => set('auth', e.target.value)}
                 disabled={submitting}
                 placeholder="e.g. EU citizen, no sponsorship needed"
+                aria-label="Work authorization"
               />
             </label>
 
@@ -567,6 +575,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 value={form.summary}
                 onChange={(e) => set('summary', e.target.value)}
                 disabled={submitting}
+                aria-label="Summary"
               />
             </label>
 

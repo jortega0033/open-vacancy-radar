@@ -590,6 +590,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                 className="checkbox checkbox-xs"
                 checked={showOnlyOpen}
                 onChange={(event) => setShowOnlyOpen(event.currentTarget.checked)}
+                aria-label="Show only what needs me"
               />
               Show only what needs me
             </label>
@@ -638,6 +639,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                         onChange={(event) =>
                           void patchRequirement(requirement.requirementId, { reviewed: event.currentTarget.checked })
                         }
+                        aria-label="Reviewed"
                       />
                       Reviewed
                     </label>
@@ -756,6 +758,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                                 className="checkbox checkbox-xs"
                                 checked={requirement.sourceIds.includes(anchor.id)}
                                 onChange={() => toggleLink(requirement, 'sourceIds', anchor.id)}
+                                aria-label={anchor.label}
                               />
                               {anchor.label}
                             </label>
@@ -773,6 +776,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                                 className="checkbox checkbox-xs"
                                 checked={requirement.factIds.includes(fact.factId)}
                                 onChange={() => toggleLink(requirement, 'factIds', fact.factId)}
+                                aria-label={fact.activity.slice(0, 100)}
                               />
                               {fact.activity.slice(0, 100)}
                             </label>
@@ -836,6 +840,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                   className="input input-sm font-normal"
                   value={newRequirementText}
                   onChange={(event) => setNewRequirementText(event.currentTarget.value)}
+                  aria-label="What the requirement says"
                 />
               </label>
               <label className="flex flex-col gap-1 text-xs font-medium">
@@ -845,6 +850,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                   rows={2}
                   value={newRequirementQuote}
                   onChange={(event) => setNewRequirementQuote(event.currentTarget.value)}
+                  aria-label="Exact quote from the job description"
                 />
               </label>
               <button

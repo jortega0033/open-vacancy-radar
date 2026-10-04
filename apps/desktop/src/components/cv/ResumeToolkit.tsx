@@ -203,6 +203,7 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
               aria-describedby={
                 focusValidation.overlong ? 'resume-audit-target-role-error' : 'resume-audit-target-role-hint'
               }
+              aria-label="Target role"
             />
             {focusValidation.overlong ? (
               <p id="resume-audit-target-role-error" className="mt-1 text-xs text-error" role="alert">

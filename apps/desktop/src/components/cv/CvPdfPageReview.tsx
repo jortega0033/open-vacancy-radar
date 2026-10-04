@@ -88,7 +88,7 @@ function ReviewPage({ review, pageNumber, onDrawn, onFailed }: ReviewPageProps) 
         {drawn ? '' : ', not shown yet'}
       </figcaption>
       <div ref={frame} className="w-full border border-base-300 bg-white" style={drawn ? undefined : { aspectRatio: '1 / 1.414' }}>
-        <canvas ref={canvas} className="block h-auto w-full" data-drawn={drawn ? 'true' : 'false'} />
+        <canvas ref={canvas} className="block h-auto w-full" data-drawn={drawn ? 'true' : 'false'} aria-label={`Page ${pageNumber} content`} />
       </div>
       {text !== undefined && (
         <details className="text-xs">
@@ -200,7 +200,6 @@ export function CvPdfPageReview({ overlayId, artifact, onOverlayChange }: CvPdfP
             className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto overflow-x-hidden rounded-box border border-base-300 p-2"
             role="region"
             aria-label="PDF pages"
-            tabIndex={0}
           >
             {Array.from({ length: pageCount }, (_unused, index) => (
               <ReviewPage key={index + 1} review={review} pageNumber={index + 1} onDrawn={onDrawn} onFailed={onFailed} />
