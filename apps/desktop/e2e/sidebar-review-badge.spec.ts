@@ -48,9 +48,11 @@ test('expanded Applications badge leaves the label readable in light and dark th
       await electronApp.evaluate(({ BrowserWindow }) => {
         BrowserWindow.getAllWindows()[0]?.setBounds({ width: 1280, height: 720 });
       });
-      const sidebar = window.getByRole('complementary', { name: 'Main' });
-      const expand = sidebar.getByRole('button', { name: 'Expand sidebar' });
+      const expand = window.locator('aside.ovr-sidebar-collapsed[aria-label="Main"]')
+        .getByRole('button', { name: 'Expand sidebar' });
       if (await expand.isVisible()) await expand.click();
+      const sidebar = window.locator('aside.ovr-sidebar[aria-label="Main"]');
+      await expect(sidebar).toBeVisible();
       const applications = sidebar.getByRole('button', { name: 'Applications, 1 to review' });
       await expect(applications).toBeVisible();
       await expect(applications.locator('span.truncate')).toBeVisible();
