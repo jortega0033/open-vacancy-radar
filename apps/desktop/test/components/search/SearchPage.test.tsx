@@ -430,7 +430,7 @@ describe('SearchPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
       expect(await screen.findByText('Checked 4 of 11 source groups')).toBeInTheDocument();
-      expect(screen.getByText('212 vacancies so far')).toBeInTheDocument();
+      expect(screen.getByText('212 listings checked')).toBeInTheDocument();
       expect(screen.getByText(/1:4\d elapsed|1:5\d elapsed/)).toBeInTheDocument();
       expect(screen.getByText(/usually takes 2 to 5 minutes/i)).toBeInTheDocument();
       expect(screen.getByRole('progressbar', { name: 'Scan progress' })).toHaveAttribute('value', '36');

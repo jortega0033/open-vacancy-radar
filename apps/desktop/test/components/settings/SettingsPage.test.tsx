@@ -320,9 +320,13 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: '' }));
   });
 
-  it('lists the CV library in the default-CV select and saves the chosen id', async () => {
+  it('lists the CV library in the default-CV select and sets the library default (#554)', async () => {
+    const cv1 = makeCv('cv-1', 'Frontend CV');
+    const cv2 = makeCv('cv-2', 'Angular CV');
+    const setDefaultCvDocument = vi.fn().mockResolvedValue([cv1, { ...cv2, isDefault: true }]);
     const { bridge } = setup({
-      listCvDocuments: vi.fn().mockResolvedValue([makeCv('cv-1', 'Frontend CV'), makeCv('cv-2', 'Angular CV')]),
+      listCvDocuments: vi.fn().mockResolvedValue([cv1, cv2]),
+      setDefaultCvDocument,
     });
 
     render(<SettingsPage />);
@@ -333,7 +337,22 @@ describe('SettingsPage', () => {
 
     fireEvent.change(select, { target: { value: 'cv-2' } });
 
-    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultCvId: 'cv-2' }));
+    await waitFor(() => expect(setDefaultCvDocument).toHaveBeenCalledWith('cv-2'));
+    await waitFor(() => expect(select).toHaveValue('cv-2'));
+    expect(within(select).queryByRole('option', { name: 'No default' })).not.toBeInTheDocument();
+    expect(bridge.updateSettings).not.toHaveBeenCalledWith({ defaultCvId: 'cv-2' });
+  });
+
+  it('shows the CV the library marks as default, the same one the CV page shows (#554)', async () => {
+    setup({
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv('cv-1', 'Frontend CV'), { ...makeCv('cv-2', 'Angular CV'), isDefault: true }]),
+    });
+
+    render(<SettingsPage />);
+    await screen.findByLabelText('Start page');
+    openTab('Workspace');
+    const select = await screen.findByLabelText('Default CV');
+    await waitFor(() => expect(select).toHaveValue('cv-2'));
   });
 
   it('disables the default-CV select and says so when the library is empty', async () => {

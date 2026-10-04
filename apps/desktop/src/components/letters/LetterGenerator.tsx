@@ -225,8 +225,7 @@ export function LetterGenerator({
         setType(settings.defaultLetterType);
         setTone(settings.defaultLetterTone);
         setLength(settings.defaultLetterLength);
-        const defaultCvId = settings.defaultCvId;
-        if (defaultCvId) setCvId((current) => current || defaultCvId);
+        // The CV comes from the library's default flag below, the one the CV page sets (#554).
       } catch {
         // the useState defaults are already sensible
       }
@@ -469,7 +468,7 @@ export function LetterGenerator({
         const exporter = format === 'md' ? exportMarkdown : format === 'docx' ? exportDocx : exportPdf;
         const result = await exporter(exportTitle, body);
         if (result.saved) {
-          const fileName = result.path?.split(/[\/\\]/).pop();
+          const fileName = result.path?.split(/[/\\]/).pop();
           setExportedName(fileName);
           announce(fileName ? `Saved ${fileName}.` : 'Exported.');
           setExportState('exported');

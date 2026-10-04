@@ -30,7 +30,7 @@ export function describeScanProgress(status: VacancyScanStatus | undefined, now:
   const vacancies =
     status?.vacanciesSoFar === undefined
       ? null
-      : `${status.vacanciesSoFar.toLocaleString()} raw ${status.vacanciesSoFar === 1 ? 'listing' : 'listings'} scanned`;
+      : `${status.vacanciesSoFar.toLocaleString()} ${status.vacanciesSoFar === 1 ? 'listing' : 'listings'} checked`;
 
   if (status?.stopping) {
     return { fraction: null, headline: 'Stopping the scan…', elapsed, vacancies };

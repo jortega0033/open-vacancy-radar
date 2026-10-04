@@ -551,13 +551,23 @@ export function SettingsPage({
             >
               <SettingsSelect
                 id="setting-default-cv"
-                value={settings.defaultCvId ?? ''}
+                // The same default the CV page and Search use: the library's own flag (#554).
+                value={cvDocuments.find((cv) => cv.isDefault)?.id ?? ''}
                 options={[
-                  { value: '', label: 'No default' },
+                  ...(cvDocuments.some((cv) => cv.isDefault) ? [] : [{ value: '', label: 'No default' }]),
                   ...cvDocuments.map((cv) => ({ value: cv.id, label: cv.name })),
                 ]}
                 disabled={disabled || Boolean(cvListError) || cvDocuments.length === 0}
-                onChange={(next) => changeField({ defaultCvId: next === '' ? null : next })}
+                onChange={(next) => {
+                  if (next === '') return;
+                  void window.workspace
+                    .setDefaultCvDocument(next)
+                    .then((refreshed) => {
+                      setCvDocuments(refreshed);
+                      flash({ kind: 'saved', message: 'Default CV saved' });
+                    })
+                    .catch((err: unknown) => flash({ kind: 'error', message: describeError(err, 'could not set the default CV') }));
+                }}
               />
             </SettingsRow>
             <SettingsRow label="Default letter type" htmlFor="setting-letter-type">
