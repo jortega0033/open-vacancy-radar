@@ -16,7 +16,7 @@ import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
-import { EmptyState, ErrorBanner, Menu } from '../shell/index.js';
+import { EmptyState, ErrorBanner, Menu, useAnnounce } from '../shell/index.js';
 import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
 import { buildBundledDocumentPrompt } from '../generation/prompts.js';
 import { exportDocx, exportMarkdown, exportPdf } from './export.js';
@@ -138,6 +138,7 @@ export function LetterGenerator({
   const [status, setStatus] = useState<LetterStatus>(letter?.status ?? 'draft');
   const [instructions, setInstructions] = useState('');
   const { provider } = useEffectiveProvider();
+  const announce = useAnnounce();
 
   const [title, setTitle] = useState(letter?.title ?? '');
   // A title the user typed is theirs; only an untouched one keeps tracking the type and company.
@@ -159,6 +160,7 @@ export function LetterGenerator({
 
   const [exportState, setExportState] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
   const [exportError, setExportError] = useState<string>();
+  const [exportedName, setExportedName] = useState<string>();
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Which run's output has already been moved into the editor. A counter rather than a text
@@ -355,6 +357,11 @@ export function LetterGenerator({
 
   const hasBody = body.trim().length > 0;
   const isDirty = body !== savedBody;
+  // Title, type, tone, length, status and CV are saved with the letter too, so changing only one of
+  // them still counts as something to save.
+  const settingsKey = JSON.stringify([title, type, tone, length, status, cvId]);
+  const [savedSettingsKey, setSavedSettingsKey] = useState(settingsKey);
+  const hasUnsavedChanges = isDirty || settingsKey !== savedSettingsKey;
   const unsavedKind: UnsavedKind = !isDirty || !hasBody ? null : letterId ? 'edited' : 'new';
 
   useEffect(() => {
@@ -416,6 +423,7 @@ export function LetterGenerator({
       setSavedBody(record.body);
       setBody(record.body);
       setSaveState('saved');
+      setSavedSettingsKey(settingsKey);
       onSaved?.(record);
     } catch (err) {
       setSaveState('idle');
@@ -434,6 +442,7 @@ export function LetterGenerator({
     vacancyKey,
     cvId,
     letterId,
+    settingsKey,
     onSaved,
   ]);
 
@@ -460,6 +469,9 @@ export function LetterGenerator({
         const exporter = format === 'md' ? exportMarkdown : format === 'docx' ? exportDocx : exportPdf;
         const result = await exporter(exportTitle, body);
         if (result.saved) {
+          const fileName = result.path?.split(/[\/]/).pop();
+          setExportedName(fileName);
+          announce(fileName ? `Saved ${fileName}.` : 'Exported.');
           setExportState('exported');
           exportTimeoutRef.current = setTimeout(() => setExportState('idle'), COPY_FEEDBACK_MS);
         } else {
@@ -470,7 +482,7 @@ export function LetterGenerator({
         setExportError(describeError(err, 'could not export this letter'));
       }
     },
-    [body, title, derivedTitle],
+    [body, title, derivedTitle, announce],
   );
 
   /** A rejected selection is as much a failure of this generation as a dead session is, and it is
@@ -772,10 +784,10 @@ export function LetterGenerator({
             </select>
           </label>
           <button
-            className="btn btn-primary"
+            className={letterId && !hasUnsavedChanges ? 'btn btn-outline' : 'btn btn-primary'}
             type="button"
             onClick={() => void handleSave()}
-            disabled={!hasBody || saveState === 'saving' || run.isBusy}
+            disabled={!hasBody || saveState === 'saving' || run.isBusy || (letterId !== null && !hasUnsavedChanges)}
           >
             {saveState === 'saving' && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
             {letterId ? 'Save changes' : 'Save letter'}
@@ -831,7 +843,7 @@ export function LetterGenerator({
           )}
           {exportState === 'exported' && (
             <span className="text-success" role="status">
-              Exported.
+              {exportedName ? `Saved ${exportedName}.` : 'Exported.'}
             </span>
           )}
         </div>

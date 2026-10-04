@@ -261,16 +261,38 @@ describe('LetterGenerator', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: 'letter-1' })));
   });
 
+  it('keeps the save button quiet until something changes, then lights it up again', async () => {
+    const letter = makeLetter();
+    setup({ updateLetter: vi.fn().mockImplementation(async (_id: string, input: { body: string }) => ({ ...letter, body: input.body })) });
+    render(<LetterGenerator letter={letter} />);
+
+    const save = await screen.findByRole('button', { name: /save changes/i });
+    expect(save).toBeDisabled();
+    expect(save).not.toHaveClass('btn-primary');
+
+    fireEvent.change(screen.getByRole('textbox', { name: /letter body/i }), { target: { value: 'Edited body.' } });
+    expect(save).toBeEnabled();
+    expect(save).toHaveClass('btn-primary');
+
+    fireEvent.click(save);
+    expect(await screen.findByText(/saved to your letters/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Status' }), { target: { value: 'final' } });
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+  });
+
   it('reports a failed save and keeps the text', async () => {
     const letter = makeLetter();
     setup({ updateLetter: vi.fn().mockRejectedValue(new Error('database is locked')) });
 
     render(<LetterGenerator letter={letter} />);
 
+    fireEvent.change(await screen.findByRole('textbox', { name: /letter body/i }), { target: { value: 'Edited.' } });
     fireEvent.click(await screen.findByRole('button', { name: /save changes/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('database is locked');
-    expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue(letter.body);
+    expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue('Edited.');
   });
 
   it('cannot generate without a CV, and says why', async () => {
@@ -336,6 +358,17 @@ describe('LetterGenerator', () => {
     expect(call?.encoding).toBe('utf8');
     expect(call?.data).toContain(makeLetter().body);
     expect(await screen.findByText(/^exported\.$/i)).toBeInTheDocument();
+  });
+
+  it('confirms an export with the name of the saved file', async () => {
+    const { system } = setup();
+    vi.mocked(system.saveFile).mockResolvedValue({ saved: true, path: 'C:\Users\me\Documents\Cover letter.pdf' });
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /pdf \(\.pdf\)/i }));
+
+    expect(await screen.findByText('Saved Cover letter.pdf.')).toBeInTheDocument();
   });
 
   it('does not report an error when the user cancels the save dialog', async () => {
