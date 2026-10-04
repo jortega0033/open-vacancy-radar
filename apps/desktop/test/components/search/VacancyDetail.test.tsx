@@ -68,6 +68,25 @@ function renderDetail(
   );
 }
 
+describe('VacancyDetail work arrangement hint (#565a)', () => {
+  it('names the setup and quotes the wording it rests on', () => {
+    renderDetail(
+      worldwideResult({
+        workArrangement: { arrangement: 'hybrid', evidence: 'Office three days per week' },
+      }),
+    );
+    expect(screen.getByText('Work setup')).toBeInTheDocument();
+    const text = screen.getByText(/going by the posting/).textContent ?? '';
+    expect(text).toBe('Hybrid, going by the posting: "Office three days per week"');
+    expect(text).not.toContain('—');
+  });
+
+  it('shows no line when nothing was detected', () => {
+    renderDetail(worldwideResult({ workArrangement: { arrangement: 'unknown', evidence: null } }));
+    expect(screen.queryByText('Work setup')).not.toBeInTheDocument();
+  });
+});
+
 describe('VacancyDetail', () => {
   it('shows the description text when the source provided one', () => {
     renderDetail(worldwideResult({ description: 'Join our fully-remote engineering team.' }));

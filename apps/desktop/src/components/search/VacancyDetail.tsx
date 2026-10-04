@@ -12,6 +12,7 @@ import {
   profileFitSpoken,
   type SearchResult,
   type Verification,
+  workArrangementOf,
 } from './results.js';
 
 /** The one control that opens and closes the CV assistant. Label strings live here only. */
@@ -144,6 +145,22 @@ function FitSummary({ result }: { result: SearchResult }) {
   );
 }
 
+const ARRANGEMENT_LABELS = { onsite: 'On-site', hybrid: 'Hybrid', remote: 'Remote' } as const;
+
+/** One overview line for a detected work arrangement, worded as a hint with its evidence. */
+function arrangementPairs(result: SearchResult): { k: string; v: string }[] {
+  const detection = workArrangementOf(result);
+  if (detection.arrangement === 'unknown') return [];
+  return [
+    {
+      k: 'Work setup',
+      v: `${ARRANGEMENT_LABELS[detection.arrangement]}, going by the posting${
+        detection.evidence ? `: "${detection.evidence}"` : ''
+      }`,
+    },
+  ];
+}
+
 function overviewPairs(result: SearchResult): { k: string; v: string }[] {
   const vacancy = result.raw;
   return [
@@ -151,6 +168,7 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
     { k: 'Location', v: orNotStated(result.location) },
     { k: 'Source', v: discoveryProviderLabel(result.provider) },
     { k: 'Employment type', v: orNotStated(vacancy.employmentType) },
+    ...arrangementPairs(result),
     { k: 'Advertised salary', v: result.salary ?? 'Not disclosed' },
     {
       k: 'Posted',

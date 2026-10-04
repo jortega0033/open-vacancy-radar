@@ -53,6 +53,36 @@ function worldwideResult(key: string, title: string, overrides: Partial<SearchRe
   };
 }
 
+describe('SearchResultList work arrangement chip (#565a)', () => {
+  function renderRows(results: SearchResult[]) {
+    render(
+      <SearchResultList
+        results={results}
+        totalCount={results.length}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="rows"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+  }
+
+  it('shows a Hybrid chip and an On-site chip, and nothing for remote or unknown', () => {
+    renderRows([
+      worldwideResult('1', 'A', { workArrangement: { arrangement: 'hybrid', evidence: 'hybrid' } }),
+      worldwideResult('2', 'B', { workArrangement: { arrangement: 'onsite', evidence: 'on-site' } }),
+      worldwideResult('3', 'C', { workArrangement: { arrangement: 'remote', evidence: 'Remote' } }),
+      worldwideResult('4', 'D', { workArrangement: { arrangement: 'unknown', evidence: null } }),
+      worldwideResult('5', 'E'),
+    ]);
+    expect(screen.getAllByText('Hybrid')).toHaveLength(1);
+    expect(screen.getAllByText('On-site')).toHaveLength(1);
+  });
+});
+
 describe('SearchResultList', () => {
   // UX audit finding: `decisionLabel(result.raw.decision)` used to render as a badge chip styled
   // identically to the salary/employment-type chips. In every populated screenshot reviewed,

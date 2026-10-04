@@ -9,6 +9,11 @@ import {
   parseMinimumAnnualSalary,
   type SalaryFilterCriteria,
 } from '@open-vacancy-radar/vacancy-engine/salary';
+import {
+  detectWorkArrangement,
+  isOnsiteOrHybrid,
+  type WorkArrangementDetection,
+} from '@open-vacancy-radar/vacancy-engine/work-arrangement';
 import type { VacancyLead } from '../cv/types.js';
 import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countries.js';
 
@@ -89,6 +94,12 @@ interface CommonResult {
    * unavailable" state rather than fabricating one from the number.
    */
   profileMatch?: ProfileMatchBreakdown | null;
+  /**
+   * Best-effort on-site/hybrid/remote hint read from the title, location and description text
+   * (issue #565a). Not set on mapping: read it through `workArrangementOf`, which works it out on
+   * first use, so a large report is not scanned up front. Set only to override that (tests).
+   */
+  workArrangement?: WorkArrangementDetection;
   /** Deterministic engine findings, where the pipeline produces them. */
   strongPoints: string[];
   gaps: string[];
@@ -382,6 +393,24 @@ export function toPartialResults(vacancies: readonly DiscoveryVacancyAudit[]): S
 
 export type PostedWithin = 'any' | '1' | '7' | '30';
 
+const workArrangementCache = new WeakMap<SearchResult, WorkArrangementDetection>();
+
+/**
+ * The on-site/hybrid/remote hint for one result (#565a), worked out on first use and cached. Lazy
+ * because scanning every description of a 20,000-row report up front takes seconds; only the rows
+ * on screen, and every row once the hide filter is turned on, are ever scanned. Works for reports
+ * saved before the hint existed.
+ */
+export function workArrangementOf(result: SearchResult): WorkArrangementDetection {
+  if (result.workArrangement) return result.workArrangement;
+  let detection = workArrangementCache.get(result);
+  if (!detection) {
+    detection = detectWorkArrangement({ title: result.title, location: result.location, description: result.description });
+    workArrangementCache.set(result, detection);
+  }
+  return detection;
+}
+
 export interface SearchFilters {
   /** Role or keyword, matched against title and company. */
   query: string;
@@ -389,6 +418,8 @@ export interface SearchFilters {
   location: string;
   /** Keep only rows with a possible IND sponsor match (best-effort; see `worldwideVerification`). */
   sponsorOnly: boolean;
+  /** Drop rows whose wording suggests on-site or hybrid work. Off by default; unknown stays. */
+  hideOnsiteHybrid: boolean;
   /** Most sources still record no posting date at all -- a row with an unknown date is dropped
    * rather than kept when this filter is active, never assumed recent. */
   postedWithin: PostedWithin;
@@ -408,6 +439,7 @@ export const DEFAULT_FILTERS: SearchFilters = {
   query: '',
   location: '',
   sponsorOnly: false,
+  hideOnsiteHybrid: false,
   postedWithin: 'any',
   source: 'all',
   employment: 'any',
@@ -532,6 +564,8 @@ export function filterSearchResultIndex(
     if (filters.source !== 'all' && entry.result.provider !== filters.source) return false;
 
     if (filters.sponsorOnly && entry.result.raw.worldwideSponsorMatch === null) return false;
+
+    if (filters.hideOnsiteHybrid && isOnsiteOrHybrid(workArrangementOf(entry.result).arrangement)) return false;
 
     if (maximumAgeMs !== null) {
       // A row with no known posting date cannot satisfy "posted in the last N days". It is dropped

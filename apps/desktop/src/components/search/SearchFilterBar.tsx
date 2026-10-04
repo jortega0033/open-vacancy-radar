@@ -304,6 +304,17 @@ export function SearchFilterBar({
           </select>
         )}
 
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-base-content/70">
+          <input
+            className="checkbox checkbox-xs"
+            type="checkbox"
+            aria-label="Hide on-site and hybrid"
+            checked={filters.hideOnsiteHybrid ?? false}
+            onChange={(event) => onFiltersChange({ hideOnsiteHybrid: event.target.checked })}
+          />
+          Hide on-site and hybrid
+        </label>
+
         {/* Separates the filter chips (narrow what's shown) from the trailing meta+reset pair
             (explain/undo), so the row reads as two groups rather than one undifferentiated run. */}
         <div className="mx-1 hidden h-5 w-px self-center bg-base-300 md:block" aria-hidden="true" />
