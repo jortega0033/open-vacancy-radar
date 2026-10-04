@@ -90,7 +90,7 @@ export const SearchResultRow = memo(function SearchResultRow({
         <div className="mt-1.5 flex flex-wrap items-center gap-1 short:mt-1 short:flex-nowrap short:overflow-hidden">
           {result.profileScore != null && (
             <span
-              className="badge badge-xs badge-soft badge-primary font-mono"
+              className="badge badge-xs badge-soft badge-primary flex-none whitespace-nowrap font-mono"
               title="Deterministic score against your search profile. It does not compare this vacancy to a CV."
             >
               <span aria-hidden="true">{profileFitText(result.profileScore)}</span>
@@ -100,7 +100,7 @@ export const SearchResultRow = memo(function SearchResultRow({
           {badges.map((badge) => (
             <span
               key={badge.text}
-              className={`badge badge-sm flex-none whitespace-nowrap font-normal ${
+              className={`badge badge-sm flex-none whitespace-nowrap font-normal ${badge.text === result.employmentType && result.salary ? 'short:hidden' : ''} ${
                 badge.tone === 'success'
                   ? 'badge-success badge-soft'
                   : badge.tone === 'warning'

@@ -123,14 +123,24 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
           const rect = row.getBoundingClientRect();
           return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1;
         });
+        const badgeClipped = fully.some((row) =>
+          [...row.querySelectorAll<HTMLElement>('.badge')].some((badge) => {
+            if (getComputedStyle(badge).display === 'none') return false;
+            const rowEdge = badge.parentElement?.getBoundingClientRect().right ?? 0;
+            return badge.getBoundingClientRect().right > rowEdge + 1 ||
+              badge.scrollWidth > badge.clientWidth + 1 || badge.scrollHeight > badge.clientHeight + 1;
+          }),
+        );
         return {
           fully: fully.length,
+          badgeClipped,
           listHeight: Math.round(box.height),
           rowHeight: Math.round(rows[0]?.getBoundingClientRect().height ?? 0),
           docScrollTop: document.scrollingElement?.scrollTop ?? -1,
         };
       });
       expect(rowFit.fully).toBeGreaterThanOrEqual(4);
+      expect(rowFit.badgeClipped).toBe(false);
       expect(rowFit.docScrollTop).toBe(0);
 
       let sidebarCollapsed = false;
