@@ -523,7 +523,7 @@ describe('ApplicationsPage', () => {
       expect((await screen.findAllByText('Queued')).length).toBeGreaterThan(0);
 
       await waitFor(
-        () => expect(screen.getByRole('button', { name: 'Open employer site' })).toBeInTheDocument(),
+        () => expect(screen.getByRole('button', { name: 'Open the posting' })).toBeInTheDocument(),
         { timeout: 3_000 },
       );
       expect(listApplicationAttempts.mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -589,7 +589,7 @@ describe('ApplicationsPage', () => {
       expect(within(dialog).getByText(/review application/i)).toBeInTheDocument();
       await waitFor(() => expect(resolveTargetPolicyId).toHaveBeenCalledWith(attempt.canonicalUrl));
       await waitFor(() => expect(within(dialog).getByText(/You send this one yourself/i)).toBeInTheDocument());
-      expect(within(dialog).getByRole('button', { name: /open employer site/i })).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /open the posting/i })).toBeInTheDocument();
     });
 
     it('advances directly to the next actionable card after a decision', async () => {
