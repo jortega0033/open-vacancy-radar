@@ -373,6 +373,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     value={form.currentRole}
                     disabled={saving}
                     onChange={(event) => set('currentRole', event.currentTarget.value)}
+                    aria-label="Current role"
                   />
                 </label>
 
@@ -388,6 +389,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                       value={form.experienceYears}
                       disabled={saving}
                       onChange={(event) => set('experienceYears', event.currentTarget.value)}
+                      aria-label="Years of experience"
                     />
                   </label>
                   <label className="block">
@@ -399,6 +401,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                       value={form.location}
                       disabled={saving}
                       onChange={(event) => set('location', event.currentTarget.value)}
+                      aria-label="Location"
                     />
                   </label>
                 </div>
@@ -412,6 +415,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     value={form.professionalLanguage}
                     disabled={saving}
                     onChange={(event) => set('professionalLanguage', event.currentTarget.value)}
+                    aria-label="Professional language"
                   />
                 </label>
 
@@ -426,6 +430,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     disabled={saving}
                     onChange={(event) => set('strongestSkills', event.currentTarget.value)}
                     placeholder="Comma-separated"
+                    aria-label="Strongest skills"
                   />
                 </label>
 
@@ -440,6 +445,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     disabled={saving}
                     onChange={(event) => set('additionalSkills', event.currentTarget.value)}
                     placeholder="Comma-separated"
+                    aria-label="Additional skills"
                   />
                 </label>
 
@@ -454,6 +460,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     disabled={saving}
                     onChange={(event) => set('targetRoles', event.currentTarget.value)}
                     placeholder="Comma-separated"
+                    aria-label="Target roles"
                   />
                 </label>
 
@@ -468,6 +475,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     disabled={saving}
                     onChange={(event) => set('consideredRoles', event.currentTarget.value)}
                     placeholder="Comma-separated"
+                    aria-label="Considered roles"
                   />
                 </label>
 
@@ -480,6 +488,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     value={form.primaryCountry}
                     disabled={saving}
                     onChange={(event) => set('primaryCountry', event.currentTarget.value)}
+                    aria-label="Country"
                   />
                 </label>
               </>

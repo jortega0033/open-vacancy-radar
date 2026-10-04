@@ -316,6 +316,7 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
                       rows={2}
                       value={correcting.values.activity}
                       onChange={(event) => setCorrecting({ ...correcting, values: { ...correcting.values, activity: event.currentTarget.value } })}
+                      aria-label="What you did"
                     />
                   </label>
                   <label className="flex flex-col gap-1 text-xs">
@@ -325,6 +326,7 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
                       rows={2}
                       value={correcting.values.mechanism}
                       onChange={(event) => setCorrecting({ ...correcting, values: { ...correcting.values, mechanism: event.currentTarget.value } })}
+                      aria-label="How"
                     />
                   </label>
                   <label className="flex flex-col gap-1 text-xs">
@@ -334,6 +336,7 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
                       rows={2}
                       value={correcting.values.result}
                       onChange={(event) => setCorrecting({ ...correcting, values: { ...correcting.values, result: event.currentTarget.value } })}
+                      aria-label="Result"
                     />
                   </label>
                   <div className="flex flex-wrap gap-2">
@@ -344,6 +347,7 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
                         className="input input-sm"
                         value={correcting.values.timePhase}
                         onChange={(event) => setCorrecting({ ...correcting, values: { ...correcting.values, timePhase: event.currentTarget.value } })}
+                        aria-label="When"
                       />
                     </label>
                     <label className="flex flex-col gap-1 text-xs">

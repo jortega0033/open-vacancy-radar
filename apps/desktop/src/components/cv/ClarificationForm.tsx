@@ -123,6 +123,7 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
               rows={2}
               value={activity}
               onChange={(event) => setActivity(event.currentTarget.value)}
+              aria-label="What did you personally do, and where"
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -133,6 +134,7 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
               value={timePhase}
               onChange={(event) => setTimePhase(event.currentTarget.value)}
               placeholder="e.g. the first year, or 2021 to 2022"
+              aria-label="When did this happen, if you want to say"
             />
           </label>
         </>
@@ -147,6 +149,7 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
             rows={3}
             value={mechanism}
             onChange={(event) => setMechanism(event.currentTarget.value)}
+            aria-label="How did you do it, including the actual tools and scope"
           />
         </label>
       )}
@@ -161,6 +164,7 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
               rows={2}
               value={result}
               onChange={(event) => setResult(event.currentTarget.value)}
+              aria-label="What was the result, or what was it for, if you know"
             />
           </label>
           <div className="flex flex-wrap items-end gap-2">
@@ -172,6 +176,7 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
                 value={metricValue}
                 onChange={(event) => setMetricValue(event.currentTarget.value)}
                 placeholder="e.g. 30%"
+                aria-label="Number, if there is one"
               />
             </label>
             <label className="flex flex-col gap-1">
@@ -181,6 +186,7 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
                 className="input input-sm w-24"
                 value={metricUnit}
                 onChange={(event) => setMetricUnit(event.currentTarget.value)}
+                aria-label="Unit"
               />
             </label>
             <label className="flex min-w-40 flex-1 flex-col gap-1">
@@ -191,6 +197,7 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
                 value={metricBasis}
                 onChange={(event) => setMetricBasis(event.currentTarget.value)}
                 placeholder="e.g. a report you were sent"
+                aria-label="Where does that number come from"
               />
             </label>
           </div>

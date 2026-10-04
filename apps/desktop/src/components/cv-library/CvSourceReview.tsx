@@ -153,6 +153,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
             value={source.contact.name}
             onChange={(e) => patchContact({ name: e.target.value })}
             disabled={disabled}
+            aria-label="Full name"
           />
         </label>
         <label className="block">
@@ -164,6 +165,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
             value={source.contact.email}
             onChange={(e) => patchContact({ email: e.target.value })}
             disabled={disabled}
+            aria-label="Email"
           />
         </label>
         <label className="block">
@@ -175,6 +177,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
             value={source.contact.phone}
             onChange={(e) => patchContact({ phone: e.target.value })}
             disabled={disabled}
+            aria-label="Phone"
           />
         </label>
         <label className="block">
@@ -186,6 +189,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
             value={source.contact.location}
             onChange={(e) => patchContact({ location: e.target.value })}
             disabled={disabled}
+            aria-label="Location"
           />
         </label>
       </div>
@@ -198,6 +202,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
           onChange={(e) => patchContact({ links: textToLinks(e.target.value) })}
           disabled={disabled}
           placeholder="Comma-separated, e.g. github.com/you, yoursite.dev"
+          aria-label="Links"
         />
       </label>
 

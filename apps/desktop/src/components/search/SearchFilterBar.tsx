@@ -194,6 +194,7 @@ export function SearchFilterBar({
                 checked={filters.includeUnknownSalary}
                 onChange={(event) => onFiltersChange({ includeUnknownSalary: event.target.checked })}
                 disabled={busy}
+                aria-label="Include jobs with no salary"
               />
               <span>Include jobs with no salary</span>
             </label>
@@ -241,6 +242,7 @@ export function SearchFilterBar({
               checked={filters.sponsorOnly}
               onChange={(event) => onFiltersChange({ sponsorOnly: event.target.checked })}
               disabled={busy}
+              aria-label="Possible IND sponsor match only"
             />
             Possible IND sponsor match only
           </label>

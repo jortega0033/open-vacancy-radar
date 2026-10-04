@@ -554,6 +554,7 @@ export function LetterGenerator({
                     onChange={(event) => setManualRole(event.target.value)}
                     placeholder="e.g. Product Manager, Solutions Architect"
                     disabled={run.isBusy}
+                    aria-label="Role"
                   />
                 </label>
                 <label className="block">
@@ -565,6 +566,7 @@ export function LetterGenerator({
                     onChange={(event) => setManualCompany(event.target.value)}
                     placeholder="e.g. Company name"
                     disabled={run.isBusy}
+                    aria-label="Company"
                   />
                 </label>
                 <label className="block">
@@ -576,6 +578,7 @@ export function LetterGenerator({
                     onChange={(event) => setManualLocation(event.target.value)}
                     placeholder="e.g. Lisbon, Remote"
                     disabled={run.isBusy}
+                    aria-label="Location"
                   />
                 </label>
                 <label className="block">
@@ -587,6 +590,7 @@ export function LetterGenerator({
                     onChange={(event) => setManualUrl(event.target.value)}
                     placeholder="https://…"
                     disabled={run.isBusy}
+                    aria-label="Posting URL"
                   />
                 </label>
                 <label className="block">
@@ -598,6 +602,7 @@ export function LetterGenerator({
                     onChange={(event) => setManualDescription(event.target.value)}
                     placeholder="Paste the description and requirements here."
                     disabled={run.isBusy}
+                    aria-label="Posting text"
                   />
                   <span className="mt-1 block text-xs text-base-content/60">
                     Optional. More text gives a more specific letter.

@@ -125,15 +125,15 @@ export function ManualCaseForm({ documents, onSubmit, onCancel }: ManualCaseForm
       </div>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">Role (required)</span>
-        <input className="input w-full" value={role} onChange={(event) => setRole(event.currentTarget.value)} />
+        <input className="input w-full" value={role} onChange={(event) => setRole(event.currentTarget.value)} aria-label="Role" />
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">Company (required)</span>
-        <input className="input w-full" value={company} onChange={(event) => setCompany(event.currentTarget.value)} />
+        <input className="input w-full" value={company} onChange={(event) => setCompany(event.currentTarget.value)} aria-label="Company" />
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">Link to the posting (optional)</span>
-        <input className="input w-full" value={url} onChange={(event) => setUrl(event.currentTarget.value)} />
+        <input className="input w-full" value={url} onChange={(event) => setUrl(event.currentTarget.value)} aria-label="Link to the posting" />
       </label>
       <label className="block">
         <span className="mb-1 block text-sm font-medium">Job description (required)</span>
@@ -141,6 +141,7 @@ export function ManualCaseForm({ documents, onSubmit, onCancel }: ManualCaseForm
           className="textarea min-h-48 w-full"
           value={description}
           onChange={(event) => setDescription(event.currentTarget.value)}
+          aria-label="Job description"
         />
       </label>
       {error && (

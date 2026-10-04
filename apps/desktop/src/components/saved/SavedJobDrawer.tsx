@@ -113,6 +113,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               type="text"
               value={form.role}
               onChange={(e) => set('role', e.target.value)}
+              aria-label="Role"
             />
           </label>
 
@@ -123,6 +124,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               type="text"
               value={form.company}
               onChange={(e) => set('company', e.target.value)}
+              aria-label="Company"
             />
           </label>
 
@@ -134,6 +136,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.location}
               onChange={(e) => set('location', e.target.value)}
               placeholder="e.g. Lisbon, Remote"
+              aria-label="Location"
             />
           </label>
 
@@ -145,6 +148,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.salary}
               onChange={(e) => set('salary', e.target.value)}
               placeholder="e.g. 45,000 per year"
+              aria-label="Salary"
             />
           </label>
 
@@ -156,6 +160,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.arrangement}
               onChange={(e) => set('arrangement', e.target.value)}
               placeholder="e.g. Remote, Hybrid, On-site"
+              aria-label="Arrangement"
             />
           </label>
 
@@ -167,6 +172,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.sourceUrl}
               onChange={(e) => set('sourceUrl', e.target.value)}
               placeholder="https://…"
+              aria-label="Source URL"
             />
           </label>
 
@@ -178,6 +184,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.verification}
               onChange={(e) => set('verification', e.target.value)}
               placeholder="e.g. Recognised sponsor"
+              aria-label="Sponsor check"
             />
           </label>
 
@@ -203,6 +210,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               rows={4}
               value={form.notes}
               onChange={(e) => set('notes', e.target.value)}
+              aria-label="Notes"
             />
           </label>
 

@@ -173,6 +173,7 @@ export function ApplicationDrawer({
               value={draft.role}
               onChange={(e) => update('role', e.target.value)}
               disabled={submitting}
+              aria-label="Role"
             />
           </label>
 
@@ -185,6 +186,7 @@ export function ApplicationDrawer({
               value={draft.company}
               onChange={(e) => update('company', e.target.value)}
               disabled={submitting}
+              aria-label="Company"
             />
           </label>
 
@@ -197,6 +199,7 @@ export function ApplicationDrawer({
               value={draft.location}
               onChange={(e) => update('location', e.target.value)}
               disabled={submitting}
+              aria-label="Location"
             />
           </label>
 
@@ -228,6 +231,7 @@ export function ApplicationDrawer({
                 value={draft.appliedAt}
                 onChange={(e) => update('appliedAt', e.target.value)}
                 disabled={submitting}
+                aria-label="Applied date"
               />
             </label>
           </div>
@@ -242,6 +246,7 @@ export function ApplicationDrawer({
               onChange={(e) => update('nextStep', e.target.value)}
               placeholder="e.g. Technical interview · 2 Sep"
               disabled={submitting}
+              aria-label="Next step"
             />
           </label>
 
@@ -254,6 +259,7 @@ export function ApplicationDrawer({
               value={draft.contact}
               onChange={(e) => update('contact', e.target.value)}
               disabled={submitting}
+              aria-label="Contact person"
             />
           </label>
 
@@ -300,6 +306,7 @@ export function ApplicationDrawer({
               value={draft.notes}
               onChange={(e) => update('notes', e.target.value)}
               disabled={submitting}
+              aria-label="Notes"
             />
           </label>
 

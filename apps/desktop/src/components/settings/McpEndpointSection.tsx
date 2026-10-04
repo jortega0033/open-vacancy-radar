@@ -162,6 +162,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
                 value={grantName}
                 disabled={disabled || creating}
                 onChange={(event) => setGrantName(event.currentTarget.value)}
+                aria-label="App name"
               />
             </div>
             <div>
