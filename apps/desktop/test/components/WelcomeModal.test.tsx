@@ -689,6 +689,51 @@ describe('Finish setup (reopening the checklist, #539)', () => {
     expect(workspace.updateSettings).not.toHaveBeenCalledWith(expect.objectContaining({ welcomeSeen: false }));
   });
 
+  it('"Set up" closes the reopened checklist and opens the AI runtime page, without touching welcomeSeen', async () => {
+    const workspace = installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS) });
+    render(<App />);
+    const { dialog } = await openFinishSetup();
+
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Set up' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Finish setup' })).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Finish setup' })).not.toBeInTheDocument();
+    expect(workspace.updateSettings).not.toHaveBeenCalledWith({ welcomeSeen: true });
+    expect(workspace.updateSettings).not.toHaveBeenCalledWith(expect.objectContaining({ welcomeSeen: false }));
+  });
+
+  it('"Open Settings" from the reopened checklist lands on the Search tab with the profile focused', async () => {
+    const profileLoads = { ok: false };
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn(async () => {
+        if (!profileLoads.ok) throw new Error('unreadable');
+        return { ...DEFAULT_CANDIDATE_PROFILE };
+      }),
+    });
+    installCvBridge();
+    installDrivableAgentDockBridge();
+    const savedCv = makeCv({ id: 'cv-new', isDefault: true });
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS),
+      listCvDocuments: vi.fn().mockResolvedValue([savedCv]),
+      createCvDocument: vi.fn().mockResolvedValue(savedCv),
+    });
+    render(<App />);
+    const { dialog } = await openFinishSetup();
+    // The page was already on Settings > General when the modal closes: it must still switch tabs.
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(await within(dialog).findByRole('button', { name: /upload cv/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
+    await screen.findByText(/Could not fill your profile automatically/);
+    profileLoads.ok = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+  });
+
   it('never auto-opens for a dismissed user, and the entry stays once everything is done', async () => {
     installWorkspaceBridge({
       getSettings: vi.fn().mockResolvedValue(SEEN_SETTINGS),

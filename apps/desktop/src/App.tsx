@@ -81,6 +81,8 @@ export function App() {
   // search profile", the first-launch checklist). Held here, not in SettingsPage, so it survives
   // that page remounting; a plain sidebar visit clears it in `handleNavigate`.
   const [settingsTarget, setSettingsTarget] = useState<{ tab: SettingsTab; focusSection?: SettingsFocusSection }>();
+  // Bumped on every jump to a Settings target so an already-mounted Settings page remounts onto it.
+  const [settingsTargetKey, setSettingsTargetKey] = useState(0);
   const [searchSession, setSearchSession] = useState(createSearchSessionState);
   const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
   const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
@@ -236,6 +238,7 @@ export function App() {
   const handleOpenSearchProfile = useCallback(() => {
     handleNavigate('settings');
     setSettingsTarget({ tab: 'search', focusSection: 'search-profile' });
+    setSettingsTargetKey((key) => key + 1);
   }, [handleNavigate]);
 
   const handleGenerateApplicationLetter = useCallback((vacancy: SelectedVacancy, attemptId: string) => {
@@ -527,6 +530,7 @@ export function App() {
           )}
           {nav === 'settings' && (
             <SettingsPage
+              key={settingsTargetKey}
               onNavigateToRuntime={() => handleNavigate('runtime')}
               onOpenSetup={() => setShowSetup(true)}
               currentPage={nav}

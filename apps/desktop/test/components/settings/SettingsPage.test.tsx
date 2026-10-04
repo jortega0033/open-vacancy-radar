@@ -58,6 +58,21 @@ afterEach(() => {
 });
 
 describe('SettingsPage', () => {
+  it('shows the Finish setup entry only when the shell can open it (#539)', async () => {
+    setup();
+    const onOpenSetup = vi.fn();
+    const { unmount } = render(<SettingsPage onOpenSetup={onOpenSetup} />);
+    const button = await screen.findByRole('button', { name: 'Finish setup' });
+    fireEvent.click(button);
+    expect(onOpenSetup).toHaveBeenCalledTimes(1);
+    unmount();
+
+    setup();
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Finish setup' })).not.toBeInTheDocument();
+  });
+
   it('opens on the General tab unless a tab is asked for', async () => {
     setup();
     render(<SettingsPage />);
