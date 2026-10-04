@@ -33,7 +33,7 @@ import {
   loadConfig,
   migrateDatabase,
   readAtsRosterStatus,
-  readGlobalRemoteReport,
+  readGlobalRemoteReportWithFallback,
   runAtsRosterImport,
   runGlobalRemoteScan,
   runSponsorSync,
@@ -318,6 +318,8 @@ let vacancyScanLock: ScanLock | undefined;
 /** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
 let vacancyEngineFailure: VacancyEngineFailure | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
+/** Set at startup when the report on disk was the kept one from before a zero-match scan (#577). */
+let hydratedZeroMatch: { checked: number } | undefined;
 let lastVacancyScanAt: string | undefined;
 
 /**
@@ -399,7 +401,9 @@ async function vacancyEngineDataRoot(): Promise<string> {
  */
 async function hydrateLatestVacancyReport(): Promise<void> {
   try {
-    latestVacancyReport = await readGlobalRemoteReport(await vacancyEngineDataRoot());
+    const loaded = await readGlobalRemoteReportWithFallback(await vacancyEngineDataRoot());
+    latestVacancyReport = loaded?.report;
+    hydratedZeroMatch = loaded?.keptPrevious;
   } catch {
     // Tolerated -- see doc comment above.
   }
@@ -2538,12 +2542,13 @@ guardedIpc.handle('vacancy:rebuild-cache', async (): Promise<VacancyCacheRebuild
 });
 
 guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
-guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt: string; vacancyCount: number } | null =>
+guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt: string; vacancyCount: number; keptAfterZeroMatch?: { checked: number } } | null =>
   latestVacancyReport
     ? {
         runId: latestVacancyReport.runId,
         generatedAt: latestVacancyReport.generatedAt,
         vacancyCount: latestVacancyReport.discoveryAudit.length,
+        ...(hydratedZeroMatch ? { keptAfterZeroMatch: hydratedZeroMatch } : {}),
       }
     : null,
 );
@@ -2693,7 +2698,6 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         if (scan.controller.signal.aborted) throw new ScanCancelledError();
         const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
           signal: scan.controller.signal,
-          preserveNonEmptyLatest: true,
           ...(request.mode === 'query'
             ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
             : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
@@ -2720,6 +2724,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         // A scan with no matches must not displace the last report that had some (#561): saved jobs
         // and prepare still resolve rows against it, and the renderer keeps showing it.
         lastVacancyScanAt = result.report.generatedAt;
+        hydratedZeroMatch = undefined;
         if (result.report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
           latestVacancyReport = result.report;
         }
