@@ -988,6 +988,46 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(createApplicationView).not.toHaveBeenCalled();
   });
 
+  it('links a letter saved from the hand-off to its attempt and clears the letter blocker (#552)', async () => {
+    generateCoverLetter.mockResolvedValueOnce({ ok: true, text: '{"factIds":["experience-99"]}' });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-handoff', applyUrl: 'https://jobs.example.invalid/apply/handoff' },
+    });
+    queueApplicationDocumentRenders();
+    await pipeline.runNextApplicationAttempt(deps);
+    const attemptId = started.attemptId!;
+    expect(workspace.listApplicationArtifacts(db, attemptId).map((artifact) => artifact.kind)).toEqual(['cv_pdf']);
+
+    // Nothing saved yet for this vacancy.
+    await expect(pipeline.attachLetterToAttempt(deps, attemptId)).resolves.toMatchObject({ ok: false });
+
+    workspace.createLetter(db, {
+      title: 'Cover Letter',
+      company: VACANCY.company,
+      role: VACANCY.role,
+      type: 'cover_letter',
+      vacancyKey: 'vac-handoff',
+      body: 'Dear Northwind Freight hiring team,\n\nI am applying for the Logistics Platform Engineer role.\n\nJamie Rivera',
+    });
+    printQueue.push(coverLetterPdf());
+
+    const attached = await pipeline.attachLetterToAttempt(deps, attemptId);
+
+    expect(attached.ok).toBe(true);
+    expect(workspace.listApplicationArtifacts(db, attemptId).map((artifact) => artifact.kind))
+      .toEqual(['cv_pdf', 'cover_letter_pdf']);
+    const attempt = workspace.getApplicationAttempt(db, attemptId);
+    expect(attempt.checkpoint).toBe('needs_user');
+    expect(attempt.checkpointDetail).toContain('Your application documents are ready.');
+    expect(attempt.checkpointDetail).not.toMatch(/cover letter/iu);
+  });
+
+  it('refuses to link a letter to an attempt that is not waiting on one (#552)', async () => {
+    const attemptId = await prepareOneApplication();
+    workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'ready', checkpointDetail: '' });
+    await expect(pipeline.attachLetterToAttempt(deps, attemptId)).resolves.toMatchObject({ ok: false });
+  });
+
   it('warns at start and never calls the CV ready when the profile has no skills (#521)', async () => {
     const cvId = workspace.listCvDocuments(db)[0]!.id;
     workspace.updateCvDocument(db, cvId, {
