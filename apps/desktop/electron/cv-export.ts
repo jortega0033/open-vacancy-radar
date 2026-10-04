@@ -78,11 +78,53 @@ export function describeCvExportBlockers(doc: CvDocumentRecord): string[] {
 
 /** Strips characters invalid in a Windows/macOS filename and collapses whitespace, mirroring
  * `letters/export.ts`'s `sanitizeFileName` (not imported: that module lives in `src/`, the
- * renderer's own bundle, and electron/ never imports from it). */
+ * renderer's own bundle, and electron/ never imports from it). Also strips any file extension
+ * (e.g., ".docx", ".pdf") from the name since the extension will be added per the export format. */
 export function sanitizeCvExportFileName(name: string): string {
-  const cleaned = name
+  // First strip any file extension (anything after the last dot)
+  const withoutExtension = name.replace(/\.[^.]*$/, '');
+
+  const cleaned = withoutExtension
     .replace(/[\\/:*?"<>|]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   return cleaned || 'cv';
+}
+
+/** Builds the export file name for a CV case, including company name when available (#565e).
+ * Format: "<CV name without extension> - <Company>" when company is known, else just the CV name.
+ * Sanitizes Windows/macOS-invalid characters and trailing dots/spaces. */
+export function buildCvCaseExportFileName(cvName: string, company: string | undefined): string {
+  const cvBaseName = sanitizeCvExportFileName(cvName);
+
+  if (!company) {
+    return cvBaseName;
+  }
+
+  // Sanitize company name: remove invalid characters and collapse whitespace
+  const sanitizedCompany = company
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!sanitizedCompany) {
+    return cvBaseName;
+  }
+
+  // Combine CV name and company with " - " separator, and trim to reasonable length
+  const combined = `${cvBaseName} - ${sanitizedCompany}`;
+
+  // Windows has a 260 character path limit; limit filename to 200 to leave room for directory path
+  if (combined.length > 200) {
+    // Truncate intelligently: keep CV name intact if possible, truncate company
+    if (cvBaseName.length > 100) {
+      return cvBaseName.substring(0, 200);
+    }
+    const maxCompanyLength = 200 - cvBaseName.length - 3; // 3 for " - "
+    if (maxCompanyLength > 0) {
+      return `${cvBaseName} - ${sanitizedCompany.substring(0, maxCompanyLength)}`;
+    }
+  }
+
+  return combined;
 }

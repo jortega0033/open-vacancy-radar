@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
-import { cvDocumentToTailoredResume, sanitizeCvExportFileName } from '../electron/cv-export.js';
+import { buildCvCaseExportFileName, cvDocumentToTailoredResume, sanitizeCvExportFileName } from '../electron/cv-export.js';
 import type { CvDocumentRecord } from '../electron/workspace/types.js';
 
 const CV: CvDocumentRecord = {
@@ -83,14 +83,97 @@ describe('cvDocumentToTailoredResume (#156)', () => {
   });
 });
 
-describe('sanitizeCvExportFileName (#156)', () => {
+describe('sanitizeCvExportFileName (#156, #565e)', () => {
   it('strips filename-invalid characters and collapses whitespace', () => {
     expect(sanitizeCvExportFileName('Frontend CV: Netherlands / Remote?')).toBe('Frontend CV Netherlands Remote');
+  });
+
+  it('strips file extensions from uploaded CVs', () => {
+    // Issue #565e: uploaded CVs keep their original filename with .docx extension
+    expect(sanitizeCvExportFileName('Jake-Ortega-Senior-Frontend-Developer-React-TypeScript-v1.docx')).toBe(
+      'Jake-Ortega-Senior-Frontend-Developer-React-TypeScript-v1'
+    );
+  });
+
+  it('strips multiple dotted extensions but keeps other dots in the name', () => {
+    expect(sanitizeCvExportFileName('My.CV.v2.0.docx')).toBe('My.CV.v2.0');
+    expect(sanitizeCvExportFileName('Resume_2026.pdf')).toBe('Resume_2026');
   });
 
   it('falls back to "cv" for an empty or all-invalid name', () => {
     expect(sanitizeCvExportFileName('')).toBe('cv');
     expect(sanitizeCvExportFileName('   ')).toBe('cv');
     expect(sanitizeCvExportFileName('///')).toBe('cv');
+  });
+
+  it('falls back to "cv" when left with only an extension', () => {
+    expect(sanitizeCvExportFileName('.docx')).toBe('cv');
+    expect(sanitizeCvExportFileName('.pdf')).toBe('cv');
+  });
+});
+
+describe('buildCvCaseExportFileName (#565e)', () => {
+  it('returns CV name alone when company is undefined', () => {
+    expect(buildCvCaseExportFileName('Frontend CV', undefined)).toBe('Frontend CV');
+  });
+
+  it('returns CV name alone when company is empty string', () => {
+    expect(buildCvCaseExportFileName('Frontend CV', '')).toBe('Frontend CV');
+  });
+
+  it('combines CV name and company with " - " separator', () => {
+    expect(buildCvCaseExportFileName('Frontend CV', 'Acme Corp')).toBe('Frontend CV - Acme Corp');
+  });
+
+  it('strips extension from CV name before combining with company', () => {
+    expect(buildCvCaseExportFileName('Jake-Ortega-Senior-Frontend-Developer-React-TypeScript-v1.docx', 'Mejuri')).toBe(
+      'Jake-Ortega-Senior-Frontend-Developer-React-TypeScript-v1 - Mejuri'
+    );
+  });
+
+  it('sanitizes invalid characters in both CV name and company', () => {
+    expect(buildCvCaseExportFileName('Frontend CV: React?', 'Acme / Corp')).toBe('Frontend CV React - Acme Corp');
+  });
+
+  it('handles company names with invalid characters', () => {
+    expect(buildCvCaseExportFileName('MyCV', 'Company <Inc>')).toBe('MyCV - Company Inc');
+  });
+
+  it('truncates combined name at 200 characters when necessary', () => {
+    const longCvName = 'A'.repeat(150);
+    const longCompany = 'B'.repeat(100);
+    const result = buildCvCaseExportFileName(longCvName, longCompany);
+    expect(result.length).toBeLessThanOrEqual(200);
+  });
+
+  it('keeps CV name intact if both are short enough', () => {
+    const cvName = 'Frontend CV';
+    const company = 'Acme';
+    expect(buildCvCaseExportFileName(cvName, company)).toBe('Frontend CV - Acme');
+  });
+
+  it('intelligently truncates company when combined name exceeds 200 characters', () => {
+    const longCvName = 'A'.repeat(80);
+    const longCompany = 'B'.repeat(150);
+    const result = buildCvCaseExportFileName(longCvName, longCompany);
+    expect(result).toContain(' - ');
+    expect(result.length).toBeLessThanOrEqual(200);
+    expect(result.startsWith('A'.repeat(80))).toBe(true);
+  });
+
+  it('returns fallback CV name when all-invalid CV name becomes empty', () => {
+    expect(buildCvCaseExportFileName('///', 'Acme')).toBe('cv - Acme');
+  });
+
+  it('handles whitespace collapsing in company name', () => {
+    expect(buildCvCaseExportFileName('MyCV', 'Acme   Corp   Inc')).toBe('MyCV - Acme Corp Inc');
+  });
+
+  it('returns CV name when company sanitizes to empty', () => {
+    expect(buildCvCaseExportFileName('MyCV', '///')).toBe('MyCV');
+  });
+
+  it('returns "cv" fallback when both CV name and company are invalid', () => {
+    expect(buildCvCaseExportFileName('///', '///')).toBe('cv');
   });
 });

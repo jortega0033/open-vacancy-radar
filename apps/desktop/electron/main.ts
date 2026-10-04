@@ -177,7 +177,7 @@ import {
   parseSettingsPatch,
 } from './workspace/validate.js';
 import { printHtmlToPdf } from './application-artifact-staging.js';
-import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportFileName } from './cv-export.js';
+import { buildCvCaseExportFileName, cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportFileName } from './cv-export.js';
 import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
@@ -3391,7 +3391,7 @@ guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input:
       checkReadiness: (id) => workspace.checkCvCaseExportReadiness(db, id),
       hasWindow: () => mainWindow !== undefined,
       render: (resume, artifactFormat) => renderApprovedSnapshot(resume, artifactFormat, printHtmlToPdf),
-      defaultFileBaseName: (overlay) => sanitizeCvExportFileName(workspace.getCvDocument(db, overlay.cvId).name),
+      defaultFileBaseName: (overlay) => buildCvCaseExportFileName(workspace.getCvDocument(db, overlay.cvId).name, overlay.caseCompany),
       showSaveDialog: (options) => dialog.showSaveDialog(mainWindow!, options),
       writeFile,
       recordArtifact: (id, record) =>
