@@ -52,7 +52,8 @@ const REGION_ONLY =
 
 function clean(text: string): string {
   return text
-    .replace(/<[^>]*>/gu, ' ')
+    // `[^<>]`, not `[^>]`: a run of "<" with no ">" stays linear instead of polynomial.
+    .replace(/<[^<>]*>/gu, ' ')
     .replace(/[\u00a0\u2009\u202f]/gu, ' ')
     .replace(/[\u2010-\u2015\u2212]/gu, '-')
     .replace(/[\u2018\u2019]/gu, "'")
