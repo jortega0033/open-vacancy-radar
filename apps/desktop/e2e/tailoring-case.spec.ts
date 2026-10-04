@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { ensureLightTheme, launchApp } from './fixtures.js';
-import { SEEDED_APPROVED_BULLET, SEEDED_CASE_LABEL, SEEDED_CV_NAME, seedApprovedTailoringCase } from './seed-tailoring-case.js';
+import { SEEDED_APPROVED_BULLET, SEEDED_CASE_LABEL, SEEDED_CV_NAME, SEEDED_EXPORT_NAME, seedApprovedTailoringCase } from './seed-tailoring-case.js';
 
 /**
  * The tailoring-case path in the real, built app (#435): open an approved case from the CV Library,
@@ -111,13 +111,13 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await expect.poll(async () => (await nativeRecord(electronApp)).saveRequests.length).toBe(1);
     await expect(pdf.getByRole('button', { name: 'Export as PDF' })).toBeEnabled();
     await expect(pdf.getByRole('status').first()).toHaveText('Not exported');
-    expect(existsSync(join(saveDir, `${SEEDED_CV_NAME}.pdf`))).toBe(false);
+    expect(existsSync(join(saveDir, `${SEEDED_EXPORT_NAME}.pdf`))).toBe(false);
 
     // The PDF is rendered, checked and saved; it then waits for the candidate's own review.
     await stubNativeSurfaces(electronApp, saveDir, 'save');
     await pdf.getByRole('button', { name: 'Export as PDF' }).click();
     await expect(pdf.getByRole('status').first()).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
-    const pdfPath = `${saveDir}/${SEEDED_CV_NAME}.pdf`;
+    const pdfPath = `${saveDir}/${SEEDED_EXPORT_NAME}.pdf`;
     expect(readFileSync(pdfPath).subarray(0, 4).equals(PDF_MAGIC)).toBe(true);
     await expect(panel.getByRole('status').filter({ hasText: `Saved to ${saveDir}` })).toBeVisible();
     // The panel shows the page count, and keeps the file location behind a disclosure.
@@ -125,7 +125,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await expect(pdf).toContainText('1 page');
     await expect(pdf.getByText('Show file location')).toBeVisible();
     expect((await nativeRecord(electronApp)).saveRequests).toEqual([
-      expect.objectContaining({ title: 'Export approved CV', defaultPath: `${SEEDED_CV_NAME}.pdf` }),
+      expect.objectContaining({ title: 'Export approved CV', defaultPath: `${SEEDED_EXPORT_NAME}.pdf` }),
     ]);
 
     // A PDF cannot be accepted before its pages were shown in the app. Opening the system viewer
@@ -145,7 +145,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await expect(word.getByRole('status')).toHaveText('Not exported');
     await word.getByRole('button', { name: 'Export as Word' }).click();
     await expect(word.getByRole('status')).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
-    const docxPath = `${saveDir}/${SEEDED_CV_NAME}.docx`;
+    const docxPath = `${saveDir}/${SEEDED_EXPORT_NAME}.docx`;
     expect(readFileSync(docxPath).subarray(0, 4).equals(DOCX_MAGIC)).toBe(true);
     const docxHash = sha256OfFile(docxPath);
     await expect(word.getByText('Show file location')).toBeVisible();
