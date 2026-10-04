@@ -155,7 +155,15 @@ export function deriveCaseProgress({ overlay, sourceCv, cvChanged }: CaseProgres
     const approved = overlay.state === 'candidate_approved' || overlay.state === 'artifact_approved';
     started.approve = approved;
     complete.approve = approved && !snapshotNeedsReapproval(overlay);
-    detail.approve = complete.approve ? 'Approved' : approved ? 'Approve again' : 'Not approved yet';
+    // A kept snapshot on an unapproved case means it was approved once and an edit since then (job
+    // description, requirements, facts, wording or projects) took the approval back (#564).
+    detail.approve = complete.approve
+      ? 'Approved'
+      : approved
+        ? 'Approve again'
+        : overlay.approvedResumeSnapshot
+          ? 'Changed since you approved it: approve again'
+          : 'Not approved yet';
 
     // 7. Files: at least one file looked at and confirmed, none still waiting on that.
     const formats = (['pdf', 'docx'] as const).map((format) => cvArtifactStatus(overlay, format));

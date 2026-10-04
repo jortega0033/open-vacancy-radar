@@ -2,7 +2,11 @@ import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readGlobalRemoteReport, writeGlobalRemoteReport } from '../../src/global-remote/report.js';
+import {
+  readGlobalRemoteReport,
+  readGlobalRemoteReportWithFallback,
+  writeGlobalRemoteReport,
+} from '../../src/global-remote/report.js';
 import { discoveryAudit } from '../../src/global-remote/discovery-shared.js';
 import type { GlobalRemoteReport } from '../../src/global-remote/models.js';
 
@@ -135,5 +139,97 @@ describe('readGlobalRemoteReport', () => {
     await writeFile(join(output, 'latest.json'), '{ not valid json', 'utf8');
 
     await expect(readGlobalRemoteReport(projectRoot)).resolves.toBeUndefined();
+  });
+});
+
+describe('readGlobalRemoteReportWithFallback (#577)', () => {
+  function withVacancy(runId: string, generatedAt: string, id: string): GlobalRemoteReport {
+    const report = { ...sampleReport(), runId, generatedAt };
+    report.discoveryAudit = [
+      discoveryAudit({
+        key: `remote_first_jobs:${id}`,
+        provider: 'remote_first_jobs',
+        company: 'Example',
+        title: `Role ${id}`,
+        url: `https://example.com/jobs/${id}`,
+        location: 'Remote',
+        employmentType: null,
+        currency: null,
+        salaryPeriod: null,
+        advertisedMinimum: null,
+        raw: { id },
+        minimumAnnualBaseUsd: null,
+      }),
+    ];
+    return report;
+  }
+  const emptyScan = (): GlobalRemoteReport => {
+    const report = { ...sampleReport(), runId: 'run-empty', generatedAt: '2026-01-03T00:00:00.000Z' };
+    report.statistics = { ...report.statistics, rawRowsFetched: 42 };
+    return report;
+  };
+  const output = () => join(projectRoot, 'reports', 'global-remote');
+
+  it('writes the kept copy only for a report with vacancies, and reads latest as-is while it has some', async () => {
+    const first = withVacancy('run-1', '2026-01-01T00:00:00.000Z', '1');
+    const files = await writeGlobalRemoteReport(first, projectRoot);
+
+    expect(files.latestNonEmptyJson).toBe(join(output(), 'latest-nonempty.json'));
+    expect(JSON.parse(await readFile(join(output(), 'latest-nonempty.json'), 'utf8'))).toEqual(first);
+    expect((await writeGlobalRemoteReport(emptyScan(), projectRoot)).latestNonEmptyJson).toBeUndefined();
+    expect(JSON.parse(await readFile(join(output(), 'latest-nonempty.json'), 'utf8'))).toEqual(first);
+    expect(await readGlobalRemoteReportWithFallback(projectRoot)).toMatchObject({ keptPrevious: { checked: 42 } });
+  });
+
+  it('falls back to the kept report when latest.json has no vacancies', async () => {
+    const first = withVacancy('run-1', '2026-01-01T00:00:00.000Z', '1');
+    await writeGlobalRemoteReport(first, projectRoot);
+    await writeGlobalRemoteReport(emptyScan(), projectRoot);
+
+    const loaded = await readGlobalRemoteReportWithFallback(projectRoot);
+    expect(loaded?.report).toEqual(first);
+    expect(loaded?.keptPrevious).toEqual({ checked: 42 });
+  });
+
+  it('returns latest without a notice when it has vacancies', async () => {
+    const first = withVacancy('run-1', '2026-01-01T00:00:00.000Z', '1');
+    await writeGlobalRemoteReport(first, projectRoot);
+
+    const loaded = await readGlobalRemoteReportWithFallback(projectRoot);
+    expect(loaded).toEqual({ report: first });
+  });
+
+  it('replaces the kept report when a later scan has vacancies', async () => {
+    await writeGlobalRemoteReport(withVacancy('run-1', '2026-01-01T00:00:00.000Z', '1'), projectRoot);
+    await writeGlobalRemoteReport(emptyScan(), projectRoot);
+    const later = withVacancy('run-4', '2026-01-04T00:00:00.000Z', '2');
+    await writeGlobalRemoteReport(later, projectRoot);
+
+    expect(JSON.parse(await readFile(join(output(), 'latest-nonempty.json'), 'utf8'))).toEqual(later);
+    expect(await readGlobalRemoteReportWithFallback(projectRoot)).toEqual({ report: later });
+  });
+
+  it('returns the empty latest report when the kept file is missing or corrupt', async () => {
+    const empty = emptyScan();
+    await writeGlobalRemoteReport(empty, projectRoot);
+    expect(await readGlobalRemoteReportWithFallback(projectRoot)).toEqual({ report: empty });
+
+    await writeFile(join(output(), 'latest-nonempty.json'), '{ not valid json', 'utf8');
+    expect(await readGlobalRemoteReportWithFallback(projectRoot)).toEqual({ report: empty });
+
+    await writeFile(join(output(), 'latest-nonempty.json'), JSON.stringify(sampleReport()), 'utf8');
+    expect(await readGlobalRemoteReportWithFallback(projectRoot)).toEqual({ report: empty });
+  });
+
+  it('resolves to undefined when nothing was ever written', async () => {
+    await expect(readGlobalRemoteReportWithFallback(projectRoot)).resolves.toBeUndefined();
+  });
+
+  it('uses the kept report when latest.json is gone or corrupt', async () => {
+    const first = withVacancy('run-1', '2026-01-01T00:00:00.000Z', '1');
+    await writeGlobalRemoteReport(first, projectRoot);
+    await writeFile(join(output(), 'latest.json'), '{ not valid json', 'utf8');
+
+    expect(await readGlobalRemoteReportWithFallback(projectRoot)).toEqual({ report: first });
   });
 });
