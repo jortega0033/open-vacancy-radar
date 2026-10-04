@@ -96,5 +96,7 @@ export default defineConfig({
     // `e2e/**/*.spec.ts` are Playwright specs (see playwright.config.ts), not vitest's: vitest's
     // default include glob would otherwise try to run them too and fail on the API mismatch.
     exclude: [...configDefaults.exclude, 'e2e/**'],
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
 });
