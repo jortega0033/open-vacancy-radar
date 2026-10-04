@@ -160,13 +160,8 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
               );
               const results = resultsScroller?.parentElement?.getBoundingClientRect();
               const detail = detailScroller?.getBoundingClientRect();
-              const workspace =
-                resultsScroller?.parentElement?.parentElement?.getBoundingClientRect();
               const summaryGrid =
                 detailScroller?.querySelector<HTMLElement>(':scope > div > div.grid');
-              const footer = [...document.querySelectorAll('p')]
-                .find((element) => element.textContent?.startsWith('Run e2e-search-layout'))
-                ?.parentElement?.getBoundingClientRect();
               if (!main || !controls || !resultsScroller || !results)
                 throw new Error('Search layout is incomplete');
               // Below 900px of page width the list and the details are one pane at a time (#451), so
@@ -196,7 +191,8 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
                 listScrollTop: resultsScroller.scrollTop,
                 detailScrollTop: detailScroller?.scrollTop ?? 0,
                 mainScrollTop: document.querySelector('main')?.scrollTop ?? -1,
-                footerGap: workspace && footer ? footer.top - workspace.bottom : -1,
+                // #562: the run log is not part of the Search page.
+                noRunLog: !document.body.textContent?.includes('Scan details'),
                 listOverflow: getComputedStyle(resultsScroller).overflowY,
                 detailOverflow: detailScroller ? getComputedStyle(detailScroller).overflowY : 'auto',
               };
@@ -209,7 +205,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
             expect(geometry.listScrollTop).toBeGreaterThan(0);
             if (geometry.twoPane) expect(geometry.detailScrollTop).toBeGreaterThan(0);
             expect(geometry.mainScrollTop).toBe(0);
-            expect(geometry.footerGap).toBeGreaterThanOrEqual(0);
+            expect(geometry.noRunLog).toBe(true);
             expect(geometry.listOverflow).toBe('auto');
             expect(geometry.detailOverflow).toBe('auto');
             if (geometry.twoPane && viewport.name === 'expanded-details' && !collapsed)
