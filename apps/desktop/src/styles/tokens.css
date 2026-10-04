@@ -479,6 +479,14 @@
  * edits to this file.
  */
 
+/* The document never scrolls: the shell is a fixed-height frame and its panes own their scroll (#550). */
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
 /* Muted text floor: 60% of base-content reaches 4.5:1 on base-100 and base-200 in both themes.
    Use `text-base-content/60` in markup, or this token where a plain colour is needed. */
 :root {
