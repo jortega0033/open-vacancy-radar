@@ -49,7 +49,7 @@ function renderCard(
 describe('ManualApplicationReviewCard', () => {
   it('offers the same Continue and Skip decisions without requiring a swipe', () => {
     const actions = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: 'Open employer site' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open the posting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     expect(actions.onContinue).toHaveBeenCalledTimes(1);
     expect(actions.onSkip).toHaveBeenCalledTimes(1);
@@ -136,7 +136,7 @@ describe('ManualApplicationReviewCard', () => {
     const actions = renderCard({ busy: true });
     const card = screen.getByTestId('manual-application-swipe-card');
     const skip = screen.getByRole('button', { name: 'Skip' });
-    const proceed = screen.getByRole('button', { name: 'Open employer site' });
+    const proceed = screen.getByRole('button', { name: 'Open the posting' });
 
     expect(skip).toBeDisabled();
     expect(proceed).toBeDisabled();
