@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApplicationsPage } from '../../../src/components/applications/index.js';
 import type { ApplicationAttemptRecord, ApplicationRecord } from '../../../src/window.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
+import { activeProviderLimit, resetProviderLimitsForTest } from '../../../src/provider-limits.js';
 
 /**
  * What `openReview` hands the review session (#277). `readiness` is a first-class part of that
@@ -650,6 +651,66 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(useOriginalCv).toHaveBeenCalledWith(attempt.id));
       expect(retryTailoring).not.toHaveBeenCalled();
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('shows the Claude limit and holds Try again until the reset when tailoring hit a usage limit (#546)', async () => {
+      resetProviderLimitsForTest();
+      const attempt = makeAttempt({
+        checkpoint: 'needs_user',
+        checkpointDetail: "Automatic CV tailoring stopped: You've hit your session limit · resets 11:59pm",
+        updatedAt: new Date().toISOString(),
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+      const retryTailoring = vi.fn();
+      const useOriginalCv = vi.fn().mockResolvedValue({ ok: true, attemptId: attempt.id, tailoringMode: 'original' });
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        start: vi.fn(), startFromVacancy: vi.fn(), retryTailoring, useOriginalCv,
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/Claude has reached its usage limit until 11:59pm\./)).toBeInTheDocument();
+      expect(within(dialog).getByText(/Preparing an application needs Claude/)).toBeInTheDocument();
+      expect(within(dialog).queryByText('We could not tailor your CV for this job.')).not.toBeInTheDocument();
+      // No futile retry before the reset; the real option stays.
+      const retry = within(dialog).getByRole('button', { name: /^Try again after / });
+      expect(retry).toBeDisabled();
+      expect(within(dialog).getByRole('button', { name: 'Use my CV as it is' })).toBeEnabled();
+      // The AI runtime page and sidebar learn about the limit too.
+      expect(activeProviderLimit('claude')).toMatchObject({ provider: 'claude', resetLabel: '11:59pm' });
+      resetProviderLimitsForTest();
+    });
+
+    it('keeps Try again available for a usage limit with no reset time (#546)', async () => {
+      resetProviderLimitsForTest();
+      const attempt = makeAttempt({
+        checkpoint: 'needs_user',
+        checkpointDetail: "Automatic CV tailoring stopped: You've hit your session limit",
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        start: vi.fn(), startFromVacancy: vi.fn(), retryTailoring: vi.fn(), useOriginalCv: vi.fn(),
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/^Claude has reached its usage limit\. Preparing an application needs Claude/)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'Try again' })).toBeEnabled();
+      resetProviderLimitsForTest();
     });
 
     it('does not claim documents are ready for a preparation blocker', async () => {

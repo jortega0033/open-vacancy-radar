@@ -22,6 +22,9 @@ import { useElementWidth } from './useElementWidth.js';
 import { publishEngineHealth } from '../../engine-health.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
+import { describeAiWebSearchFailure } from './ai-web-search-notice.js';
+import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
+import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
 import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
 import {
@@ -51,6 +54,8 @@ const PAGE_SIZE = 25;
 
 const SALARY_NOTE = 'Salary shown only where advertised';
 const BROWSE_ALL_RESULT_CAP = 5_000;
+/** A Claude limit with no reset time is not recorded from a report older than its usage window. */
+const UNTIMED_LIMIT_MAX_AGE_MS = 5 * 60 * 60 * 1000;
 
 function useSearchSessionField<K extends keyof SearchSessionState>(
   session: SearchSessionState,
@@ -407,6 +412,16 @@ export function SearchPage({
         const report = await window.vacancyRadar.getReport();
         if (cancelled || requestGeneration !== reportRequestGenerationRef.current) return;
         setWorldwideReport(report);
+        // A report kept from before a zero-match scan gets the same notice as in-session (#577).
+        if (report && report.discoveryAudit.length > 0) {
+          try {
+            const kept = (await window.vacancyRadar.getReportSummary())?.keptAfterZeroMatch;
+            if (cancelled || requestGeneration !== reportRequestGenerationRef.current) return;
+            if (kept) setZeroMatchNotice({ checked: kept.checked, keptPrevious: true });
+          } catch {
+            // The notice is optional; the report itself loaded.
+          }
+        }
         hasHydrated.current = true;
         setReportHydrated(true);
       } catch (error) {
@@ -791,6 +806,33 @@ export function SearchPage({
     [worldwideReport],
   );
   const sourceWarnings = sourceCoverage?.warnings ?? [];
+  const aiWebSearchNotice = useMemo(
+    () => (worldwideReport ? describeAiWebSearchFailure(worldwideReport.discoverySources, worldwideReport.generatedAt) : null),
+    [worldwideReport],
+  );
+  // A usage limit hit by AI web search is Claude's, whatever the default tool is: shown on the AI
+  // runtime page too, the same way any other Claude limit is. The report may be a saved one from
+  // days ago, so a limit is recorded only while it can still be in force (its reset is ahead, or,
+  // with no reset time, the report is under five hours old) and never over a newer Claude limit.
+  const aiLimitResetLabel = aiWebSearchNotice?.limit?.resetLabel;
+  const aiLimitResetAt = aiWebSearchNotice?.limit?.resetAt;
+  const aiLimitHit = aiWebSearchNotice?.limit !== undefined;
+  const reportGeneratedAt = worldwideReport?.generatedAt;
+  useEffect(() => {
+    if (!aiLimitHit) return;
+    const now = Date.now();
+    const parsed = reportGeneratedAt ? Date.parse(reportGeneratedAt) : NaN;
+    const reachedAt = Number.isNaN(parsed) ? now : parsed;
+    if (aiLimitResetAt !== undefined ? aiLimitResetAt <= now : now - reachedAt > UNTIMED_LIMIT_MAX_AGE_MS) return;
+    const existing = activeProviderLimit('claude', now);
+    if (existing && existing.reachedAt >= reachedAt) return;
+    recordProviderLimit({
+      provider: 'claude',
+      reachedAt,
+      ...(aiLimitResetLabel ? { resetLabel: aiLimitResetLabel } : {}),
+      ...(aiLimitResetAt !== undefined ? { resetAt: aiLimitResetAt } : {}),
+    });
+  }, [aiLimitHit, aiLimitResetLabel, aiLimitResetAt, reportGeneratedAt]);
 
   const [copiedScanLogRunId, setCopiedScanLogRunId] = useState<string>();
   // The full run log is not shown on the Search page; it is copied on demand (#562).
@@ -800,10 +842,13 @@ export function SearchPage({
     const lines = [
       `Run ${worldwideReport.runId}, generated ${new Date(worldwideReport.generatedAt).toLocaleString()}`,
       `${(stats.rawRowsFetched ?? stats.discoveryListings).toLocaleString()} listings fetched, ${stats.discoveryUniqueListings.toLocaleString()} unique vacancies`,
-      ...sourceWarnings.map(
-        (source) =>
-          `${discoveryProviderLabel(source.provider)} (${source.id}, ${source.status}): ${source.completenessReason ?? source.error ?? source.status}`,
-      ),
+      // Both the summary and the underlying reason: the summary alone ("the session failed to
+      // start") hid why AI web search failed (#559).
+      ...sourceWarnings.map((source) => {
+        const summary = source.completenessReason ?? source.error ?? source.status;
+        const reason = source.error && source.error !== summary ? ` ${source.error}` : '';
+        return redactDiagnosticsText(`${discoveryProviderLabel(source.provider)} (${source.id}, ${source.status}): ${summary}${reason}`);
+      }),
     ];
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
@@ -1555,6 +1600,17 @@ export function SearchPage({
           that's useful on demand but not worth greeting every visit with above the results. */}
       {sourceWarnings.length > 0 && (
         <div className="flex-none border-t border-base-300 px-6 pt-2">
+          {/* Not folded into the collapsed list below: the person asked for this step, so its
+              failure is said outright (#559). */}
+          {aiWebSearchNotice && (
+            <div className="flex flex-wrap items-center gap-2 text-sm text-warning" role="status" data-testid="ai-web-search-notice">
+              <Info size={14} aria-hidden="true" />
+              <span>{aiWebSearchNotice.message}</span>
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => void copyScanLog()}>
+                {copiedScanLogRunId === worldwideReport?.runId ? 'Copied' : 'Copy diagnostics'}
+              </button>
+            </div>
+          )}
           {sourceWarnings.length > 0 && (
             <>
               <button

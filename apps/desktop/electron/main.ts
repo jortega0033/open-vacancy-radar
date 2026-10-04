@@ -33,7 +33,7 @@ import {
   loadConfig,
   migrateDatabase,
   readAtsRosterStatus,
-  readGlobalRemoteReport,
+  readGlobalRemoteReportWithFallback,
   runAtsRosterImport,
   runGlobalRemoteScan,
   runSponsorSync,
@@ -122,7 +122,7 @@ import {
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
-import type { VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
+import type { VacancyScanAiWebSearchState, VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 import {
   describeVacancyEngineFailure,
   rebuildVacancyEngineDatabase,
@@ -318,6 +318,8 @@ let vacancyScanLock: ScanLock | undefined;
 /** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
 let vacancyEngineFailure: VacancyEngineFailure | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
+/** Set at startup when the report on disk was the kept one from before a zero-match scan (#577). */
+let hydratedZeroMatch: { checked: number } | undefined;
 let lastVacancyScanAt: string | undefined;
 
 /**
@@ -399,7 +401,9 @@ async function vacancyEngineDataRoot(): Promise<string> {
  */
 async function hydrateLatestVacancyReport(): Promise<void> {
   try {
-    latestVacancyReport = await readGlobalRemoteReport(await vacancyEngineDataRoot());
+    const loaded = await readGlobalRemoteReportWithFallback(await vacancyEngineDataRoot());
+    latestVacancyReport = loaded?.report;
+    hydratedZeroMatch = loaded?.keptPrevious;
   } catch {
     // Tolerated -- see doc comment above.
   }
@@ -2538,12 +2542,13 @@ guardedIpc.handle('vacancy:rebuild-cache', async (): Promise<VacancyCacheRebuild
 });
 
 guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
-guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt: string; vacancyCount: number } | null =>
+guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt: string; vacancyCount: number; keptAfterZeroMatch?: { checked: number } } | null =>
   latestVacancyReport
     ? {
         runId: latestVacancyReport.runId,
         generatedAt: latestVacancyReport.generatedAt,
         vacancyCount: latestVacancyReport.discoveryAudit.length,
+        ...(hydratedZeroMatch ? { keptAfterZeroMatch: hydratedZeroMatch } : {}),
       }
     : null,
 );
@@ -2564,6 +2569,8 @@ interface ActiveVacancyScan {
   doneSources: Set<string>;
   total: number;
   vacancies: number;
+  /** Only set when this run was asked to also search the web with AI (#559). */
+  aiWebSearch?: VacancyScanAiWebSearchState;
 }
 let activeVacancyScan: ActiveVacancyScan | undefined;
 
@@ -2581,6 +2588,7 @@ guardedIpc.handle('vacancy:get-scan-progress', (): VacancyScanStatus => {
     sourcesDone: scan.doneSources.size,
     sourcesTotal: scan.total,
     vacanciesSoFar: scan.vacancies,
+    ...(scan.aiWebSearch ? { aiWebSearch: scan.aiWebSearch } : {}),
     ...(scan.controller.signal.aborted ? { stopping: true } : {}),
   };
 });
@@ -2655,6 +2663,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
           doneSources: new Set(),
           total: SCAN_PROGRESS_SOURCE_IDS.length,
           vacancies: 0,
+          ...(request.aiWebDiscovery === true ? { aiWebSearch: 'waiting' as const } : {}),
         };
         activeVacancyScan = scan;
         try {
@@ -2675,10 +2684,19 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
           // if `request.aiWebDiscovery` had been false), never abort the whole scan.
           try {
             const profile = await loadCandidateProfile(await candidateProfilePath());
+            scan.aiWebSearch = 'running';
             aiWebDiscovery = await runAiWebDiscovery(client, {
               profile,
               cwd: await ensureAiWorkspaceDir(),
             });
+            const aiAudit = aiWebDiscovery.sourceAudit;
+            const aiFailed = aiAudit.status === 'error' || aiAudit.status === 'blocked';
+            scan.aiWebSearch = aiFailed ? 'failed' : 'done';
+            // At warn, not only debug: a failed AI step used to leave no trace outside the report (#559).
+            if (aiFailed) {
+              logger.warn({ sourceAudit: aiAudit }, 'AI web discovery did not run to completion');
+              console.warn(`[ai-web-search] ${aiAudit.status}: ${aiAudit.error ?? aiAudit.completenessReason ?? 'no reason given'}`);
+            }
             // Issue #398: "the actual queries used in a run are persisted/reportable" -- logged here,
             // alongside the resulting source audit, since Phase 1 needs no dedicated DB persistence
             // for this (see `runAiWebDiscovery`'s own doc comment on `queriesUsed`).
@@ -2687,13 +2705,13 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
               'AI web discovery pass finished',
             );
           } catch (error) {
+            scan.aiWebSearch = 'failed';
             logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
           }
         }
         if (scan.controller.signal.aborted) throw new ScanCancelledError();
         const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
           signal: scan.controller.signal,
-          preserveNonEmptyLatest: true,
           ...(request.mode === 'query'
             ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
             : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
@@ -2720,6 +2738,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         // A scan with no matches must not displace the last report that had some (#561): saved jobs
         // and prepare still resolve rows against it, and the renderer keeps showing it.
         lastVacancyScanAt = result.report.generatedAt;
+        hydratedZeroMatch = undefined;
         if (result.report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
           latestVacancyReport = result.report;
         }

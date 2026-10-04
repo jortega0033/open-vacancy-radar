@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
 import {
@@ -8,6 +8,7 @@ import {
 } from '../../../electron/application-target-policies.js';
 import { ApplicationReviewSession } from '../../../src/components/applications/ApplicationReviewSession.js';
 import type { ApplicationAttemptRecord } from '../../../src/window.js';
+import { activeProviderLimit, resetProviderLimitsForTest } from '../../../src/provider-limits.js';
 
 /**
  * What the auto-apply kill switch actually does to the screen a person sees.
@@ -80,6 +81,111 @@ function installBridges() {
 
 afterEach(() => {
   setAutoApplyEnabled(false);
+});
+
+describe('ApplicationReviewSession when Claude hit its usage limit (#546)', () => {
+  const LIMIT_DETAIL = "Automatic CV tailoring stopped: You've hit your session limit · resets 10:10pm";
+
+  function blockedAttempt(overrides: Partial<ApplicationAttemptRecord>): ApplicationAttemptRecord {
+    return { ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: LIMIT_DETAIL, ...overrides } as ApplicationAttemptRecord;
+  }
+
+  /** Lets the session's opening effect and its promises settle under fake timers. */
+  async function settle() {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetProviderLimitsForTest();
+  });
+
+  it('unlocks Try again just after the reset time passes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    vi.setSystemTime(new Date(2026, 9, 4, 21, 0, 0));
+    installBridges();
+    render(<ApplicationReviewSession attempt={blockedAttempt({ updatedAt: new Date(2026, 9, 4, 21, 0, 0).toISOString() })} onClose={vi.fn()} />);
+    await settle();
+
+    expect(screen.getByText(/Claude has reached its usage limit until 10:10pm\./)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Try again after / })).toBeDisabled();
+
+    // 22:09: still waiting.
+    act(() => vi.advanceTimersByTime(69 * 60_000));
+    expect(screen.getByRole('button', { name: /^Try again after / })).toBeDisabled();
+
+    // A few seconds after 22:10, not up to a minute late.
+    act(() => vi.advanceTimersByTime(60_000 + 2_000));
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('enables Try again at once for a different attempt whose reset passed long ago, and records no stale limit', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    vi.setSystemTime(new Date(2026, 9, 4, 21, 0, 0));
+    installBridges();
+    const { rerender } = render(
+      <ApplicationReviewSession attempt={blockedAttempt({ updatedAt: new Date(2026, 9, 4, 21, 0, 0).toISOString() })} onClose={vi.fn()} />,
+    );
+    await settle();
+    expect(screen.getByRole('button', { name: /^Try again after / })).toBeDisabled();
+
+    // The clock moves on without any timer firing (a sleeping machine), and the queue steps to an
+    // attempt whose own reset, 22:30, is already behind it at 23:00.
+    vi.setSystemTime(new Date(2026, 9, 4, 23, 0, 0));
+    resetProviderLimitsForTest();
+    rerender(
+      <ApplicationReviewSession
+        attempt={blockedAttempt({
+          id: '22222222-2222-4222-8222-222222222222',
+          checkpointDetail: "Automatic CV tailoring stopped: You've hit your session limit · resets 10:30pm",
+          updatedAt: new Date(2026, 9, 4, 22, 20, 0).toISOString(),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    await settle();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    expect(activeProviderLimit('claude')).toBeUndefined();
+
+    // And an attempt from days ago is enabled at once too.
+    rerender(
+      <ApplicationReviewSession
+        attempt={blockedAttempt({ id: '33333333-3333-4333-8333-333333333333', updatedAt: new Date(2026, 9, 1, 21, 0, 0).toISOString() })}
+        onClose={vi.fn()}
+      />,
+    );
+    await settle();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    expect(activeProviderLimit('claude')).toBeUndefined();
+  });
+
+  it('does not take a non-provider blocker that mentions 429 for a Claude limit', async () => {
+    installBridges();
+    render(
+      <ApplicationReviewSession
+        attempt={blockedAttempt({ checkpointDetail: 'the employer page answered 429 Too Many Requests while loading' })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText('This application needs your attention.')).toBeInTheDocument();
+    expect(screen.queryByText(/usage limit/)).not.toBeInTheDocument();
+    expect(activeProviderLimit('claude')).toBeUndefined();
+  });
+
+  it('shows the limit for a field-map run that hit it', async () => {
+    installBridges();
+    render(
+      <ApplicationReviewSession
+        attempt={blockedAttempt({ checkpointDetail: "working out what goes in each field did not finish: You've hit your session limit" })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText(/^Claude has reached its usage limit\. Preparing an application needs Claude/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
+  });
 });
 
 describe('ApplicationReviewSession under the auto-apply kill switch', () => {

@@ -78,10 +78,20 @@ export function applyClarificationAnswer(
   }
 
   if (answer.kind === 'unknown') {
-    // Considered and could not be answered -- distinct from `'skip'` in that a person did look at
-    // it, so it counts toward review completeness, but distinct from a real answer in that nothing
-    // about the requirement's evidence changes.
-    return { requirement: { ...requirement, reviewed: true }, fact: null };
+    // Considered and could not be answered (#563). Leaving it as `needs_verification` kept the
+    // question open with no visible change, so it records the same state as choosing "A gap I
+    // confirm" in the Evidence menu: the CV never claims it. Only "Skip for now" leaves it open.
+    return {
+      requirement: {
+        ...requirement,
+        evidenceClass: 'candidate_confirmed_gap',
+        anchorParentId: '',
+        sourceIds: [],
+        factIds: [],
+        reviewed: true,
+      },
+      fact: null,
+    };
   }
 
   const now = new Date().toISOString();
