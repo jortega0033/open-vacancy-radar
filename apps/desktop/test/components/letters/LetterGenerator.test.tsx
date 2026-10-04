@@ -347,6 +347,7 @@ describe('LetterGenerator', () => {
 
   it('exports the letter as a real file through the native save dialog', async () => {
     const { system } = setup();
+    vi.mocked(system.saveFile).mockResolvedValue({ saved: true });
     render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
@@ -362,7 +363,7 @@ describe('LetterGenerator', () => {
 
   it('confirms an export with the name of the saved file', async () => {
     const { system } = setup();
-    vi.mocked(system.saveFile).mockResolvedValue({ saved: true, path: 'C:\Users\me\Documents\Cover letter.pdf' });
+    vi.mocked(system.saveFile).mockResolvedValue({ saved: true, path: 'C:/Users/me/Documents/Cover letter.pdf' });
     render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
