@@ -109,6 +109,40 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       await expect(window.getByText('AI features cannot start.')).toHaveCount(0);
       await expect(window.getByLabel('Vacancy details')).toBeVisible();
 
+      // #555: at the default 1000x700 window at least 4 result rows are fully visible.
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setBounds({ width: 1000, height: 700 });
+      });
+      await window.waitForTimeout(200);
+      const rowFit = await window.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('[aria-label="Vacancy results"]');
+        if (!scroller) throw new Error('No results list');
+        const box = scroller.getBoundingClientRect();
+        const rows = [...scroller.querySelectorAll<HTMLElement>('[data-result-key]')];
+        const fully = rows.filter((row) => {
+          const rect = row.getBoundingClientRect();
+          return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1;
+        });
+        const badgeClipped = fully.some((row) =>
+          [...row.querySelectorAll<HTMLElement>('.badge')].some((badge) => {
+            if (getComputedStyle(badge).display === 'none') return false;
+            const rowEdge = badge.parentElement?.getBoundingClientRect().right ?? 0;
+            return badge.getBoundingClientRect().right > rowEdge + 1 ||
+              badge.scrollWidth > badge.clientWidth + 1 || badge.scrollHeight > badge.clientHeight + 1;
+          }),
+        );
+        return {
+          fully: fully.length,
+          badgeClipped,
+          listHeight: Math.round(box.height),
+          rowHeight: Math.round(rows[0]?.getBoundingClientRect().height ?? 0),
+          docScrollTop: document.scrollingElement?.scrollTop ?? -1,
+        };
+      });
+      expect(rowFit.fully).toBeGreaterThanOrEqual(4);
+      expect(rowFit.badgeClipped).toBe(false);
+      expect(rowFit.docScrollTop).toBe(0);
+
       let sidebarCollapsed = false;
       for (const theme of ['openvacancyradar', 'openvacancyradar-dark']) {
         await window.evaluate((nextTheme) => {
@@ -130,7 +164,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
             sidebarCollapsed = collapsed;
           }
           for (const viewport of [
-            { name: 'default', width: 1000, height: 720 },
+            { name: 'default', width: 1000, height: 700 },
             { name: 'expanded-details', width: 800, height: 600 },
             { name: 'wide', width: 1440, height: 900 },
             { name: 'narrow', width: 760, height: 820 },
