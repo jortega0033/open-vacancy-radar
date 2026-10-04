@@ -469,7 +469,7 @@ export function LetterGenerator({
         const exporter = format === 'md' ? exportMarkdown : format === 'docx' ? exportDocx : exportPdf;
         const result = await exporter(exportTitle, body);
         if (result.saved) {
-          const fileName = result.path?.split(/[\/]/).pop();
+          const fileName = result.path?.split(/[\/\\]/).pop();
           setExportedName(fileName);
           announce(fileName ? `Saved ${fileName}.` : 'Exported.');
           setExportState('exported');
