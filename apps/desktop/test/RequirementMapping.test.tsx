@@ -547,6 +547,17 @@ describe('RequirementMapping (#419)', () => {
       expect(lastPatch?.requirements?.[0]).toMatchObject({ evidenceClass: 'candidate_confirmed_gap' });
     });
 
+    it('"I don\'t know" closes the question as a confirmed gap, with no fact, so the CV never claims it', async () => {
+      const workspace = await seedOneNeedsVerificationRequirement();
+      fireEvent.click(screen.getByRole('button', { name: /^answer$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /i don.t know$/i }));
+
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^answer$/i })).not.toBeInTheDocument());
+      const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
+      expect(lastPatch?.facts ?? []).toHaveLength(0);
+      expect(lastPatch?.requirements?.[0]).toMatchObject({ evidenceClass: 'candidate_confirmed_gap', reviewed: true, factIds: [] });
+    });
+
     it('"skip" closes the form and saves nothing', async () => {
       const workspace = await seedOneNeedsVerificationRequirement();
       vi.mocked(workspace.updateCvEvidenceOverlay).mockClear();

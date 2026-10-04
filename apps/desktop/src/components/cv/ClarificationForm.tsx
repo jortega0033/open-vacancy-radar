@@ -19,7 +19,7 @@ const STEP_COUNT = 3;
  * The clarification ask for one `needs_verification` requirement (#419, step 6): three separate
  * steps -- what the candidate personally did and where, how with the actual tools and scope, and the
  * result or purpose if known -- with no target keyword ever suggested as an answer. Every step offers
- * the same explicit non-answers: "I don't know" (considered, no answer), "Not my work" (recorded as a
+ * the same explicit non-answers: "I don't know" (recorded as a confirmed gap, #563), "Not my work" (recorded as a
  * gap the candidate confirmed) and "Skip" (nothing recorded). Steps two and three may also be left
  * unstated with "Don't know this part", so an unknown mechanism or result stays unstated rather than
  * being guessed.
@@ -274,6 +274,9 @@ export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCance
           Skip for now
         </button>
       </div>
+      <p className="text-xs text-base-content/60">
+        &ldquo;I don&rsquo;t know&rdquo; and &ldquo;Not my work&rdquo; mark this as a gap, so the CV won&rsquo;t claim it. Skipping leaves it open and blocks approval.
+      </p>
       {pendingExit && (
         <div className="alert alert-warning flex-wrap text-sm" role="alert">
           <span>{pendingExit.message}</span>
