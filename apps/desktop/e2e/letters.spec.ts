@@ -105,7 +105,8 @@ test.describe('Letters', () => {
       const markdownOption = window.getByRole('menuitem', { name: /markdown \(\.md\)/i });
       await expect(markdownOption).toBeVisible();
       await markdownOption.click();
-      await expect(window.getByText('Exported.')).toBeVisible();
+      // The confirmation names the written file (#554).
+      await expect(window.getByText('Saved letter.md.')).toBeVisible();
 
       // Keyboard path: Enter opens the menu on its first item, ArrowDown moves to the next one, and
       // Escape closes it and returns focus to the trigger.
