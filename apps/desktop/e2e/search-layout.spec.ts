@@ -256,6 +256,30 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       await window.locator('summary', { hasText: 'Quick draft to read' }).click();
       await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeVisible();
 
+      // #550: opening the assistant must not scroll the document or the shell.
+      for (const size of [
+        { width: 1000, height: 700 },
+        { width: 1440, height: 900 },
+      ]) {
+        await electronApp.evaluate(
+          ({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds(bounds),
+          size,
+        );
+        await window.waitForTimeout(150);
+        const shell = await window.evaluate(() => {
+          const shellEl = document.querySelector('#root > div') as HTMLElement | null;
+          return {
+            docScrollTop: document.scrollingElement?.scrollTop ?? -1,
+            shellScrollTop: shellEl?.scrollTop ?? -1,
+            shellHeight: shellEl?.getBoundingClientRect().height ?? -1,
+            windowHeight: globalThis.innerHeight,
+          };
+        });
+        expect(shell.docScrollTop).toBe(0);
+        expect(shell.shellScrollTop).toBe(0);
+        expect(Math.round(shell.shellHeight)).toBe(shell.windowHeight);
+      }
+
       for (const viewport of [
         { name: 'assistant-minimum', width: 640, height: 480 },
         { name: 'assistant-desktop', width: 1000, height: 720 },
