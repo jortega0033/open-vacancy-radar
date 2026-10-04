@@ -95,12 +95,16 @@ describe('ProviderErrorNotice (#461)', () => {
     expect(notice).not.toHaveTextContent(/usage limit/i);
   });
 
-  it('leaves an unclassified failure as the plain error it was', async () => {
+  it('keeps an unclassified provider message behind Details', async () => {
     installProviders([status('claude')]);
     render(<ProviderErrorNotice error="the agent finished without returning any text" providerId="claude" onRetry={vi.fn()} />);
     const notice = await screen.findByRole('alert');
     expect(notice).toHaveClass('alert-error');
-    expect(notice).toHaveTextContent('the agent finished without returning any text');
+    expect(notice).toHaveTextContent('Claude Code could not finish this step.');
+    const details = within(notice).getByText('Details').closest('details')!;
+    expect(details).not.toHaveAttribute('open');
+    expect(within(details).getByText('the agent finished without returning any text')).not.toBeVisible();
+    expect(within(notice).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 });
 

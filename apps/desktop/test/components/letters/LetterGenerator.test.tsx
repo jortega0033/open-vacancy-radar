@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LetterGenerator, MAX_INSTRUCTION_CHARS } from '../../../src/components/letters/index.js';
-import { installBridges } from '../../cv-bridges.js';
+import { CLAUDE_INSTALLED, installBridges } from '../../cv-bridges.js';
 import { DEFAULT_SETTINGS, installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
 import { FACT_SELECTION, LETTER_VACANCY, makeCv, makeLetter, makeUnreviewedCv } from './fixtures.js';
+import { resetProviderLimitsForTest, setProviderOverride } from '../../../src/provider-limits.js';
 
 /**
  * `installBridges` installs a *default* workspace bridge of its own (the CV assistant saves to the
@@ -31,6 +32,9 @@ async function waitForGenerateEnabled(name: RegExp = /^generate$/i) {
   await waitFor(() => expect(button).toBeEnabled());
   return button;
 }
+
+const CODEX_READY = { ...CLAUDE_INSTALLED, id: 'codex', name: 'Codex' } as typeof CLAUDE_INSTALLED;
+const LIMIT = "You've hit your session limit, resets 11:59pm (Europe/Amsterdam)";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -189,7 +193,7 @@ describe('LetterGenerator', () => {
 
     fireEvent.click(await waitForGenerateEnabled());
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('We could not write the letter this time. Try again.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Claude Code could not be started.');
     expect(screen.getByText('AgentDock daemon is not running')).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
   });
@@ -420,4 +424,23 @@ describe('LetterGenerator', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await waitFor(() => expect(onUnsavedChange).toHaveBeenLastCalledWith(null));
   });
+
+  it('shows the guided limit notice with a switch action when the letter generator hits a usage limit (#547)', async () => {
+    resetProviderLimitsForTest();
+    setProviderOverride(null);
+    const bridges = setup();
+    vi.mocked(bridges.agentDock.listProviders).mockResolvedValue([CLAUDE_INSTALLED, CODEX_READY]);
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+    await screen.findByRole('textbox', { name: /letter body/i });
+    fireEvent.click(await waitForGenerateEnabled(/^regenerate$/i));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    bridges.emit('sess-cv-1', { type: 'session.failed', message: LIMIT });
+
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent('usage limit until 11:59pm (Europe/Amsterdam)');
+    expect(await screen.findByRole('button', { name: 'Use Codex for now' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    setProviderOverride(null);
+  });
+
 });

@@ -10,6 +10,7 @@ import type {
   SavedJobRecord,
 } from '../../window.js';
 import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
+import { classifyProviderError } from '../../provider-error.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { AiOutput } from '../cv/AiOutput.js';
@@ -476,6 +477,12 @@ export function LetterGenerator({
    * reported through the same panel so the user never has to look in two places for what went
    * wrong. */
   const failure = selectionError ?? run.error;
+  // A provider limit or sign-in problem gets the guided notice (#547); anything else keeps the
+  // plain sentence, with the raw text behind Details below.
+  const letterFailureMessage =
+    !selectionError && run.error && classifyProviderError(run.error).kind !== 'other'
+      ? run.error
+      : 'We could not write the letter this time. Try again.';
   const showStreamPanel =
     run.isBusy || run.status === 'failed' || run.status === 'cancelled' || selectionError !== undefined;
 
@@ -840,14 +847,16 @@ export function LetterGenerator({
             // screen may still reject, and showing it would put unvalidated model output on screen
             // looking like a draft. The finished letter appears in the editor below or not at all.
             text=""
-            {...(failure ? { error: 'We could not write the letter this time. Try again.' } : {})}
+            {...(failure ? { error: letterFailureMessage } : {})}
             label="letter being generated"
             idleHint="No document yet."
             busyLabel="Writing your letter…"
+            providerId={provider}
+            onRetry={handleGenerate}
           />
         )}
 
-        {failure && showStreamPanel && !run.isBusy ? (
+        {failure && showStreamPanel && !run.isBusy && letterFailureMessage !== failure ? (
           <details className="mt-2 text-xs text-base-content/70">
             <summary className="cursor-pointer font-medium">Details</summary>
             <p className="mt-1 break-words">{failure}</p>
