@@ -222,7 +222,7 @@ export function normalizeAiWebDiscoveryCandidates(
 function normalizedHostname(url: string): string | null {
   try {
     const parsed = new URL(url);
-    return parsed.hostname.toLowerCase().replace(/^www\./u, '');
+    return parsed.hostname.toLowerCase().replace(/\.+$/u, '').replace(/^www\./u, '');
   } catch {
     return null;
   }
@@ -230,8 +230,8 @@ function normalizedHostname(url: string): string | null {
 
 /**
  * Issue #398 / #151: whether `url`'s hostname matches, or is a subdomain of, a `registry` entry this
- * project has already reviewed and marked `'prohibited'` or `'blocked'` (LinkedIn, Indeed, Glassdoor
- * Direct, Google Jobs, EURES, ZipRecruiter -- only these two states are checked, not every
+ * project has already reviewed and marked `'prohibited'` or `'blocked'` (e.g. LinkedIn, Indeed, Glassdoor
+ * Direct, Google Jobs, EURES, ZipRecruiter, Y Combinator -- only these two states are checked, not every
  * non-`'active'` state; a `'manual_only'`/`'configuration_required'`/`'partner_required'` entry such
  * as Built In is deliberately NOT caught here). Called by the desktop orchestrator (or the
  * normalizer) before ever `WebFetch`-ing a candidate URL -- an AI-web-search session has no awareness

@@ -324,6 +324,10 @@ describe('isBlockedDiscoveryDomain', () => {
     'https://www.workatastartup.com/companies/acme',
     'https://workatastartup.com/jobs/12345',
     'https://api.workatastartup.com/jobs/12345',
+    'https://workatastartup.com./jobs/1',
+    'https://www.ycombinator.com./companies',
+    'https://WWW.YCOMBINATOR.COM/companies',
+    'https://evil.example@workatastartup.com/',
   ])('blocks YC / Work at a Startup URL %s (issue #619)', (url) => {
     expect(isBlockedDiscoveryDomain(url, registry)).toBe(true);
   });
@@ -334,6 +338,8 @@ describe('isBlockedDiscoveryDomain', () => {
     'https://notycombinator.com/jobs/1',
     'https://boards.greenhouse.io/acme/jobs/12345',
     'https://jobs.ashbyhq.com/acme/abc-123',
+    'https://workatastartup.com@evil.example/',
+    'https://boards.greenhouse.io/acme/jobs/1?ref=https://www.ycombinator.com/companies',
   ])('does not block lookalike or external employer URL %s', (url) => {
     expect(isBlockedDiscoveryDomain(url, registry)).toBe(false);
   });
