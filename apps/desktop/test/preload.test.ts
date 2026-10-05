@@ -2017,7 +2017,7 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
 describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
   it('exposes exactly the preparation entry and recovery points', async () => {
     const api = await loadPreload('applicationPipeline');
-    expect(Object.keys(api)).toEqual(['start', 'startFromVacancy', 'retryTailoring', 'useOriginalCv', 'resume']);
+    expect(Object.keys(api)).toEqual(['start', 'startFromVacancy', 'retryTailoring', 'useOriginalCv', 'resume', 'attachLetter']);
     expect(typeof api.start).toBe('function');
     expect(typeof api.startFromVacancy).toBe('function');
     expect(typeof api.retryTailoring).toBe('function');

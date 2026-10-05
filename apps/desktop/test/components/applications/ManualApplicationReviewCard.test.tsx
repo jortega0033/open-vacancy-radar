@@ -165,6 +165,31 @@ describe('ManualApplicationReviewCard', () => {
     expect(onRetryLetter).toHaveBeenCalledTimes(1);
   });
 
+  it('lists the letter and drops the blocker once it is linked to the attempt (#552)', () => {
+    const noop = vi.fn();
+    const cv = { id: 'artifact-1', attemptId: attempt.id, kind: 'cv_pdf', fileName: 'resume.pdf' } as never;
+    const letter = { id: 'artifact-2', attemptId: attempt.id, kind: 'cover_letter_pdf', fileName: 'cover-letter.pdf' } as never;
+    const blocked = { ...attempt, checkpointDetail: 'Your tailored CV is ready. Cover letter blocker: not written.' };
+    const linked = {
+      ...attempt,
+      checkpointDetail: 'Your application documents are ready. This employer site is not approved for automated submission.',
+    };
+    const props = {
+      busy: false, continued: false, onContinue: noop, onSkip: noop, onMarkApplied: noop, onStillInProgress: noop,
+      onSaveArtifact: noop, onOpenArtifact: noop, onGenerateLetter: noop, onRetryLetter: noop,
+    };
+    const { rerender } = render(<ManualApplicationReviewCard attempt={blocked} documents={[cv]} {...props} />);
+    expect(screen.getByRole('button', { name: 'Generate letter' })).toBeInTheDocument();
+
+    rerender(<ManualApplicationReviewCard attempt={linked} documents={[cv, letter]} {...props} />);
+
+    expect(screen.queryByRole('button', { name: 'Generate letter' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/cover letter still needs attention/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Cover letter')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Save copy' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Review' })).toHaveLength(2);
+  });
+
   it('shows no letter recovery when the documents are complete', () => {
     renderCard({ onRetryLetter: vi.fn(), onGenerateLetter: vi.fn() });
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();

@@ -63,6 +63,7 @@ import { runFieldMapGeneration, runTextGeneration } from './application-generati
 import {
   recoverInterruptedApplicationAttempts,
   resumeApplicationAttempt,
+  attachLetterToAttempt,
   restartApplicationTailoring,
   runNextApplicationAttempt,
   startApplicationAttempt,
@@ -2235,6 +2236,15 @@ guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) 
   return applicationDataResetGate.runMutation(async () => {
     const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
     const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
+    if (result.ok) void applicationPipelineTick.runOnce();
+    return result;
+  });
+});
+
+guardedIpc.handle('application-pipeline:attach-letter', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const result = await attachLetterToAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
     if (result.ok) void applicationPipelineTick.runOnce();
     return result;
   });

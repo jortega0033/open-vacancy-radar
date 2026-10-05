@@ -109,6 +109,7 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
     retryTailoring: vi.fn(),
     useOriginalCv: vi.fn(),
     resume: vi.fn(),
+    attachLetter: vi.fn(),
   };
   return installVacancyRadarBridge({
     getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
