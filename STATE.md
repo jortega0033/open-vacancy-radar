@@ -6,6 +6,16 @@ Automation status: ACTIVE after the user's 2026-09-11 request to continue resear
 Kill switch: inactive
 Budget accounting reset: 2026-09-11T08:52:00Z, epoch `substantive-research-v2`. The previous 105,500 estimate mixed substantive research with repeated context recovery and hourly bookkeeping. It remains in the log as historical, non-metered data but is not comparable to the new ledger. Future substantive runs have an 8,000 estimated-token ceiling and a 100,000 rolling-24-hour epoch cap. Budget-only/no-change checks count 0 and do not write state or log. Current epoch usage: 41,000 estimated tokens. Automation is ACTIVE after the user's resume request.
 
+## 2026-10-06 user-directed implementation session
+
+Not an L1 loop run. The user directly instructed implementation, PRs, merges and ticket closure, so the L1 push/merge/issue limits were lifted by explicit authorization for this session only. The L1 setting and the loop files' rules are unchanged; unattended loop runs remain report-only.
+
+Merged: #607 (deps), #612 (closes #164), #613 (spike docs for #50-#53), #614 (closes #348), #615 (closes #43), #616 (closes #49), #617 (closes #127), #618 (adds the PhilJobNet source; #343 stays open for the unread terms of service), #620 (closes #619), #621 (Poland ePraca spike, #45 stays open). Each feature PR went through an independent read-only review and a fix pass before merge.
+
+Open and not actionable by a model: #50, #51, #52, #53, #45 (written provider answers needed), #354 (clean-Windows QA), #590 (waiting upstream), #343 (terms of service review). Deferred as Opus-level: #29 (Upwork OAuth and retention compliance), #541, #412, #349, #3, #30, and the epics #502, #536, #39, #10. Dependabot #608 and #611 are still open; #611 is a major bump of the credential keyring library and needs a breaking-change check first.
+
+Routing used: Haiku for fact gathering and small fixes, Sonnet for implementation and reviews, no Opus. Subagent spawns exceeded the L1 budget of 0 per run; that is recorded here because this session was not a loop run.
+
 ## High Priority
 
 ### Application-workflow tranche complete
