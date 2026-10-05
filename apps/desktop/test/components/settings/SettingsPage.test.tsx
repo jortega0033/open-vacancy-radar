@@ -158,7 +158,7 @@ describe('SettingsPage', () => {
 
     openTab('Search');
     await waitFor(() =>
-      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company list']),
+      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company list', 'Company discovery']),
     );
 
     openTab('Workspace');

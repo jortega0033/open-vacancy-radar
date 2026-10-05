@@ -172,7 +172,7 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the thirteen documented capability functions and nothing else', async () => {
+  it('exposes exactly the sixteen documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -189,6 +189,9 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
         'getScanProgress',
         'rebuildCache',
         'refreshAtsRoster',
+        'getSourceScoutStatus',
+        'runSourceScoutNow',
+        'setSourceScoutPaused',
       ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
@@ -308,6 +311,19 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('vacancy:ats-roster:refresh');
     expect(received).toEqual(result);
+  });
+
+  it('source scout calls invoke only their own channels', async () => {
+    invoke.mockResolvedValue({});
+    const api = await loadPreload('vacancyRadar');
+    await (api.getSourceScoutStatus as () => Promise<unknown>)();
+    await (api.runSourceScoutNow as () => Promise<unknown>)();
+    await (api.setSourceScoutPaused as (paused: boolean) => Promise<unknown>)(true);
+    expect(invoke.mock.calls).toEqual([
+      ['vacancy:source-scout:get-status'],
+      ['vacancy:source-scout:run-now'],
+      ['vacancy:source-scout:set-paused', true],
+    ]);
   });
 });
 
@@ -720,6 +736,9 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'getScanProgress',
     'rebuildCache',
     'refreshAtsRoster',
+    'getSourceScoutStatus',
+    'runSourceScoutNow',
+    'setSourceScoutPaused',
   ],
   workspace: [
     'getSettings',

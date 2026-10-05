@@ -353,10 +353,14 @@ function remoteScopes(
   return [...scopes].sort();
 }
 
+/** Upper bound on how far a host's `Retry-After` can push a source's next due time. */
+const MAX_RETRY_AFTER_MS = 7 * 24 * 60 * 60 * 1_000;
+
 function nextRefresh(
   status: AtsSourceObservationStatus,
   consecutiveCount: number,
   now: Date,
+  retryAfterMs?: number,
 ): { nextDueAt: string; refreshTier: AtsSourceRefreshTier } {
   let hours: number;
   let refreshTier: AtsSourceRefreshTier;
@@ -373,10 +377,27 @@ function nextRefresh(
     hours = Math.min(24 * 7, 6 * 2 ** Math.max(0, consecutiveCount - 1));
     refreshTier = consecutiveCount >= 4 ? 'cold' : 'warm';
   }
+  // A host's own `Retry-After` can only lengthen the wait, never shorten the adaptive backoff.
+  const hostDelayMs =
+    status === 'verified' || retryAfterMs === undefined || !Number.isFinite(retryAfterMs)
+      ? 0
+      : Math.min(Math.max(0, retryAfterMs), MAX_RETRY_AFTER_MS);
+  const delayMs = Math.max(hours * 60 * 60 * 1_000, hostDelayMs);
   return {
-    nextDueAt: new Date(now.valueOf() + hours * 60 * 60 * 1_000).toISOString(),
+    nextDueAt: new Date(now.valueOf() + delayMs).toISOString(),
     refreshTier,
   };
+}
+
+/** The upstream `Retry-After` delay carried by a failed fetch, if the HTTP layer attached one. */
+export function retryAfterMsFromError(error: unknown): number | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
+    const value = (current as { retryAfterMs?: unknown }).retryAfterMs;
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+    current = current.cause;
+  }
+  return undefined;
 }
 
 export type AtsSourceObservationOutcome = {
@@ -387,6 +408,8 @@ export type AtsSourceObservationOutcome = {
   evidence?: readonly string[];
   decisionReason?: string;
   attemptedAt?: Date;
+  /** Upstream `Retry-After` for a failed attempt; lengthens `nextDueAt` when larger than the backoff. */
+  retryAfterMs?: number;
 };
 
 export function classifyAtsSourceFailure(error: unknown): AtsSourceFailureCategory {
@@ -427,7 +450,7 @@ export function recordAtsSourceObservation(
   }
   const observedScopes = new Set(existing?.observedRemoteScopes ?? []);
   for (const scope of remoteScopes(outcome.vacancies)) observedScopes.add(scope);
-  const refresh = nextRefresh(outcome.status, consecutiveCount, attemptedAt);
+  const refresh = nextRefresh(outcome.status, consecutiveCount, attemptedAt, outcome.retryAfterMs);
   const observation: AtsSourceObservation = {
     provider: outcome.entry.provider,
     slug: outcome.entry.slug,

@@ -19,6 +19,18 @@ export {
 export { readGlobalRemoteReport, readGlobalRemoteReportWithFallback, type LoadedGlobalRemoteReport } from './global-remote/report.js';
 export { createDatabaseBackedAtsHttpClient } from './pipeline/ats-http-client.js';
 export {
+  DEFAULT_ATS_SOURCE_SCOUT_LIMITS,
+  emptyAtsSourceScoutCounters,
+  resolveAtsSourceScoutLimits,
+  runAtsSourceScout,
+  scoutExplorationQuota,
+  type AtsSourceScoutCounters,
+  type AtsSourceScoutLimits,
+  type AtsSourceScoutOptions,
+  type AtsSourceScoutResult,
+  type AtsSourceScoutStopReason,
+} from './global-remote/ats-source-scout.js';
+export {
   fetchJobgetherOfferDetail,
   fetchWorkableJobDetail,
   jobgetherOfferIdFromUrl,
@@ -87,6 +99,7 @@ export {
   type AtsRosterProviderImportResult,
 } from './pipeline/ats-roster-import.js';
 export {
+  loadAtsRoster,
   readAtsRosterStatus,
   type AtsRosterStatus,
 } from './companies/ats-roster-repository.js';
