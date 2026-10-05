@@ -93,6 +93,7 @@ export interface AgentDockBridge {
 
 export type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-engine-recovery.js';
 import type { VacancyCacheRebuildResult, VacancyEngineStatus } from './vacancy-engine-recovery.js';
+import type { SourceScoutRunStart, SourceScoutStatus } from './source-scout-types.js';
 import type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 export type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 export type VacancyReportSummary = {
@@ -170,6 +171,12 @@ export interface VacancyRadarBridge {
    * advisory lock the `ats-roster:import` CLI command already takes).
    */
   refreshAtsRoster(): Promise<AtsRosterImportResult>;
+  /** Background source scout (#348): what Settings shows. Reads stored state only. */
+  getSourceScoutStatus(): Promise<SourceScoutStatus>;
+  /** Starts one scout run now; resolves as soon as it starts or is refused, not when it ends. */
+  runSourceScoutNow(): Promise<SourceScoutRunStart>;
+  /** Pauses or resumes the scheduled scout without changing the on/off setting. */
+  setSourceScoutPaused(paused: boolean): Promise<SourceScoutStatus>;
 }
 
 /**
@@ -353,6 +360,15 @@ const vacancyApi: VacancyRadarBridge = {
   },
   refreshAtsRoster() {
     return ipcRenderer.invoke('vacancy:ats-roster:refresh');
+  },
+  getSourceScoutStatus() {
+    return ipcRenderer.invoke('vacancy:source-scout:get-status');
+  },
+  runSourceScoutNow() {
+    return ipcRenderer.invoke('vacancy:source-scout:run-now');
+  },
+  setSourceScoutPaused(paused) {
+    return ipcRenderer.invoke('vacancy:source-scout:set-paused', paused);
   },
 };
 

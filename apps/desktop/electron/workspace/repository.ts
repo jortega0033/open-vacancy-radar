@@ -2986,6 +2986,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     minimizeToTrayOnClose: row.minimizeToTrayOnClose,
     welcomeSeen: row.welcomeSeen,
     autoScanEnabled: row.autoScanEnabled,
+    autoSourceScoutEnabled: row.autoSourceScoutEnabled,
     autoApplyEnabled: row.autoApplyEnabled,
     defaultLocation: row.defaultLocation,
     defaultCvId: row.defaultCvId,

@@ -225,6 +225,13 @@
       "when": 1791030874059,
       "tag": "0031_motionless_jetstream",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1791191912651,
+      "tag": "0032_soft_yellowjacket",
+      "breakpoints": true
     }
   ]
 }

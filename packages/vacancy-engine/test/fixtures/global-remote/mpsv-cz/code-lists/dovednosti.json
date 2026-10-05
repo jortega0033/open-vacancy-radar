@@ -1,0 +1,6 @@
+{
+  "polozky": [
+    { "id": "Dovednost/2", "kod": "2", "nazev": { "cs": "Ekonomika" } },
+    { "id": "Dovednost/21", "kod": "21", "nazev": { "cs": "Ekonomika - psaní na stroji" } }
+  ]
+}
