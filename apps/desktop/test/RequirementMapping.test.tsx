@@ -438,6 +438,71 @@ describe('RequirementMapping (#419)', () => {
       expect(screen.queryByRole('button', { name: /this list covers the whole job description/i })).not.toBeInTheDocument();
       // No made up percentage.
       expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+      // The same warning offers the single action that reads the rest.
+      fireEvent.click(screen.getByRole('button', { name: /^read the rest$/i }));
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(3));
+    });
+
+    describe('direct evidence (#553)', () => {
+      const row = (partial: Partial<CvRequirementMapping>): CvRequirementMapping => ({
+        requirementId: '', text: '', jdAnchor: '', classification: 'preferred', evidenceClass: 'direct', anchorParentId: '', candidateAdded: false, reviewed: false,
+        quoteStart: 0, quoteEnd: 0, jdRevisionId: '', excluded: false, exclusionReason: '', sourceIds: [], factIds: [], ...partial,
+      });
+
+      async function seed() {
+        installBridges();
+        const workspace = installStatefulOverlayBridge();
+        const created = await workspace.createCvEvidenceOverlay({ cvId: 'cv-1', vacancyKey: `url:${TEST_VACANCY.url}`, sourceCvContentHash: 'a'.repeat(64), jdSnapshotHash: 'b'.repeat(64), jdSnapshot: 'Build Angular applications.' });
+        await workspace.updateCvEvidenceOverlay(created.id, {
+          requirements: [
+            row({ requirementId: 'r-1', text: 'Direct one', jdAnchor: 'Build Angular', quoteEnd: 13 }),
+            row({ requirementId: 'r-2', text: 'Direct two', jdAnchor: 'Build Angular', quoteEnd: 13 }),
+            row({ requirementId: 'r-3', text: 'Direct done', jdAnchor: 'Build Angular', quoteEnd: 13, reviewed: true }),
+            row({ requirementId: 'r-4', text: 'Needs an answer', jdAnchor: 'Build Angular', quoteEnd: 13, classification: 'required', evidenceClass: 'needs_verification' }),
+            row({ requirementId: 'r-5', text: 'Close match', jdAnchor: 'Build Angular', quoteEnd: 13, evidenceClass: 'transferable' }),
+          ],
+          requirementCoverage: { status: 'complete', batches: 1 },
+        });
+        vi.mocked(workspace.updateCvEvidenceOverlay).mockClear();
+        render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+        await screen.findByText('Direct one');
+        return workspace;
+      }
+
+      it('counts reviewed, needs-answer and direct-evidence rows separately', async () => {
+        await seed();
+        expect(screen.getByLabelText('Review progress')).toHaveTextContent('1 of 5 reviewed. 2 need your answer. 2 with direct evidence to confirm.');
+      });
+
+      it('confirms every unreviewed direct row after a summary, in one save, and nothing else', async () => {
+        const workspace = await seed();
+        fireEvent.click(screen.getByRole('button', { name: /confirm direct evidence/i }));
+        const summary = screen.getByRole('group', { name: /confirm direct evidence/i });
+        expect(within(summary).getByText('Direct one')).toBeInTheDocument();
+        expect(within(summary).getByText('Direct two')).toBeInTheDocument();
+        expect(within(summary).queryByText('Needs an answer')).not.toBeInTheDocument();
+        expect(workspace.updateCvEvidenceOverlay).not.toHaveBeenCalled();
+
+        fireEvent.click(within(summary).getByRole('button', { name: /^confirm 2$/i }));
+        await waitFor(() =>
+          expect(screen.getByLabelText('Review progress')).toHaveTextContent('3 of 5 reviewed. 2 need your answer.'),
+        );
+        expect(screen.getByLabelText('Review progress')).not.toHaveTextContent(/direct evidence to confirm/);
+        expect(workspace.updateCvEvidenceOverlay).toHaveBeenCalledTimes(1);
+        const saved = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls[0]![1].requirements!;
+        expect(saved.map((r: CvRequirementMapping) => [r.requirementId, r.reviewed])).toEqual([
+          ['r-1', true], ['r-2', true], ['r-3', true], ['r-4', false], ['r-5', false],
+        ]);
+        expect(screen.queryByRole('button', { name: /confirm direct evidence/i })).not.toBeInTheDocument();
+      });
+
+      it('cancelling the summary saves nothing', async () => {
+        const workspace = await seed();
+        fireEvent.click(screen.getByRole('button', { name: /confirm direct evidence/i }));
+        fireEvent.click(within(screen.getByRole('group', { name: /confirm direct evidence/i })).getByRole('button', { name: /cancel/i }));
+        expect(workspace.updateCvEvidenceOverlay).not.toHaveBeenCalled();
+        expect(screen.getByLabelText('Review progress')).toHaveTextContent('1 of 5 reviewed.');
+      });
     });
   });
 

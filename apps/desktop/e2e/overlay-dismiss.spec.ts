@@ -18,24 +18,23 @@ import { ensureLightTheme, expect, goto, launchApp, test } from './fixtures.js';
  */
 
 test.describe('Escape and outside-click dismissal', () => {
-  test('Escape closes the Salary popover, and so does a click outside it', async ({ window }) => {
+  test('Escape closes the Filters popover (focus returns to its button), and so does a click outside it', async ({ window }) => {
     await goto(window, 'Search');
 
-    // Not `getByRole('button', { name: 'Salary' })`: overriding a native `<summary>`'s default
-    // disclosure marker with `list-none` (SearchFilterBar.tsx's own styling) takes it out of
-    // Chromium's accessibility tree as a button, even though it stays a real, clickable summary.
-    const salaryButton = window.locator('summary', { hasText: 'Salary' });
+    // The Salary control now lives in the Filters popover (#578).
+    const filtersButton = window.getByRole('button', { name: /^Filters/ });
     const minimumSalaryInput = window.getByLabel('Minimum annual salary');
 
-    await salaryButton.click();
+    await filtersButton.click();
     await expect(minimumSalaryInput).toBeVisible();
     await window.keyboard.press('Escape');
     await expect(minimumSalaryInput).toBeHidden();
+    await expect(filtersButton).toBeFocused();
 
     // Outside-click dismissal (the issue's second half: the popover used to also swallow clicks
     // meant for whatever it overlapped, since nothing closed it first) -- clicking a plain, unrelated
     // point on the page while it's open must close it too, not just Escape.
-    await salaryButton.click();
+    await filtersButton.click();
     await expect(minimumSalaryInput).toBeVisible();
     await window.getByRole('heading', { name: 'No search yet' }).click();
     await expect(minimumSalaryInput).toBeHidden();

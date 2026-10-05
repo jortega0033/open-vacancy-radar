@@ -1,9 +1,55 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { useEscapeToClose } from '../shell/index.js';
-import { countryOptions, type SearchFilters } from './results.js';
+import { countryOptions, DEFAULT_FILTERS, type SearchFilters } from './results.js';
 
 const SALARY_CURRENCIES = ['EUR', 'USD', 'GBP', 'CAD', 'AUD', 'CHF'];
+
+const POSTED_LABELS: Record<string, string> = {
+  '1': 'Last 24 hours',
+  '7': 'Last 7 days',
+  '30': 'Last 30 days',
+};
+
+interface FilterChip {
+  key: string;
+  label: string;
+  /** What removing this chip resets. */
+  reset: Partial<SearchFilters>;
+}
+
+/** The secondary filters that are currently narrowing the list. All default to off. */
+function activeFilterChips(filters: SearchFilters): FilterChip[] {
+  const chips: FilterChip[] = [];
+  if (filters.postedWithin !== 'any') {
+    chips.push({
+      key: 'posted',
+      label: POSTED_LABELS[filters.postedWithin] ?? `Last ${filters.postedWithin} days`,
+      reset: { postedWithin: DEFAULT_FILTERS.postedWithin },
+    });
+  }
+  if (filters.source !== 'all') {
+    chips.push({ key: 'source', label: discoveryProviderLabel(filters.source), reset: { source: 'all' } });
+  }
+  if (filters.employment !== 'any') {
+    chips.push({ key: 'employment', label: filters.employment, reset: { employment: 'any' } });
+  }
+  if (filters.salaryMinimum.trim()) {
+    const amount = parseInt(filters.salaryMinimum.replace(/\s/g, ''), 10);
+    chips.push({
+      key: 'salary',
+      label: Number.isFinite(amount) ? `Salary ${amount.toLocaleString()} or more` : 'Salary',
+      reset: { salaryMinimum: '' },
+    });
+  }
+  if (filters.hideOnsiteHybrid) {
+    chips.push({ key: 'remote', label: 'No on-site or hybrid', reset: { hideOnsiteHybrid: false } });
+  }
+  if (filters.sponsorOnly) {
+    chips.push({ key: 'sponsor', label: 'IND sponsor match', reset: { sponsorOnly: false } });
+  }
+  return chips;
+}
 
 export interface SearchFilterBarProps {
   filters: SearchFilters;
@@ -75,34 +121,34 @@ export function SearchFilterBar({
   const draftDiffersFromApplied = hasReport && hasQuery && appliedQueryText !== '' && draftQuery !== appliedQueryText;
 
   /**
-   * The Salary popover is a native `<details>`, not a React-controlled overlay -- see below for why
-   * that means Escape and outside-click dismissal (open-vacancy-radar#386) need their own wiring
-   * rather than reusing the drawer/dialog pattern directly. `salaryOpen` mirrors the element's own
-   * `open` property (updated via the native `toggle` event) purely so the effects below know when to
-   * listen; the element's `open` property stays the actual source of truth, closed imperatively via
-   * `salaryDetailsRef` rather than through React state.
+   * The Filters popover is React-controlled. Escape goes through the shared overlay stack
+   * (`useEscapeToClose`) and returns focus to the button; an outside press closes it on `mousedown`
+   * (not `click`) so one click both dismisses it and reaches whatever it had been covering
+   * (open-vacancy-radar#386).
    */
-  const salaryDetailsRef = useRef<HTMLDetailsElement>(null);
-  const [salaryOpen, setSalaryOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersButtonRef = useRef<HTMLButtonElement>(null);
+  const filtersWrapRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+  const chips = activeFilterChips(filters);
 
-  useEscapeToClose(() => {
-    if (salaryDetailsRef.current) salaryDetailsRef.current.open = false;
-  }, !salaryOpen);
+  const closeFilters = useCallback((returnFocus: boolean) => {
+    setFiltersOpen(false);
+    if (returnFocus) filtersButtonRef.current?.focus();
+  }, []);
 
-  // Closes on `mousedown`, not `click`: the popover used to sit on top of (and swallow clicks meant
-  // for) whatever it visually overlapped, since nothing closed it first. Acting on `mousedown` closes
-  // it before the browser resolves the subsequent `click`'s target, so a single click both dismisses
-  // the popover and reaches the control it had been covering, instead of requiring two.
+  useEscapeToClose(() => closeFilters(true), !filtersOpen);
+
   useEffect(() => {
-    if (!salaryOpen) return;
+    if (!filtersOpen) return;
     function handlePointerDown(event: MouseEvent) {
-      if (salaryDetailsRef.current && !salaryDetailsRef.current.contains(event.target as Node)) {
-        salaryDetailsRef.current.open = false;
+      if (filtersWrapRef.current && !filtersWrapRef.current.contains(event.target as Node)) {
+        setFiltersOpen(false);
       }
     }
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, [salaryOpen]);
+  }, [filtersOpen]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     // Enter always means "Search"; an empty keyword still reaches the page's own guard message
@@ -115,7 +161,7 @@ export function SearchFilterBar({
   return (
     <div className="flex-none border-b border-base-300 pb-3 short:pb-2">
       <div className="flex flex-wrap items-end gap-2">
-        <label className="flex min-w-52 flex-1 flex-col gap-1 short:min-w-40 text-xs font-medium text-base-content/70 md:max-w-96">
+        <label className="flex min-w-44 flex-1 flex-col gap-1 short:min-w-32 text-xs font-medium text-base-content/70 md:max-w-96">
           <span className="short:sr-only">Role or keywords</span>
           <input
             className="input input-sm w-full text-sm font-normal text-base-content"
@@ -131,7 +177,7 @@ export function SearchFilterBar({
         </label>
 
         <select
-          className="select select-sm w-48 short:w-36"
+          className="select select-sm w-40 short:w-36"
           aria-label="Country"
           value={filters.country}
           onChange={(event) => onLocationChange(event.target.value)}
@@ -145,67 +191,161 @@ export function SearchFilterBar({
           ))}
         </select>
 
-        <details
-          ref={salaryDetailsRef}
-          className="relative"
-          onToggle={(event) => setSalaryOpen(event.currentTarget.open)}
-        >
-          <summary className="btn btn-outline btn-sm list-none">
-            {filters.salaryMinimum
-              ? `Salary ${parseInt(filters.salaryMinimum, 10).toLocaleString()} or more`
-              : 'Salary'}
-          </summary>
-          <div className="absolute left-0 top-full z-20 mt-1 w-80 max-w-[calc(100vw-3rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
-            <div className="flex items-end gap-2">
-              <label className="min-w-0 flex-1 text-xs font-medium text-base-content/70">
-                Minimum annual salary
-                <input
-                  className="input input-sm mt-1 w-full"
-                  type="text"
-                  inputMode="decimal"
-                  aria-label="Minimum annual salary"
-                  placeholder="e.g. 60000 or 60 000"
-                  value={filters.salaryMinimum}
-                  onChange={(event) => onFiltersChange({ salaryMinimum: event.target.value })}
-                  disabled={busy}
-                />
-              </label>
-              <label className="text-xs font-medium text-base-content/70">
-                Currency
+        <div ref={filtersWrapRef} className="relative">
+          <button
+            ref={filtersButtonRef}
+            className="btn btn-outline btn-sm"
+            type="button"
+            aria-expanded={filtersOpen}
+            aria-controls={panelId}
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            Filters
+            {chips.length > 0 && (
+              <span className="badge badge-primary badge-sm" aria-label={`${chips.length} active`}>
+                {chips.length}
+              </span>
+            )}
+          </button>
+          {filtersOpen && (
+            <div
+              id={panelId}
+              role="group"
+              aria-label="Filters"
+              className="absolute left-0 top-full z-20 mt-1 w-80 max-w-[calc(100vw-3rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg"
+            >
+              <div className="flex flex-col gap-2">
                 <select
-                  className="select select-sm mt-1 w-24"
-                  aria-label="Salary currency"
-                  value={filters.salaryCurrency}
-                  onChange={(event) => onFiltersChange({ salaryCurrency: event.target.value })}
-                  disabled={busy}
+                  className="select select-sm w-full"
+                  aria-label="Posted within"
+                  value={filters.postedWithin}
+                  onChange={(event) =>
+                    onFiltersChange({ postedWithin: event.target.value as SearchFilters['postedWithin'] })
+                  }
                 >
-                  {SALARY_CURRENCIES.map((currency) => (
-                    <option key={currency} value={currency}>
-                      {currency}
+                  <option value="any">Posted: any time</option>
+                  <option value="1">Last 24 hours</option>
+                  <option value="7">Last 7 days</option>
+                  <option value="30">Last 30 days</option>
+                </select>
+
+                <select
+                  className="select select-sm w-full"
+                  aria-label="Job source"
+                  value={filters.source}
+                  onChange={(event) => onFiltersChange({ source: event.target.value })}
+                >
+                  <option value="all">All sources</option>
+                  {sources.map((source) => (
+                    <option key={source} value={source}>
+                      {discoveryProviderLabel(source)}
                     </option>
                   ))}
                 </select>
-              </label>
+
+                {employmentTypes.length > 0 && (
+                  <select
+                    className="select select-sm w-full"
+                    aria-label="Employment type"
+                    value={filters.employment}
+                    onChange={(event) => onFiltersChange({ employment: event.target.value })}
+                  >
+                    <option value="any">Any employment</option>
+                    {employmentTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <div className="flex items-end gap-2">
+                  <label className="min-w-0 flex-1 text-xs font-medium text-base-content/70">
+                    Minimum annual salary
+                    <input
+                      className="input input-sm mt-1 w-full"
+                      type="text"
+                      inputMode="decimal"
+                      aria-label="Minimum annual salary"
+                      placeholder="e.g. 60000 or 60 000"
+                      value={filters.salaryMinimum}
+                      onChange={(event) => onFiltersChange({ salaryMinimum: event.target.value })}
+                      disabled={busy}
+                    />
+                  </label>
+                  <label className="text-xs font-medium text-base-content/70">
+                    Currency
+                    <select
+                      className="select select-sm mt-1 w-24"
+                      aria-label="Salary currency"
+                      value={filters.salaryCurrency}
+                      onChange={(event) => onFiltersChange({ salaryCurrency: event.target.value })}
+                      disabled={busy}
+                    >
+                      {SALARY_CURRENCIES.map((currency) => (
+                        <option key={currency} value={currency}>
+                          {currency}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="flex cursor-pointer items-start gap-2 text-xs text-base-content/70">
+                  <input
+                    className="checkbox checkbox-sm mt-0.5"
+                    type="checkbox"
+                    checked={filters.includeUnknownSalary}
+                    onChange={(event) => onFiltersChange({ includeUnknownSalary: event.target.checked })}
+                    disabled={busy}
+                    aria-label="Include jobs with no salary"
+                  />
+                  <span>Include jobs with no salary</span>
+                </label>
+                <p className="text-xs text-base-content/60">Yearly gross pay. Hourly pay is converted.</p>
+                {salaryNote && <p className="text-xs text-base-content/60">{salaryNote}</p>}
+
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
+                  <input
+                    className="checkbox checkbox-sm"
+                    type="checkbox"
+                    aria-label="Hide on-site and hybrid"
+                    checked={filters.hideOnsiteHybrid ?? false}
+                    onChange={(event) => onFiltersChange({ hideOnsiteHybrid: event.target.checked })}
+                  />
+                  Hide on-site and hybrid
+                </label>
+
+                {/* The engine only ever attempts this check for a Netherlands-located vacancy (see
+                    `worldwideSponsorMatch`'s own gate), so the filter is meaningless -- and would just
+                    silently empty the list -- for any other country selection. */}
+                {filters.country === 'Netherlands' && (
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
+                    <input
+                      className="checkbox checkbox-sm"
+                      type="checkbox"
+                      checked={filters.sponsorOnly}
+                      onChange={(event) => onFiltersChange({ sponsorOnly: event.target.checked })}
+                      disabled={busy}
+                      aria-label="Possible IND sponsor match only"
+                    />
+                    Possible IND sponsor match only
+                  </label>
+                )}
+
+                {filters.postedWithin !== 'any' && (
+                  <p className="text-xs text-base-content/60">Jobs without a posting date are hidden.</p>
+                )}
+
+                <button className="btn btn-ghost btn-sm self-start" type="button" onClick={onClear}>
+                  Clear filters
+                </button>
+              </div>
             </div>
-            <label className="mt-2 flex cursor-pointer items-start gap-2 text-xs text-base-content/70">
-              <input
-                className="checkbox checkbox-sm mt-0.5"
-                type="checkbox"
-                checked={filters.includeUnknownSalary}
-                onChange={(event) => onFiltersChange({ includeUnknownSalary: event.target.checked })}
-                disabled={busy}
-                aria-label="Include jobs with no salary"
-              />
-              <span>Include jobs with no salary</span>
-            </label>
-            <p className="mt-2 text-xs text-base-content/60">
-              Yearly gross pay. Hourly pay is converted.
-            </p>
-          </div>
-        </details>
+          )}
+        </div>
 
         <label
-          className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70"
+          className="flex cursor-pointer items-center gap-2 text-sm text-base-content/70"
           title={aiWebDiscoveryAvailable ? undefined : 'Fill in your search profile first.'}
         >
           <input
@@ -223,31 +363,28 @@ export function SearchFilterBar({
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
           Search
         </button>
-
-        {!hasQuery && (
-          <button className="btn btn-outline btn-sm" type="button" onClick={onBrowseAll} disabled={busy || scanUnavailable}>
-            Browse all vacancies
-          </button>
-        )}
-
-        {/* The engine only ever attempts this check for a Netherlands-located vacancy (see
-            `worldwideSponsorMatch`'s own gate), so the filter is meaningless -- and would just
-            silently empty the list -- for any other country selection. Shown only once "Netherlands"
-            is the selected country, not for "All countries" or any other one. */}
-        {filters.country === 'Netherlands' && (
-          <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
-            <input
-              className="checkbox checkbox-sm"
-              type="checkbox"
-              checked={filters.sponsorOnly}
-              onChange={(event) => onFiltersChange({ sponsorOnly: event.target.checked })}
-              disabled={busy}
-              aria-label="Possible IND sponsor match only"
-            />
-            Possible IND sponsor match only
-          </label>
-        )}
       </div>
+
+      {chips.length > 0 && (
+        <ul className="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Active filters">
+          {chips.map((chip) => (
+            <li key={chip.key} className="badge badge-outline h-auto gap-1 py-1 pr-1 text-xs">
+              {chip.label}
+              <button
+                className="btn btn-ghost btn-xs h-5 min-h-0 w-5 p-0"
+                type="button"
+                aria-label={`Remove filter: ${chip.label}`}
+                onClick={() => {
+                  onFiltersChange(chip.reset);
+                  filtersButtonRef.current?.focus();
+                }}
+              >
+                <span aria-hidden="true">&times;</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {draftDiffersFromApplied && (
         <p id="search-draft-hint" className="mt-2 text-xs text-base-content/60" role="status">
@@ -257,80 +394,16 @@ export function SearchFilterBar({
 
       {!hasQuery && (
         <p className="mt-2 text-xs text-base-content/60" role="status">
-          Enter a role to search.
-        </p>
-      )}
-
-      <div className="mt-2.5 flex flex-wrap items-center gap-1.5 short:mt-1.5">
-        <select
-          className="select select-xs w-36"
-          aria-label="Posted within"
-          value={filters.postedWithin}
-          onChange={(event) =>
-            onFiltersChange({ postedWithin: event.target.value as SearchFilters['postedWithin'] })
-          }
-        >
-          <option value="any">Posted: any time</option>
-          <option value="1">Last 24 hours</option>
-          <option value="7">Last 7 days</option>
-          <option value="30">Last 30 days</option>
-        </select>
-
-        <select
-          className="select select-xs w-36"
-          aria-label="Job source"
-          value={filters.source}
-          onChange={(event) => onFiltersChange({ source: event.target.value })}
-        >
-          <option value="all">All sources</option>
-          {sources.map((source) => (
-            <option key={source} value={source}>
-              {discoveryProviderLabel(source)}
-            </option>
-          ))}
-        </select>
-
-        {employmentTypes.length > 0 && (
-          <select
-            className="select select-xs w-36"
-            aria-label="Employment type"
-            value={filters.employment}
-            onChange={(event) => onFiltersChange({ employment: event.target.value })}
+          Enter a role to search, or{' '}
+          <button
+            className="link link-primary"
+            type="button"
+            onClick={onBrowseAll}
+            disabled={busy || scanUnavailable}
           >
-            <option value="any">Any employment</option>
-            {employmentTypes.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        )}
-
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-base-content/70">
-          <input
-            className="checkbox checkbox-xs"
-            type="checkbox"
-            aria-label="Hide on-site and hybrid"
-            checked={filters.hideOnsiteHybrid ?? false}
-            onChange={(event) => onFiltersChange({ hideOnsiteHybrid: event.target.checked })}
-          />
-          Hide on-site and hybrid
-        </label>
-
-        {/* Separates the filter chips (narrow what's shown) from the trailing meta+reset pair
-            (explain/undo), so the row reads as two groups rather than one undifferentiated run. */}
-        <div className="mx-1 hidden h-5 w-px self-center bg-base-300 md:block" aria-hidden="true" />
-
-        <span className="text-xs text-base-content/60">{salaryNote}</span>
-
-        <button className="btn btn-ghost btn-sm" type="button" onClick={onClear}>
-          Clear filters
-        </button>
-      </div>
-
-      {filters.postedWithin !== 'any' && (
-        <p className="mt-2 text-xs text-base-content/60">
-          Jobs without a posting date are hidden.
+            Browse all vacancies
+          </button>
+          .
         </p>
       )}
     </div>

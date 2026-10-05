@@ -129,6 +129,8 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   const [openRequirementId, setOpenRequirementId] = useState<string | null>(null);
   /** Hides every row that does not need the candidate, so the open ones are not lost in the list. */
   const [showOnlyOpen, setShowOnlyOpen] = useState(false);
+  /** Whether the "confirm all direct evidence" summary is showing. */
+  const [confirmingDirect, setConfirmingDirect] = useState(false);
   /** A row waiting to take keyboard focus once the list has rendered (a hidden row first needs the filter off). */
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -295,6 +297,25 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
     [overlay],
   );
 
+  /** Marks every unreviewed direct-evidence row reviewed in one save, through the same overlay
+   * update a single Reviewed tick uses. Rows are picked from the current overlay at click time, so
+   * nothing without direct evidence is ever marked. */
+  const confirmDirectEvidence = useCallback(async () => {
+    if (!overlay) return;
+    setConfirmingDirect(false);
+    const next = overlay.requirements.map((requirement) =>
+      !requirement.excluded && !requirement.reviewed && requirement.evidenceClass === 'direct'
+        ? { ...requirement, reviewed: true }
+        : requirement,
+    );
+    setOverlay({ ...overlay, requirements: next });
+    try {
+      setOverlay(await window.workspace.updateCvEvidenceOverlay(overlay.id, { requirements: next }));
+    } catch (err) {
+      setSaveError(describeError(err, 'could not save that change'));
+    }
+  }, [overlay]);
+
   const handleAnswer = useCallback(
     async (requirement: CvRequirementMapping, answer: ClarificationAnswer) => {
       if (!overlay) return;
@@ -405,6 +426,9 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
       .filter((requirement) => !requirement.reviewed || (requirement.classification === 'required' && requirement.evidenceClass === 'needs_verification'))
       .map((requirement) => requirement.requirementId),
   );
+  // Direct evidence only needs a glance, not an answer: counted and confirmed on its own.
+  const directPending = activeRequirements.filter((requirement) => !requirement.reviewed && requirement.evidenceClass === 'direct');
+  const needsAnswerCount = [...openIds].filter((id) => !directPending.some((requirement) => requirement.requirementId === id)).length;
   const shownRequirements = overlay ? (showOnlyOpen ? overlay.requirements.filter((requirement) => openIds.has(requirement.requirementId)) : overlay.requirements) : [];
   const currentRevisionId = overlay ? currentCvJdRevisionId(overlay) : '';
   const approvedFacts = overlay?.facts.filter((fact) => fact.approval === 'approved' && fact.verification !== 'candidate_confirmed_gap') ?? [];
@@ -478,11 +502,6 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           <button className="btn btn-primary" type="button" onClick={() => handleRun(false)} disabled={!canRun}>
             {overlay && overlay.requirements.length > 0 ? 'Re-map requirements' : 'Map requirements'}
           </button>
-          {overlay && coverageCurrent === 'partial' && (
-            <button className="btn btn-outline" type="button" onClick={() => handleRun(true)} disabled={!canRun}>
-              Read the rest
-            </button>
-          )}
           <button className="btn btn-outline" type="button" onClick={() => void run.cancel()} disabled={!run.isBusy}>
             Cancel
           </button>
@@ -559,10 +578,18 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                 All requirements are reviewed.
               </div>
             )}
-            {coverageCurrent === 'partial' && overlay.requirementCoverage.batches > 0 && (
-              <p className="text-sm text-base-content/70">
-                Only part of the job description was read.
-              </p>
+            {coverageCurrent === 'partial' && (
+              <div className="flex flex-wrap items-center gap-2">
+                {overlay.requirementCoverage.batches > 0 && (
+                  <p className="text-sm text-base-content/70">
+                    Only part of the job description was read.
+                  </p>
+                )}
+                {/* One action: reads the next part and adds what it finds to this list. */}
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => handleRun(true)} disabled={!canRun}>
+                  Read the rest
+                </button>
+              </div>
             )}
             {coverageCurrent !== 'complete' && (
               <button
@@ -582,8 +609,15 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         {overlay && overlay.requirements.length > 0 && (
           <div id="cv-step-answers" tabIndex={-1} className="flex flex-wrap items-center gap-3 outline-none" aria-label="Review progress">
             <p className="text-sm font-medium">
-              {reviewedCount} of {activeRequirements.length} reviewed.{openIds.size > 0 ? ` ${openIds.size} need your answer.` : ''}
+              {reviewedCount} of {activeRequirements.length} reviewed.
+              {needsAnswerCount > 0 ? ` ${needsAnswerCount} need your answer.` : ''}
+              {directPending.length > 0 ? ` ${directPending.length} with direct evidence to confirm.` : ''}
             </p>
+            {directPending.length > 0 && !confirmingDirect && (
+              <button type="button" className="btn btn-outline btn-xs" onClick={() => setConfirmingDirect(true)}>
+                Confirm direct evidence
+              </button>
+            )}
             <label className="flex items-center gap-2 text-xs">
               <input
                 type="checkbox"
@@ -597,6 +631,28 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
             <button type="button" className="btn btn-outline btn-xs" onClick={focusNextOpenRow} disabled={openIds.size === 0}>
               Next open item
             </button>
+          </div>
+        )}
+
+        {overlay && confirmingDirect && directPending.length > 0 && (
+          <div className="rounded-box border border-base-300 p-3 text-sm" role="group" aria-label="Confirm direct evidence">
+            <p className="font-medium">
+              Confirm {directPending.length} {directPending.length === 1 ? 'requirement' : 'requirements'} your CV clearly
+              shows?
+            </p>
+            <ul className="mt-1 list-disc pl-4 text-xs text-base-content/70">
+              {directPending.map((requirement) => (
+                <li key={requirement.requirementId}>{requirement.text}</li>
+              ))}
+            </ul>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => void confirmDirectEvidence()}>
+                Confirm {directPending.length}
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmingDirect(false)}>
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 

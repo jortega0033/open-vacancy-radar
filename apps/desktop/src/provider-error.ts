@@ -48,10 +48,14 @@ const UNAVAILABLE_PATTERNS = [
 /** "resets 12:10pm (Europe/Amsterdam)", "resets at 5 PM", "reset at 17:30". Needs a colon or am/pm. */
 const RESET_PATTERN = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?(?:\s*\(([A-Za-z_]+(?:\/[A-Za-z_+-]+)*)\))?/i;
 
+/**
+ * Replaces the profile folder in home paths with `~`. The folder name may contain spaces
+ * ("Jane Doe"), so it runs to the next path separator, quote or line end rather than to whitespace.
+ */
 export function redactHomePaths(text: string): string {
   return text
-    .replace(/\/(?:Users|home)\/[^/\s]+/g, '~')
-    .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, '~');
+    .replace(/\/(?:Users|home)\/[^/\r\n"'<>`]+/g, '~')
+    .replace(/[A-Za-z]:[\\/]+Users[\\/]+[^\\/\r\n"'<>`]+/g, '~');
 }
 
 function localTimeZone(): string | null {
@@ -79,7 +83,9 @@ function parseReset(message: string, now: Date): Pick<ProviderErrorInfo, 'resetL
   } else if (hour > 23) {
     return {};
   }
-  const label = whole.replace(/^resets?\s+(?:at\s+)?/i, '').trim();
+  // "resets 11:59pm." ends a sentence: the dot is the provider's, not part of the time, and
+  // keeping it renders "until 11:59pm.." in our own sentences.
+  const label = whole.replace(/^resets?\s+(?:at\s+)?/i, '').trim().replace(/([ap]m)\.$/i, '$1');
   const sameZone = zone === undefined || zone === localTimeZone();
   if (!sameZone) return { resetLabel: label };
   const at = new Date(now);

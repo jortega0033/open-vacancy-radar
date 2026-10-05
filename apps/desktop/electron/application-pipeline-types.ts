@@ -65,4 +65,6 @@ export interface ApplicationPipelineBridge {
   useOriginalCv(attemptId: string): Promise<RestartApplicationTailoringResult>;
   /** Re-runs a needs-user preparation after the person addresses its blocker. */
   resume(attemptId: string): Promise<RestartApplicationTailoringResult>;
+  /** Links the letter just saved from the review hand-off to this attempt. Main finds the letter. */
+  attachLetter(attemptId: string): Promise<{ ok: boolean; attemptId: string; detail?: string }>;
 }

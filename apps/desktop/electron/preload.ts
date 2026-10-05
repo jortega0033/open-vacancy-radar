@@ -1891,6 +1891,11 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
     const mode = source ? optionalString(source, 'tailoringMode') : undefined;
     return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
   },
+  async attachLetter(attemptId) {
+    const source = asRecord(await ipcRenderer.invoke('application-pipeline:attach-letter', { attemptId }));
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return { ok: source?.ok === true, attemptId, ...(detail === undefined ? {} : { detail }) };
+  },
 };
 
 function parseRestartTailoringResult(
