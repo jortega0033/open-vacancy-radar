@@ -876,6 +876,77 @@ export async function resumeApplicationAttempt(
   return { ok: true, attemptId, tailoringMode: attempt.tailoringMode };
 }
 
+export interface AttachLetterResult {
+  ok: boolean;
+  attemptId: string;
+  detail?: string;
+}
+
+/**
+ * Links the letter the person just saved from the review's "Generate letter" hand-off to its
+ * attempt. The link is the letter's vacancy key (the Letters page stamps it from the preselected
+ * job), so the renderer names only the attempt: main finds the newest saved cover or motivation
+ * letter for that vacancy and renders it itself.
+ *
+ * An employer site this app does not submit to is finished here: the letter is staged as a PDF and
+ * the attempt reads ready again. For a supported site the letter is marked final and preparation is
+ * resumed, so the ordinary run stages it before filling the form.
+ */
+export async function attachLetterToAttempt(
+  deps: ApplicationPipelineDeps,
+  attemptId: string,
+): Promise<AttachLetterResult> {
+  const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
+  // Only an attempt stopped on its cover letter. `needs_user` also covers tailoring failures, page
+  // problems and the like, whose detail must not be replaced; and once a letter is attached the
+  // detail no longer names a letter blocker, so a second save does not stage it again.
+  const waitingOnLetter =
+    attempt.checkpointDetail.includes('Cover letter blocker:') ||
+    attempt.checkpointDetail.startsWith('Automatic cover letter preparation stopped:');
+  if (attempt.checkpoint !== 'needs_user' || attempt.submittedAt !== null || !attempt.vacancyKey || !waitingOnLetter) {
+    return { ok: false, attemptId, detail: 'this application is not waiting on a letter' };
+  }
+  const letter = workspace
+    .listLetters(deps.db)
+    .find(
+      (candidate) =>
+        candidate.vacancyKey === attempt.vacancyKey &&
+        (candidate.type === 'cover_letter' || candidate.type === 'motivation_letter') &&
+        candidate.body.trim().length > 0,
+    );
+  if (!letter || (letter.type !== 'cover_letter' && letter.type !== 'motivation_letter')) {
+    return { ok: false, attemptId, detail: 'no saved letter was found for this vacancy' };
+  }
+
+  if (resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl)) {
+    if (letter.status !== 'final') workspace.updateLetter(deps.db, letter.id, { status: 'final' });
+    const resumed = await resumeApplicationAttempt(deps, attemptId);
+    return { ok: resumed.ok, attemptId, ...(resumed.detail ? { detail: resumed.detail } : {}) };
+  }
+
+  const cv = workspace.listCvDocuments(deps.db).find((document) => document.id === attempt.sourceCvId);
+  try {
+    await stageLetterArtifact({
+      db: deps.db,
+      attemptId,
+      kind: letter.type,
+      title: letter.title,
+      body: letter.body,
+      candidateName: cv?.source?.contact.name ?? '',
+      target: { company: attempt.company, role: attempt.role },
+      storageRoot: deps.storageRoot,
+    });
+  } catch (err) {
+    return { ok: false, attemptId, detail: `the letter could not be added: ${describeError(err)}` };
+  }
+  workspace.updateApplicationAttempt(deps.db, attemptId, {
+    checkpoint: 'needs_user',
+    checkpointDetail:
+      'Your application documents are ready. This employer site is not approved for automated submission, so apply on the site yourself and mark the attempt when you finish.',
+  });
+  return { ok: true, attemptId };
+}
+
 interface FillApplicationFormInput {
   attempt: ApplicationAttemptRecord;
   policyId: string;
