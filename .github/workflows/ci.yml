@@ -57,6 +57,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Issue #164. Links, anchors, required rows, and test references in docs/capability-matrix.md.
+      # Its own tests run inside apps/daemon's suite as capability-matrix-check.test.mjs.
+      - name: Capability matrix
+        run: pnpm docs:check-capabilities
+
       - name: Typecheck
         run: pnpm typecheck
 
