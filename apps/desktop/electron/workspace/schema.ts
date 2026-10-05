@@ -655,6 +655,10 @@ export const appSettings = sqliteTable('app_settings', {
    * (#195). Off by default -- and a no-op in practice unless `minimizeToTrayOnClose` is also on,
    * since nothing else keeps the process alive to run the timer. */
   autoScanEnabled: integer('auto_scan_enabled', { mode: 'boolean' }).notNull().default(false),
+  /** Whether the app scouts new ATS sources on its own while it is open (#348). Off by default and
+   * independent of `autoScanEnabled`: refreshing vacancies and widening the source list are two
+   * separate background jobs. It needs a saved role or keyword and never runs while OVR is closed. */
+  autoSourceScoutEnabled: integer('auto_source_scout_enabled', { mode: 'boolean' }).notNull().default(false),
   /**
    * Whether this app is allowed to treat any site as automated-submission eligible at all -- the
    * MVP kill switch over #193's auto-apply track. Off by default, and off in every shipped build of

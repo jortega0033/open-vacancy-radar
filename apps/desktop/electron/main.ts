@@ -29,12 +29,14 @@ import {
   fetchJobgetherOfferDetail,
   fetchWorkableJobDetail,
   jobgetherOfferIdFromUrl,
+  loadAtsRoster,
   loadCandidateProfile,
   loadConfig,
   migrateDatabase,
   readAtsRosterStatus,
   readGlobalRemoteReportWithFallback,
   runAtsRosterImport,
+  runAtsSourceScout,
   runGlobalRemoteScan,
   runSponsorSync,
   isScanCancelledError,
@@ -122,6 +124,7 @@ import {
 } from './cv-transcription-staging.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
+import { createSourceScout, createSourceScoutStateStore, sourceScoutLimitsFromEnv } from './source-scout.js';
 import { createTick } from './tick.js';
 import type { VacancyScanAiWebSearchState, VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 import {
@@ -248,6 +251,8 @@ let isQuitting = false;
  * every 5-minute tick is needless DB traffic when this mirror is already kept current.
  */
 let autoScanEnabled = false;
+/** Same kind of mirror for `autoSourceScoutEnabled` (#348), read by the scout tick below. */
+let autoSourceScoutEnabled = false;
 /** #421's local MCP endpoint, non-`null` only while actually listening. Started/stopped by
  * `syncMcpServer` below, never constructed directly elsewhere -- that function is the single
  * place that decides whether one should be running right now. */
@@ -495,6 +500,7 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     const settings = workspace.getSettings(db);
     minimizeToTrayOnClose = settings.minimizeToTrayOnClose;
     autoScanEnabled = settings.autoScanEnabled;
+    autoSourceScoutEnabled = settings.autoSourceScoutEnabled;
     // The auto-apply kill switch is a third mirror of the same kind, kept in the module that
     // enforces it rather than here: `resolvePolicyIdForCanonicalUrl` is synchronous and is called
     // from synchronous plumbing. If this line never runs -- a failed open, a migration that threw
@@ -2660,6 +2666,9 @@ function notifyScanOutcome(show: () => void): void {
  * notification either.
  */
 async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<GlobalRemoteReport> {
+  // A background source scout holds the scan guard for up to its whole run; a person asking for a
+  // scan wins, so stop the scout first. It records itself as cancelled and retries later.
+  await sourceScout.cancel();
   const db = await ensureVacancyEngine();
   try {
     const report = await runExclusiveScan(
@@ -2855,6 +2864,65 @@ function scheduleBackgroundScanTick(): void {
         console.error('[background-scan] scheduled scan failed', error);
       });
   }, BACKGROUND_SCAN_CHECK_INTERVAL_MS);
+}
+
+/**
+ * #348: opt-in, bounded ATS source scouting. One scheduling owner: this main-process lifecycle, the
+ * same `ScanGuard` (with the advisory lock) a manual scan uses, and the #341 planner/observation
+ * store inside `runAtsSourceScout`. It runs only while OVR is open or minimized, and only with a
+ * saved role or keyword.
+ */
+const sourceScout = createSourceScout({
+  isEnabled: () => autoSourceScoutEnabled,
+  loadQuery: async () => {
+    const profile = await loadCandidateProfile(await candidateProfilePath());
+    return scheduledScanQueryFromProfile(profile);
+  },
+  runExclusiveScan: async (run, options) => {
+    // The guard reads the advisory lock lazily, so the engine must be up before it is entered.
+    await ensureVacancyEngine();
+    return runExclusiveScan(run, options);
+  },
+  runScout: async (query, signal) => {
+    const http = await ensureApplicationJdHttpClient();
+    const projectRoot = await vacancyEngineDataRoot();
+    return runAtsSourceScout({
+      http,
+      roster: await loadAtsRoster(projectRoot),
+      projectRoot,
+      roleQuery: query,
+      // Role only, on purpose: the scheduled vacancy scan narrows by role alone too
+      // (`scheduledScanQueryFromProfile` returns just the query), and the observation planner
+      // matches a blank country against every country.
+      limits: sourceScoutLimitsFromEnv(process.env),
+      signal,
+    });
+  },
+  store: createSourceScoutStateStore(() => vacancyEngineDataRoot(), { log: (message, error) => console.error(message, error) }),
+  log: (message, error) => console.error(message, error),
+});
+
+guardedIpc.handle('vacancy:source-scout:get-status', () => sourceScout.getStatus());
+
+guardedIpc.handle('vacancy:source-scout:run-now', () => {
+  const started = sourceScout.runNow();
+  return started.started ? { started: true as const } : started;
+});
+
+guardedIpc.handle('vacancy:source-scout:set-paused', (_event, paused: unknown) => {
+  if (typeof paused !== 'boolean') throw new Error('paused must be a boolean');
+  return sourceScout.setPaused(paused);
+});
+
+// Same short-tick-from-a-durable-timestamp approach as the vacancy scan tick above: the tick itself
+// is a settings read, and "is it time" comes from the stored `nextRunAt`, so sleep never replays
+// missed intervals.
+const SOURCE_SCOUT_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+function scheduleSourceScoutTick(): void {
+  setInterval(() => {
+    void sourceScout.tick();
+  }, SOURCE_SCOUT_CHECK_INTERVAL_MS);
 }
 
 // A short poll relative to the cancel window itself (#203's own AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS
@@ -3085,6 +3153,8 @@ guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) =>
     // carry it, so a renderer write can never be what changes it.
     minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
     autoScanEnabled = updated.autoScanEnabled;
+    autoSourceScoutEnabled = updated.autoSourceScoutEnabled;
+    if (!autoSourceScoutEnabled) void sourceScout.cancel();
     setAutoApplyEnabled(updated.autoApplyEnabled);
     void syncMcpServer(updated.mcpEndpointEnabled);
     return updated;
@@ -3100,6 +3170,8 @@ guardedIpc.handle('workspace:data:reset', async () => {
       throw new Error('wait for the active application task to finish before resetting data');
     }
 
+    // A scout run reads the roster and observation files this reset may clear.
+    await sourceScout.cancel();
     closeAllApplicationReviews();
     const queueStatus = await daemonGetJson('/v2/applications');
     const lease = queueStatus?.lease;
@@ -3150,6 +3222,7 @@ guardedIpc.handle('workspace:data:reset', async () => {
 
     minimizeToTrayOnClose = result.settings.minimizeToTrayOnClose;
     autoScanEnabled = result.settings.autoScanEnabled;
+    autoSourceScoutEnabled = result.settings.autoSourceScoutEnabled;
     setAutoApplyEnabled(result.settings.autoApplyEnabled);
     void syncMcpServer(result.settings.mcpEndpointEnabled);
     return result;
@@ -3668,6 +3741,7 @@ if (gotSingleInstanceLock) {
     // #195: pick up a report a previous process lifetime's scan already wrote to disk.
     void hydrateLatestVacancyReport();
     scheduleBackgroundScanTick();
+    scheduleSourceScoutTick();
     scheduleAutomaticSubmissionTick();
     scheduleApplicationPipelineTick();
     scheduleCvTranscriptionStagingSweep();
@@ -3687,6 +3761,7 @@ if (gotSingleInstanceLock) {
   // tray's own "Quit" item would set it too late relative to a `close` event already in flight.
   app.on('before-quit', () => {
     isQuitting = true;
+    void sourceScout.cancel();
   });
 
   // Separate from the daemon shutdown below on purpose: `will-quit` always fires, whereas the
