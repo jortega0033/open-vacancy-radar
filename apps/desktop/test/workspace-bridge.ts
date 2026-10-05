@@ -198,6 +198,17 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
     // about a populated roster overrides this with its own resolved status.
     getAtsRosterStatus: vi.fn().mockResolvedValue(null),
     refreshAtsRoster: vi.fn(),
+    getSourceScoutStatus: vi.fn().mockResolvedValue({
+      enabled: false,
+      paused: false,
+      running: false,
+      hasProfile: false,
+      lastRunAt: null,
+      nextRunAt: null,
+      lastOutcome: null,
+    }),
+    runSourceScoutNow: vi.fn().mockResolvedValue({ started: false, reason: 'disabled' }),
+    setSourceScoutPaused: vi.fn(),
     ...overrides,
   };
   (window as unknown as { vacancyRadar: VacancyRadarBridge }).vacancyRadar = bridge;

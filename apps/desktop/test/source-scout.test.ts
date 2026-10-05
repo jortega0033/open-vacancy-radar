@@ -261,17 +261,23 @@ describe('source scout orchestrator', () => {
     });
   });
 
-  it('waits until the earliest due time when nothing is due', async () => {
-    const idle = scoutResult({
-      stoppedBecause: 'nothing_due',
-      dueRemaining: 0,
-      earliestNextDueAt: '2026-10-07T10:00:00.000Z',
-      counters: { attempted: 0, refreshed: 0, explored: 0, newlyVerified: 0, empty: 0, skipped: 0, blocked: 0, failed: 0 },
-    });
-    const { scout, store } = setup({ runScout: vi.fn(async () => idle) });
-    await scout.tick();
-    expect(store.current().lastOutcome?.kind).toBe('nothing_due');
-    expect(store.current().nextRunAt).toBe('2026-10-07T10:00:00.000Z');
+  it('waits until the earliest due time when nothing is due, never longer than a day', async () => {
+    const idleWith = (earliestNextDueAt: string) =>
+      scoutResult({
+        stoppedBecause: 'nothing_due',
+        dueRemaining: 0,
+        earliestNextDueAt,
+        counters: { attempted: 0, refreshed: 0, explored: 0, newlyVerified: 0, empty: 0, skipped: 0, blocked: 0, failed: 0 },
+      });
+
+    const soon = setup({ runScout: vi.fn(async () => idleWith('2026-10-05T15:00:00.000Z')) });
+    await soon.scout.tick();
+    expect(soon.store.current().lastOutcome?.kind).toBe('nothing_due');
+    expect(soon.store.current().nextRunAt).toBe('2026-10-05T15:00:00.000Z');
+
+    const far = setup({ runScout: vi.fn(async () => idleWith('2026-10-07T10:00:00.000Z')) });
+    await far.scout.tick();
+    expect(far.store.current().nextRunAt).toBe('2026-10-06T10:00:00.000Z');
   });
 
   it('honors Pause for scheduled ticks and lets Run now still start a run', async () => {
