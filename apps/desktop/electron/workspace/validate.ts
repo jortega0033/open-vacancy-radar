@@ -1011,6 +1011,7 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'minimizeToTrayOnClose', (v) => bool(v, 'minimizeToTrayOnClose'));
   patch(input, out, 'welcomeSeen', (v) => bool(v, 'welcomeSeen'));
   patch(input, out, 'autoScanEnabled', (v) => bool(v, 'autoScanEnabled'));
+  patch(input, out, 'autoSourceScoutEnabled', (v) => bool(v, 'autoSourceScoutEnabled'));
   // `autoApplyEnabled` is deliberately absent, and its absence is the point: this validator is an
   // allow-list, so a renderer payload carrying it is dropped here rather than reaching Drizzle. The
   // auto-apply kill switch is the one setting whose "on" state would let this app submit an

@@ -39,6 +39,7 @@ export interface AgentDockBridge {
 }
 
 import type { VacancyCacheRebuildResult, VacancyEngineStatus } from '../electron/vacancy-engine-recovery.js';
+import type { SourceScoutRunStart, SourceScoutStatus } from '../electron/source-scout-types.js';
 import type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus } from '../electron/vacancy-scan-progress-types.js';
 export type { VacancyScanCancelResult, VacancyScanProgressEvent, VacancyScanStatus };
 export type { VacancyCacheRebuildResult, VacancyEngineStatus };
@@ -95,6 +96,12 @@ export interface VacancyRadarBridge {
   /** Runs the roster import now. Deliberately manual, never automatic -- see the main-process
    * doc comment on `runAtsRosterRefresh`. */
   refreshAtsRoster(): Promise<AtsRosterImportResult>;
+  /** Background source scout (#348): what Settings shows. Reads stored state only. */
+  getSourceScoutStatus(): Promise<SourceScoutStatus>;
+  /** Starts one scout run now; resolves as soon as it starts or is refused, not when it ends. */
+  runSourceScoutNow(): Promise<SourceScoutRunStart>;
+  /** Pauses or resumes the scheduled scout without changing the on/off setting. */
+  setSourceScoutPaused(paused: boolean): Promise<SourceScoutStatus>;
 }
 
 export interface CvFile {

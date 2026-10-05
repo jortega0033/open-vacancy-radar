@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   // back to false explicitly -- see `test/components/WelcomeModal.test.tsx`.
   welcomeSeen: true,
   autoScanEnabled: false,
+  autoSourceScoutEnabled: false,
   autoApplyEnabled: false,
   defaultLocation: '',
   defaultCvId: null,

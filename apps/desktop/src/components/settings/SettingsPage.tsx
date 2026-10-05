@@ -46,6 +46,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   lastOpenedPage: 'search',
   minimizeToTrayOnClose: false,
   autoScanEnabled: false,
+  autoSourceScoutEnabled: false,
   defaultLocation: '',
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
