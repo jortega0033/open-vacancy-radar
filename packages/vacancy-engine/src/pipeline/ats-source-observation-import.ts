@@ -33,7 +33,7 @@ export type AtsSourceObservationImportResult = {
   acceptedSources: { provider: string; slug: string; company: string }[];
 };
 
-function hasStableVacancyIdentity(vacancy: { externalId: string; url: string }): boolean {
+export function hasStableVacancyIdentity(vacancy: { externalId: string; url: string }): boolean {
   if (vacancy.externalId.trim().length === 0) return false;
   try {
     return new URL(vacancy.url).protocol === 'https:';

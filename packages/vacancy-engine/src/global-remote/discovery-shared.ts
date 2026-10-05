@@ -165,6 +165,8 @@ export function discoveryAudit(
     company: input.company,
     title: input.title,
     location: input.location,
+    provider: input.provider,
+    key: input.key,
   });
   const applyUrl = resolveApplyUrl(identity, input.url);
   return {
