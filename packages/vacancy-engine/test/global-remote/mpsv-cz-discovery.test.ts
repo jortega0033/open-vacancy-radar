@@ -426,7 +426,7 @@ describe('personal data omission', () => {
 
   it('keeps error messages free of record content', async () => {
     const snapshot = leakySnapshot();
-    const body = JSON.stringify(snapshot).replace('"polozky"', '"polozky"').slice(0, -30);
+    const body = JSON.stringify(snapshot).slice(0, -30);
     const run = await runMpsvCzDiscovery(fakeClient({ body }).client, CONFIG, { now: () => NOW });
     const source = sourceOf(run);
     expect(source.status).toBe('error');
