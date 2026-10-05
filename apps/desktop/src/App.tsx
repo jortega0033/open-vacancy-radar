@@ -254,6 +254,15 @@ export function App() {
   // state can be cleared immediately rather than waiting for the user to navigate elsewhere.
   const handleVacancyConsumed = useCallback(() => setPendingVacancy(null), []);
 
+  // A letter saved while Letters was opened from an application review belongs to that application:
+  // main links it, so the review lists it under Prepared documents when the person comes back.
+  const handleLettersChanged = useCallback(() => {
+    if (letterReturnAttemptId) {
+      void window.applicationPipeline?.attachLetter(letterReturnAttemptId).catch(() => {});
+    }
+    void refreshCounts();
+  }, [letterReturnAttemptId, refreshCounts]);
+
   const handleBackToVacancy = useCallback((vacancy: SelectedVacancy) => {
     hasNavigatedRef.current = true;
     if (letterReturnAttemptId) {
@@ -523,7 +532,7 @@ export function App() {
               vacancy={pendingVacancy}
               openOnGenerator={pendingVacancy !== null}
               onVacancyConsumed={handleVacancyConsumed}
-              onLettersChanged={refreshCounts}
+              onLettersChanged={handleLettersChanged}
               onBackToVacancy={handleBackToVacancy}
               onOpenCvPage={() => handleNavigate('cv')}
             />

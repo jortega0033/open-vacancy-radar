@@ -12,6 +12,7 @@ import {
 } from '../../../src/components/search/index.js';
 import type { SavedJobRecord, VacancyEngineStatus, VacancyRadarBridge } from '../../../src/window.js';
 import type { ApplicationPipelineBridge } from '../../../electron/application-pipeline-types.js';
+import { formatReportTimestamp } from '../../../src/components/search/results.js';
 import { installBridges } from '../../cv-bridges.js';
 import {
   DEFAULT_CANDIDATE_PROFILE,
@@ -19,6 +20,12 @@ import {
   installVacancyRadarBridge,
   installWorkspaceBridge,
 } from '../../workspace-bridge.js';
+
+/** Secondary filters live behind the Filters button; open it once (a second click would close it). */
+function openFilters() {
+  const button = screen.getByRole('button', { name: /^Filters/ });
+  if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button);
+}
 
 function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
   return {
@@ -91,6 +98,33 @@ function makeWorldwideReport(
   };
 }
 
+/** A report that records the search it came from, the way a current scan does. */
+function makeFocusedReport(
+  vacancies: DiscoveryVacancyAudit[],
+  requested: { role?: string; country?: string },
+  mode: 'focused' | 'browse_all' = 'focused',
+): GlobalRemoteReport {
+  const source = {
+    id: 'remotive:all',
+    provider: 'remotive' as const,
+    url: 'https://example.test/remotive',
+    requests: 1,
+    listings: vacancies.length,
+    status: 'success' as const,
+    error: null,
+    networkAttempts: 1,
+    retries: 0,
+    complete: true,
+    completenessReason: null,
+    continuationCursor: null,
+    focusedScan: { requested, applied: [], deferred: [], unsupported: [] },
+  };
+  return {
+    ...makeWorldwideReport(vacancies, [source]),
+    scanBounds: { mode, resultCap: null, resultCountBeforeCap: vacancies.length, complete: true, completenessReason: null },
+  };
+}
+
 /**
  * Every bridge the page (and the CV assistant it can open) touches, with the vacancy engine
  * reported ready.
@@ -109,6 +143,7 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
     retryTailoring: vi.fn(),
     useOriginalCv: vi.fn(),
     resume: vi.fn(),
+    attachLetter: vi.fn(),
   };
   return installVacancyRadarBridge({
     getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
@@ -181,6 +216,7 @@ describe('SearchPage', () => {
 
     render(<SearchSessionHarness initialSession={initialSession} />);
 
+    openFilters();
     expect(screen.getByLabelText('Minimum annual salary')).toHaveValue('60 000');
     expect(screen.getByLabelText('Include jobs with no salary')).not.toBeChecked();
 
@@ -390,8 +426,8 @@ describe('SearchPage', () => {
 
       await screen.findByLabelText('Vacancy results');
       expect(screen.queryByText(/Scan details/)).not.toBeInTheDocument();
-      // The separate stats line above the list is gone, so the list gets that height.
-      expect(screen.queryByText(/ · scanned /)).not.toBeInTheDocument();
+      // No separate stats line above the list; the list header carries the role and date (#538).
+      expect(screen.getAllByText(/ · searched /)).toHaveLength(1);
     });
   });
 
@@ -878,6 +914,7 @@ describe('SearchPage', () => {
 
     enterSearchQuery('frontend');
     fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Employment type' }), { target: { value: 'full_time' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
@@ -1048,6 +1085,104 @@ describe('SearchPage', () => {
       expect(screen.getByText(/could not check your profile/i)).toBeInTheDocument(),
     );
     expect(screen.queryByText(/profile read failed/i)).not.toBeInTheDocument();
+  });
+
+  describe('saved report context after restart (#538)', () => {
+    const roleBox = () => screen.getByRole('searchbox', { name: 'Role or keywords' });
+
+    it('restores the saved role and shows role and date without scanning', async () => {
+      const report = makeFocusedReport([makeWorldwideVacancy({ location: 'Berlin, Germany' })], {
+        role: 'Frontend Engineer',
+        country: 'Germany',
+      });
+      const bridge = installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+      render(<SearchPage />);
+
+      expect(
+        await screen.findByText(
+          `1 vacancy for Frontend Engineer in Germany · searched ${formatReportTimestamp(report.generatedAt)}`,
+        ),
+      ).toBeInTheDocument();
+      expect(roleBox()).toHaveValue('Frontend Engineer');
+      expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany');
+      expect(bridge.runScan).not.toHaveBeenCalled();
+    });
+
+    it('keeps a newly typed role as the next scan and the summary on the saved report', async () => {
+      const report = makeFocusedReport([makeWorldwideVacancy()], { role: 'Frontend Engineer' });
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+      render(<SearchPage />);
+      await screen.findByText(/for Frontend Engineer · searched /);
+      enterSearchQuery('Designer');
+
+      expect(screen.getByText(/for Frontend Engineer · searched /)).toBeInTheDocument();
+      expect(screen.getByText(/Showing results for 'Frontend Engineer'/)).toBeInTheDocument();
+    });
+
+    it('labels a browse-all report and restores no role', async () => {
+      const report = makeFocusedReport([makeWorldwideVacancy()], {}, 'browse_all');
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+      render(<SearchPage />);
+
+      expect(
+        await screen.findByText(`1 vacancy · browse all · searched ${formatReportTimestamp(report.generatedAt)}`),
+      ).toBeInTheDocument();
+      expect(roleBox()).toHaveValue('');
+    });
+
+    it('labels a legacy report honestly without inventing a role or country', async () => {
+      const report = makeWorldwideReport([makeWorldwideVacancy()]);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+      render(<SearchPage />);
+
+      expect(
+        await screen.findByText(`1 vacancy · searched ${formatReportTimestamp(report.generatedAt)}`),
+      ).toBeInTheDocument();
+      expect(roleBox()).toHaveValue('');
+      expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('all');
+    });
+
+    it('does not overwrite a role typed while the report is still loading', async () => {
+      let resolveReport: (report: GlobalRemoteReport) => void = () => {};
+      installAllBridges({
+        getReport: vi.fn().mockReturnValue(new Promise((resolve) => {
+          resolveReport = resolve;
+        })),
+      });
+
+      render(<SearchPage />);
+      enterSearchQuery('Designer');
+      resolveReport(makeFocusedReport([makeWorldwideVacancy()], { role: 'Frontend Engineer' }));
+
+      await screen.findByText(/for Frontend Engineer · searched /);
+      expect(roleBox()).toHaveValue('Designer');
+    });
+
+    it('lets the saved report country win over a delayed default location', async () => {
+      let resolveSettings: (settings: typeof DEFAULT_SETTINGS) => void = () => {};
+      installBridges();
+      installWorkspaceBridge({
+        getSettings: vi.fn().mockReturnValue(new Promise((resolve) => {
+          resolveSettings = resolve;
+        })),
+      });
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(
+          makeFocusedReport([makeWorldwideVacancy()], { role: 'Frontend Engineer', country: 'France' }),
+        ),
+      });
+
+      render(<SearchPage />);
+      await screen.findByText(/for Frontend Engineer in France · searched /);
+      resolveSettings({ ...DEFAULT_SETTINGS, defaultLocation: 'Germany' });
+
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('France'));
+    });
   });
 
   it('seeds the country filter from the persisted default search location on first load', async () => {
@@ -1252,6 +1387,7 @@ describe('SearchPage', () => {
     Object.defineProperty(resultsScroller, 'scrollTop', { configurable: true, value: 84, writable: true });
     fireEvent.scroll(resultsScroller);
 
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
       target: { value: 'dice' },
     });
@@ -1292,6 +1428,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
       target: { value: 'remotive' },
     });
@@ -1576,8 +1713,8 @@ describe('SearchPage', () => {
     expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the match count with the applied query and scan time, and no run log', async () => {
-    const report = makeWorldwideReport([makeWorldwideVacancy()]);
+  it('shows the match count with the report role and scan date, and no run log', async () => {
+    const report = makeFocusedReport([makeWorldwideVacancy()], { role: 'Frontend Engineer' });
     report.statistics.rawRowsFetched = 12;
     report.statistics.focusedMatches = 3;
     const bridge = installAllBridges({
@@ -1590,8 +1727,9 @@ describe('SearchPage', () => {
     enterSearchQuery('Frontend Engineer');
     fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
-    const time = new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    expect(await screen.findByText(`1 vacancy match 'Frontend Engineer' · scanned ${time}`)).toBeInTheDocument();
+    expect(
+      await screen.findByText(`1 vacancy for Frontend Engineer · searched ${formatReportTimestamp(report.generatedAt)}`),
+    ).toBeInTheDocument();
     expect(bridge.runScan).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/listings fetched/i)).not.toBeInTheDocument();
   });
@@ -1749,6 +1887,7 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
       enterSearchQuery('frontend engineer');
+      openFilters();
       fireEvent.change(screen.getByLabelText('Minimum annual salary'), { target: { value: '100000' } });
       fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
       await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
@@ -2068,6 +2207,7 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
     await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
+    openFilters();
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     resolveScan({
       ...makeWorldwideReport([makeWorldwideVacancy({ title: 'Backend Role' })]),
