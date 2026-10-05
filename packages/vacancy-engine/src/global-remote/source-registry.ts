@@ -41,6 +41,11 @@ const gated = (
   reason: `Adapter is implemented but disabled until ${configuredReason} ${configuredReason.includes(' and ') ? 'are' : 'is'} explicitly configured for this project.`,
 });
 
+/** True only when the user both enabled TheirStack and supplied a local key. */
+export function theirstackConfigured(config: GlobalRemoteConfig): boolean {
+  return config.discovery.theirstackEnabled === true && (config.discovery.theirstackApiKey ?? '').trim().length > 0;
+}
+
 export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRegistryEntry[] {
   const muse = config.discovery.museEnabled
     ? active(
@@ -75,6 +80,10 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
   const navArbeidsplassen = config.discovery.navArbeidsplassenApiKey.trim().length > 0
     ? active('nav_arbeidsplassen', 'NAV Arbeidsplassen Public Job Feed', 'https://arbeidsplassen.nav.no/vilkar-api', 'api', 'nav_arbeidsplassen', 'full_ingestion')
     : gated('nav_arbeidsplassen', 'NAV Arbeidsplassen Public Job Feed', 'https://arbeidsplassen.nav.no/vilkar-api', 'nav_arbeidsplassen', 'NAV_ARBEIDSPLASSEN_API_KEY (free consumer registration)');
+
+  const theirstack = theirstackConfigured(config)
+    ? active('theirstack', 'TheirStack Jobs API (paid)', 'https://api.theirstack.com/openapi', 'api', 'theirstack')
+    : gated('theirstack', 'TheirStack Jobs API (paid)', 'https://api.theirstack.com/openapi', 'theirstack', 'THEIRSTACK_ENABLED=true and THEIRSTACK_API_KEY (paid, one credit per returned job)');
 
   return [
     active('himalayas', 'Himalayas Remote Jobs API', 'https://himalayas.app/docs/remote-jobs-api', 'api', 'himalayas', 'full_ingestion'),
@@ -115,6 +124,7 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     reed,
     jobspipe,
     navArbeidsplassen,
+    theirstack,
     entry({
       id: 'ai_web_search',
       name: 'AI Web Search Discovery (Claude WebSearch/WebFetch)',

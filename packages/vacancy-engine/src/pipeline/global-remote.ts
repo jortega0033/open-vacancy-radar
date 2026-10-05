@@ -992,6 +992,11 @@ export async function runGlobalRemoteScan(
       reedApiKey: appConfig.keyedDiscovery.reedApiKey,
       jobspipeApiKey: appConfig.keyedDiscovery.jobspipeApiKey,
       navArbeidsplassenApiKey: appConfig.keyedDiscovery.navArbeidsplassenApiKey,
+      theirstackEnabled: appConfig.keyedDiscovery.theirstackEnabled,
+      theirstackApiKey: appConfig.keyedDiscovery.theirstackApiKey,
+      theirstackMaxCredits: appConfig.keyedDiscovery.theirstackMaxCredits,
+      theirstackMaxPages: appConfig.keyedDiscovery.theirstackMaxPages,
+      theirstackPostedWithinDays: appConfig.keyedDiscovery.theirstackPostedWithinDays,
       atsRosterFocusCountry: options.country ?? loadedProfile.discovery.atsRosterFocusCountry ?? '',
     },
   };
