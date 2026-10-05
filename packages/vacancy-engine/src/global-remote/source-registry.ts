@@ -173,6 +173,8 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     entry({ id: 'indeed', name: 'Indeed', url: 'https://www.indeed.com/', transport: 'none', state: 'prohibited', provider: null, reason: 'Direct portal scraping is not implemented; only a sanctioned partner/API integration would be eligible.' }),
     entry({ id: 'glassdoor_direct', name: 'Glassdoor Direct', url: 'https://www.glassdoor.com/Job/index.htm', transport: 'none', state: 'prohibited', provider: null, reason: 'Direct portal scraping is not implemented; only the separately listed partner API is eligible.' }),
     entry({ id: 'google_jobs', name: 'Google Jobs', url: 'https://www.google.com/search?q=frontend+developer+jobs', transport: 'none', state: 'prohibited', provider: null, reason: 'Automated Google result-page/browser scraping is not part of the production architecture.' }),
+    entry({ id: 'y_combinator_jobs', name: 'Y Combinator Startup Jobs / company job pages', url: 'https://www.ycombinator.com/companies', transport: 'none', state: 'prohibited', provider: null, reason: 'Current YC Terms prohibit scraping, data mining, and robot extraction; only a sanctioned API, feed, or partner path would be eligible.' }),
+    entry({ id: 'work_at_a_startup', name: 'Y Combinator Work at a Startup', url: 'https://www.workatastartup.com/', transport: 'none', state: 'prohibited', provider: null, reason: 'A login or user-owned browser session does not override the current YC Terms; do not automate extraction without explicit authorization.' }),
   ];
 }
 

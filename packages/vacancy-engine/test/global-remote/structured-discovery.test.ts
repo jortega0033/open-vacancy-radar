@@ -634,6 +634,17 @@ describe('fetchJobgetherOfferDetail', () => {
   });
 });
 
+describe('on-demand description lookups never recognise YC / Work at a Startup URLs (issue #619)', () => {
+  it.each([
+    'https://www.ycombinator.com/companies/acme/jobs/abc123-frontend-engineer',
+    'https://www.workatastartup.com/jobs/12345',
+    'https://www.workatastartup.com/companies/acme',
+  ])('returns null for both URL recognisers on %s, so main.ts issues no request', (url) => {
+    expect(jobgetherOfferIdFromUrl(url)).toBeNull();
+    expect(workableJobReferenceFromUrl(url)).toBeNull();
+  });
+});
+
 describe('workableJobReferenceFromUrl', () => {
   it('reads the short apply URL the workable_global feed actually emits', () => {
     // `workable-feed.ts` rejects any job whose <url> is not exactly this, so this is the only shape
