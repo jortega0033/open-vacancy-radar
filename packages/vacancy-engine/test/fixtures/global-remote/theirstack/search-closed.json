@@ -1,0 +1,33 @@
+{
+  "metadata": { "total_results": null, "total_companies": null, "truncated_results": 0, "truncated_companies": 0 },
+  "data": [
+    {
+      "id": 900000010,
+      "job_title": "Frontend Engineer (closed)",
+      "url": "https://jobs.example-board.test/listing/900000010",
+      "final_url": null,
+      "date_posted": "2026-09-28",
+      "closed_at": "2026-10-03T12:00:00Z",
+      "company": "ClosedCo",
+      "location": "Rotterdam",
+      "country": "Netherlands",
+      "remote": false,
+      "employment_statuses": ["full_time"],
+      "description": "This posting was closed by the source."
+    },
+    {
+      "id": 900000011,
+      "job_title": "Frontend Engineer",
+      "url": "https://jobs.example-board.test/listing/900000011",
+      "final_url": null,
+      "date_posted": "2026-10-04",
+      "closed_at": null,
+      "company": "OpenCo",
+      "location": "Rotterdam",
+      "country": "Netherlands",
+      "remote": false,
+      "employment_statuses": ["full_time"],
+      "description": "Still open."
+    }
+  ]
+}

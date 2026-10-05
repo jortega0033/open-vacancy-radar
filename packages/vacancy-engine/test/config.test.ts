@@ -21,6 +21,11 @@ describe('configuration', () => {
       reedApiKey: '',
       jobspipeApiKey: '',
       navArbeidsplassenApiKey: '',
+      theirstackApiKey: '',
+      theirstackEnabled: false,
+      theirstackMaxCredits: 50,
+      theirstackMaxPages: 4,
+      theirstackPostedWithinDays: 7,
     });
     expect(config.globalConcurrency).toBe(6);
     expect(config.perDomainConcurrency).toBe(1);

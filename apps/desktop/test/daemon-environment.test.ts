@@ -37,6 +37,8 @@ describe('buildDaemonEnvironment', () => {
       JOOBLE_API_KEY: 'jooble-fake',
       REED_API_KEY: 'reed-fake',
       JOBSPIPE_API_KEY: 'jobspipe-fake',
+      THEIRSTACK_API_KEY: 'theirstack-fake',
+      THEIRSTACK_ENABLED: 'true',
     };
 
     const env = buildDaemonEnvironment(parentEnv);

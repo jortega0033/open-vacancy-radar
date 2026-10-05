@@ -1,4 +1,4 @@
-import type { AtsHttpClient, AtsHttpResponse } from '../ats/http.js';
+import type { AtsHttpClient, AtsHttpRequestOptions, AtsHttpResponse } from '../ats/http.js';
 import type { AppConfig } from '../config.js';
 import { DatabaseHttpCache } from '../crawler/database-cache.js';
 import {
@@ -9,7 +9,7 @@ import {
 } from '../crawler/http-client.js';
 import type { Database } from '../db/client.js';
 
-export type AtsHttpSafeClient = Pick<SafeHttpClient, 'get' | 'postJson'>;
+export type AtsHttpSafeClient = Pick<SafeHttpClient, 'get' | 'postJson'> & Partial<Pick<SafeHttpClient, 'postForm'>>;
 
 export type DatabaseBackedAtsHttpClientDependencies = Omit<SafeHttpClientDependencies, 'cache'>;
 
@@ -42,6 +42,17 @@ export function createAtsHttpClient(httpClient: AtsHttpSafeClient): AtsHttpClien
           : httpClient.postJson(url, body, options)),
       );
     },
+    ...(httpClient.postForm === undefined
+      ? {}
+      : {
+          async postForm(url: string, fields: Readonly<Record<string, string>>, options?: AtsHttpRequestOptions) {
+            const post = httpClient.postForm;
+            if (post === undefined) throw new Error('postForm is unavailable');
+            return toAtsResponse(
+              await (options === undefined ? post.call(httpClient, url, fields) : post.call(httpClient, url, fields, options)),
+            );
+          },
+        }),
   };
 }
 

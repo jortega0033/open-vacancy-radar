@@ -27,6 +27,8 @@ import type {
   GlobalRemoteConfig,
 } from './models.js';
 import { runNavArbeidsplassenDiscovery } from './nav-arbeidsplassen-discovery.js';
+import { theirstackConfigured } from './source-registry.js';
+import { discoverTheirStack } from './theirstack-discovery.js';
 
 function basicAuthHeader(apiKey: string): string {
   return `Basic ${Buffer.from(`${apiKey}:`, 'utf8').toString('base64')}`;
@@ -364,6 +366,7 @@ export async function runKeyedDiscovery(
     ...(config.discovery.navArbeidsplassenApiKey.trim().length > 0
       ? [runNavArbeidsplassenDiscovery(http, config)]
       : []),
+    ...(theirstackConfigured(config) ? [discoverTheirStack(http, config)] : []),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

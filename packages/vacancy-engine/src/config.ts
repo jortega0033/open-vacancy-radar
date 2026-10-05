@@ -45,6 +45,11 @@ const environmentSchema = z
     REED_API_KEY: z.string().optional().default(''),
     JOBSPIPE_API_KEY: z.string().optional().default(''),
     NAV_ARBEIDSPLASSEN_API_KEY: z.string().optional().default(''),
+    THEIRSTACK_API_KEY: z.string().optional().default(''),
+    THEIRSTACK_ENABLED: booleanFromEnvironment.default(false),
+    THEIRSTACK_MAX_CREDITS: z.coerce.number().int().min(1).max(5_000).default(50),
+    THEIRSTACK_MAX_PAGES: z.coerce.number().int().min(1).max(20).default(4),
+    THEIRSTACK_POSTED_WITHIN_DAYS: z.coerce.number().int().min(1).max(30).default(7),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
     REPORT_MIN_SCORE: z.coerce.number().int().min(70).max(100).default(70),
     MAX_POSTING_AGE_DAYS: z.coerce.number().int().min(30).max(730).default(365),
@@ -95,6 +100,11 @@ export type AppConfig = {
     reedApiKey: string;
     jobspipeApiKey: string;
     navArbeidsplassenApiKey: string;
+    theirstackApiKey: string;
+    theirstackEnabled: boolean;
+    theirstackMaxCredits: number;
+    theirstackMaxPages: number;
+    theirstackPostedWithinDays: number;
   };
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   reportMinScore: number;
@@ -152,6 +162,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env, project
       reedApiKey: parsed.REED_API_KEY,
       jobspipeApiKey: parsed.JOBSPIPE_API_KEY,
       navArbeidsplassenApiKey: parsed.NAV_ARBEIDSPLASSEN_API_KEY,
+      theirstackApiKey: parsed.THEIRSTACK_API_KEY,
+      theirstackEnabled: parsed.THEIRSTACK_ENABLED,
+      theirstackMaxCredits: parsed.THEIRSTACK_MAX_CREDITS,
+      theirstackMaxPages: parsed.THEIRSTACK_MAX_PAGES,
+      theirstackPostedWithinDays: parsed.THEIRSTACK_POSTED_WITHIN_DAYS,
     },
     logLevel: parsed.LOG_LEVEL,
     reportMinScore: parsed.REPORT_MIN_SCORE,

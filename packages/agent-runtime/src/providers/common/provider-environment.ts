@@ -316,6 +316,7 @@ export const PROVIDER_ENVIRONMENT_DENY_PATTERNS: readonly RegExp[] = [
   /^JOOBLE_/i,
   /^REED_/i,
   /^JOBSPIPE_/i,
+  /^THEIRSTACK_/i,
 ];
 
 /** True when a variable name must be dropped regardless of any allowlist. */

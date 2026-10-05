@@ -35,6 +35,7 @@ const DISCOVERY_PROVIDER_LABEL: Record<DiscoveryProvider, string> = {
   remoote: 'Remoote',
   ai_dev_jobs: 'AI Dev Jobs',
   taiwan_jobs: 'Taiwan Jobs',
+  phil_jobnet: 'PhilJobNet',
   mpsv_cz: 'Czech MPSV Open Data',
   the_muse: 'The Muse',
   jobspresso: 'Jobspresso',
@@ -52,6 +53,7 @@ const DISCOVERY_PROVIDER_LABEL: Record<DiscoveryProvider, string> = {
   ats_roster_recruitee: 'Recruitee (ATS roster)',
   ats_roster_personio: 'Personio (ATS roster)',
   nav_arbeidsplassen: 'NAV Arbeidsplassen',
+  theirstack: 'TheirStack',
   ai_web_search: 'AI Web Search',
 };
 

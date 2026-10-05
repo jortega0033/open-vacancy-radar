@@ -192,6 +192,51 @@ describe('SafeHttpClient read-only JSON POST', () => {
   });
 });
 
+describe('SafeHttpClient read-only form POST', () => {
+  it('serializes a urlencoded form, applies safety headers, and bypasses GET cache', async () => {
+    const cache = {
+      get: vi.fn(() => Promise.resolve(undefined)),
+      set: vi.fn(() => Promise.resolve()),
+    };
+    const attempts: RequestInit[] = [];
+    const fetchFn = vi.fn(
+      asFetch((_input, init) => {
+        attempts.push(init ?? {});
+        return Promise.resolve(new Response('<html></html>', { status: 200 }));
+      }),
+    );
+    const client = createClient({ cache, fetchFn });
+
+    const response = await client.postForm(
+      'https://jobs.example.com/search',
+      { __EVENTTARGET: 'grid', term: 'a b&c' },
+      { allowedOrigins: ['https://jobs.example.com'] },
+    );
+
+    expect(response.text()).toBe('<html></html>');
+    expect(attempts[0]?.method).toBe('POST');
+    expect(attempts[0]?.body).toBe('__EVENTTARGET=grid&term=a+b%26c');
+    expect(new Headers(attempts[0]?.headers).get('content-type')).toBe('application/x-www-form-urlencoded');
+    expect(new Headers(attempts[0]?.headers).get('user-agent')).toContain('personal vacancy research');
+    expect(cache.get).not.toHaveBeenCalled();
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
+  it('rejects a form POST redirect that would change the request method', async () => {
+    const fetchFn = vi.fn(
+      asFetch(() => Promise.resolve(new Response(null, { status: 302, headers: { location: '/login' } }))),
+    );
+    const client = createClient({ fetchFn });
+
+    await expect(client.postForm('https://jobs.example.com/search', { a: 'b' })).rejects.toMatchObject({
+      category: 'http_error',
+      code: 'post_redirect_not_preserved',
+      status: 302,
+    });
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+});
+
 describe('SafeHttpClient retries and status categorization', () => {
   it('owns a bounded exponential retry loop for transient 5xx responses', async () => {
     const statuses = [503, 503, 200];

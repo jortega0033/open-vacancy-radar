@@ -279,7 +279,7 @@ describe('runGlobalRemoteDiscovery progress callback (issue #252)', () => {
     expect(sourceIds.sort()).toEqual(
       [
         'additional', 'ai_dev_jobs', 'ats_roster', 'feeds', 'himalayas', 'jobicy', 'jobtech',
-        'keyed', 'structured', 'taiwan_jobs',
+        'keyed', 'phil_jobnet', 'structured', 'taiwan_jobs',
       ].sort(),
     );
 

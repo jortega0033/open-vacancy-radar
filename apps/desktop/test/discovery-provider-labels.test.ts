@@ -12,6 +12,7 @@ describe('discoveryProviderLabel', () => {
     ['jobicy', 'Jobicy'],
     ['ai_dev_jobs', 'AI Dev Jobs'],
     ['nav_arbeidsplassen', 'NAV Arbeidsplassen'],
+    ['theirstack', 'TheirStack'],
     ['ats_roster_greenhouse', 'Greenhouse (ATS roster)'],
     ['workable_global', 'Workable'],
     ['the_muse', 'The Muse'],
