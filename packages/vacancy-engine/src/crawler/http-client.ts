@@ -579,6 +579,22 @@ export class SafeHttpClient {
     return this.#request(input, 'POST', serializedBody, { ...options, headers }, false);
   }
 
+  /**
+   * Executes an idempotent, read-only `application/x-www-form-urlencoded` query, for public
+   * listings whose pagination is an ASP.NET Web Forms postback. Same safety policy and cache
+   * bypass as `postJson`; it must not be used for mutations.
+   */
+  public async postForm(
+    input: string | URL,
+    fields: Readonly<Record<string, string>>,
+    options: SafeHttpPostJsonOptions = {},
+  ): Promise<SafeHttpResponse> {
+    const headers = new Headers(options.headers);
+    headers.set('content-type', 'application/x-www-form-urlencoded');
+    headers.set('accept', headers.get('accept') ?? 'text/html');
+    return this.#request(input, 'POST', new URLSearchParams(fields).toString(), { ...options, headers }, false);
+  }
+
   async #request(
     input: string | URL,
     method: SafeHttpMethod,
