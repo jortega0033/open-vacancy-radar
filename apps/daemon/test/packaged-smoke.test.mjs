@@ -129,7 +129,8 @@ describe('tasklistHasImage', () => {
 
 describe('NSIS silent switches', () => {
   it('keeps /D last and unquoted, and runs the uninstaller in place', () => {
-    expect(nsisInstallArgs('C:\Temp\a b')).toEqual(['/S', '/D=C:\Temp\a b']);
-    expect(nsisUninstallArgs('C:\Temp\a b')).toEqual(['/S', '_?=C:\Temp\a b']);
+    const dir = String.raw`C:\Temp\a b`;
+    expect(nsisInstallArgs(dir)).toEqual(['/S', `/D=${dir}`]);
+    expect(nsisUninstallArgs(dir)).toEqual(['/S', `_?=${dir}`]);
   });
 });
