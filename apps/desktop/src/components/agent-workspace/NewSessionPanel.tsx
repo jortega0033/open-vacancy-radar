@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import type { SessionCapacity, StartSessionDenialReason } from '../../window.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { CapabilityStatusBadge } from './CapabilityStatusBadge.js';
 import { refusalCopy } from './refusal-copy.js';
 import type { PendingStart } from './workspace-reducer.js';
 
@@ -120,8 +121,15 @@ export function NewSessionPanel({
     <section aria-label="Start a session">
       <h3 className="text-base font-semibold">Start an agent session</h3>
       <p className="mt-1 text-sm text-base-content/70">
-        The app will ask you to choose a folder and confirm it before anything runs. The agent works
-        only in the folder you approve.
+        The app will ask you to choose a folder and confirm it before anything runs. The agent starts
+        in that folder.
+      </p>
+      <p className="mt-1.5">
+        <CapabilityStatusBadge
+          status="unsupported"
+          label="Not limited to the folder"
+          detail="The agent runs with your own account permissions. The app cannot keep it inside the folder."
+        />
       </p>
 
       <form

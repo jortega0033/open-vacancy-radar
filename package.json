@@ -32,6 +32,7 @@
     "test:windows-process-tree": "pnpm --filter @agent-dock/agent-runtime exec vitest run test/spawn-process.test.ts",
     "typecheck": "pnpm -r run typecheck",
     "lint": "eslint .",
+    "docs:check-capabilities": "node scripts/check-capability-matrix.mjs",
     "format": "prettier --write .",
     "assets:generate": "python scripts/assets/generate_assets.py",
     "assets:validate": "python scripts/assets/validate_assets.py"
