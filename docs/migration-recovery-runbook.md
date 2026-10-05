@@ -60,8 +60,9 @@ installed app and uninstalls silently (CI only).
   (`POST /sessions/cancel-all`) before it terminates the daemon, because terminating the process
   skips its signal handler. Provider processes run under the Job Object host
   (`agent-dock-job-host.exe`). The termination suite (`pnpm test:windows-process-tree`) proves the
-  host kills a tree whose middle process already exited. The packaged smoke checks that no JobHost
-  process is left after it stops the packaged daemon. A packaged-app run that starts a real provider
+  host kills a tree whose middle process already exited. The packaged smoke only checks that no stray
+  JobHost from its own directory is left after it stops an idle packaged daemon (no provider session
+  is started, so no JobHost is ever spawned). A packaged-app run that starts a real provider
   session and then cancels it is **not verified** by any automated check yet.
 
 ## Active-session limits

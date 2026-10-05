@@ -79,14 +79,18 @@ source tree:
 - the packaged daemon starts on a loopback port with a throwaway app id and state directory,
   `/health` reports protocol 1 and `supportedProtocolVersions` containing 1 and 2, and
   `POST /sessions/cancel-all` returns 202;
-- the daemon is then stopped, and no `agent-dock-job-host.exe` is left running. Windows cannot
-  deliver a graceful signal to it, so this is a termination check, not a clean-shutdown check.
+- the daemon is then stopped, and no `agent-dock-job-host.exe` whose image is under the smoke's own
+  directory is left running. The idle daemon never spawns a JobHost (that needs a provider session),
+  so this is only a stray-process check, not proof that cancellation kills provider children. Windows
+  cannot deliver a graceful signal to the daemon, so it is a termination check, not a clean-shutdown
+  check.
 - `node scripts/packaged-smoke.mjs --installer "dist-packages/Open Vacancy Radar-Setup-<version>.exe"`
   (a separate CI step) installs the real NSIS installer silently (`/S /D=<temp dir>`), runs all the
   checks above against the installed app, uninstalls silently (`/S _?=<dir>`) and checks the
   executable is gone while a sentinel file in `%APPDATA%\Open Vacancy Radar` is kept. It changes the
-  per-user uninstall entry of the real app id, so it refuses to run unless `CI=true` or
-  `OVR_SMOKE_ALLOW_INSTALL=1` (disposable machine only). It has not been run locally.
+  per-user uninstall entry of the real app id, so outside CI it refuses to run unless
+  `OVR_SMOKE_ALLOW_INSTALL=1` is set and no uninstall registry key for the real app id exists. It
+  points `APPDATA` at a temp directory, so the real user data is never touched. It has not been run locally.
 
 The pure checks are unit tested in `apps/daemon/test/packaged-smoke.test.mjs` and run under
 `pnpm test`. The process steps only run on Windows. This does not cover a real provider session cancelled in the packaged app. See

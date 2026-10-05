@@ -10,7 +10,8 @@
 //      include;
 //   3. better-sqlite3 loads inside the packaged Electron runtime;
 //   4. the packaged daemon answers /health with protocol v1 and v2 on a loopback port, accepts
-//      cancel-all, can be stopped, and leaves no JobHost process behind;
+//      cancel-all, can be stopped, and leaves no stray JobHost process from the same directory
+//      (an idle daemon never spawns a JobHost, so this is a leftover-process check only);
 //   5. with `--installer <Setup.exe>` (CI only): silent NSIS install, the same smoke against the
 //      installed app, silent uninstall, user data kept.
 //
@@ -149,12 +150,36 @@ export function checkHealthBody(body) {
   return problems;
 }
 
-/** True when a `tasklist /FO CSV /NH` listing contains the given image name. */
-export function tasklistHasImage(csv, imageName) {
-  const wanted = imageName.toLowerCase();
-  return csv
+/**
+ * Returns the executable paths (one per line, as printed by the process query) that live under
+ * `dir`. Case-insensitive and separator-agnostic, so a developer's own running copy elsewhere
+ * never matches.
+ */
+export function pathsUnderDir(listing, dir) {
+  const norm = (p) => p.trim().replace(/[\\/]+/g, '\\').toLowerCase();
+  const root = `${norm(dir).replace(/\\$/, '')}\\`;
+  return listing
     .split(/\r?\n/)
-    .some((line) => line.replace(/^"/, '').split('","')[0]?.toLowerCase() === wanted);
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && norm(line).startsWith(root));
+}
+
+/** Per-user (HKCU) or machine-wide (HKLM) uninstall registry key electron-builder writes for an app id. */
+export function uninstallRegistryKey(appId, hive = 'HKCU') {
+  return `${hive}\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${appId}`;
+}
+
+function realAppId() {
+  const yaml = readFileSync(join(repoRoot, 'apps/desktop/electron-builder.yml'), 'utf8');
+  return /^appId:\s*(\S+)\s*$/m.exec(yaml)?.[1];
+}
+
+function installedAppRegistryKey(appId) {
+  for (const hive of ['HKCU', 'HKLM']) {
+    const key = uninstallRegistryKey(appId, hive);
+    if (spawnSync('reg', ['query', key], { encoding: 'utf8', windowsHide: true }).status === 0) return key;
+  }
+  return undefined;
 }
 
 function listFilesRecursive(root, base = root) {
@@ -250,6 +275,7 @@ async function checkPackagedDaemon(unpacked) {
   const stateDir = mkdtempSync(join(tmpdir(), 'ovr-smoke-state-'));
   const discovery = join(tmpdir(), 'agent-dock', `${appId}.json`);
   let output = '';
+  let spawnError;
   const child = spawn(exe, [entry], {
     env: {
       ...process.env,
@@ -263,10 +289,25 @@ async function checkPackagedDaemon(unpacked) {
   });
   child.stdout.on('data', (d) => (output += d));
   child.stderr.on('data', (d) => (output += d));
-  const exited = new Promise((resolveExit) => child.once('exit', (code, signal) => resolveExit({ code, signal })));
+  const exited = new Promise((resolveExit) => {
+    child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    child.once('error', (error) => {
+      spawnError = error;
+      problems.push(`packaged daemon failed to spawn: ${error.message}`);
+      resolveExit({ code: null, signal: null });
+    });
+  });
 
   try {
-    const info = await waitFor(() => (existsSync(discovery) ? JSON.parse(readFileSync(discovery, 'utf8')) : undefined), 30_000, 'daemon discovery file');
+    const info = await waitFor(() => {
+      if (spawnError) throw spawnError;
+      if (!existsSync(discovery)) return undefined;
+      try {
+        return JSON.parse(readFileSync(discovery, 'utf8'));
+      } catch {
+        return undefined; // the daemon writes the file non-atomically; retry until it parses
+      }
+    }, 30_000, 'daemon discovery file');
     if (info.pid !== child.pid) problems.push(`discovery file pid ${info.pid} is not the spawned daemon pid ${child.pid}`);
     const base = `http://127.0.0.1:${info.port}`;
     const health = await (await fetch(`${base}/health`)).json();
@@ -290,9 +331,17 @@ async function checkPackagedDaemon(unpacked) {
     try { rmSync(stateDir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 
-  const listing = spawnSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8' });
-  if (listing.status === 0 && tasklistHasImage(listing.stdout, JOB_HOST_NAME)) {
-    problems.push(`${JOB_HOST_NAME} is still running after the daemon stopped`);
+  // Only JobHost processes whose image lives under THIS smoke's directory count, so a developer's
+  // running app elsewhere never fails the check. The daemon is idle (no provider session), so it
+  // never spawns a JobHost: this proves no stray host from this build, not that cancel kills one.
+  const listing = spawnSync(
+    'powershell',
+    ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process -Filter "Name='${JOB_HOST_NAME}'" | ForEach-Object { $_.ExecutablePath }`],
+    { encoding: 'utf8', windowsHide: true },
+  );
+  if (listing.status === 0) {
+    const stray = pathsUnderDir(listing.stdout ?? '', unpacked);
+    if (stray.length > 0) problems.push(`${JOB_HOST_NAME} from ${unpacked} is still running after the daemon stopped: ${stray.join(', ')}`);
   }
   return problems;
 }
@@ -307,9 +356,23 @@ export function nsisUninstallArgs(installDir) {
   return ['/S', `_?=${installDir}`];
 }
 
-function runNsis(exe, args, label) {
-  // windowsVerbatimArguments keeps `/D=C:\path with spaces` unquoted, as NSIS requires.
-  const result = spawnSync(exe, args, { encoding: 'utf8', timeout: 300_000, windowsHide: true, windowsVerbatimArguments: true });
+/**
+ * Command line for cmd.exe: the executable path is quoted (installer and uninstaller names contain
+ * spaces), the switches are not (NSIS needs `/D=` and `_?=` unquoted and last). The caller wraps
+ * the whole line in one more pair of quotes, which `cmd /s /c` strips.
+ */
+export function nsisCommandLine(exe, args) {
+  return `"${exe.replace(/"/g, '')}" ${args.join(' ')}`;
+}
+
+function runNsis(exe, args, label, env) {
+  const result = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${nsisCommandLine(exe, args)}"`], {
+    encoding: 'utf8',
+    timeout: 300_000,
+    windowsHide: true,
+    windowsVerbatimArguments: true,
+    env: { ...process.env, ...env },
+  });
   if (result.error || result.status !== 0) {
     return `${label} failed (exit ${result.status}): ${String(result.error ?? result.stderr ?? '').slice(0, 400)}`;
   }
@@ -324,33 +387,49 @@ function runNsis(exe, args, label) {
  */
 async function runInstallerLifecycle(installerPath) {
   if (process.platform !== 'win32') return ['installer lifecycle smoke is Windows only'];
-  if (process.env.CI !== 'true' && process.env.OVR_SMOKE_ALLOW_INSTALL !== '1') {
-    return ['refusing to install: it touches the per-user uninstall entry of the real app id. Set OVR_SMOKE_ALLOW_INSTALL=1 on a disposable machine.'];
+  if (!process.env.CI) {
+    if (process.env.OVR_SMOKE_ALLOW_INSTALL !== '1') {
+      return ['refusing to install: it touches the per-user uninstall entry of the real app id. Set OVR_SMOKE_ALLOW_INSTALL=1 on a disposable machine.'];
+    }
+    const appId = realAppId();
+    if (!appId) return ['could not read appId from electron-builder.yml'];
+    const existing = installedAppRegistryKey(appId);
+    if (existing) return [`refusing to install: ${existing} exists, so the real app is installed on this machine`];
   }
   const installRoot = mkdtempSync(join(tmpdir(), 'ovr-smoke-install-'));
   const installDir = join(installRoot, 'Open Vacancy Radar');
-  const userData = join(process.env.APPDATA ?? '', 'Open Vacancy Radar');
+  // A private APPDATA keeps the real user data directory out of reach of the installer and sentinel.
+  const fakeAppData = join(installRoot, 'appdata');
+  const nsisEnv = { APPDATA: fakeAppData };
+  const userData = join(fakeAppData, 'Open Vacancy Radar');
   const sentinel = join(userData, 'ovr-installer-smoke-sentinel.txt');
   const problems = [];
   mkdirSync(userData, { recursive: true });
   writeFileSync(sentinel, 'must survive uninstall');
   try {
-    const installError = runNsis(installerPath, nsisInstallArgs(installDir), 'silent install');
-    if (installError) return [installError];
-    if (!existsSync(join(installDir, EXE_NAME))) return [`installed executable missing at ${installDir}`];
+    const installError = runNsis(installerPath, nsisInstallArgs(installDir), 'silent install', nsisEnv);
+    if (installError) problems.push(installError);
+    if (!existsSync(join(installDir, EXE_NAME))) {
+      problems.push(`installed executable missing at ${installDir}`);
+      return problems;
+    }
     console.log('ok    silent NSIS install produced the executable');
     const installed = [...runStatic(installDir), ...checkBetterSqlite(installDir), ...(await checkPackagedDaemon(installDir))];
     problems.push(...installed.map((p) => `installed app: ${p}`));
     if (installed.length === 0) console.log('ok    installed app passes the same smoke as the unpacked output');
-    const uninstaller = join(installDir, 'Uninstall Open Vacancy Radar.exe');
-    if (!existsSync(uninstaller)) return [...problems, `uninstaller missing at ${uninstaller}`];
-    const uninstallError = runNsis(uninstaller, nsisUninstallArgs(installDir), 'silent uninstall');
-    if (uninstallError) problems.push(uninstallError);
-    if (existsSync(join(installDir, EXE_NAME))) problems.push('uninstall left the executable behind');
-    if (!existsSync(sentinel)) problems.push('uninstall removed the user data directory');
-    else console.log('ok    silent uninstall removed the app and kept user data');
   } finally {
-    try { rmSync(sentinel, { force: true }); } catch { /* best effort */ }
+    // Always uninstall when anything may have been installed, so a failed check never leaves the
+    // per-user uninstall entry behind.
+    const uninstaller = join(installDir, 'Uninstall Open Vacancy Radar.exe');
+    if (existsSync(uninstaller)) {
+      const uninstallError = runNsis(uninstaller, nsisUninstallArgs(installDir), 'silent uninstall', nsisEnv);
+      if (uninstallError) problems.push(uninstallError);
+      if (existsSync(join(installDir, EXE_NAME))) problems.push('uninstall left the executable behind');
+      if (!existsSync(sentinel)) problems.push('uninstall removed the user data directory');
+      else console.log('ok    silent uninstall removed the app and kept user data');
+    } else if (existsSync(join(installDir, EXE_NAME))) {
+      problems.push(`uninstaller missing at ${uninstaller}`);
+    }
     try { rmSync(installRoot, { recursive: true, force: true }); } catch { /* best effort */ }
   }
   return problems;

@@ -64,7 +64,7 @@ jobs:
       # files (daemon bundle, JobHost, vacancy-engine and workspace migrations, icons, the
       # better-sqlite3 binding), app identity / installer naming / VC++ NSIS include, better-sqlite3
       # loading inside the packaged Electron runtime, and the packaged daemon answering /health
-      # with protocol v1 and v2 on a loopback port and stopping with no JobHost left behind.
+      # with protocol v1 and v2 on a loopback port and stopping with no stray JobHost from the same directory.
       # See scripts/packaged-smoke.mjs and docs/packaging.md.
       - name: Packaged app smoke (unpacked output)
         run: node scripts/packaged-smoke.mjs dist-packages/win-unpacked

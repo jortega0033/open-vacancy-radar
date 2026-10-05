@@ -12,7 +12,9 @@ import {
   nsisInstallArgs,
   nsisUninstallArgs,
   parseAsarEntries,
-  tasklistHasImage,
+  pathsUnderDir,
+  nsisCommandLine,
+  uninstallRegistryKey,
   toPosix,
 } from '../../../scripts/packaged-smoke.mjs';
 
@@ -118,12 +120,31 @@ describe('checkHealthBody', () => {
   });
 });
 
-describe('tasklistHasImage', () => {
-  const csv = '"System","4","Services","0","148 K"\r\n"agent-dock-job-host.exe","1234","Console","1","3,000 K"\r\n';
+describe('pathsUnderDir', () => {
+  const listing = String.raw`C:\Temp\smoke\resources\daemon\agent-dock-job-host.exe
+C:\Users\dev\app\resources\daemon\agent-dock-job-host.exe
+`;
 
-  it('matches the exact image name case-insensitively', () => {
-    expect(tasklistHasImage(csv, 'Agent-Dock-Job-Host.exe')).toBe(true);
-    expect(tasklistHasImage(csv, 'node.exe')).toBe(false);
+  it('keeps only processes under the smoke directory, case-insensitively', () => {
+    expect(pathsUnderDir(listing, String.raw`c:\temp\SMOKE`)).toEqual([String.raw`C:\Temp\smoke\resources\daemon\agent-dock-job-host.exe`]);
+    expect(pathsUnderDir(listing, String.raw`C:\Temp\smo`)).toEqual([]);
+  });
+});
+
+describe('uninstallRegistryKey', () => {
+  it('points at the uninstall entry of the app id', () => {
+    expect(uninstallRegistryKey('dev.agentdock.desktop')).toBe(
+      String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\dev.agentdock.desktop`,
+    );
+  });
+});
+
+describe('nsisCommandLine', () => {
+  it('quotes the executable path and leaves the NSIS switches unquoted', () => {
+    const exe = String.raw`C:\x\Open Vacancy Radar-Setup-1.0.0.exe`;
+    expect(nsisCommandLine(exe, nsisInstallArgs(String.raw`C:\a b`))).toBe(
+      String.raw`"C:\x\Open Vacancy Radar-Setup-1.0.0.exe" /S /D=C:\a b`,
+    );
   });
 });
 
