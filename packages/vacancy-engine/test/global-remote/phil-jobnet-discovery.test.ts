@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AtsHttpClient, AtsHttpResponse } from '../../src/ats/http.js';
+import { AtsResponseError } from '../../src/ats/http.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
 import {
   discoverPhilJobNet,
@@ -175,6 +176,18 @@ describe('PhilJobNet parsing', () => {
     expect(normalizePhilJobNetLocation('Location not specified')).toBeNull();
   });
 
+  it('never invents Philippines for an unrecognised place', () => {
+    expect(normalizePhilJobNetLocation('DUBAI, PHILIPPINES')).toEqual({
+      display: 'Dubai',
+      country: null,
+      region: null,
+      province: null,
+      city: null,
+    });
+    expect(normalizePhilJobNetLocation('Somewhere')).toMatchObject({ display: 'Somewhere', country: null });
+    expect(normalizePhilJobNetLocation('BAGUIO CITY, BENGUET')).toMatchObject({ country: 'Philippines' });
+  });
+
   it('maps PHP salary without conversion or invention', () => {
     expect(parsePhilJobNetSalary('₱22,000.00')).toEqual({ minimum: 22000, currency: 'PHP' });
     expect(parsePhilJobNetSalary('₱18,000.00 - ₱20,000.00')).toEqual({ minimum: 18000, currency: 'PHP' });
@@ -184,9 +197,37 @@ describe('PhilJobNet parsing', () => {
 
   it('parses both date formats the portal prints', () => {
     expect(parsePhilJobNetDate('Posted on 5 October 2026')).toBe('2026-10-05T00:00:00.000Z');
-    expect(parsePhilJobNetDate('Posted on 10/5/2026')).toBe('2026-10-05T00:00:00.000Z');
+    expect(parsePhilJobNetDate('Posted on 25/5/2026')).toBe('2026-05-25T00:00:00.000Z');
+    expect(parsePhilJobNetDate('Posted on 5/25/2026')).toBe('2026-05-25T00:00:00.000Z');
     expect(parsePhilJobNetDate('soon')).toBeNull();
   });
+
+  it('drops ambiguous numeric dates and future dates', () => {
+    const now = new Date('2026-10-06T00:00:00.000Z');
+    expect(parsePhilJobNetDate('Posted on 10/5/2026', now)).toBeNull();
+    expect(parsePhilJobNetDate('Posted on 5 November 2026', now)).toBeNull();
+    expect(parsePhilJobNetDate('Posted on 5 October 2026', now)).toBe('2026-10-05T00:00:00.000Z');
+  });
+
+  it('keeps the literal text 00a0 and strips real no-break spaces', () => {
+    const html = fixture('detail-1000001.html').replace(
+      'Balances the till at end of shift.',
+      'Ref 00a0 code\u00a0A.',
+    );
+    const detail = parsePhilJobNetDetail(html);
+    expect(detail.description).toContain('Ref 00a0 code A.');
+    const listing = parsePhilJobNetListing(fixture('list-page1.html').replace('EXAMPLE RETAIL CORP', 'ACME 00a0\u00a0INC'));
+    expect(listing.cards[0]?.company).toBe('ACME 00a0 INC');
+  });
+
+  it('rejects an empty grid unless the site reports an explicit zero', () => {
+    const html = fixture('list-empty.html').replace('0 job openings', 'Please try again');
+    expect(() => parsePhilJobNetListing(html)).toThrow(/parser drift/u);
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('discoverPhilJobNet', () => {
@@ -199,6 +240,8 @@ describe('discoverPhilJobNet', () => {
   });
 
   it('walks bounded pages with Web Forms state and hydrates details', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T12:00:00.000Z'));
     const client = fullClient();
     const run = await discoverPhilJobNet(client, profile());
     expect(client.posts).toHaveLength(1);
@@ -292,6 +335,48 @@ describe('discoverPhilJobNet', () => {
     const run = await discoverPhilJobNet(client, profile());
     expect(run.sources[0]?.status).toBe('blocked');
     expect(client.gets).toHaveLength(1);
+  });
+
+  it('stops on a blocked detail page instead of counting it as a detail failure', async () => {
+    for (const status of [429, 403]) {
+      const client = new PortalClient(new Map([[SEARCH, page(fixture('list-page1.html'))]]));
+      const get = client.get.bind(client);
+      client.get = async (url: string): Promise<AtsHttpResponse> => {
+        if (url.includes('/job/')) {
+          client.gets.push(url);
+          throw new AtsResponseError('phil_jobnet', `HTTP ${status}`, status);
+        }
+        return get(url);
+      };
+      const run = await discoverPhilJobNet(client, profile({ philJobNetMaxPages: 1 }));
+      expect(run.sources[0]?.status).toBe('blocked');
+      expect(client.gets.filter((url) => url.includes('/job/'))).toHaveLength(1);
+    }
+  });
+
+  it('fails fast as blocked on a login wall', async () => {
+    const client = new PortalClient(
+      new Map([[SEARCH, { ...page(fixture('list-page1.html')), finalUrl: `${PHIL_JOBNET_ORIGIN}/login.aspx?url=x` }]]),
+    );
+    const run = await discoverPhilJobNet(client, profile());
+    expect(run.sources[0]?.status).toBe('blocked');
+    expect(client.gets).toHaveLength(1);
+  });
+
+  it('reports partial when no next page is offered but the total says more listings exist', async () => {
+    const html = fixture('list-page2.html').replace('5 job openings', '50 job openings');
+    const run = await discoverPhilJobNet(new PortalClient(new Map([[SEARCH, page(html)]])), profile());
+    expect(run.sources[0]).toMatchObject({ status: 'partial', complete: false });
+    expect(run.sources[0]?.error).toMatch(/50 openings/u);
+  });
+
+  it('reports drift when cards are shown but no pager is found and the total is unknown', async () => {
+    const html = fixture('list-page1.html')
+      .replace(/<tr class="pagination-vs">[\s\S]*?<\/table><\/td><\/tr>/u, '')
+      .replace('5 job openings', 'Search results');
+    const run = await discoverPhilJobNet(new PortalClient(new Map([[SEARCH, page(html)]])), profile());
+    expect(run.sources[0]?.status).toBe('error');
+    expect(run.sources[0]?.error).toMatch(/pager/u);
   });
 
   it('flags a postback that returns the wrong page as drift', async () => {

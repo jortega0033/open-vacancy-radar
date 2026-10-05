@@ -61,7 +61,7 @@ const NOT_SPECIFIED = /\bnot specified\b/iu;
 
 function cleaned(value: string | undefined): string | null {
   if (value === undefined) return null;
-  const text = value.replace(/00a0/gu, ' ').replace(/\s+/gu, ' ').trim();
+  const text = value.replace(/\u00a0/gu, ' ').replace(/\s+/gu, ' ').trim();
   return text.length === 0 || NOT_SPECIFIED.test(text) ? null : text;
 }
 
@@ -98,12 +98,36 @@ function cityName(part: string): string {
   return match?.[1] === undefined ? titleCase(part) : `${titleCase(match[1])} City`;
 }
 
+const PH_PROVINCES = new Set([
+  'abra', 'agusan del norte', 'agusan del sur', 'aklan', 'albay', 'antique', 'apayao', 'aurora',
+  'basilan', 'bataan', 'batanes', 'batangas', 'benguet', 'biliran', 'bohol', 'bukidnon', 'bulacan',
+  'cagayan', 'camarines norte', 'camarines sur', 'camiguin', 'capiz', 'catanduanes', 'cavite', 'cebu',
+  'cotabato', 'davao de oro', 'davao del norte', 'davao del sur', 'davao occidental', 'davao oriental',
+  'dinagat islands', 'eastern samar', 'guimaras', 'ifugao', 'ilocos norte', 'ilocos sur', 'iloilo',
+  'isabela', 'kalinga', 'la union', 'laguna', 'lanao del norte', 'lanao del sur', 'leyte', 'maguindanao',
+  'maguindanao del norte', 'maguindanao del sur', 'marinduque', 'masbate', 'misamis occidental',
+  'misamis oriental', 'mountain province', 'negros occidental', 'negros oriental', 'northern samar',
+  'nueva ecija', 'nueva vizcaya', 'occidental mindoro', 'oriental mindoro', 'palawan', 'pampanga',
+  'pangasinan', 'quezon', 'quirino', 'rizal', 'romblon', 'samar', 'sarangani', 'siquijor', 'sorsogon',
+  'south cotabato', 'southern leyte', 'sultan kudarat', 'sulu', 'surigao del norte', 'surigao del sur',
+  'tarlac', 'tawi-tawi', 'zambales', 'zamboanga del norte', 'zamboanga del sur', 'zamboanga sibugay',
+  'metro manila', 'ncr', 'national capital region', 'car', 'armm', 'barmm', 'caraga', 'calabarzon',
+  'mimaropa', 'bicol region', 'ilocos region', 'cagayan valley', 'central luzon', 'western visayas',
+  'central visayas', 'eastern visayas', 'davao region', 'soccsksargen', 'northern mindanao',
+  'zamboanga peninsula', 'cordillera administrative region',
+]);
+
+function isKnownPhilippinePlace(part: string): boolean {
+  const lowered = part.toLocaleLowerCase('en-US');
+  return PH_PROVINCES.has(lowered) || /^city of\s+\S/u.test(lowered) || /\S\s+city$/u.test(lowered);
+}
+
 /**
  * Normalizes the portal's location text. Philippine postings read `CITY, PROVINCE` or
  * `CITY, NCR, DISTRICT`; overseas postings carry only a country name. NCR maps to Metro Manila and
- * the district suffix is dropped. A single unrecognised place is assumed to be a Philippine
- * locality because the portal is Philippine, but a recognised foreign country is kept as such so
- * overseas roles are never presented as Manila.
+ * the district suffix is dropped. Philippines is only asserted when a part matches a known
+ * Philippine city, province or region; an unrecognised place keeps its raw text with no country, and
+ * a recognised foreign country is kept as such so overseas roles are never presented as Manila.
  */
 export function normalizePhilJobNetLocation(raw: string | null): PhilJobNetLocation | null {
   const text = cleaned(raw ?? undefined);
@@ -137,6 +161,9 @@ export function normalizePhilJobNetLocation(raw: string | null): PhilJobNetLocat
       province: null,
       city: cityText,
     };
+  }
+  if (!places.some(isKnownPhilippinePlace)) {
+    return { display: places.map(titleCase).join(', '), country: null, region: null, province: null, city: null };
   }
   const city = cityName(places[0] ?? '');
   const province = places.length > 1 ? titleCase(places[places.length - 1] ?? '') : null;
@@ -189,17 +216,33 @@ function isoDay(year: number, month: number, day: number): string | null {
   return parsed.getUTCMonth() === month - 1 ? parsed.toISOString() : null;
 }
 
-/** Detail pages print `5 October 2026`; listing cards print the US-ordered `10/5/2026`. */
-export function parsePhilJobNetDate(raw: string | null): string | null {
+/**
+ * Detail pages print `5 October 2026`; listing cards print a numeric `10/5/2026` whose field order is
+ * not documented. A numeric date is only trusted when it is unambiguous (one part above 12, or both
+ * parts equal), otherwise it is dropped rather than guessed. Dates in the future are rejected.
+ */
+export function parsePhilJobNetDate(raw: string | null, now: Date = new Date()): string | null {
   const text = cleaned(raw ?? undefined);
   if (text === null) return null;
+  let iso: string | null = null;
   const long = /(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/u.exec(text);
   if (long !== null) {
     const month = MONTHS.indexOf((long[2] ?? '').toLocaleLowerCase('en-US')) + 1;
-    return month === 0 ? null : isoDay(Number(long[3]), month, Number(long[1]));
+    iso = month === 0 ? null : isoDay(Number(long[3]), month, Number(long[1]));
+  } else {
+    const short = /(\d{1,2})\/(\d{1,2})\/(\d{4})/u.exec(text);
+    if (short !== null) {
+      const first = Number(short[1]);
+      const second = Number(short[2]);
+      const year = Number(short[3]);
+      if (first === second) iso = isoDay(year, first, second);
+      else if (first > 12 && second <= 12) iso = isoDay(year, second, first);
+      else if (second > 12 && first <= 12) iso = isoDay(year, first, second);
+    }
   }
-  const short = /(\d{1,2})\/(\d{1,2})\/(\d{4})/u.exec(text);
-  return short === null ? null : isoDay(Number(short[3]), Number(short[1]), Number(short[2]));
+  if (iso === null) return null;
+  // One day of slack covers the portal's own timezone being ahead of UTC.
+  return Date.parse(iso) > now.getTime() + 24 * 60 * 60 * 1000 ? null : iso;
 }
 
 export type PhilJobNetCard = {
@@ -219,6 +262,7 @@ export type PhilJobNetListing = {
   cards: PhilJobNetCard[];
   invalidCards: number;
   totalText: string | null;
+  totalCount: number | null;
   currentPage: number | null;
   nextPage: number | null;
   formState: Record<string, string> | null;
@@ -276,11 +320,11 @@ export function parsePhilJobNetListing(html: string): PhilJobNetListing {
     });
   });
   if (cards.length === 0 && invalidCards === 0 && !/\b0\s+job openings?/iu.test(totalText ?? '')) {
-    // An empty grid is only legitimate when the site itself says there are no openings.
-    if (grid.find('a.nolink').length === 0 && grid.text().trim().length > 0) {
-      throw new PhilJobNetDriftError('result grid holds content but no recognisable vacancy cards');
-    }
+    // An empty grid is only legitimate when the site itself states an explicit zero count.
+    throw new PhilJobNetDriftError('result grid holds no vacancy cards and the site does not report zero openings');
   }
+  const countMatch = /(\d[\d,]*)\s+job openings?/iu.exec(totalText ?? '');
+  const totalCount = countMatch === null ? null : Number((countMatch[1] ?? '').replace(/,/gu, ''));
 
   const pager = grid.find('tr.pagination-vs, tr:has(td > table)').last();
   const currentText = cleaned(pager.find('span').first().text());
@@ -297,7 +341,7 @@ export function parsePhilJobNetListing(html: string): PhilJobNetListing {
   }
   const formState =
     state['__VIEWSTATE'] !== undefined && state['__EVENTVALIDATION'] !== undefined ? state : null;
-  return { cards, invalidCards, totalText, currentPage, nextPage, formState };
+  return { cards, invalidCards, totalText, totalCount, currentPage, nextPage, formState };
 }
 
 export type PhilJobNetDetail = {
@@ -322,7 +366,7 @@ function sectionText($: cheerio.CheerioAPI, heading: string): string | null {
   if (title.length === 0) return null;
   const block = title.closest('.row').next();
   block.find('br').replaceWith('\n');
-  const text = block.text().replace(/00a0/gu, ' ').replace(/[ \t]+/gu, ' ').replace(/\n\s*\n+/gu, '\n').trim();
+  const text = block.text().replace(/\u00a0/gu, ' ').replace(/[ \t]+/gu, ' ').replace(/\n\s*\n+/gu, '\n').trim();
   return text.length === 0 || NOT_SPECIFIED.test(text) || /^no additional remarks$/iu.test(text) ? null : text;
 }
 
@@ -397,7 +441,27 @@ function requirePostForm(http: AtsHttpClient): NonNullable<AtsHttpClient['postFo
   return postForm.bind(http);
 }
 
+const BLOCKED_STATUSES = [401, 403, 406, 407, 429, 451];
+
+function loginWall(response: AtsHttpResponse): boolean {
+  try {
+    return /\/login(?:\.aspx)?\/?$/iu.test(new URL(response.finalUrl, PHIL_JOBNET_ORIGIN).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** The portal stopping anonymous access (status block or login redirect) must end the run, not be retried around. */
+function blockedStatus(error: unknown): number | null {
+  const status = (error as { status?: unknown } | null)?.status;
+  const typed = error instanceof AtsResponseError || (error instanceof Error && error.name === 'CrawlerHttpError');
+  return typed && typeof status === 'number' && BLOCKED_STATUSES.includes(status) ? status : null;
+}
+
 function body(response: AtsHttpResponse): string {
+  if (loginWall(response)) {
+    throw new AtsResponseError(PROVIDER, 'redirected to the login page (login wall); stopping', 401);
+  }
   requireSuccessfulResponse(PROVIDER, response);
   return response.body;
 }
@@ -436,13 +500,27 @@ export async function discoverPhilJobNet(
     let listing = parsePhilJobNetListing(body(await client.get(url, options)));
     let page = 1;
     let invalid = listing.invalidCards;
+    let rawCards = 0;
     for (;;) {
+      rawCards += listing.cards.length;
       for (const card of listing.cards) {
         if (seen.has(card.id)) continue;
         seen.add(card.id);
         cards.push(card);
       }
-      if (listing.nextPage === null) break;
+      if (listing.nextPage === null) {
+        const accountedFor = listing.totalCount !== null && listing.totalCount <= rawCards;
+        if (listing.currentPage === null && listing.cards.length > 0 && !accountedFor) {
+          throw new PhilJobNetDriftError('result cards present but the pager was not found');
+        }
+        if (listing.totalCount !== null && listing.totalCount > rawCards) {
+          complete = false;
+          notes.push(
+            `The portal reports ${listing.totalCount} openings but only ${rawCards} listings were collected (pager markup may have changed).`,
+          );
+        }
+        break;
+      }
       if (page >= maxPages) {
         complete = false;
         continuationCursor = String(listing.nextPage);
@@ -494,7 +572,8 @@ export async function discoverPhilJobNet(
         try {
           requests += 1;
           detail = parsePhilJobNetDetail(body(await client.get(card.url, options)));
-        } catch {
+        } catch (error) {
+          if (blockedStatus(error) !== null) throw error;
           detailFailures += 1;
         }
         if (detail?.closed === true) {
@@ -510,7 +589,12 @@ export async function discoverPhilJobNet(
       notes.push(`${detailFailures} detail pages could not be read; those listings keep listing-level data only.`);
     }
   } catch (error) {
-    const failure = sourceFailure(error);
+    const blocked = blockedStatus(error);
+    const failure = sourceFailure(
+      blocked !== null && !(error instanceof AtsResponseError)
+        ? new AtsResponseError(PROVIDER, error instanceof Error ? error.message : 'blocked', blocked)
+        : error,
+    );
     status = failure.status;
     errorMessage = failure.error;
     complete = false;
