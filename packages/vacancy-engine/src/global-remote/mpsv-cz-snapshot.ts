@@ -322,6 +322,11 @@ export class MpsvSnapshotParser {
 
   #route(bytes: Uint8Array): void {
     if (this.#mode === 'gzip') {
+      // Backpressure is not available here: `SafeHttpClient.streamGet` requires a synchronous
+      // `onChunk` and cannot be paused, so a `false` return from `write` cannot stop the download.
+      // Memory is instead bounded by `maxResponseBytes` on the compressed transfer (the gzip path
+      // only runs for a transport that does not decode; `fetch` normally hands over decoded JSON),
+      // and the decoded side by `maxDecodedChars` plus the per-record cap.
       this.#gunzip?.write(bytes);
     } else {
       this.#splitter.write(bytes);

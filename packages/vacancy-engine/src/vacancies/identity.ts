@@ -17,6 +17,8 @@ import { canonicalizeVacancyUrl, normalizeVacancyText } from './hash.js';
  *    page). Deliberately company-scoped and description-free -- see `semanticIdentityKey`'s doc
  *    comment for why, and for the one documented case it cannot distinguish.
  */
+const MPSV_CZ_IDENTITY_SCOPE = 'mpsv_cz:snapshot';
+
 export type VacancyIdentityKind = 'requisition' | 'canonical_url' | 'semantic';
 
 export type VacancyIdentity = {
@@ -245,7 +247,24 @@ export function vacancyIdentityFor(input: {
   company: string;
   title: string;
   location: string;
+  /** Source provider and row key; only used so `mpsv_cz` rows keep their own per-record identity. */
+  provider?: string;
+  key?: string;
 }): VacancyIdentity {
+  // The MPSV open-data snapshot has no per-vacancy URL, an employer `urlAdresa` is shared by every
+  // vacancy of that employer, and many rows share a title/obec or an undisclosed employer. The
+  // stable portal ID is the only trustworthy identity, so it beats every URL- or text-based tier.
+  if (input.provider === 'mpsv_cz') {
+    const portalId = /^mpsv_cz:(\d+)$/u.exec(input.key ?? '')?.[1];
+    if (portalId !== undefined) {
+      return {
+        kind: 'requisition',
+        key: `mpsv_cz:${portalId}`,
+        employerKey: MPSV_CZ_IDENTITY_SCOPE,
+        requisitionId: portalId,
+      };
+    }
+  }
   const requisition = atsRequisitionFor(input.url);
   if (requisition !== null) {
     const employerKey = `${requisition.provider}:${requisition.tenant.toLowerCase()}`;
@@ -289,6 +308,16 @@ export function vacancyIdentityFor(input: {
  * never remove a vacancy from the report.
  */
 export function resolveApplyUrl(identity: VacancyIdentity, url: string): ApplyUrlEvidence {
+  if (identity.kind === 'requisition' && identity.employerKey === MPSV_CZ_IDENTITY_SCOPE) {
+    // A portal ID identifies the record inside the open-data snapshot, not an application target.
+    return {
+      status: 'unresolved',
+      url,
+      reasons: [
+        'This row comes from the Czech open vacancy snapshot, which has no per-vacancy application page; the link is not a verified application target.',
+      ],
+    };
+  }
   if (identity.kind === 'requisition') {
     return {
       status: 'verified',

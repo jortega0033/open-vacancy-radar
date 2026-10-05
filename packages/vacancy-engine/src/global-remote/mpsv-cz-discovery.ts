@@ -175,20 +175,38 @@ function label(map: ReadonlyMap<string, string>, id: string | null): string | nu
 }
 
 const EMAIL_PATTERN = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/gu;
+/** `jan(at)firma.cz`, `jan [at] firma . cz`, `jan{zavinac}firma.cz`. */
+const OBFUSCATED_EMAIL_PATTERN =
+  /[\p{L}\p{N}._%+-]+\p{Zs}*[([{<]\p{Zs}*(?:at|zavin[aá]č)\p{Zs}*[)\]}>]\p{Zs}*[\p{L}\p{N}-]+(?:\p{Zs}*\.\p{Zs}*[\p{L}\p{N}-]+)*\p{Zs}*\.\p{Zs}*\p{L}{2,}/giu;
 const INTERNATIONAL_PHONE_PATTERN = /(?:\+|\b00)\d{1,3}\p{Zs}?(?:\d\p{Zs}?){8,12}/gu;
-const NINE_DIGIT_PHONE_PATTERN = /(?<![\d])\d{3}[\p{Zs}.-]?\d{3}[\p{Zs}.-]?\d{3}(?![\d])/gu;
+/** Nine or more digits with any mix of spaces, dots and dashes between them. */
+const LONG_DIGIT_RUN_PATTERN = /(?<!\d)\d(?:[\p{Zs}.-]*\d){8,}(?!\d)/gu;
+const SALARY_FIGURE_PATTERN = /^(?:\d+|\d{1,3}(?:[\p{Zs}.]\d{3})+)$/u;
+
+/**
+ * A two-part range such as `35000-45000` or `35 000 - 45 000` (a salary): each side is one plain or
+ * thousands-grouped number of at most seven digits, so a phone number split in two does not match.
+ */
+function isSalaryRange(run: string): boolean {
+  const sides = run.split(/\p{Zs}*[-–]\p{Zs}*/u);
+  return (
+    sides.length === 2 &&
+    sides.every((side) => SALARY_FIGURE_PATTERN.test(side) && side.replace(/\D/gu, '').length <= 7)
+  );
+}
 
 /**
  * Removes e-mail addresses and phone-number-like sequences from an employer-typed free-text note.
- * Conservative on purpose: groups of 3-3-3 digits and international prefixes only, so salary ranges
- * like "35000-45000" survive. A person's name typed into free text cannot be detected
+ * Digit runs of nine or more digits (any spaces, dots or dashes between them) and international
+ * prefixes are removed; a plain two-part range like "35000-45000" survives as a salary. A person's name typed into free text cannot be detected
  * deterministically; that residual risk is documented in docs/job-source-evidence.md.
  */
 export function redactMpsvFreeText(text: string): string {
   return text
     .replace(EMAIL_PATTERN, '')
+    .replace(OBFUSCATED_EMAIL_PATTERN, '')
     .replace(INTERNATIONAL_PHONE_PATTERN, '')
-    .replace(NINE_DIGIT_PHONE_PATTERN, '')
+    .replace(LONG_DIGIT_RUN_PATTERN, (run) => (isSalaryRange(run) ? run : ''))
     .replace(/[\p{Zs}\t]{2,}/gu, ' ')
     .trim();
 }
@@ -318,7 +336,8 @@ export function normalizeMpsvRecord(
   const entry = record(raw);
   if (entry === null) return { kind: 'invalid' };
   const portalId = entry.portalId;
-  const professionName = stringValue(record(entry.pozadovanaProfese)?.cs);
+  const rawProfession = stringValue(record(entry.pozadovanaProfese)?.cs);
+  const professionName = rawProfession === null ? null : redactMpsvFreeText(rawProfession);
   const publishId = codeId(entry.zverejnovat);
   if (
     typeof portalId !== 'number' ||
@@ -333,11 +352,12 @@ export function normalizeMpsvRecord(
   const publication = PUBLISH_CODES.get(publishId);
   if (publication === undefined) return { kind: 'skipped', reason: 'not_published' };
   if (expiry !== null && expiry < options.today) return { kind: 'skipped', reason: 'expired' };
-  if (professionName === null) return { kind: 'invalid' };
+  if (professionName === null || professionName.length === 0) return { kind: 'invalid' };
 
   const employer = record(entry.zamestnavatel);
-  const employerName = publication === 'disclosed' ? stringValue(employer?.nazev) : null;
-  const company = employerName ?? 'Employer not disclosed';
+  const rawEmployerName = publication === 'disclosed' ? stringValue(employer?.nazev) : null;
+  const employerName = rawEmployerName === null ? null : redactMpsvFreeText(rawEmployerName);
+  const company = employerName === null || employerName.length === 0 ? 'Employer not disclosed' : employerName;
 
   const typeId = codeId(entry.typMzdy);
   const salaryFrom = numberValue(entry.mesicniMzdaOd);
@@ -495,6 +515,119 @@ async function loadCodeList(
   return parseMpsvCodeList(Buffer.concat(chunks).toString('utf8'));
 }
 
+/** Newest change first: `datumZmeny`, then `datumVlozeni`, then the larger portal ID as a tiebreak. */
+type Rank = { readonly time: number; readonly portalId: number };
+
+function rankOf(entry: Record<string, unknown> | null, portalId: number): Rank {
+  const changed = Date.parse(stringValue(entry?.datumZmeny) ?? '');
+  const inserted = Date.parse(stringValue(entry?.datumVlozeni) ?? '');
+  const time = Number.isFinite(changed) ? changed : Number.isFinite(inserted) ? inserted : Number.NEGATIVE_INFINITY;
+  return { time, portalId };
+}
+
+function isBetter(left: Rank, right: Rank): boolean {
+  return left.time !== right.time ? left.time > right.time : left.portalId > right.portalId;
+}
+
+type HeapEntry = { rank: Rank; vacancy: DiscoveryVacancyAudit; index: number };
+
+/**
+ * Bounded top-N of the newest rows: a min-heap whose root is the worst retained row, so memory
+ * stays at N rows and the result does not depend on file order. Entries track their own index so a
+ * superseded duplicate can be removed.
+ */
+class NewestRows {
+  readonly #heap: HeapEntry[] = [];
+  readonly #capacity: number;
+
+  public constructor(capacity: number) {
+    this.#capacity = capacity;
+  }
+
+  public get size(): number {
+    return this.#heap.length;
+  }
+
+  public get full(): boolean {
+    return this.#heap.length >= this.#capacity;
+  }
+
+  public worst(): HeapEntry | undefined {
+    return this.#heap[0];
+  }
+
+  /** Returns the stored entry (null when not good enough to keep) and any row it pushed out. */
+  public add(
+    rank: Rank,
+    vacancy: DiscoveryVacancyAudit,
+  ): { entry: HeapEntry | null; evicted: HeapEntry | null } {
+    if (this.#capacity <= 0) return { entry: null, evicted: null };
+    let evicted: HeapEntry | null = null;
+    if (this.full) {
+      const worst = this.#heap[0];
+      if (worst === undefined || !isBetter(rank, worst.rank)) return { entry: null, evicted: null };
+      this.remove(worst);
+      evicted = worst;
+    }
+    const entry: HeapEntry = { rank, vacancy, index: this.#heap.length };
+    this.#heap.push(entry);
+    this.#up(entry.index);
+    return { entry, evicted };
+  }
+
+  public remove(entry: HeapEntry): void {
+    const last = this.#heap.pop();
+    if (last === undefined || last === entry) return;
+    this.#heap[entry.index] = last;
+    last.index = entry.index;
+    this.#up(last.index);
+    this.#down(last.index);
+  }
+
+  public rows(): DiscoveryVacancyAudit[] {
+    return [...this.#heap]
+      .sort((a, b) => a.rank.portalId - b.rank.portalId)
+      .map((entry) => entry.vacancy);
+  }
+
+  #swap(a: number, b: number): void {
+    const left = this.#heap[a];
+    const right = this.#heap[b];
+    if (left === undefined || right === undefined) return;
+    this.#heap[a] = right;
+    this.#heap[b] = left;
+    right.index = a;
+    left.index = b;
+  }
+
+  #up(start: number): void {
+    let index = start;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      const child = this.#heap[index];
+      const above = this.#heap[parent];
+      if (child === undefined || above === undefined || !isBetter(above.rank, child.rank)) return;
+      this.#swap(index, parent);
+      index = parent;
+    }
+  }
+
+  #down(start: number): void {
+    let index = start;
+    for (;;) {
+      let worst = index;
+      for (const next of [index * 2 + 1, index * 2 + 2]) {
+        const candidate = this.#heap[next];
+        const current = this.#heap[worst];
+        if (candidate !== undefined && current !== undefined && isBetter(current.rank, candidate.rank)) worst = next;
+      }
+      if (worst === index) return;
+      this.#swap(index, worst);
+      index = worst;
+    }
+  }
+}
+
 const ACCEPTED_CONTENT_TYPES = ['application/x-gzip', 'application/gzip', 'application/json', 'application/octet-stream'];
 
 /**
@@ -548,8 +681,8 @@ export async function runMpsvCzDiscovery(
   );
   degraded.sort();
 
-  const vacancies: DiscoveryVacancyAudit[] = [];
-  const seenPortalIds = new Set<number>();
+  const retained = new NewestRows(maxRetained);
+  const seen = new Map<number, { rank: Rank; entry: HeapEntry | null }>();
   const presentKeys = new Set<string>();
   let scanned = 0;
   let expired = 0;
@@ -576,12 +709,26 @@ export async function runMpsvCzDiscovery(
       } else if (result.kind === 'skipped') {
         if (result.reason === 'expired') expired += 1;
         else notPublished += 1;
-      } else if (seenPortalIds.has(Number(result.vacancy.key.slice('mpsv_cz:'.length)))) {
-        duplicates += 1;
       } else {
-        seenPortalIds.add(Number(result.vacancy.key.slice('mpsv_cz:'.length)));
-        if (vacancies.length < maxRetained) vacancies.push(result.vacancy);
-        else overCap += 1;
+        const portalId = Number(result.vacancy.key.slice('mpsv_cz:'.length));
+        const rank = rankOf(entry, portalId);
+        const previous = seen.get(portalId);
+        if (previous !== undefined) {
+          // Duplicate portal ID: the version with the later change date wins, whatever the file order.
+          duplicates += 1;
+          if (!(rank.time > previous.rank.time)) return;
+          if (previous.entry !== null) retained.remove(previous.entry);
+          else overCap -= 1;
+        }
+        const added = retained.add(rank, result.vacancy);
+        if (added.evicted !== null) {
+          // A row pushed out by a newer one is no longer retained.
+          const pushedOut = seen.get(added.evicted.rank.portalId);
+          if (pushedOut !== undefined) pushedOut.entry = null;
+          overCap += 1;
+        }
+        seen.set(portalId, { rank, entry: added.entry });
+        if (added.entry === null) overCap += 1;
       }
     },
   });
@@ -611,7 +758,7 @@ export async function runMpsvCzDiscovery(
       snapshotUrl,
       requests,
       counters,
-      vacancies,
+      vacancies: retained.rows(),
       degraded,
       stale: Number.isFinite(lastModified) && now.getTime() - lastModified > MPSV_CZ_MAX_STALE_AGE_MS,
       stats: { scanned, expired, notPublished, invalid, overCap, duplicates, scanLimited },
@@ -625,7 +772,7 @@ export async function runMpsvCzDiscovery(
         snapshotUrl,
         requests,
         counters,
-        vacancies,
+        vacancies: retained.rows(),
         degraded,
         stale: false,
         stats: { scanned, expired, notPublished, invalid, overCap, duplicates, scanLimited: true },
@@ -666,6 +813,9 @@ function finishRun(input: {
     sources: [failureSource(input.snapshotUrl, input.requests, new AtsResponseError('mpsv_cz', message), input.counters)],
     vacancies: [],
   });
+  if (input.stale) {
+    return fail('snapshot is stale: its Last-Modified date is more than 7 days old, so no vacancies were imported');
+  }
   if (stats.scanned === 0) return fail('snapshot contains no vacancy records (empty data)');
   const missing = MPSV_CZ_CORE_KEYS.filter((key) => !input.presentKeys.has(key));
   if (missing.length > 0 && !stats.scanLimited) {
@@ -680,13 +830,12 @@ function finishRun(input: {
   const notes: string[] = [];
   if (stats.scanLimited) notes.push(`scan stopped after ${stats.scanned} records by request`);
   if (stats.overCap > 0) {
-    notes.push(`kept the first ${input.vacancies.length} active vacancies; ${stats.overCap} more were not retained`);
+    notes.push(`kept the ${input.vacancies.length} most recently changed active vacancies; ${stats.overCap} older ones were not retained`);
   }
   if (stats.invalid > 0) notes.push(`${stats.invalid} records were skipped for violating the contract`);
   if (input.degraded.length > 0) {
     notes.push(`code list(s) unavailable, labels left blank: ${input.degraded.join(', ')}`);
   }
-  if (input.stale) notes.push('snapshot Last-Modified is older than 7 days');
   const complete = notes.length === 0;
   const source: DiscoverySourceAudit = {
     id: SOURCE_ID,

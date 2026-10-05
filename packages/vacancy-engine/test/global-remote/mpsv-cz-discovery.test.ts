@@ -19,6 +19,7 @@ import {
   type MpsvLookups,
 } from '../../src/global-remote/mpsv-cz-discovery.js';
 import { MpsvSnapshotError, MpsvSnapshotParser } from '../../src/global-remote/mpsv-cz-snapshot.js';
+import { uniqueDiscovery } from '../../src/pipeline/global-remote.js';
 import { globalRemoteSourceRegistry } from '../../src/global-remote/source-registry.js';
 import { globalRemoteConfigSchema } from '../../src/global-remote/models.js';
 
@@ -149,17 +150,20 @@ describe('MpsvSnapshotParser streaming', () => {
   });
 
   it('hands records over one at a time without needing the whole document', async () => {
-    const seenWhileWriting: number[] = [];
     const bytes = Buffer.from(text, 'utf8');
-    const parser = new MpsvSnapshotParser({ onRecord: () => seenWhileWriting.push(1) });
     let written = 0;
+    const writtenAtEmit: number[] = [];
+    const parser = new MpsvSnapshotParser({ onRecord: () => writtenAtEmit.push(written) });
     for (const chunk of slices(bytes, 512)) {
-      parser.write(chunk);
       written += chunk.byteLength;
+      parser.write(chunk);
     }
     // Records were emitted before the last byte was written, not only at finish().
-    expect(seenWhileWriting.length).toBe(7);
+    expect(writtenAtEmit).toHaveLength(7);
     expect(written).toBe(bytes.byteLength);
+    expect(writtenAtEmit[0]).toBeLessThan(bytes.byteLength);
+    expect(writtenAtEmit[1]).toBeLessThan(bytes.byteLength);
+    expect(writtenAtEmit[0]).toBeLessThan(writtenAtEmit[6] ?? 0);
     await parser.finish();
   });
 
@@ -288,7 +292,8 @@ describe('normalizeMpsvRecord', () => {
     expect(row.sourceUrl).toBe(row.url);
     expect(new URL(row.url).hostname).toBe('data.mpsv.cz');
     // The shared dataset page must not become a canonical-URL merge key for different postings.
-    expect(row.identity?.kind).toBe('semantic');
+    expect(row.identity?.kind).toBe('requisition');
+    expect(row.applyUrl?.status).toBe('unresolved');
     expect(vacancy(90000006).identity?.key).not.toBe(row.identity?.key);
   });
 
@@ -426,6 +431,26 @@ describe('personal data omission', () => {
     const source = sourceOf(run);
     expect(source.status).toBe('error');
     for (const value of Object.values(SYNTHETIC)) expect(JSON.stringify(source)).not.toContain(value);
+  });
+
+  it('redacts obfuscated e-mails and spaced, dotted or dashed long digit runs', () => {
+    expect(redactMpsvFreeText('piste na jan(at)firma.cz nebo jana [at] firma . cz ok')).toBe('piste na nebo ok');
+    expect(redactMpsvFreeText('tel 777 12 34 56 7, 777.123.456, 777-123-456-0 konec')).toBe('tel , , konec');
+    expect(redactMpsvFreeText('mzda 35 000 - 45 000 Kč')).toContain('35 000');
+  });
+
+  it('redacts title and company as well as the description', () => {
+    const base = day1().polozky[0];
+    if (base === undefined) throw new Error('fixture missing');
+    const entry = {
+      ...base,
+      pozadovanaProfese: { cs: 'Řidič volejte 777 123 456' },
+      zamestnavatel: { ...(base.zamestnavatel as object), nazev: 'Firma s.r.o. jan(at)firma.cz' },
+    };
+    const result = normalizeMpsvRecord(entry, fixtureLookups(), { today: '2026-10-05', minimumAnnualBaseUsd: null });
+    if (result.kind !== 'vacancy') throw new Error('expected vacancy');
+    expect(result.vacancy.title).toBe('Řidič volejte');
+    expect(result.vacancy.company).toBe('Firma s.r.o.');
   });
 
   it('redacts e-mail addresses and phone-like numbers but not salary figures', () => {
@@ -669,7 +694,7 @@ describe('runMpsvCzDiscovery', () => {
     });
     expect(run.vacancies).toHaveLength(2);
     expect(sourceOf(run)).toMatchObject({ status: 'partial', complete: false });
-    expect(sourceOf(run).error).toMatch(/3 more were not retained/u);
+    expect(sourceOf(run).error).toMatch(/3 older ones were not retained/u);
   });
 
   it('supports a capped scan and reports it as partial', async () => {
@@ -688,8 +713,9 @@ describe('runMpsvCzDiscovery', () => {
       CONFIG,
       { now: () => NOW },
     );
-    expect(sourceOf(run).status).toBe('partial');
-    expect(sourceOf(run).error).toMatch(/older than 7 days/u);
+    expect(sourceOf(run).status).toBe('error');
+    expect(sourceOf(run).error).toMatch(/stale/u);
+    expect(run.vacancies).toEqual([]);
   });
 
   it('passes bounded, origin-restricted stream options to the HTTP client', async () => {
@@ -708,6 +734,80 @@ describe('runMpsvCzDiscovery', () => {
       expect(options.maxResponseBytes).toBeGreaterThan(0);
       expect(options.timeoutMs).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('MPSV retention and identity', () => {
+  function rows(count: number, build: (index: number) => Record<string, unknown>): Snapshot {
+    const base = day1().polozky[0];
+    if (base === undefined) throw new Error('fixture missing');
+    return { polozky: Array.from({ length: count }, (_, index) => ({ ...base, ...build(index) })) };
+  }
+
+  it('keeps the newest rows regardless of file order', async () => {
+    const make = (order: number[]) =>
+      rows(order.length, (index) => ({
+        portalId: 100 + (order[index] ?? 0),
+        datumZmeny: `2026-09-${String(10 + (order[index] ?? 0)).padStart(2, '0')}T08:00:00`,
+        pozadovanaProfese: { cs: `Role ${order[index]}` },
+        expirace: null,
+      }));
+    const run = async (order: number[]) =>
+      (
+        await runMpsvCzDiscovery(fakeClient(jsonRoute(make(order))).client, CONFIG, {
+          now: () => NOW,
+          maxRetainedRecords: 3,
+        })
+      ).vacancies.map((row) => row.key);
+    const expected = ['mpsv_cz:107', 'mpsv_cz:108', 'mpsv_cz:109'];
+    expect(await run([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])).toEqual(expected);
+    expect(await run([9, 3, 5, 0, 8, 1, 7, 2, 6, 4])).toEqual(expected);
+  });
+
+  it('keeps the version with the later datumZmeny for a duplicate portalId', async () => {
+    const snapshot = rows(2, (index) => ({
+      portalId: 555,
+      datumZmeny: index === 0 ? '2026-09-30T08:00:00' : '2026-09-01T08:00:00',
+      pozadovanaProfese: { cs: index === 0 ? 'Newer title' : 'Older title' },
+      expirace: null,
+    }));
+    const run = await runMpsvCzDiscovery(fakeClient(jsonRoute(snapshot)).client, CONFIG, { now: () => NOW });
+    expect(run.vacancies.map((row) => row.title)).toEqual(['Newer title']);
+    snapshot.polozky.reverse();
+    const reversed = await runMpsvCzDiscovery(fakeClient(jsonRoute(snapshot)).client, CONFIG, { now: () => NOW });
+    expect(reversed.vacancies.map((row) => row.title)).toEqual(['Newer title']);
+  });
+
+  it('keeps same-title, same-obec rows and undisclosed-employer rows separate through uniqueDiscovery', async () => {
+    const snapshot = rows(4, (index) => ({
+      portalId: 800 + index,
+      pozadovanaProfese: { cs: 'Skladník' },
+      zverejnovat: { id: index < 2 ? 'ZverejnovatVpm/ano' : 'ZverejnovatVpm/anosp' },
+      urlAdresa: null,
+      expirace: null,
+    }));
+    const run = await runMpsvCzDiscovery(fakeClient(jsonRoute(snapshot)).client, CONFIG, { now: () => NOW });
+    expect(run.vacancies).toHaveLength(4);
+    expect(uniqueDiscovery(run.vacancies).map((row) => row.key).sort()).toEqual([
+      'mpsv_cz:800',
+      'mpsv_cz:801',
+      'mpsv_cz:802',
+      'mpsv_cz:803',
+    ]);
+  });
+
+  it('does not let a shared employer URL merge different vacancies', async () => {
+    const snapshot = rows(2, (index) => ({
+      portalId: 900 + index,
+      pozadovanaProfese: { cs: `Role ${index}` },
+      urlAdresa: 'https://firma.cz/volna-mista',
+      expirace: null,
+    }));
+    const run = await runMpsvCzDiscovery(fakeClient(jsonRoute(snapshot)).client, CONFIG, { now: () => NOW });
+    expect(run.vacancies.every((row) => row.url === 'https://firma.cz/volna-mista')).toBe(true);
+    const merged = uniqueDiscovery(run.vacancies);
+    expect(merged.map((row) => row.key).sort()).toEqual(['mpsv_cz:900', 'mpsv_cz:901']);
+    expect(merged.every((row) => row.applyUrl?.status === 'unresolved')).toBe(true);
   });
 });
 
