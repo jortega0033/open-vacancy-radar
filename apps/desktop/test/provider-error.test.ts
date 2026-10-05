@@ -53,6 +53,7 @@ describe('classifyProviderError (#461)', () => {
     expect(redactHomePaths('failed at /Users/jamie/projects/x and C:\\Users\\Jamie\\AppData\\y and /home/pat/z')).toBe(
       'failed at ~/projects/x and ~\\AppData\\y and ~/z',
     );
+    expect(redactHomePaths('/Users/Jane Doe/x and C:\\Users\\Jane Doe\\y and /home/jane doe/z')).toBe('~/x and ~\\y and ~/z');
     expect(classifyProviderError('session limit at /home/pat/cv.pdf').details).toBe('session limit at ~/cv.pdf');
   });
 });

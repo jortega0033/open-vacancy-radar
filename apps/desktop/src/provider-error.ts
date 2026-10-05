@@ -48,10 +48,14 @@ const UNAVAILABLE_PATTERNS = [
 /** "resets 12:10pm (Europe/Amsterdam)", "resets at 5 PM", "reset at 17:30". Needs a colon or am/pm. */
 const RESET_PATTERN = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?(?:\s*\(([A-Za-z_]+(?:\/[A-Za-z_+-]+)*)\))?/i;
 
+/**
+ * Replaces the profile folder in home paths with `~`. The folder name may contain spaces
+ * ("Jane Doe"), so it runs to the next path separator, quote or line end rather than to whitespace.
+ */
 export function redactHomePaths(text: string): string {
   return text
-    .replace(/\/(?:Users|home)\/[^/\s]+/g, '~')
-    .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, '~');
+    .replace(/\/(?:Users|home)\/[^/\r\n"'<>`]+/g, '~')
+    .replace(/[A-Za-z]:[\\/]+Users[\\/]+[^\\/\r\n"'<>`]+/g, '~');
 }
 
 function localTimeZone(): string | null {
