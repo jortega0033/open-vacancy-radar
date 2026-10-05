@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { AtsHttpClient, AtsHttpRequestOptions, AtsHttpResponse } from '../../src/ats/http.js';
+import { CrawlerHttpError } from '../../src/crawler/errors.js';
 import { runKeyedDiscovery } from '../../src/global-remote/keyed-discovery.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
 import { globalRemoteSourceRegistry, theirstackConfigured } from '../../src/global-remote/source-registry.js';
@@ -282,6 +283,11 @@ describe('TheirStack Jobs API discovery (paid, key and explicit enablement requi
     expect(result.vacancies).toEqual([]);
     expect(result.sources[0]).toMatchObject({ status: 'error', complete: false });
     expect(JSON.stringify(result)).not.toContain(TEST_KEY);
+
+    const notArray = new ScriptedClient([fixture('search-data-not-array.json')]);
+    const notArrayResult = await discoverTheirStack(notArray, profile(), noWait);
+    expect(notArrayResult.sources[0]).toMatchObject({ status: 'error', complete: false });
+    expect(notArrayResult.sources[0]?.error).toContain('data is not an array');
   });
 
   it.each([
@@ -298,6 +304,56 @@ describe('TheirStack Jobs API discovery (paid, key and explicit enablement requi
     expect(result.sources[0]?.error).toContain(text);
     expect(JSON.stringify(result)).not.toContain(TEST_KEY);
   });
+
+  it.each([
+    [401, 'blocked', 'rejected the API key'],
+    [402, 'error', 'credits or plan limit'],
+    [429, 'blocked', 'rate limit'],
+  ] as const)('maps a thrown CrawlerHttpError %i like the stub response', async (code, expected, text) => {
+    const error = new CrawlerHttpError({
+      category: code === 429 ? 'rate_limited' : code === 401 ? 'blocked' : 'http_error',
+      code: code === 429 ? 'rate_limited_status' : code === 401 ? 'blocked_status' : 'http_status',
+      url: THEIRSTACK_SEARCH_URL,
+      detail: `HTTP ${code}`,
+      status: code,
+    });
+    const client = new ScriptedClient([error]);
+    const result = await discoverTheirStack(client, profile(), noWait);
+    expect(client.urls).toHaveLength(1);
+    expect(result.sources[0]).toMatchObject({ status: expected, complete: false, creditsUsed: 0 });
+    expect(result.sources[0]?.error).toContain(text);
+    expect(result.sources[0]?.error).not.toContain('may be higher');
+    expect(JSON.stringify(result)).not.toContain(TEST_KEY);
+  });
+
+  it('warns that credits may be undercounted after a non-4xx failure on a later page', async () => {
+    const client = new ScriptedClient([fixture('search-page-1.json'), new Error('request timed out')]);
+    const result = await discoverTheirStack(client, profile({ theirstackMaxCredits: 10 }), { ...noWait, pageSize: 2 });
+    expect(result.sources[0]).toMatchObject({ status: 'partial', creditsUsed: 2 });
+    expect(result.sources[0]?.error).toContain('Credits used may be higher than reported');
+  });
+
+  it('drops a job id repeated across offset pages within one run', async () => {
+    const client = new ScriptedClient([fixture('search-page-1.json'), fixture('search-page-1.json')]);
+    const result = await discoverTheirStack(client, profile({ theirstackMaxCredits: 4 }), { ...noWait, pageSize: 2 });
+    expect(client.urls).toHaveLength(2);
+    expect(result.vacancies.map((v) => v.key)).toEqual(['theirstack:900000001', 'theirstack:900000002']);
+    expect(result.sources[0]).toMatchObject({ creditsUsed: 4, listings: 2 });
+  });
+
+  it.each([[{}], [{ 'RateLimit-Reset': 'soon' }]])(
+    'stops when the window is exhausted and the reset header is missing or not numeric (%o)',
+    async (extra) => {
+      const client = new ScriptedClient([
+        status(200, fixture('search-page-1.json'), { 'RateLimit-Remaining': '0', ...extra }),
+        fixture('search-page-2.json'),
+      ]);
+      const result = await discoverTheirStack(client, profile({ theirstackMaxCredits: 10 }), { ...noWait, pageSize: 2 });
+      expect(client.urls).toHaveLength(1);
+      expect(result.sources[0]).toMatchObject({ status: 'partial' });
+      expect(result.sources[0]?.error).toContain('rate limit');
+    },
+  );
 
   it('keeps earlier pages and stops at once when a later page hits 429', async () => {
     const client = new ScriptedClient([fixture('search-page-1.json'), status(429, fixture('error-429.json'))]);

@@ -43,6 +43,7 @@ liveIt('matches the TheirStack Jobs API contract within a 2-credit budget', asyn
   };
 
   const result = await discoverTheirStack(createAtsHttpClient(safeHttp), config);
+  expect(result.sources[0]?.requests).toBe(1);
   const source = result.sources[0];
   expect(source).toBeDefined();
   if (source === undefined) throw new Error('TheirStack live discovery returned no source row');

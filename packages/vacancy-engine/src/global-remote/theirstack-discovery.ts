@@ -242,6 +242,7 @@ export async function discoverTheirStack(
   let message: string | null = null;
   let continuationCursor: string | null = null;
   let lastRequestAt: number | null = null;
+  const seenKeys = new Set<string>();
 
   const audit = (): DiscoveryRun => ({
     sources: [{
@@ -263,6 +264,8 @@ export async function discoverTheirStack(
   });
 
   if (role.length === 0) {
+    // Intentional error row: the audit status union has no skipped / not-applicable value, and a
+    // silent no-op would hide why an enabled paid source returns nothing on every scan.
     status = 'error';
     message = 'TheirStack needs a role search. Enter a role so credits are only spent on relevant jobs.';
     return audit();
@@ -315,7 +318,11 @@ export async function discoverTheirStack(
       creditsUsed += data.length;
       for (const raw of data) {
         const outcome = normalizeJob(raw, config.minimumAnnualBaseUsd);
-        if (outcome.kind === 'vacancy') vacancies.push(outcome.vacancy);
+        // Offset pagination can repeat a job across pages; keep one row per job id per run.
+        if (outcome.kind === 'vacancy' && !seenKeys.has(outcome.vacancy.key)) {
+          seenKeys.add(outcome.vacancy.key);
+          vacancies.push(outcome.vacancy);
+        }
       }
 
       if (truncated > 0) {
@@ -328,8 +335,12 @@ export async function discoverTheirStack(
 
       const rateRemaining = headerValue(response, 'ratelimit-remaining');
       if (rateRemaining !== null && Number(rateRemaining) <= 0) {
-        const resetSeconds = Number(headerValue(response, 'ratelimit-reset'));
-        const resetMs = Number.isFinite(resetSeconds) ? resetSeconds * 1000 : Number.POSITIVE_INFINITY;
+        // A missing or non-numeric reset is unknown, so stop rather than spend on a likely failure.
+        const resetHeader = headerValue(response, 'ratelimit-reset')?.trim() ?? '';
+        const resetSeconds = resetHeader.length === 0 ? Number.NaN : Number(resetHeader);
+        const resetMs = Number.isFinite(resetSeconds) && resetSeconds >= 0
+          ? resetSeconds * 1000
+          : Number.POSITIVE_INFINITY;
         if (resetMs > MAX_RATE_LIMIT_WAIT_MS) {
           status = 'partial';
           message = theirStackGuidance(429);
@@ -340,13 +351,15 @@ export async function discoverTheirStack(
     }
   } catch (error) {
     const upstream = statusOfError(error);
-    const text = upstream === null
+    const text = upstream === null || upstream < 300
       ? (error instanceof Error ? error.message : String(error))
       : theirStackGuidance(upstream);
     status = creditsUsed > 0 || vacancies.length > 0
       ? 'partial'
       : upstream !== null && [401, 403, 429].includes(upstream) ? 'blocked' : 'error';
-    message = text;
+    // A non-4xx failure (5xx, timeout, transport) may follow a billed response we never saw.
+    const maybeBilled = upstream === null || upstream < 300 || upstream >= 500;
+    message = maybeBilled ? `${text} Credits used may be higher than reported.` : text;
     continuationCursor = null;
   }
   return audit();
