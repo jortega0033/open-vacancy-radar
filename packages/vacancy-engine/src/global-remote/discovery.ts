@@ -15,6 +15,7 @@ import { writeGapTelemetryReport } from './gap-report.js';
 import { runJobtechDiscovery } from './jobtech-discovery.js';
 import { runKeyedDiscovery } from './keyed-discovery.js';
 import { recordDiscoveryGapTelemetry } from './source-gap-telemetry.js';
+import { discoverPhilJobNet } from './phil-jobnet-discovery.js';
 import { discoverTaiwanJobs } from './taiwan-jobs-discovery.js';
 import {
   completeAudit,
@@ -232,6 +233,7 @@ export const SCAN_PROGRESS_SOURCE_IDS = [
   'jobicy',
   'ai_dev_jobs',
   'taiwan_jobs',
+  'phil_jobnet',
   'structured',
   'feeds',
   'jobtech',
@@ -275,12 +277,13 @@ export async function runGlobalRemoteDiscovery(
   onProgress?: ScanProgressCallback,
   signal?: AbortSignal,
 ): Promise<DiscoveryRun> {
-  const [himalayas, jobicy, aiDevJobs, taiwanJobs, structured, feeds, jobtech, additional, keyed, atsRosterScan] =
+  const [himalayas, jobicy, aiDevJobs, taiwanJobs, philJobNet, structured, feeds, jobtech, additional, keyed, atsRosterScan] =
     await Promise.all([
       withProgress('himalayas', discoverHimalayas(http, config), onProgress),
       withProgress('jobicy', discoverJobicy(http, config), onProgress),
       withProgress('ai_dev_jobs', discoverAiDevJobs(http, config), onProgress),
       withProgress('taiwan_jobs', discoverTaiwanJobs(http, config), onProgress),
+      withProgress('phil_jobnet', discoverPhilJobNet(http, config), onProgress),
       withProgress('structured', runStructuredDiscovery(http, config), onProgress),
       withProgress('feeds', runFeedDiscovery(http, config), onProgress),
       withProgress('jobtech', runJobtechDiscovery(http, config), onProgress),
@@ -293,6 +296,7 @@ export async function runGlobalRemoteDiscovery(
     ...jobicy.sources,
     ...aiDevJobs.sources,
     ...taiwanJobs.sources,
+    ...philJobNet.sources,
     ...structured.sources,
     ...feeds.sources,
     ...jobtech.sources,
@@ -305,6 +309,7 @@ export async function runGlobalRemoteDiscovery(
     ...jobicy.vacancies,
     ...aiDevJobs.vacancies,
     ...taiwanJobs.vacancies,
+    ...philJobNet.vacancies,
     ...structured.vacancies,
     ...feeds.vacancies,
     ...jobtech.vacancies,

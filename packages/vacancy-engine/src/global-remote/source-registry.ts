@@ -65,6 +65,19 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
         adapter: 'ready',
         reason: 'Adapter is implemented but disabled until project-specific API registration/terms approval is explicitly confirmed.',
       });
+  const philJobNet = config.discovery.philJobNetEnabled === true
+    ? active('phil_jobnet', 'PhilJobNet (Philippines DOLE/BLE vacancy portal)', 'https://philjobnet.gov.ph/job-vacancies/', 'structured', 'phil_jobnet')
+    : entry({
+        id: 'phil_jobnet',
+        name: 'PhilJobNet (Philippines DOLE/BLE vacancy portal)',
+        url: 'https://philjobnet.gov.ph/job-vacancies/',
+        transport: 'structured',
+        state: 'configuration_required',
+        ingestionMode: 'disabled',
+        provider: 'phil_jobnet',
+        adapter: 'ready',
+        reason: 'Adapter is implemented but disabled until the PhilJobNet terms of service, which the portal publishes only behind login, are reviewed and philJobNetEnabled is explicitly set. See docs/job-source-evidence.md.',
+      });
   const adzuna = config.discovery.adzunaAppId.trim().length > 0 && config.discovery.adzunaAppKey.trim().length > 0
     ? active('adzuna', 'Adzuna Search API', 'https://developer.adzuna.com/docs/search', 'api', 'adzuna')
     : gated('adzuna', 'Adzuna Search API', 'https://developer.adzuna.com/docs/search', 'adzuna', 'ADZUNA_APP_ID and ADZUNA_APP_KEY');
@@ -108,6 +121,7 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     active('remoote', 'Remoote Agent Jobs API', 'https://remoote.app/agents', 'api', 'remoote'),
     active('ai_dev_jobs', 'AI Dev Jobs Public REST API', 'https://aidevboard.com/docs', 'api', 'ai_dev_jobs'),
     active('taiwan_jobs', 'Taiwan Jobs (台灣就業通) Official WebService', 'https://data.gov.tw/en/datasets/44062', 'structured', 'taiwan_jobs'),
+    philJobNet,
     active('mpsv_cz', 'Czech MPSV Open Vacancy Data', 'https://data.mpsv.cz/web/data/volna-mista-za-celou-cr', 'structured', 'mpsv_cz', 'full_ingestion'),
     active('jobspresso', 'Jobspresso Job Feed', 'https://jobspresso.co/?feed=job_feed', 'rss', 'jobspresso'),
     active('remote_frontend_jobs', 'Remote Frontend Jobs RSS', 'https://www.remotefrontendjobs.com/feed.xml', 'rss', 'remote_frontend_jobs'),

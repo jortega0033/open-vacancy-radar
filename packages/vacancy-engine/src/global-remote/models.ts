@@ -97,6 +97,15 @@ export const globalRemoteConfigSchema = z.object({
      * that would favor some counties/cities over others.
      */
     taiwanJobsMaxCities: z.number().int().min(1).max(22).default(22),
+    /**
+     * PhilJobNet stays off until a human has confirmed its terms of service, which the portal only
+     * publishes behind login (see docs/job-source-evidence.md). Optional so the default is "off".
+     */
+    philJobNetEnabled: z.boolean().optional(),
+    /** Bounded result-page budget for PhilJobNet (10 listings per page). */
+    philJobNetMaxPages: z.number().int().min(1).max(5).optional(),
+    /** Bounded detail-page fan-out per PhilJobNet run. */
+    philJobNetMaxDetails: z.number().int().min(1).max(50).optional(),
     museEnabled: z.boolean().default(false),
     museMaxPages: z.number().int().min(1).max(10).default(6),
     adzunaAppId: z.string().default(''),
@@ -213,6 +222,7 @@ export type DiscoveryProvider =
   | 'remoote'
   | 'ai_dev_jobs'
   | 'taiwan_jobs'
+  | 'phil_jobnet'
   | 'mpsv_cz'
   | 'the_muse'
   | 'jobspresso'

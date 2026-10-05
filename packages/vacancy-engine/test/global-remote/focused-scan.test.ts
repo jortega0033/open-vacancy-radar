@@ -56,7 +56,8 @@ describe('focused scan capability contract', () => {
   it('declares a reviewed entry for every adapter and never guesses employment parameters', () => {
     // +1 since issue #398's `ai_web_search` capability entry.
     // +1 each since the `mpsv_cz` and issue #49 `theirstack` entries.
-    expect(Object.keys(SOURCE_FILTER_CAPABILITIES)).toHaveLength(41);
+    // +1 since the `phil_jobnet` entry.
+    expect(Object.keys(SOURCE_FILTER_CAPABILITIES)).toHaveLength(42);
     expect(SOURCE_FILTER_CAPABILITIES.jobicy.employment).toBeUndefined();
     expect(SOURCE_FILTER_CAPABILITIES.jobspresso.role).toBeUndefined();
     expect(SOURCE_FILTER_CAPABILITIES.remote_frontend_jobs.role).toBeUndefined();

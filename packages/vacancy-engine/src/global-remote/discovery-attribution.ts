@@ -85,6 +85,20 @@ export function attributeNetworkRequests(
       return attributionContext.run({ counters }, () =>
         (options === undefined ? http.postJson(url, body) : http.postJson(url, body, options)));
     },
+    ...(http.postForm === undefined
+      ? {}
+      : {
+          postForm(
+            url: string,
+            fields: Readonly<Record<string, string>>,
+            options?: AtsHttpRequestOptions,
+          ): Promise<AtsHttpResponse> {
+            const post = http.postForm;
+            if (post === undefined) return Promise.reject(new Error('postForm is unavailable'));
+            return attributionContext.run({ counters }, () =>
+              (options === undefined ? post.call(http, url, fields) : post.call(http, url, fields, options)));
+          },
+        }),
   };
 }
 

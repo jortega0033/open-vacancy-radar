@@ -106,6 +106,32 @@ describe('createAtsHttpClient', () => {
     expect(get).toHaveBeenCalledWith('https://careers.example.com/jobs', options);
   });
 
+  it('forwards read-only form posts through the safe HTTP client', async () => {
+    const safeResponse = new SafeHttpResponse({
+      requestedUrl: 'https://portal.example.gov/jobs',
+      url: 'https://portal.example.gov/jobs',
+      status: 200,
+      headers: {},
+      body: new TextEncoder().encode('<html></html>'),
+      fromCache: false,
+      revalidated: false,
+    });
+    const get = vi.fn(() => Promise.resolve(safeResponse));
+    const postJson = vi.fn(() => Promise.resolve(safeResponse));
+    const postForm = vi.fn(() => Promise.resolve(safeResponse));
+    const client = createAtsHttpClient({ get, postJson, postForm });
+    const fields = { __EVENTTARGET: 'grid' };
+    const options = { allowedOrigins: ['https://portal.example.gov'] };
+
+    await expect(client.postForm?.(safeResponse.url, fields, options)).resolves.toMatchObject({
+      status: 200,
+      body: '<html></html>',
+    });
+    expect(postForm).toHaveBeenCalledWith(safeResponse.url, fields, options);
+    expect(postJson).not.toHaveBeenCalled();
+    expect(createAtsHttpClient({ get, postJson }).postForm).toBeUndefined();
+  });
+
   it('forwards read-only JSON queries through the safe HTTP client', async () => {
     const safeResponse = new SafeHttpResponse({
       requestedUrl: 'https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/External/jobs',
