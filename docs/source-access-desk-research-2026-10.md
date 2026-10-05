@@ -1,4 +1,4 @@
-# Source access desk research (spikes #50, #51, #52, #53)
+# Source access desk research (spikes #45, #50, #51, #52, #53)
 
 Desk research done on 2026-10-05 from public pages only. Nobody was contacted, no credentials were used and no API calls were made. Every spike below needs a written answer from the data provider before it can be decided, so none of them is closed by this note.
 
@@ -12,6 +12,7 @@ Anything marked UNVERIFIED could not be confirmed from a page that was actually 
 | #51 | VDAB (Belgium) | `partner_required` | `disabled` | Hold. Written VDAB answers needed, and VDAB says new applications are paused. |
 | #52 | Jobnet (Denmark) | `partner_required` | `disabled` | Hold. Technical spec was unreachable. Written STAR answers needed. |
 | #53 | France Travail | `configuration_required` | `disabled` | Hold. Nothing about terms could be verified. |
+| #45 | Poland ePraca | `partner_required` | `disabled` | Hold. Terms read; a fixed registered IP per applicant does not fit a distributed desktop app. |
 
 No implementation ticket should be opened for any of these until the provider confirms in writing that a locally installed, open-source desktop app is allowed.
 
@@ -98,6 +99,34 @@ Open questions for France Travail:
 4. May vacancy data be cached locally, and may descriptions be shown or only linked?
 5. Required attribution and canonical link rules.
 6. A current OpenAPI definition and the versioning policy.
+
+## #45 Poland ePraca (added 2026-10-06)
+
+Sources: the official conditions document "Warunki udostepniania przez Ministerstwo Rodziny, Pracy i Polityki Spolecznej informacji o ofertach pracy upowszechnianych w systemie ePraca" (PDF linked from `oferty.praca.gov.pl/portal/dla-integratorow`), read in full. The integrator landing page itself returned no usable text, and the technical instruction PDF was only partly readable, so endpoint and schema details are UNVERIFIED here.
+
+Confirmed from the conditions:
+- Access to the WebService is free. The applicant and the Ministry each bear their own costs.
+- To apply, send the conditions, filled in under section 5 and signed with a trusted-profile or qualified electronic signature by the applicant's representative, to `apicbop@praca.gov.pl`. After the formal checks the Ministry grants WebService permissions.
+- The form asks for the applicant's name, tax and registry numbers (or PESEL for a natural person), address, a named representative, phone and email, the name and web address of the system that will process the offers, and the IP address of the computer equipment that will call the WebService.
+- The applicant must not modify the content of downloaded offers, must not publish stale offers, must not use the data unlawfully or against the Ministry's legitimate interests, and must mark every downloaded offer with the ePraca logo supplied by the Ministry.
+- Downloads are possible only between 17:00 and 07:00 each day, from a snapshot taken at 16:00. Layouts are national, per voivodeship, or per labour office. Offers can be filtered by language (Polish, English, Ukrainian, Belarusian, Russian).
+- At most 20 queries per availability window.
+- The Ministry may monitor the volume and scope of downloads and how the data is used, may change the conditions or the service, and may refuse or stop access for a breach or for security reasons.
+
+Why this does not fit OVR as it stands:
+- Access is bound to a named applicant and a registered IP address. A locally installed app has no stable egress IP, and every user would need to apply separately.
+- A 20 query budget inside a 14 hour night window cannot serve many independent installations from one registration.
+- "Do not modify content" may conflict with truncation, highlighting or normalization in the UI. This needs an explicit answer.
+
+Still open (written answer from the Ministry needed):
+1. Is an open-source, locally installed desktop app an eligible applicant, and is each user a separate applicant?
+2. Can the registered IP requirement be met without a hosted relay, and would the Ministry accept a relay run by the project?
+3. Does the no-modification rule allow truncation, highlighting and whitespace normalization?
+4. Where and how often must the ePraca logo appear?
+5. Local caching and retention of downloaded offers between windows.
+6. Is the 20 query limit per applicant or per IP, and does a failed request count?
+
+Proposed registry state: `partner_required`, ingestion `disabled`, provider id `epraca_pl`. Hold until the Ministry answers in writing. The contact is `apicbop@praca.gov.pl` (from the conditions); the data protection officer address is not an API contact.
 
 ## Next step
 
