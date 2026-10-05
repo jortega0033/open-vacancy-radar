@@ -10,6 +10,12 @@ describe('classifyProviderError (#461)', () => {
     expect(info.resetLabel).toBe('12:10pm (Europe/Amsterdam)');
   });
 
+  it('drops a sentence-ending dot after the time so "until X." never doubles it', () => {
+    const info = classifyProviderError("You've hit your session limit · resets 11:59pm.", now);
+    expect(info.resetLabel).toBe('11:59pm');
+    expect(info.resetAt).toBe(new Date(2026, 9, 3, 23, 59).getTime());
+  });
+
   it('places a reset time only when the zone is this machine\'s or unnamed', () => {
     const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const same = classifyProviderError(`usage limit reached, resets 12:10pm (${local})`, now);
@@ -47,6 +53,7 @@ describe('classifyProviderError (#461)', () => {
     expect(redactHomePaths('failed at /Users/jamie/projects/x and C:\\Users\\Jamie\\AppData\\y and /home/pat/z')).toBe(
       'failed at ~/projects/x and ~\\AppData\\y and ~/z',
     );
+    expect(redactHomePaths('/Users/Jane Doe/x and C:\\Users\\Jane Doe\\y and /home/jane doe/z')).toBe('~/x and ~\\y and ~/z');
     expect(classifyProviderError('session limit at /home/pat/cv.pdf').details).toBe('session limit at ~/cv.pdf');
   });
 });
