@@ -1,0 +1,25 @@
+{
+  "polozky": [
+    {
+      "id": "UrovenZnalostiJazyka/akt",
+      "kod": "akt",
+      "nazev": {
+        "cs": "Aktivní"
+      }
+    },
+    {
+      "id": "UrovenZnalostiJazyka/neurceno",
+      "kod": "neurceno",
+      "nazev": {
+        "cs": "Neurčeno"
+      }
+    },
+    {
+      "id": "UrovenZnalostiJazyka/pas",
+      "kod": "pas",
+      "nazev": {
+        "cs": "Pasivní"
+      }
+    }
+  ]
+}

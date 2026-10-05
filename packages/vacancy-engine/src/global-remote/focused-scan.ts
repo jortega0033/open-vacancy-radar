@@ -96,6 +96,7 @@ export const SOURCE_FILTER_CAPABILITIES: Readonly<
   }),
   ai_dev_jobs: role('q'),
   taiwan_jobs: NO_UPSTREAM_FILTERS,
+  mpsv_cz: NO_UPSTREAM_FILTERS,
   the_muse: NO_UPSTREAM_FILTERS,
   jobspresso: NO_UPSTREAM_FILTERS,
   remote_frontend_jobs: NO_UPSTREAM_FILTERS,

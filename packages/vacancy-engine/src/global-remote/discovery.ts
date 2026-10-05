@@ -239,6 +239,7 @@ export const SCAN_PROGRESS_SOURCE_IDS = [
   'keyed',
   'ats_roster',
   'workable_global',
+  'mpsv_cz',
 ] as const;
 
 function withProgress(

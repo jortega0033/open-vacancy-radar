@@ -205,6 +205,10 @@ export function isGenericListingUrl(rawUrl: string): boolean {
   // only its `/j/{code}` job-detail shape counts as specific. Called out explicitly because this is
   // the one provider issue #278 names by name for preserved canonical-URL behavior.
   if (url.hostname.toLowerCase() === 'apply.workable.com' && !/^\/j\//u.test(url.pathname)) return true;
+  // Dataset pages of the Czech MPSV open-data portal (the `mpsv_cz` source's fallback link when a
+  // record has no employer URL) describe a whole dataset, never one posting, and every record of
+  // that source shares them, so they must not anchor a canonical-URL merge.
+  if (url.hostname.toLowerCase() === 'data.mpsv.cz') return true;
   const parts = pathSegments(url);
   const last = parts.at(-1)?.toLowerCase() ?? '';
   return parts.length === 0 || GENERIC_LISTING_LAST_SEGMENTS.has(last);
