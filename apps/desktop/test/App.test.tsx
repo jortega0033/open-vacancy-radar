@@ -144,6 +144,12 @@ afterEach(() => {
  * `test/components/runtime/RuntimePage.test.tsx`; this file no longer needs to drive it to test
  * App.tsx's own behavior.
  */
+/** Secondary filters live behind the Filters button; open it once (a second click would close it). */
+function openFilters() {
+  const button = screen.getByRole('button', { name: /^Filters/ });
+  if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button);
+}
+
 describe('App', () => {
   it('gives only Search an edge-to-edge, independently scrolling workspace', async () => {
     installVacancyRadarBridge({
@@ -394,6 +400,7 @@ describe('App', () => {
       fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
         target: { value: 'Frontend' },
       });
+      openFilters();
       fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
         target: { value: 'remotive' },
       });
@@ -419,6 +426,7 @@ describe('App', () => {
 
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
       expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Frontend');
+      openFilters();
       expect(screen.getByRole('combobox', { name: 'Job source' })).toHaveValue('remotive');
       expect(screen.getByRole('combobox', { name: 'Employment type' })).toHaveValue('full_time');
       expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();

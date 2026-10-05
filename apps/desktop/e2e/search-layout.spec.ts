@@ -143,6 +143,50 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       expect(rowFit.badgeClipped).toBe(false);
       expect(rowFit.docScrollTop).toBe(0);
 
+      // #578: the primary controls (role, country, Filters, AI toggle, Search) are one row at 1000px
+      // and at least 4 rows still fit at the 760x600 minimum, where the top area may wrap.
+      const topRowTops = () =>
+        window.evaluate(() => {
+          const names = ['searchbox', 'Country', 'Filters', 'Also search the web with AI', 'Search'];
+          const tops = names.map((name) => {
+            const el =
+              name === 'searchbox'
+                ? document.querySelector<HTMLElement>('[role="searchbox"]')
+                : [...document.querySelectorAll<HTMLElement>('main button, main select, main input')].find(
+                    (candidate) =>
+                      candidate.getAttribute('aria-label') === name || candidate.textContent?.trim() === name,
+                  );
+            if (!el) throw new Error(`Missing control: ${name}`);
+            const rect = el.getBoundingClientRect();
+            return Math.round(rect.top + rect.height / 2);
+          });
+          return tops;
+        });
+      const oneRow = await topRowTops();
+      expect(Math.max(...oneRow) - Math.min(...oneRow)).toBeLessThanOrEqual(12);
+
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setBounds({ width: 760, height: 600 });
+      });
+      await window.waitForTimeout(200);
+      const backToList = window.getByRole('button', { name: 'Back to results' });
+      if (await backToList.isVisible()) await backToList.click();
+      const minimumFit = await window.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('[aria-label="Vacancy results"]');
+        if (!scroller) throw new Error('No results list');
+        const box = scroller.getBoundingClientRect();
+        const rows = [...scroller.querySelectorAll<HTMLElement>('[data-result-key]')];
+        return {
+          fully: rows.filter((row) => {
+            const rect = row.getBoundingClientRect();
+            return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1;
+          }).length,
+          horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+      expect(minimumFit.fully).toBeGreaterThanOrEqual(4);
+      expect(minimumFit.horizontalOverflow).toBeLessThanOrEqual(0);
+
       let sidebarCollapsed = false;
       for (const theme of ['openvacancyradar', 'openvacancyradar-dark']) {
         await window.evaluate((nextTheme) => {

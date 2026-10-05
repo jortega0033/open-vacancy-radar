@@ -20,6 +20,12 @@ import {
   installWorkspaceBridge,
 } from '../../workspace-bridge.js';
 
+/** Secondary filters live behind the Filters button; open it once (a second click would close it). */
+function openFilters() {
+  const button = screen.getByRole('button', { name: /^Filters/ });
+  if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button);
+}
+
 function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
   return {
     key: 'ww-1',
@@ -181,6 +187,7 @@ describe('SearchPage', () => {
 
     render(<SearchSessionHarness initialSession={initialSession} />);
 
+    openFilters();
     expect(screen.getByLabelText('Minimum annual salary')).toHaveValue('60 000');
     expect(screen.getByLabelText('Include jobs with no salary')).not.toBeChecked();
 
@@ -878,6 +885,7 @@ describe('SearchPage', () => {
 
     enterSearchQuery('frontend');
     fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Employment type' }), { target: { value: 'full_time' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
 
@@ -1252,6 +1260,7 @@ describe('SearchPage', () => {
     Object.defineProperty(resultsScroller, 'scrollTop', { configurable: true, value: 84, writable: true });
     fireEvent.scroll(resultsScroller);
 
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
       target: { value: 'dice' },
     });
@@ -1292,6 +1301,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
       target: { value: 'remotive' },
     });
@@ -1749,6 +1759,7 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
       enterSearchQuery('frontend engineer');
+      openFilters();
       fireEvent.change(screen.getByLabelText('Minimum annual salary'), { target: { value: '100000' } });
       fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
       await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
@@ -2068,6 +2079,7 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
     await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
+    openFilters();
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     resolveScan({
       ...makeWorldwideReport([makeWorldwideVacancy({ title: 'Backend Role' })]),
