@@ -6,7 +6,7 @@ settings:
 
 overrides:
   vite: ^8.2.2
-  '@types/node': ^22.10.5
+  '@types/node': ^22.20.5
   tar: ^7.5.18
   esbuild: ^0.25.0
   electron-builder-squirrel-windows: ^26.15.3
@@ -24,8 +24,8 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.10.0(jiti@2.7.0))
       '@types/node':
-        specifier: ^22.10.5
-        version: 22.20.1
+        specifier: ^22.20.5
+        version: 22.20.5
       eslint:
         specifier: ^10.10.0
         version: 10.10.0(jiti@2.7.0)
@@ -33,8 +33,8 @@ importers:
         specifier: ^6.10.2
         version: 6.10.2(eslint@10.10.0(jiti@2.7.0))
       globals:
-        specifier: ^15.14.0
-        version: 15.15.0
+        specifier: ^17.13.0
+        version: 17.13.0
       prettier:
         specifier: ^3.4.2
         version: 3.9.6
@@ -46,7 +46,7 @@ importers:
         version: 8.70.0(eslint@10.10.0(jiti@2.7.0))(typescript@5.9.3)
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   apps/daemon:
     dependencies:
@@ -73,8 +73,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/client
       '@types/node':
-        specifier: ^22.10.5
-        version: 22.20.1
+        specifier: ^22.20.5
+        version: 22.20.5
       esbuild:
         specifier: ^0.25.0
         version: 0.25.12
@@ -86,7 +86,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   apps/desktop:
     dependencies:
@@ -135,10 +135,10 @@ importers:
         version: 1.62.1
       '@tailwindcss/vite':
         specifier: ^4.3.3
-        version: 4.3.3(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 4.3.3(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
       '@testing-library/jest-dom':
         specifier: ^7.0.1
-        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)))
+        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)))
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -153,7 +153,7 @@ importers:
         version: 18.3.7(@types/react@18.3.31)
       '@vitejs/plugin-react':
         specifier: ^6.1.1
-        version: 6.1.1(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 6.1.1(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
       daisyui:
         specifier: ^5.7.22
         version: 5.7.22
@@ -195,13 +195,13 @@ importers:
         version: 1.8.1
       vite:
         specifier: ^8.2.2
-        version: 8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
+        version: 8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
       vite-plugin-electron:
         specifier: ^0.29.0
         version: 0.29.1
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   packages/agent-runtime:
     dependencies:
@@ -217,7 +217,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   packages/application-executor:
     dependencies:
@@ -230,7 +230,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   packages/client:
     dependencies:
@@ -243,7 +243,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   packages/shared:
     dependencies:
@@ -256,7 +256,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   packages/vacancy-engine:
     dependencies:
@@ -289,8 +289,8 @@ importers:
         specifier: ^7.6.12
         version: 7.6.13
       '@types/node':
-        specifier: ^22.10.5
-        version: 22.20.1
+        specifier: ^22.20.5
+        version: 22.20.5
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
@@ -299,7 +299,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+        version: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
 packages:
 
@@ -1098,8 +1098,8 @@ packages:
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
 
-  '@types/node@22.20.1':
-    resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
+  '@types/node@22.20.5':
+    resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
 
   '@types/pako@2.0.4':
     resolution: {integrity: sha512-VWDCbrLeVXJM9fihYodcLiIv0ku+AlOa/TQ1SvYOaBuyrSKgEcro95LJyIsJ4vSo6BXIxOKxiJAat04CmST9Fw==}
@@ -2208,8 +2208,8 @@ packages:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}
     engines: {node: '>=10.0'}
 
-  globals@15.15.0:
-    resolution: {integrity: sha512-7ACyT3wmyp3I61S4fG682L0VA2RGD9otkqGJIwNUMF1SWUombIIk+af1unuDYgMm082aHYwD+mzJvv9Iu8dsgg==}
+  globals@17.13.0:
+    resolution: {integrity: sha512-RwMTC61u7hrG3ZJMkZQOK4JLJrKS8QtoTii63EmWvFXHqycY9FObBJQCbsLxSO8kjKhWE5kV1GC+Vb1g3RI0Zg==}
     engines: {node: '>=18'}
 
   globalthis@1.0.4:
@@ -3706,7 +3706,7 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
-      '@types/node': ^22.10.5
+      '@types/node': ^22.20.5
       '@vitejs/devtools': ^0.4.0 || ^0.5.0
       esbuild: ^0.25.0
       jiti: '>=1.21.0'
@@ -3751,7 +3751,7 @@ packages:
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
-      '@types/node': ^22.10.5
+      '@types/node': ^22.20.5
       '@vitest/browser-playwright': 5.0.0
       '@vitest/browser-preview': 5.0.0
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
@@ -4523,12 +4523,12 @@ snapshots:
       '@tailwindcss/oxide-win32-arm64-msvc': 4.3.3
       '@tailwindcss/oxide-win32-x64-msvc': 4.3.3
 
-  '@tailwindcss/vite@4.3.3(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))':
+  '@tailwindcss/vite@4.3.3(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))':
     dependencies:
       '@tailwindcss/node': 4.3.3
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
-      vite: 8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
+      vite: 8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
 
   '@testing-library/dom@10.4.1':
     dependencies:
@@ -4541,7 +4541,7 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)))':
+  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)))':
     dependencies:
       '@adobe/css-tools': 4.5.0
       '@testing-library/dom': 10.4.1
@@ -4551,7 +4551,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+      vitest: 5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
 
   '@testing-library/react@16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
@@ -4567,13 +4567,13 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
 
   '@types/cacheable-request@6.0.3':
     dependencies:
       '@types/http-cache-semantics': 4.2.0
       '@types/keyv': 3.1.4
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
       '@types/responselike': 1.0.3
 
   '@types/chai@5.2.3':
@@ -4593,7 +4593,7 @@ snapshots:
 
   '@types/fs-extra@9.0.13':
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
 
   '@types/http-cache-semantics@4.2.0': {}
 
@@ -4601,11 +4601,11 @@ snapshots:
 
   '@types/keyv@3.1.4':
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
 
   '@types/ms@2.1.0': {}
 
-  '@types/node@22.20.1':
+  '@types/node@22.20.5':
     dependencies:
       undici-types: 6.21.0
 
@@ -4627,7 +4627,7 @@ snapshots:
 
   '@types/responselike@1.0.3':
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
 
   '@types/trusted-types@2.0.7':
     optional: true
@@ -4723,19 +4723,19 @@ snapshots:
       '@typescript-eslint/types': 8.70.0
       eslint-visitor-keys: 5.0.1
 
-  '@vitejs/plugin-react@6.1.1(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))':
+  '@vitejs/plugin-react@6.1.1(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
-      vite: 8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
+      vite: 8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
 
-  '@vitest/mocker@5.0.0(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))':
+  '@vitest/mocker@5.0.0(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.0.0
       estree-walker: 3.0.3
       magic-string: 1.2.3
     optionalDependencies:
-      vite: 8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
+      vite: 8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
 
   '@vitest/spy@5.0.0': {}
 
@@ -5342,7 +5342,7 @@ snapshots:
 
   docx@9.7.1:
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
       hash.js: 1.1.7
       jszip: 3.10.1
       nanoid: 5.1.16
@@ -5460,7 +5460,7 @@ snapshots:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
     transitivePeerDependencies:
       - supports-color
 
@@ -5997,7 +5997,7 @@ snapshots:
       serialize-error: 7.0.1
     optional: true
 
-  globals@15.15.0: {}
+  globals@17.13.0: {}
 
   globalthis@1.0.4:
     dependencies:
@@ -7517,7 +7517,7 @@ snapshots:
 
   vite-plugin-electron@0.29.1: {}
 
-  vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12):
+  vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -7525,16 +7525,16 @@ snapshots:
       rolldown: 1.2.7
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
       esbuild: 0.25.12
       fsevents: 2.3.3
       jiti: 2.7.0
       tsx: 4.23.12
 
-  vitest@5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)):
+  vitest@5.0.0(@types/node@22.20.5)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.0(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
+      '@vitest/mocker': 5.0.0(vite@8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -7545,10 +7545,10 @@ snapshots:
       tinybench: 6.1.4
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
-      vite: 8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
+      vite: 8.2.2(@types/node@22.20.5)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 22.20.1
+      '@types/node': 22.20.5
       jsdom: 25.0.1
     transitivePeerDependencies:
       - msw
