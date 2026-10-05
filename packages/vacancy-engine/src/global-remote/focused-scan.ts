@@ -96,6 +96,7 @@ export const SOURCE_FILTER_CAPABILITIES: Readonly<
   }),
   ai_dev_jobs: role('q'),
   taiwan_jobs: NO_UPSTREAM_FILTERS,
+  phil_jobnet: role('searchterm', 'filtered_pages', 'The portal matches the term itself; local matching remains authoritative.'),
   mpsv_cz: NO_UPSTREAM_FILTERS,
   the_muse: NO_UPSTREAM_FILTERS,
   jobspresso: NO_UPSTREAM_FILTERS,

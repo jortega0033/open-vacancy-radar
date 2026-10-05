@@ -321,6 +321,23 @@ describe('acceptance: fixture coverage for success, retries-exhausted, Retry-Aft
 });
 
 describe('discovery-attribution module', () => {
+  it('attributeNetworkRequests forwards postForm only when the client has one', async () => {
+    const response = { status: 200, finalUrl: 'https://a.example/', headers: {}, body: '' };
+    const postForm = vi.fn(() => Promise.resolve(response));
+    const base: AtsHttpClient = {
+      get: () => Promise.resolve(response),
+      postJson: () => Promise.resolve(response),
+      postForm,
+    };
+    const options = { allowedOrigins: ['https://a.example'] };
+    await attributeNetworkRequests(base).postForm?.('https://a.example/', { a: 'b' }, options);
+    await attributeNetworkRequests(base).postForm?.('https://a.example/', { a: 'b' });
+    expect(postForm).toHaveBeenNthCalledWith(1, 'https://a.example/', { a: 'b' }, options);
+    expect(postForm).toHaveBeenNthCalledWith(2, 'https://a.example/', { a: 'b' });
+    const { postForm: _omit, ...withoutForm } = base;
+    expect(attributeNetworkRequests(withoutForm).postForm).toBeUndefined();
+  });
+
   it('recordAttributedNetworkAttempt is a no-op outside any attributed context', () => {
     expect(() => recordAttributedNetworkAttempt(0)).not.toThrow();
   });

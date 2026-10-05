@@ -31,6 +31,16 @@ export type AtsHttpClient = {
     body: unknown,
     options?: AtsHttpRequestOptions,
   ): Promise<AtsHttpResponse>;
+  /**
+   * Read-only form-encoded query for public listings paginated by ASP.NET Web Forms postbacks.
+   * Optional so existing seams keep working; an adapter that needs it must report a missing
+   * implementation as a source failure.
+   */
+  postForm?(
+    url: string,
+    fields: Readonly<Record<string, string>>,
+    options?: AtsHttpRequestOptions,
+  ): Promise<AtsHttpResponse>;
 };
 
 export class AtsResponseError extends Error {
