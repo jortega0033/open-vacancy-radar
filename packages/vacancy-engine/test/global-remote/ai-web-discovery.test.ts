@@ -317,6 +317,35 @@ describe('isBlockedDiscoveryDomain', () => {
     expect(isBlockedDiscoveryDomain('https://linkedin.com.evil.com/jobs/view/12345', registry)).toBe(false);
   });
 
+  it.each([
+    'https://www.ycombinator.com/companies/acme/jobs/abc123-frontend-engineer',
+    'https://ycombinator.com/companies/acme',
+    'https://www.workatastartup.com/jobs/12345',
+    'https://www.workatastartup.com/companies/acme',
+    'https://workatastartup.com/jobs/12345',
+    'https://api.workatastartup.com/jobs/12345',
+  ])('blocks YC / Work at a Startup URL %s (issue #619)', (url) => {
+    expect(isBlockedDiscoveryDomain(url, registry)).toBe(true);
+  });
+
+  it.each([
+    'https://ycombinator.com.evil.example/companies/acme/jobs/1',
+    'https://workatastartup.com.evil.example/jobs/1',
+    'https://notycombinator.com/jobs/1',
+    'https://boards.greenhouse.io/acme/jobs/12345',
+    'https://jobs.ashbyhq.com/acme/abc-123',
+  ])('does not block lookalike or external employer URL %s', (url) => {
+    expect(isBlockedDiscoveryDomain(url, registry)).toBe(false);
+  });
+
+  it('registers both YC surfaces as prohibited with no provider or adapter', () => {
+    for (const id of ['y_combinator_jobs', 'work_at_a_startup']) {
+      expect(registry.find((entry) => entry.id === id)).toMatchObject({
+        state: 'prohibited', transport: 'none', provider: null, adapter: 'none', ingestionMode: 'disabled',
+      });
+    }
+  });
+
   it('fails closed (returns true) for a malformed URL string', () => {
     expect(isBlockedDiscoveryDomain('not-a-url-at-all', registry)).toBe(true);
   });
@@ -339,7 +368,7 @@ describe('prohibitedOrBlockedSourceRegistryEntries', () => {
     expect(entries.every((entry) => entry.state === 'prohibited' || entry.state === 'blocked')).toBe(true);
     const ids = entries.map((entry) => entry.id).sort();
     expect(ids).toEqual(
-      ['eures', 'glassdoor_direct', 'google_jobs', 'indeed', 'linkedin', 'ziprecruiter'].sort(),
+      ['eures', 'glassdoor_direct', 'google_jobs', 'indeed', 'linkedin', 'work_at_a_startup', 'y_combinator_jobs', 'ziprecruiter'].sort(),
     );
   });
 
