@@ -81,10 +81,15 @@ source tree:
   `POST /sessions/cancel-all` returns 202;
 - the daemon is then stopped, and no `agent-dock-job-host.exe` is left running. Windows cannot
   deliver a graceful signal to it, so this is a termination check, not a clean-shutdown check.
+- `node scripts/packaged-smoke.mjs --installer "dist-packages/Open Vacancy Radar-Setup-<version>.exe"`
+  (a separate CI step) installs the real NSIS installer silently (`/S /D=<temp dir>`), runs all the
+  checks above against the installed app, uninstalls silently (`/S _?=<dir>`) and checks the
+  executable is gone while a sentinel file in `%APPDATA%\Open Vacancy Radar` is kept. It changes the
+  per-user uninstall entry of the real app id, so it refuses to run unless `CI=true` or
+  `OVR_SMOKE_ALLOW_INSTALL=1` (disposable machine only). It has not been run locally.
 
 The pure checks are unit tested in `apps/daemon/test/packaged-smoke.test.mjs` and run under
-`pnpm test`. The process steps only run on Windows. This does not cover the NSIS install and
-uninstall lifecycle, or a real provider session cancelled in the packaged app. See
+`pnpm test`. The process steps only run on Windows. This does not cover a real provider session cancelled in the packaged app. See
 [migration-recovery-runbook.md](migration-recovery-runbook.md) for what is and is not verified.
 
 Claude Agent SDK assets are intentionally not packaged: the SDK transport is deferred (#144) and the

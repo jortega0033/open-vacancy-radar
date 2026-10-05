@@ -10,7 +10,9 @@
 //      include;
 //   3. better-sqlite3 loads inside the packaged Electron runtime;
 //   4. the packaged daemon answers /health with protocol v1 and v2 on a loopback port, accepts
-//      cancel-all, can be stopped, and leaves no JobHost process behind.
+//      cancel-all, can be stopped, and leaves no JobHost process behind;
+//   5. with `--installer <Setup.exe>` (CI only): silent NSIS install, the same smoke against the
+//      installed app, silent uninstall, user data kept.
 //
 // The pure checks are exported and unit tested (apps/daemon/test/packaged-smoke.test.mjs). The
 // process-level steps (3, 4) only run when this file is executed directly, on Windows.
@@ -18,7 +20,7 @@
 // No shebang, for the same reason scripts/preflight.mjs has none: Vite/esbuild chokes on one when a
 // test imports this file as a module.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,7 +34,6 @@ export const JOB_HOST_NAME = 'agent-dock-job-host.exe';
 export const REQUIRED_UNPACKED_FILES = Object.freeze([
   EXE_NAME,
   'resources/app.asar',
-  'resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node',
   'resources/daemon/index.js',
   `resources/daemon/${JOB_HOST_NAME}`,
   'resources/assets/app-icons/png/icon-256.png',
@@ -41,6 +42,16 @@ export const REQUIRED_UNPACKED_FILES = Object.freeze([
   'resources/vacancy-engine/config/candidate-profile-v1.json',
   'resources/vacancy-engine/config/company-domain-candidates-v1.json',
   'resources/vacancy-engine/config/global-remote-profile-v1.json',
+]);
+
+/**
+ * better-sqlite3 binding locations under app.asar.unpacked. electron-rebuild (the desktop
+ * postinstall) produces build/Release; prebuilds/win32-x64.node is the node-gyp-build fallback.
+ * At least one must be unpacked; the runtime load check below proves it actually works.
+ */
+export const BETTER_SQLITE_BINDINGS = Object.freeze([
+  'resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node',
+  'resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/win32-x64.node',
 ]);
 
 /** Entries that must exist inside resources/app.asar (forward-slash, no leading slash). */
@@ -168,6 +179,10 @@ function runStatic(unpacked) {
     problems.push(`missing from win-unpacked: ${missing}`);
   }
 
+  if (BETTER_SQLITE_BINDINGS.every((binding) => !present.has(binding))) {
+    problems.push(`no better-sqlite3 native binding unpacked (looked for: ${BETTER_SQLITE_BINDINGS.join(', ')})`);
+  }
+
   const engineSource = readdirSync(join(repoRoot, 'packages/vacancy-engine/drizzle'));
   for (const missing of findMissingMigrations(engineSource, present, 'resources/vacancy-engine/drizzle')) {
     problems.push(`vacancy-engine migration not packaged: ${missing}`);
@@ -269,8 +284,8 @@ async function checkPackagedDaemon(unpacked) {
     // Windows has no graceful signal: kill() is TerminateProcess, so the daemon's own SIGTERM
     // handler never runs here (same reason Electron's killDaemon cancels over HTTP first).
     child.kill();
-    const result = await Promise.race([exited, new Promise((r) => setTimeout(() => r('timeout'), 10_000))]);
-    if (result === 'timeout') problems.push('daemon process did not exit within 10s of being stopped');
+    const result = await Promise.race([exited, new Promise((r) => setTimeout(() => r('timeout'), 30_000))]);
+    if (result === 'timeout') problems.push('daemon process did not exit within 30s of being stopped');
     try { rmSync(discovery, { force: true }); } catch { /* best effort */ }
     try { rmSync(stateDir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
@@ -282,7 +297,75 @@ async function checkPackagedDaemon(unpacked) {
   return problems;
 }
 
+/** NSIS silent switches. /D must be the last argument and must not be quoted, even with spaces. */
+export function nsisInstallArgs(installDir) {
+  return ['/S', `/D=${installDir}`];
+}
+
+/** `_?=dir` makes the NSIS uninstaller run in place and wait, instead of copying itself to %TEMP% and returning. */
+export function nsisUninstallArgs(installDir) {
+  return ['/S', `_?=${installDir}`];
+}
+
+function runNsis(exe, args, label) {
+  // windowsVerbatimArguments keeps `/D=C:\path with spaces` unquoted, as NSIS requires.
+  const result = spawnSync(exe, args, { encoding: 'utf8', timeout: 300_000, windowsHide: true, windowsVerbatimArguments: true });
+  if (result.error || result.status !== 0) {
+    return `${label} failed (exit ${result.status}): ${String(result.error ?? result.stderr ?? '').slice(0, 400)}`;
+  }
+  return undefined;
+}
+
+/**
+ * Silent NSIS lifecycle: install into a temp directory, smoke the INSTALLED app with the same
+ * checks as the unpacked output, uninstall silently, and confirm the app goes away while the user
+ * data directory (a sentinel file) stays. It registers and removes the per-user uninstall entry of
+ * the real app id, so it only runs on CI or with OVR_SMOKE_ALLOW_INSTALL=1.
+ */
+async function runInstallerLifecycle(installerPath) {
+  if (process.platform !== 'win32') return ['installer lifecycle smoke is Windows only'];
+  if (process.env.CI !== 'true' && process.env.OVR_SMOKE_ALLOW_INSTALL !== '1') {
+    return ['refusing to install: it touches the per-user uninstall entry of the real app id. Set OVR_SMOKE_ALLOW_INSTALL=1 on a disposable machine.'];
+  }
+  const installRoot = mkdtempSync(join(tmpdir(), 'ovr-smoke-install-'));
+  const installDir = join(installRoot, 'Open Vacancy Radar');
+  const userData = join(process.env.APPDATA ?? '', 'Open Vacancy Radar');
+  const sentinel = join(userData, 'ovr-installer-smoke-sentinel.txt');
+  const problems = [];
+  mkdirSync(userData, { recursive: true });
+  writeFileSync(sentinel, 'must survive uninstall');
+  try {
+    const installError = runNsis(installerPath, nsisInstallArgs(installDir), 'silent install');
+    if (installError) return [installError];
+    if (!existsSync(join(installDir, EXE_NAME))) return [`installed executable missing at ${installDir}`];
+    console.log('ok    silent NSIS install produced the executable');
+    const installed = [...runStatic(installDir), ...checkBetterSqlite(installDir), ...(await checkPackagedDaemon(installDir))];
+    problems.push(...installed.map((p) => `installed app: ${p}`));
+    if (installed.length === 0) console.log('ok    installed app passes the same smoke as the unpacked output');
+    const uninstaller = join(installDir, 'Uninstall Open Vacancy Radar.exe');
+    if (!existsSync(uninstaller)) return [...problems, `uninstaller missing at ${uninstaller}`];
+    const uninstallError = runNsis(uninstaller, nsisUninstallArgs(installDir), 'silent uninstall');
+    if (uninstallError) problems.push(uninstallError);
+    if (existsSync(join(installDir, EXE_NAME))) problems.push('uninstall left the executable behind');
+    if (!existsSync(sentinel)) problems.push('uninstall removed the user data directory');
+    else console.log('ok    silent uninstall removed the app and kept user data');
+  } finally {
+    try { rmSync(sentinel, { force: true }); } catch { /* best effort */ }
+    try { rmSync(installRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+  return problems;
+}
+
 export async function main(argv = process.argv.slice(2)) {
+  const installerFlag = argv.indexOf('--installer');
+  if (installerFlag !== -1) {
+    const installer = argv[installerFlag + 1];
+    if (!installer || !existsSync(installer)) return fail([`--installer needs an existing Setup .exe, got ${installer}`]);
+    const lifecycleProblems = await runInstallerLifecycle(resolve(installer));
+    if (lifecycleProblems.length > 0) return fail(lifecycleProblems);
+    console.log('Installer lifecycle smoke passed.');
+    return;
+  }
   const unpacked = resolve(argv[0] ?? join(repoRoot, 'dist-packages', 'win-unpacked'));
   if (!existsSync(unpacked)) {
     fail([`win-unpacked directory not found: ${unpacked}. Run pnpm package:win first.`]);

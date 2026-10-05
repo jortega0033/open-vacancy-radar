@@ -39,7 +39,8 @@ anything it cannot read is quarantined, never deleted (see
 
 **Release gate.** `scripts/packaged-smoke.mjs` fails the `Package Windows installer` job when any
 workspace or vacancy-engine migration file, or the vacancy-engine config, is missing from the
-unpacked package.
+unpacked package. A second step installs the NSIS installer silently, runs the same checks on the
+installed app and uninstalls silently (CI only).
 
 ## Recovery
 

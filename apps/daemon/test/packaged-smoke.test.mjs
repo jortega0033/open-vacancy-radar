@@ -2,12 +2,15 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  BETTER_SQLITE_BINDINGS,
   REQUIRED_ASAR_ENTRIES,
   REQUIRED_UNPACKED_FILES,
   checkBuilderConfig,
   checkHealthBody,
   findMissing,
   findMissingMigrations,
+  nsisInstallArgs,
+  nsisUninstallArgs,
   parseAsarEntries,
   tasklistHasImage,
   toPosix,
@@ -37,6 +40,13 @@ describe('findMissing', () => {
     expect(findMissing(REQUIRED_UNPACKED_FILES.filter((f) => !f.endsWith('job-host.exe')), REQUIRED_UNPACKED_FILES)).toEqual([
       'resources/daemon/agent-dock-job-host.exe',
     ]);
+  });
+});
+
+describe('better-sqlite3 binding locations', () => {
+  it('accepts either the electron-rebuild or the prebuilt binding, both unpacked from the asar', () => {
+    expect(BETTER_SQLITE_BINDINGS).toHaveLength(2);
+    expect(BETTER_SQLITE_BINDINGS.every((p) => p.startsWith('resources/app.asar.unpacked/'))).toBe(true);
   });
 });
 
@@ -114,5 +124,12 @@ describe('tasklistHasImage', () => {
   it('matches the exact image name case-insensitively', () => {
     expect(tasklistHasImage(csv, 'Agent-Dock-Job-Host.exe')).toBe(true);
     expect(tasklistHasImage(csv, 'node.exe')).toBe(false);
+  });
+});
+
+describe('NSIS silent switches', () => {
+  it('keeps /D last and unquoted, and runs the uninstaller in place', () => {
+    expect(nsisInstallArgs('C:\Temp\a b')).toEqual(['/S', '/D=C:\Temp\a b']);
+    expect(nsisUninstallArgs('C:\Temp\a b')).toEqual(['/S', '_?=C:\Temp\a b']);
   });
 });
