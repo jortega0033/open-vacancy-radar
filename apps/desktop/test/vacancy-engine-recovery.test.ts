@@ -135,7 +135,10 @@ describe('rebuildVacancyEngineDatabase (#441)', () => {
 
 describe('against a real damaged SQLite file (#441)', () => {
   it('classifies the engine\'s own open/migrate failure as corrupt and then rebuilds to a working database', async () => {
-    const { createDatabaseClient, migrateDatabase } = await import('@open-vacancy-radar/vacancy-engine');
+    // Import the database module directly. The package barrel pulls in the whole discovery engine
+    // (cheerio, pino, every source adapter), and transforming that graph took 5-17s here while the
+    // actual open, migrate and rebuild work takes about 100ms (#588).
+    const { createDatabaseClient, migrateDatabase } = await import('../../../packages/vacancy-engine/src/db/client.js');
     const { join: joinPath, resolve } = await import('node:path');
     const dir = mkdtempSync(join(tmpdir(), 'ovr-engine-real-'));
     const databasePath = join(dir, 'vacancy-engine.db');

@@ -23,7 +23,11 @@ test.describe('Search', () => {
       window.getByText(/Enter a role and search to find jobs/i),
     ).toBeVisible();
     await expect(window.getByRole('button', { name: 'Search', exact: true }).first()).toBeVisible();
+    // Secondary filters (and the salary note) sit behind the Filters button (#578).
+    await expect(window.getByRole('combobox', { name: 'Job source' })).toHaveCount(0);
+    await window.getByRole('button', { name: /^Filters/ }).click();
     await expect(window.getByText('Salary shown only where advertised')).toBeVisible();
+    await window.keyboard.press('Escape');
 
     // The plain country selector is always offered -- there is no separate pipeline switch any
     // more. The best-effort sponsor-match filter is Netherlands-specific (the engine never
@@ -39,6 +43,7 @@ test.describe('Search', () => {
     await countrySelect.selectOption('Netherlands');
     await expect(countrySelect).toHaveValue('Netherlands');
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
+    await window.getByRole('button', { name: /^Filters/ }).click();
     await expect(window.getByRole('checkbox', { name: /possible IND sponsor match only/i })).toBeVisible();
 
     await countrySelect.selectOption('all');
