@@ -1,0 +1,74 @@
+{
+  "polozky": [
+    {
+      "id": "Smennost/jednoSm",
+      "kod": "jednoSm",
+      "nazev": {
+        "cs": "Jednosměnný provoz"
+      }
+    },
+    {
+      "id": "Smennost/dvouSm",
+      "kod": "dvouSm",
+      "nazev": {
+        "cs": "Dvousměnný provoz"
+      }
+    },
+    {
+      "id": "Smennost/triSm",
+      "kod": "triSm",
+      "nazev": {
+        "cs": "Třísměnný provoz"
+      }
+    },
+    {
+      "id": "Smennost/ctyrSm",
+      "kod": "ctyrSm",
+      "nazev": {
+        "cs": "Čtyřsměnný provoz"
+      }
+    },
+    {
+      "id": "Smennost/deleneSm",
+      "kod": "deleneSm",
+      "nazev": {
+        "cs": "Dělené směny"
+      }
+    },
+    {
+      "id": "Smennost/nepretrzity",
+      "kod": "nepretrzity",
+      "nazev": {
+        "cs": "Nepřetržitý provoz"
+      }
+    },
+    {
+      "id": "Smennost/nocni",
+      "kod": "nocni",
+      "nazev": {
+        "cs": "Noční provoz"
+      }
+    },
+    {
+      "id": "Smennost/pruznaPd",
+      "kod": "pruznaPd",
+      "nazev": {
+        "cs": "Pružná pracovní doba"
+      }
+    },
+    {
+      "id": "Smennost/turnus",
+      "kod": "turnus",
+      "nazev": {
+        "cs": "Turnusové služby"
+      }
+    },
+    {
+      "id": "Smennost/neurceno",
+      "kod": "neurceno",
+      "nazev": {
+        "cs": "Neurčeno"
+      }
+    }
+  ]
+}

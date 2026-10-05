@@ -52,6 +52,7 @@ import {
   WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
   WORKABLE_GLOBAL_TIMEOUT_MS,
 } from '../global-remote/workable-global-discovery.js';
+import { runMpsvCzDiscovery } from '../global-remote/mpsv-cz-discovery.js';
 import { pruneGlobalRemoteReports, readGlobalRemoteReportWithFallback, writeGlobalRemoteReport, type GlobalRemoteReportFiles } from '../global-remote/report.js';
 import { recordDiscoveryRun } from '../global-remote/discovery-runs-repository.js';
 import { createDatabaseBackedHttpClients } from './ats-http-client.js';
@@ -1038,7 +1039,7 @@ export async function runGlobalRemoteScan(
   const candidateLanguages = candidateWorkLanguages(candidateProfile);
   const progressiveRowTracker = trackProgressiveRows(options.onProgress);
   const trackedOnProgress = progressiveRowTracker.onProgress;
-  const [baseDiscovery, official, workableGlobal] = await Promise.all([
+  const [baseDiscovery, official, workableGlobal, mpsvCz] = await Promise.all([
     reuseDiscovery
       ? loadPreviousDiscovery(projectRoot)
       : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, trackedOnProgress, signal),
@@ -1051,16 +1052,27 @@ export async function runGlobalRemoteScan(
           trackedOnProgress?.({ sourceId: 'workable_global', vacancies: result.vacancies });
           return result;
         }),
+    // Streams the official Czech MPSV snapshot independently of every other source; a failure is
+    // reported on its own source row and never rejects, so it cannot affect the other sources.
+    reuseDiscovery
+      ? Promise.resolve(null)
+      : runMpsvCzDiscovery(safeClient, profile).then((result) => {
+          trackedOnProgress?.({ sourceId: 'mpsv_cz', vacancies: result.vacancies });
+          return result;
+        }),
   ]);
   // Discovery is the long part, and everything after it is enrichment of rows nobody asked to keep.
   throwIfScanCancelled(signal);
-  const withWorkableGlobal =
-    workableGlobal === null
-      ? baseDiscovery
-      : {
-          sources: [...baseDiscovery.sources, ...workableGlobal.sources],
-          vacancies: [...baseDiscovery.vacancies, ...workableGlobal.vacancies],
-        };
+  const withWorkableGlobal = [workableGlobal, mpsvCz].reduce<typeof baseDiscovery>(
+    (merged, streamed) =>
+      streamed === null
+        ? merged
+        : {
+            sources: [...merged.sources, ...streamed.sources],
+            vacancies: [...merged.vacancies, ...streamed.vacancies],
+          },
+    baseDiscovery,
+  );
   // Issue #398: AI-web-discovery rows/audit are already normalized and validated by the desktop
   // layer before this function ever sees them (see `GlobalRemoteScanOptions.aiWebDiscoveryVacancies`
   // above) -- spliced in exactly like `workableGlobal` above, so they go through the same
@@ -1220,6 +1232,7 @@ export async function runGlobalRemoteScan(
       'No LinkedIn scraping, browser-agent production crawl, CAPTCHA bypass, proxy rotation, or paid AI service is used.',
       'One blocked or malformed source is logged and does not fail the other sources.',
       'The official Workable all-customer XML is streamed only after normal source scans, parsed incrementally, and cached as a compact hourly snapshot; raw XML is never buffered or persisted.',
+      'The official Czech MPSV vacancy snapshot is stream-parsed record by record from the full dataset only, never buffered whole; contact-person, e-mail and phone fields are never read, stored or logged, and a corrupt, partial, empty or schema-drifted download is reported on that source alone.',
       'Dice results are retrieved through Dice’s AI-powered MCP search and are clearly treated as discovery leads requiring official employer verification.',
       'Remoote results come from one capped anonymous REST search, retain only canonical Remoote links, use a five-minute bounded in-memory cache after sanitization, and are never expanded into a bulk export.',
       'Work-country, mandatory-language, visa-sponsorship and Employer of Record eligibility are recorded per vacancy as yes/no/unknown with the source, scope and freshness of the evidence behind each answer. An absent statement stays unknown and reviewable; it is never read as a yes or a no.',

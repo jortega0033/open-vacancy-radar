@@ -213,6 +213,7 @@ export type DiscoveryProvider =
   | 'remoote'
   | 'ai_dev_jobs'
   | 'taiwan_jobs'
+  | 'mpsv_cz'
   | 'the_muse'
   | 'jobspresso'
   | 'remote_frontend_jobs'

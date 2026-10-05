@@ -108,6 +108,7 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     active('remoote', 'Remoote Agent Jobs API', 'https://remoote.app/agents', 'api', 'remoote'),
     active('ai_dev_jobs', 'AI Dev Jobs Public REST API', 'https://aidevboard.com/docs', 'api', 'ai_dev_jobs'),
     active('taiwan_jobs', 'Taiwan Jobs (台灣就業通) Official WebService', 'https://data.gov.tw/en/datasets/44062', 'structured', 'taiwan_jobs'),
+    active('mpsv_cz', 'Czech MPSV Open Vacancy Data', 'https://data.mpsv.cz/web/data/volna-mista-za-celou-cr', 'structured', 'mpsv_cz', 'full_ingestion'),
     active('jobspresso', 'Jobspresso Job Feed', 'https://jobspresso.co/?feed=job_feed', 'rss', 'jobspresso'),
     active('remote_frontend_jobs', 'Remote Frontend Jobs RSS', 'https://www.remotefrontendjobs.com/feed.xml', 'rss', 'remote_frontend_jobs'),
     active('un_careers', 'United Nations Careers RSS', 'https://careers.un.org/jobfeed?language=en', 'rss', 'un_careers'),
