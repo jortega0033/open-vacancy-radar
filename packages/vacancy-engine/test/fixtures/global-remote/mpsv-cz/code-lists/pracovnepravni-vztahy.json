@@ -1,0 +1,39 @@
+{
+  "polozky": [
+    {
+      "id": "PracovnepravniVztah/dpc",
+      "kod": "dpc",
+      "nazev": {
+        "cs": "Dohoda o pracovní činnosti"
+      }
+    },
+    {
+      "id": "PracovnepravniVztah/dpp",
+      "kod": "dpp",
+      "nazev": {
+        "cs": "Dohoda o provedení práce"
+      }
+    },
+    {
+      "id": "PracovnepravniVztah/plny",
+      "kod": "plny",
+      "nazev": {
+        "cs": "Pracovní poměr - plný úvazek"
+      }
+    },
+    {
+      "id": "PracovnepravniVztah/sluzebni",
+      "kod": "sluzebni",
+      "nazev": {
+        "cs": "Služební poměr"
+      }
+    },
+    {
+      "id": "PracovnepravniVztah/zkraceny",
+      "kod": "zkraceny",
+      "nazev": {
+        "cs": "Pracovní poměr - zkrácený úvazek"
+      }
+    }
+  ]
+}

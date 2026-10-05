@@ -1,0 +1,7 @@
+{
+  "polozky": [
+    { "id": "Obec/554782", "kod": "554782", "nazev": { "cs": "Praha" }, "okres": "Okres/9999" },
+    { "id": "Obec/582786", "kod": "582786", "nazev": { "cs": "Brno" }, "okres": "Okres/3702" },
+    { "id": "Obec/554821", "kod": "554821", "nazev": { "cs": "Ostrava" }, "okres": "Okres/3807" }
+  ]
+}

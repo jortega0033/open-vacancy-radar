@@ -33,6 +33,6 @@ describe('scan cancellation (#459)', () => {
   it('publishes one progress id per discovery group plus the Workable listing, with no duplicates', () => {
     expect(new Set(SCAN_PROGRESS_SOURCE_IDS).size).toBe(SCAN_PROGRESS_SOURCE_IDS.length);
     expect(SCAN_PROGRESS_SOURCE_IDS).toContain('workable_global');
-    expect(SCAN_PROGRESS_SOURCE_IDS.length).toBe(11);
+    expect(SCAN_PROGRESS_SOURCE_IDS.length).toBe(12);
   });
 });

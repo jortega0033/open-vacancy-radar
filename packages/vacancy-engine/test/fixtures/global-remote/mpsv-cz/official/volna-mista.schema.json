@@ -1,0 +1,1053 @@
+{
+  "id": "http://json-schema.org/draft-04/schema#",
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "volna-mista",
+  "type": "object",
+  "description": "Volná místa",
+  "x-docUrl": "https://data.mpsv.cz/web/data/volna-mista",
+  "properties": {
+    "polozky": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "portalId": {
+            "type": "integer",
+            "description": "Jednoznačný identifikátor volného místa na portálu JPŘ PSV"
+          },
+          "id": {
+            "type": "string",
+            "maxLength": 129
+          },
+          "referencniCislo": {
+            "type": "string",
+            "maxLength": 17,
+            "description": "Referenční číslo volného místa"
+          },
+          "azylant": {
+            "type": "boolean",
+            "description": "Souhlas se zaměstnáním azylantů"
+          },
+          "cizinecMimoEu": {
+            "type": "boolean",
+            "description": "Souhlas se zaměstnáním cizinců jiných států než zemí EU, Lichtenštejnska, Norska a Švýcarska"
+          },
+          "datumVlozeni": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Datum vložení volného místa"
+          },
+          "datumZmeny": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Datum poslední změny volného místa"
+          },
+          "mesicniMzdaDo": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "Mzdové rozpětí - maximální mzda v Kč (měsíční nebo hodinová podle typu mzdy)"
+          },
+          "mesicniMzdaOd": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "Mzdové rozpětí - minimální mzda v Kč (měsíční nebo hodinová podle typu mzdy)"
+          },
+          "modraKarta": {
+            "type": "boolean",
+            "description": "Souhlas se zařazením volného místa do centrální evidence VPM pro držitele modré karty"
+          },
+          "pocetHodinTydne": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "description": "Minimální počet odpracovaných hodin týdně"
+          },
+          "pocetMist": {
+            "type": "integer",
+            "description": "Počet nabízených volných míst v dané profesi"
+          },
+          "pozadovanaProfese": {
+            "type": [
+              "object"
+            ],
+            "description": "Název požadované profese (dříve profese - doplněk)",
+            "properties": {
+              "cs": {
+                "type": [
+                  "string"
+                ],
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "cs"
+            ]
+          },
+          "statniSpravaSamosprava": {
+            "type": "boolean",
+            "description": "Místo je určené pro úředníky územních samosprávných celků nebo pro zaměstnance, kteří ve správních úřadech vykonávají státní správu"
+          },
+          "terminUkonceniPracovnihoPomeru": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date",
+            "description": "Datum ukončení pracovního vztahu na dobu určitou"
+          },
+          "terminZahajeniPracovnihoPomeru": {
+            "type": "string",
+            "format": "date",
+            "description": "Plánovaný nástup: datum, od kdy může uchazeč o zaměstnání nastoupit na uvedené volné místo"
+          },
+          "souhlasAgenturyAgentura": {
+            "type": "boolean",
+            "description": "Agentury práce - zaměstnanci nebudou agenturou práce přidělováni k zaměstnavateli"
+          },
+          "souhlasAgenturyUzivatel": {
+            "type": "boolean",
+            "description": "Agentury práce - zaměstnanci budou přiděleni k výkonu práce u uživatele"
+          },
+          "upresnujiciInformace": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Upřesňující informace k volnému místu (dříve poznámka); Jedná se o velmi dlouhý textový řetězec (> 4000 znaků).",
+            "properties": {
+              "cs": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "cs"
+            ]
+          },
+          "urlAdresa": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "maxLength": 2048,
+            "description": "URL adresa zaměstnavatele, kde lze nalézt další informace k danému volnému místu"
+          },
+          "zamestnaneckaKarta": {
+            "type": "boolean",
+            "description": "Souhlas se zařazením volného místa do centrální evidence VPM pro držitele zaměstnanecké karty"
+          },
+          "expirace": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date",
+            "description": "Datum, do kdy bude volné místo zveřejněno na portálu JPŘ PSV"
+          },
+          "minPozadovaneVzdelani": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Požadovaný minimální stupeň vzdělání",
+            "x-looseRef": "/od/soubory/ciselniky/vzdelani-detailni-kategorie.schema.json",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 129
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "smennost": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Směnnost",
+            "x-looseRef": "/od/soubory/ciselniky/smennosti.schema.json",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 129
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "typMzdy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Typ mzdy - měsíční nebo hodinová",
+            "x-looseRef": "/od/soubory/ciselniky/typy-mzdy.schema.json",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 129
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "zverejnovat": {
+            "type": "object",
+            "description": "Způsob zveřejnění volného místa",
+            "x-looseRef": "/od/soubory/ciselniky/zverejnovat-vpm.schema.json",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 129
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "mistoVykonuPrace": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Místo výkonu práce",
+            "properties": {
+              "typMistaVykonuPrace": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "x-looseRef": "/od/soubory/ciselniky/typy-mista-vykonu-prace.schema.json",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 129
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              },
+              "obec": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Obec místa výkonu práce",
+                "x-looseRef": "/od/soubory/ciselniky/obce.schema.json",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 129
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              },
+              "okresy": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "description": "Seznam okresů místa výkonu práce",
+                "items": {
+                  "type": "object",
+                  "x-looseRef": "/od/soubory/ciselniky/okresy.schema.json",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 129
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              },
+              "adresaText": {
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "maxLength": 250,
+                "description": "Adresa místa výkonu práce, pokud je uvedena volným textem"
+              },
+              "pracoviste": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "description": "Pracoviště zaměstnavatele pro místo výkonu práce volného místa",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": [
+                        "null",
+                        "string"
+                      ],
+                      "maxLength": 254
+                    },
+                    "nazev": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "telefon": {
+                      "type": [
+                        "null",
+                        "string"
+                      ],
+                      "maxLength": 50
+                    },
+                    "adresa": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "Adresa pracoviště",
+                      "properties": {
+                        "cisloDomovni": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "cisloOrientacni": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "maxLength": 41
+                        },
+                        "dodatekAdresy": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "maxLength": 250,
+                          "description": "Adresa - dodatek adresy"
+                        },
+                        "kodAdresnihoMista": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "psc": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "maxLength": 5
+                        },
+                        "typCislaDomovniho": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "description": "Adresa - typ domovního čísla, typ stavebního objektu",
+                          "x-looseRef": "/od/soubory/ciselniky/typy-stavebniho-objektu.schema.json",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 129
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        },
+                        "kraj": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "x-looseRef": "/od/soubory/ciselniky/kraje.schema.json",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 129
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        },
+                        "okres": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "x-looseRef": "/od/soubory/ciselniky/okresy.schema.json",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 129
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        },
+                        "obec": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "x-looseRef": "/od/soubory/ciselniky/obce.schema.json",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 129
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        },
+                        "mestskyObvodMestskaCast": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "x-looseRef": "/od/soubory/ciselniky/mestske-obvody-mestske-casti.schema.json",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 129
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        },
+                        "mestskyObvodVPraze": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "x-looseRef": "/od/soubory/ciselniky/mestske-obvody-v-praze.schema.json",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 129
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        },
+                        "castObce": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "x-looseRef": "/od/soubory/ciselniky/casti-obci.schema.json",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "maxLength": 129
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        },
+                        "nazevCastiObce": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "maxLength": 1024
+                        },
+                        "ulice": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "nazev": {
+                              "type": "string",
+                              "maxLength": 48
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "nazev"
+                  ]
+                }
+              }
+            }
+          },
+          "zamestnavatel": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Zaměstnavatel",
+            "properties": {
+              "ico": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 8
+              },
+              "nazev": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "nazev"
+            ]
+          },
+          "profeseCzIsco": {
+            "type": "object",
+            "description": "Požadovaná profese podle číselníku CZ-ISCO",
+            "x-looseRef": "/od/soubory/ciselniky/cz-isco.schema.json",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 129
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "pracovnePravniVztahy": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Typ pracovněprávního vztahu",
+            "items": {
+              "type": "object",
+              "x-looseRef": "/od/soubory/ciselniky/pracovnepravni-vztahy.schema.json",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 129
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "vhodnostiPracovnihoMista": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Vhodnost pracovního místa pro typy zaměstnanců",
+            "items": {
+              "type": "object",
+              "x-looseRef": "/od/soubory/ciselniky/vhodnosti-pro-typ-zamestnance.schema.json",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 129
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "kontaktniPracoviste": {
+            "type": "object",
+            "description": "Kontaktní pracoviště ÚP ČR",
+            "x-looseRef": "/od/soubory/ciselniky/kontaktni-pracoviste.schema.json",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 129
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "vyhodyVolnehoMista": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Nabízené výhody k volnému místu",
+            "items": {
+              "type": "object",
+              "properties": {
+                "vyhoda": {
+                  "type": "object",
+                  "x-looseRef": "/od/soubory/ciselniky/vyhody-volneho-mista.schema.json",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 129
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                },
+                "popis": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "maxLength": 512
+                }
+              },
+              "required": [
+                "vyhoda"
+              ]
+            }
+          },
+          "pozadovanaDovednost": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Požadovaná dovednost pro výkon volného místa",
+            "items": {
+              "type": "object",
+              "properties": {
+                "dovednost": {
+                  "type": "object",
+                  "x-looseRef": "/od/soubory/ciselniky/dovednosti.schema.json",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 129
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                },
+                "popis": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "maxLength": 2048
+                }
+              },
+              "required": [
+                "dovednost"
+              ]
+            }
+          },
+          "pozadovanaJazykovaZnalost": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Požadovaná jazyková znalost pro výkon volného místa",
+            "items": {
+              "type": "object",
+              "properties": {
+                "urovenZnalosti": {
+                  "type": "object",
+                  "x-looseRef": "/od/soubory/ciselniky/urovne-znalosti-jazyka.schema.json",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 129
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                },
+                "jazyk": {
+                  "type": "object",
+                  "x-looseRef": "/od/soubory/ciselniky/jazyky.schema.json",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 129
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                },
+                "popis": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 2048
+                }
+              },
+              "required": [
+                "urovenZnalosti",
+                "jazyk"
+              ]
+            }
+          },
+          "pozadovanePovolani": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Požadované povolání - praxe v oboru",
+            "items": {
+              "type": "object",
+              "x-looseRef": "/od/soubory/ciselniky/cz-isco.schema.json",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 129
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "pozadovaneVzdelani": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Požadované vzdělání podle Klasifikace kmenových oborů vzdělání (KKOV)",
+            "items": {
+              "type": "object",
+              "x-looseRef": "/od/soubory/ciselniky/vzdelani-kkov.schema.json",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 129
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "prvniKontaktSeZamestnavatelem": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "První kontakt zájemce se zaměstnavatelem - místo, kde se má hlásit, adresa a další kontakty, kde se má hlásit a osoba, které se má hlásit.",
+            "properties": {
+              "komuSeHlasit": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "email": {
+                    "type": [
+                      "null",
+                      "string"
+                    ],
+                    "maxLength": 254,
+                    "description": "Kontaktovat zaměstnavatele e-mailem - e-mail"
+                  },
+                  "telefon": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 50,
+                    "description": "Kontaktovat zaměstnavatele telefonem - telefon"
+                  },
+                  "jmeno": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 100,
+                    "description": "Komu se hlásit - jméno kontaktní osoby"
+                  },
+                  "prijmeni": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 100,
+                    "description": "Komu se hlásit - příjmení kontaktní osoby"
+                  },
+                  "titulPredJmenem": {
+                    "type": [
+                      "null",
+                      "string"
+                    ],
+                    "maxLength": 35,
+                    "description": "Komu se hlásit - titul před jménem kontaktní osoby"
+                  },
+                  "titulZaJmenem": {
+                    "type": [
+                      "null",
+                      "string"
+                    ],
+                    "maxLength": 10,
+                    "description": "Komu se hlásit - titul za jménem kontaktní osoby"
+                  },
+                  "poziceVeSpolecnosti": {
+                    "type": [
+                      "null",
+                      "string"
+                    ],
+                    "maxLength": 250,
+                    "description": "Komu se hlásit - pozice kontaktní osoby u zaměstnavatele"
+                  }
+                },
+                "required": []
+              },
+              "kdeSeHlasit": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": [
+                      "null",
+                      "string"
+                    ],
+                    "maxLength": 254,
+                    "description": "Kontaktovat zaměstnavatele e-mailem - e-mail"
+                  },
+                  "telefon": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 50,
+                    "description": "Kontaktovat zaměstnavatele telefonem - telefon"
+                  },
+                  "mistoKontaktu": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4000,
+                    "description": "Kontaktovat zaměstnavatele osobně - místo kontaktu"
+                  },
+                  "adresa": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "description": "Adresa kontaktu",
+                    "properties": {
+                      "cisloDomovni": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "cisloOrientacni": {
+                        "type": [
+                          "null",
+                          "string"
+                        ],
+                        "maxLength": 41
+                      },
+                      "dodatekAdresy": {
+                        "type": [
+                          "null",
+                          "string"
+                        ],
+                        "maxLength": 250,
+                        "description": "Adresa - dodatek adresy"
+                      },
+                      "kodAdresnihoMista": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "psc": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 5
+                      },
+                      "typCislaDomovniho": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "description": "Adresa - typ domovního čísla, typ stavebního objektu",
+                        "x-looseRef": "/od/soubory/ciselniky/typy-stavebniho-objektu.schema.json",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 129
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ]
+                      },
+                      "kraj": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "x-looseRef": "/od/soubory/ciselniky/kraje.schema.json",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 129
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ]
+                      },
+                      "okres": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "x-looseRef": "/od/soubory/ciselniky/okresy.schema.json",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 129
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ]
+                      },
+                      "obec": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "x-looseRef": "/od/soubory/ciselniky/obce.schema.json",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 129
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ]
+                      },
+                      "mestskyObvodMestskaCast": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "x-looseRef": "/od/soubory/ciselniky/mestske-obvody-mestske-casti.schema.json",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 129
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ]
+                      },
+                      "mestskyObvodVPraze": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "x-looseRef": "/od/soubory/ciselniky/mestske-obvody-v-praze.schema.json",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 129
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ]
+                      },
+                      "castObce": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "x-looseRef": "/od/soubory/ciselniky/casti-obci.schema.json",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 129
+                          }
+                        },
+                        "required": [
+                          "id"
+                        ]
+                      },
+                      "nazevCastiObce": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 1024
+                      },
+                      "ulice": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "nazev": {
+                            "type": "string",
+                            "maxLength": 48
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "required": [
+          "portalId",
+          "id",
+          "referencniCislo",
+          "azylant",
+          "cizinecMimoEu",
+          "datumVlozeni",
+          "datumZmeny",
+          "modraKarta",
+          "pocetMist",
+          "pozadovanaProfese",
+          "statniSpravaSamosprava",
+          "terminZahajeniPracovnihoPomeru",
+          "souhlasAgenturyAgentura",
+          "souhlasAgenturyUzivatel",
+          "zamestnaneckaKarta",
+          "zverejnovat",
+          "mistoVykonuPrace",
+          "zamestnavatel",
+          "profeseCzIsco",
+          "pracovnePravniVztahy",
+          "kontaktniPracoviste"
+        ]
+      }
+    }
+  }
+}
