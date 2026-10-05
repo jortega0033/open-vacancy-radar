@@ -6,6 +6,10 @@ own data depends on. A rollback of any ADI-series change must never take product
 Follow this before rolling back any ADI-0x PR, and update it if a later ticket introduces new
 persistent state this doesn't yet cover.
 
+For the shipped app's database migrations, restart recovery, active-session limits and downgrade
+behavior (with what is and is not verified), see
+[migration-recovery-runbook.md](migration-recovery-runbook.md).
+
 ## What must survive a rollback, unconditionally
 
 [privacy.md](privacy.md#what-is-stored-and-where) is the authoritative record of what this app

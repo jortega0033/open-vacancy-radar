@@ -60,6 +60,25 @@ jobs:
           }
           Write-Host "Found unpacked executable: $exePath"
 
+      # ADI-09 (#127). Release gate against the UNPACKED output, not the source tree: required
+      # files (daemon bundle, JobHost, vacancy-engine and workspace migrations, icons, the
+      # better-sqlite3 binding), app identity / installer naming / VC++ NSIS include, better-sqlite3
+      # loading inside the packaged Electron runtime, and the packaged daemon answering /health
+      # with protocol v1 and v2 on a loopback port and stopping with no stray JobHost from the same directory.
+      # See scripts/packaged-smoke.mjs and docs/packaging.md.
+      - name: Packaged app smoke (unpacked output)
+        run: node scripts/packaged-smoke.mjs dist-packages/win-unpacked
+
+      # Silent NSIS lifecycle (#127): install into a temp directory, run the same smoke against the
+      # INSTALLED app, uninstall silently, check user data is kept. After the unpacked smoke so a
+      # packaging defect fails fast there. CI-only: it touches the per-user uninstall entry.
+      - name: Packaged installer lifecycle smoke (silent NSIS)
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path "dist-packages" -Filter "Open Vacancy Radar-Setup-*.exe" | Select-Object -First 1
+          node scripts/packaged-smoke.mjs --installer $installer.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # ADI-04. Deliberately positioned AFTER packaging: `pnpm package:win` runs `prepackage:win`,
       # which compiles apps/daemon/dist/agent-dock-job-host.exe. These tests exercise that real
       # compiled helper — including the negative control proving `taskkill /T /F` cannot reach an

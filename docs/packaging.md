@@ -43,6 +43,62 @@ install`, with no code signing configured: there's nothing to sign with in this 
 None of this is an installer yet: `electron .` against `apps/desktop` at this point runs the app
 unpacked, useful for a quick check without a full package step.
 
+## Prerequisites outside Node
+
+`pnpm assets:validate` (run by Core CI, not by `package:win`) needs Python 3.11 or newer with the
+pinned packages in `scripts/assets/requirements.txt` (Pillow for validation; CairoSVG too for
+`assets:generate`). Use a virtual environment so nothing is installed globally:
+
+```powershell
+python -m venv .venv-assets
+.\.venv-assets\Scripts\python -m pip install -r scripts\assets\requirements.txt
+.\.venv-assets\Scripts\python scripts\assets\validate_assets.py
+```
+
+`pnpm assets:validate` itself calls `python`, so it works once that environment's `python` is first
+on `PATH`. Details are in [assets.md](assets.md). `pnpm package:win` also needs network access
+(`scripts/download-vc-redist.mjs`) and a Windows host: the JobHost is compiled through PowerShell `Add-Type`, which uses the C#
+compiler built into the .NET Framework (no .NET SDK needed).
+
+## Release-gate smoke (`scripts/packaged-smoke.mjs`)
+
+After `pnpm package:win`, the `Package Windows installer` CI job runs
+`node scripts/packaged-smoke.mjs dist-packages/win-unpacked`. It checks the unpacked output, not the
+source tree:
+
+- required files exist: the executable, `daemon/index.js`, `daemon/agent-dock-job-host.exe`, the
+  better-sqlite3 native binding under `app.asar.unpacked`, the vacancy-engine migrations and config,
+  and the packaged icons;
+- every workspace migration SQL file in source is inside `app.asar` (`dist-electron/drizzle`), and
+  every vacancy-engine migration is under `resources/vacancy-engine/drizzle`;
+- `electron-builder.yml` still has the app id, product name, executable name, icon, installer
+  naming, the three `extraResources` entries and the VC++ NSIS include, and `installer.nsh` still
+  runs `vc_redist.x64.exe`;
+- better-sqlite3 opens an in-memory database inside the packaged Electron runtime
+  (`ELECTRON_RUN_AS_NODE`);
+- the packaged daemon starts on a loopback port with a throwaway app id and state directory,
+  `/health` reports protocol 1 and `supportedProtocolVersions` containing 1 and 2, and
+  `POST /sessions/cancel-all` returns 202;
+- the daemon is then stopped, and no `agent-dock-job-host.exe` whose image is under the smoke's own
+  directory is left running. The idle daemon never spawns a JobHost (that needs a provider session),
+  so this is only a stray-process check, not proof that cancellation kills provider children. Windows
+  cannot deliver a graceful signal to the daemon, so it is a termination check, not a clean-shutdown
+  check.
+- `node scripts/packaged-smoke.mjs --installer "dist-packages/Open Vacancy Radar-Setup-<version>.exe"`
+  (a separate CI step) installs the real NSIS installer silently (`/S /D=<temp dir>`), runs all the
+  checks above against the installed app, uninstalls silently (`/S _?=<dir>`) and checks the
+  executable is gone while a sentinel file in `%APPDATA%\Open Vacancy Radar` is kept. It changes the
+  per-user uninstall entry of the real app id, so outside CI it refuses to run unless
+  `OVR_SMOKE_ALLOW_INSTALL=1` is set and no uninstall registry key for the real app id exists. It
+  points `APPDATA` at a temp directory, so the real user data is never touched. It has not been run locally.
+
+The pure checks are unit tested in `apps/daemon/test/packaged-smoke.test.mjs` and run under
+`pnpm test`. The process steps only run on Windows. This does not cover a real provider session cancelled in the packaged app. See
+[migration-recovery-runbook.md](migration-recovery-runbook.md) for what is and is not verified.
+
+Claude Agent SDK assets are intentionally not packaged: the SDK transport is deferred (#144) and the
+SDK is not a dependency.
+
 ## Output layout
 
 ```
