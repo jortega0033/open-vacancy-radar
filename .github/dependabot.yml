@@ -14,6 +14,13 @@ updates:
       - jortega0033
     commit-message:
       prefix: deps
+    ignore:
+      # The root package.json pins esbuild with a pnpm override (^0.25.0). A bump of the direct
+      # dependency alone breaks the frozen lockfile, so move both together on purpose.
+      - dependency-name: esbuild
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
     groups:
       production-minor-and-patch:
         dependency-type: production
