@@ -83,7 +83,9 @@ function parseReset(message: string, now: Date): Pick<ProviderErrorInfo, 'resetL
   } else if (hour > 23) {
     return {};
   }
-  const label = whole.replace(/^resets?\s+(?:at\s+)?/i, '').trim();
+  // "resets 11:59pm." ends a sentence: the dot is the provider's, not part of the time, and
+  // keeping it renders "until 11:59pm.." in our own sentences.
+  const label = whole.replace(/^resets?\s+(?:at\s+)?/i, '').trim().replace(/([ap]m)\.$/i, '$1');
   const sameZone = zone === undefined || zone === localTimeZone();
   if (!sameZone) return { resetLabel: label };
   const at = new Date(now);
