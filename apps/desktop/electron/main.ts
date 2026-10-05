@@ -2666,6 +2666,9 @@ function notifyScanOutcome(show: () => void): void {
  * notification either.
  */
 async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<GlobalRemoteReport> {
+  // A background source scout holds the scan guard for up to its whole run; a person asking for a
+  // scan wins, so stop the scout first. It records itself as cancelled and retries later.
+  await sourceScout.cancel();
   const db = await ensureVacancyEngine();
   try {
     const report = await runExclusiveScan(
@@ -2880,7 +2883,7 @@ const sourceScout = createSourceScout({
     await ensureVacancyEngine();
     return runExclusiveScan(run, options);
   },
-  runScout: async (query) => {
+  runScout: async (query, signal) => {
     const http = await ensureApplicationJdHttpClient();
     const projectRoot = await vacancyEngineDataRoot();
     return runAtsSourceScout({
@@ -2888,10 +2891,14 @@ const sourceScout = createSourceScout({
       roster: await loadAtsRoster(projectRoot),
       projectRoot,
       roleQuery: query,
+      // Role only, on purpose: the scheduled vacancy scan narrows by role alone too
+      // (`scheduledScanQueryFromProfile` returns just the query), and the observation planner
+      // matches a blank country against every country.
       limits: sourceScoutLimitsFromEnv(process.env),
+      signal,
     });
   },
-  store: createSourceScoutStateStore(() => vacancyEngineDataRoot()),
+  store: createSourceScoutStateStore(() => vacancyEngineDataRoot(), { log: (message, error) => console.error(message, error) }),
   log: (message, error) => console.error(message, error),
 });
 
@@ -3147,6 +3154,7 @@ guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) =>
     minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
     autoScanEnabled = updated.autoScanEnabled;
     autoSourceScoutEnabled = updated.autoSourceScoutEnabled;
+    if (!autoSourceScoutEnabled) void sourceScout.cancel();
     setAutoApplyEnabled(updated.autoApplyEnabled);
     void syncMcpServer(updated.mcpEndpointEnabled);
     return updated;
@@ -3162,6 +3170,8 @@ guardedIpc.handle('workspace:data:reset', async () => {
       throw new Error('wait for the active application task to finish before resetting data');
     }
 
+    // A scout run reads the roster and observation files this reset may clear.
+    await sourceScout.cancel();
     closeAllApplicationReviews();
     const queueStatus = await daemonGetJson('/v2/applications');
     const lease = queueStatus?.lease;
@@ -3751,6 +3761,7 @@ if (gotSingleInstanceLock) {
   // tray's own "Quit" item would set it too late relative to a `close` event already in flight.
   app.on('before-quit', () => {
     isQuitting = true;
+    void sourceScout.cancel();
   });
 
   // Separate from the daemon shutdown below on purpose: `will-quit` always fires, whereas the

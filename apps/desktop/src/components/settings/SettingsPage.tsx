@@ -14,6 +14,7 @@ import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './
 import { DataManagement } from './DataManagement.js';
 import { McpEndpointSection } from './McpEndpointSection.js';
 import { SavedAnswersSection } from './SavedAnswersSection.js';
+import { SourceScoutSection } from './SourceScoutSection.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
 import { SupportSection } from './SupportSection.js';
 import { ALL_COUNTRIES } from '../search/countries.js';
@@ -532,6 +533,12 @@ export function SettingsPage({
               flash({ kind: 'saved', message: `Company list updated (${result.totalEntries.toLocaleString()} companies)` })
             }
             onRefreshError={(message, details) => flash({ kind: 'error', message, ...(details ? { details } : {}) })}
+          />
+
+          <SourceScoutSection
+            enabled={settings.autoSourceScoutEnabled}
+            disabled={disabled}
+            onEnabledChange={(autoSourceScoutEnabled) => changeField({ autoSourceScoutEnabled })}
           />
         </>
       )}

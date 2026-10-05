@@ -1,4 +1,7 @@
 // @vitest-environment node
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AtsSourceScoutResult, ScanLock } from '@open-vacancy-radar/vacancy-engine';
 import { createScanGuard } from '../electron/scan-guard.js';
@@ -7,6 +10,7 @@ import {
   SCOUT_BUSY_RETRY_MS,
   SCOUT_MAX_BACKOFF_MS,
   createSourceScout,
+  createSourceScoutStateStore,
   defaultSourceScoutState,
   isScoutRunDue,
   scoutFailureBackoffMs,
@@ -145,7 +149,7 @@ describe('source scout orchestrator', () => {
     await scout.tick();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]![1]).toEqual({ takeAdvisoryLock: true });
-    expect(runScout).toHaveBeenCalledWith('frontend developer');
+    expect(runScout).toHaveBeenCalledWith('frontend developer', expect.any(AbortSignal));
     void guard;
   });
 
@@ -292,5 +296,124 @@ describe('source scout orchestrator', () => {
     expect(runScout).toHaveBeenCalledTimes(1);
     expect(store.current().paused).toBe(true);
     expect((await scout.setPaused(false)).paused).toBe(false);
+  });
+});
+
+describe('source scout cancellation', () => {
+  it('passes an abort signal to the run and records a cancelled outcome', async () => {
+    const gate = deferred<AtsSourceScoutResult>();
+    let seen: AbortSignal | undefined;
+    const { scout, store } = setup({
+      runScout: async (_query, signal) => {
+        seen = signal;
+        signal.addEventListener('abort', () => gate.resolve(scoutResult({ stoppedBecause: 'cancelled' })));
+        return gate.promise;
+      },
+    });
+    const started = scout.runNow();
+    expect(started.started).toBe(true);
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    await scout.cancel();
+    expect(seen?.aborted).toBe(true);
+    expect(store.current().lastOutcome?.kind).toBe('cancelled');
+    expect(store.current().nextRunAt).not.toBeNull();
+    expect(scout.running).toBe(false);
+  });
+
+  it('records cancelled when an aborted run throws', async () => {
+    const { scout, store } = setup({
+      runScout: (_query, signal) =>
+        new Promise<AtsSourceScoutResult>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    });
+    scout.runNow();
+    await vi.waitFor(() => expect(scout.running).toBe(true));
+    await scout.cancel();
+    expect(store.current().lastOutcome?.kind).toBe('cancelled');
+    expect(store.current().consecutiveFailedRuns).toBe(0);
+  });
+
+  it('cancel with nothing running resolves', async () => {
+    const { scout } = setup();
+    await expect(scout.cancel()).resolves.toBeUndefined();
+  });
+});
+
+describe('source scout state serialization', () => {
+  it('never lets setPaused and the end-of-run record overwrite each other', async () => {
+    const base = memoryStore();
+    const releaseFirstLoad = deferred<void>();
+    let loads = 0;
+    const slow: SourceScoutStateStore = {
+      async load() {
+        const snapshot = await base.load();
+        loads += 1;
+        // The first load in this test is the end-of-run record's; hold it while Pause arrives.
+        if (loads === 1) await releaseFirstLoad.promise;
+        return snapshot;
+      },
+      save: (state) => base.save(state),
+    };
+    const { scout } = setup({ store: slow });
+    const run = scout.runNow();
+    await vi.waitFor(() => expect(loads).toBe(1));
+    const pausing = scout.setPaused(true);
+    releaseFirstLoad.resolve();
+    if (run.started) await run.done;
+    await pausing;
+    expect(base.current().paused).toBe(true);
+    expect(base.current().lastOutcome?.kind).toBe('completed');
+  });
+});
+
+describe('file-backed source scout state store', () => {
+  async function tempStore(contents?: string) {
+    const root = await mkdtemp(path.join(tmpdir(), 'ovr-scout-'));
+    const logs: string[] = [];
+    const time = clock();
+    const store = createSourceScoutStateStore(async () => root, { now: time.now, log: (message) => logs.push(message) });
+    if (contents !== undefined) {
+      await mkdir(path.join(root, '.data'), { recursive: true });
+      await writeFile(path.join(root, '.data', 'source-scout-state-v1.json'), contents, 'utf8');
+    }
+    return { store, logs, time, root };
+  }
+
+  it('reads a missing file as a fresh state and round-trips a save', async () => {
+    const { store, logs } = await tempStore();
+    expect(await store.load()).toEqual(defaultSourceScoutState());
+    const saved: SourceScoutState = { ...defaultSourceScoutState(), paused: true, lastRunAt: '2026-10-05T09:00:00.000Z' };
+    await store.save(saved);
+    expect(await store.load()).toEqual(saved);
+    expect(logs).toEqual([]);
+  });
+
+  it('does not reset a corrupt file to run-now defaults, keeps a readable pause, and logs', async () => {
+    const { store, logs, time } = await tempStore('{"version":1,"paused":true,"nextRunAt":');
+    const state = await store.load();
+    expect(state.paused).toBe(true);
+    expect(state.nextRunAt).toBe(new Date(time.now().getTime() + SCOUT_BASE_INTERVAL_MS).toISOString());
+    expect(logs).toHaveLength(1);
+  });
+
+  it('defaults to not paused but waits one interval when the file is garbage', async () => {
+    const { store, time } = await tempStore('not json at all');
+    const state = await store.load();
+    expect(state.paused).toBe(false);
+    expect(state.nextRunAt).toBe(new Date(time.now().getTime() + SCOUT_BASE_INTERVAL_MS).toISOString());
+  });
+
+  it('validates each field type and falls back with a delayed next run', async () => {
+    const { store, logs } = await tempStore(
+      JSON.stringify({ version: 1, paused: 'yes', lastRunAt: 5, nextRunAt: null, consecutiveFailedRuns: -2, lastOutcome: { kind: 'bogus' } }),
+    );
+    const state = await store.load();
+    expect(state.paused).toBe(false);
+    expect(state.lastRunAt).toBeNull();
+    expect(state.consecutiveFailedRuns).toBe(0);
+    expect(state.lastOutcome).toBeNull();
+    expect(state.nextRunAt).not.toBeNull();
+    expect(logs).toHaveLength(1);
   });
 });

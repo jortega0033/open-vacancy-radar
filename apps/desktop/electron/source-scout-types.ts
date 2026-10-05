@@ -14,6 +14,7 @@ export type SourceScoutOutcomeKind =
   | 'no_roster'
   | 'no_profile'
   | 'busy'
+  | 'cancelled'
   | 'failed';
 
 export interface SourceScoutOutcome {
