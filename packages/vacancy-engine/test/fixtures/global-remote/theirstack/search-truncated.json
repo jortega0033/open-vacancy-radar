@@ -1,0 +1,17 @@
+{
+  "metadata": { "total_results": null, "total_companies": null, "truncated_results": 7, "truncated_companies": 4 },
+  "data": [
+    {
+      "id": 900000020,
+      "job_title": "Frontend Engineer",
+      "url": "https://jobs.example-board.test/listing/900000020",
+      "date_posted": "2026-10-04",
+      "closed_at": null,
+      "company": "CreditCo",
+      "location": "Delft",
+      "country": "Netherlands",
+      "employment_statuses": ["full_time"],
+      "description": "Returned before the account ran out of credits."
+    }
+  ]
+}

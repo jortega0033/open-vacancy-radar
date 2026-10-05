@@ -1,0 +1,23 @@
+{
+  "metadata": { "total_results": null, "total_companies": null, "truncated_results": 0, "truncated_companies": 0 },
+  "data": [
+    {
+      "id": 900000003,
+      "job_title": "UI Engineer",
+      "url": "https://jobs.example-board.test/listing/900000003",
+      "final_url": null,
+      "source_url": "https://jobs.example-board.test/listing/900000003",
+      "date_posted": "2026-10-03",
+      "discovered_at": "2026-10-03T07:00:00Z",
+      "closed_at": null,
+      "company": "Fixture Works",
+      "location": "Utrecht",
+      "country": "Netherlands",
+      "country_code": "NL",
+      "remote": false,
+      "hybrid": false,
+      "employment_statuses": [],
+      "description": null
+    }
+  ]
+}

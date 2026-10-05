@@ -133,6 +133,17 @@ export const globalRemoteConfigSchema = z.object({
      * stateless one-shot scan (see `runGlobalRemoteScan`) with no persisted cross-run cursor, so
      * each run re-walks the feed from its first page up to this many pages. */
     navArbeidsplassenMaxPages: z.number().int().min(1).max(10).default(3),
+    /** TheirStack paid Jobs API (issue #49). Optional so an absent field means "off": the source
+     * makes zero requests unless BOTH `theirstackEnabled` is true AND `theirstackApiKey` is set. */
+    theirstackEnabled: z.boolean().optional(),
+    /** User-supplied local key; never committed, logged, or placed in a report. */
+    theirstackApiKey: z.string().optional(),
+    /** Hard per-run credit ceiling; one returned job costs one credit. */
+    theirstackMaxCredits: z.number().int().min(1).max(5_000).optional(),
+    /** Hard per-run request (page) ceiling, enforced alongside the credit ceiling. */
+    theirstackMaxPages: z.number().int().min(1).max(20).optional(),
+    /** Date window sent as `posted_at_max_age_days`. */
+    theirstackPostedWithinDays: z.number().int().min(1).max(30).optional(),
   }),
   officialSources: z.array(globalRemoteSourceSchema),
 });
@@ -229,7 +240,8 @@ export type DiscoveryProvider =
   | 'ats_roster_ashby'
   | 'ats_roster_recruitee'
   | 'ats_roster_personio'
-  | 'nav_arbeidsplassen';
+  | 'nav_arbeidsplassen'
+  | 'theirstack';
 
 /** One discovery source's contribution to a (possibly merged) vacancy row -- issue #278. */
 export type VacancySourceReference = {
@@ -408,6 +420,9 @@ export type DiscoverySourceAudit = {
    * `null` whenever the source has nothing to resume from, including every `complete: true` row.
    */
   continuationCursor: string | null;
+  /** Paid-API spend for this run (TheirStack): credits actually consumed and the configured ceiling. */
+  creditsUsed?: number;
+  creditCeiling?: number;
   /** Per-source evidence of which focused criteria were actually sent upstream. */
   focusedScan?: {
     requested: Partial<Record<'role' | 'country' | 'employment' | 'salary', string>>;
