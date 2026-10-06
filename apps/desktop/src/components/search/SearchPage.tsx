@@ -1288,6 +1288,7 @@ export function SearchPage({
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
+          onOpenSearchProfile={onOpenSearchProfile}
           scanUnavailable={engineState === 'unavailable'}
         />
       </div>
