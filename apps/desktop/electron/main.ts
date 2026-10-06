@@ -190,7 +190,7 @@ import { renderApprovedSnapshot } from './cv-case-export.js';
 import { exportCvCase } from './cv-case-export-handler.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import type { TailoredResume } from './resume-schema.js';
-import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
+import { mergeFieldSources, parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -3154,6 +3154,7 @@ guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknow
         ...current,
         ...patch,
         constraints: { ...current.constraints, ...patch.constraints },
+        fieldSources: mergeFieldSources(current.fieldSources, patch),
         profileVersion: nextProfileVersion(),
       });
       const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;

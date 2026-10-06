@@ -84,6 +84,7 @@ export {
   isCandidateProfileConfigured,
   loadCandidateProfile,
   type CandidateProfile,
+  type ProfileFieldSource,
 } from './candidate/profile.js';
 
 /**

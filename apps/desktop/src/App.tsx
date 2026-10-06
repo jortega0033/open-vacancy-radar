@@ -545,6 +545,7 @@ export function App() {
               key={settingsTargetKey}
               onNavigateToRuntime={() => handleNavigate('runtime')}
               onOpenSetup={() => setShowSetup(true)}
+              onOpenCvPage={() => handleNavigate('cv')}
               currentPage={nav}
               {...(previousNav ? { previousPage: previousNav } : {})}
               {...(settingsTarget ? { initialTab: settingsTarget.tab } : {})}

@@ -189,18 +189,19 @@ describe('App', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Fill search profile' }));
     }
 
-    it('lands on Settings > Search with the first profile field focused', async () => {
+    it('opens "What you are looking for" in place with the target roles field focused (#635)', async () => {
       await openSearchProfileFromSearch();
 
-      await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
-      await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+      const dialog = await screen.findByRole('dialog', { name: 'What you are looking for' });
+      expect(screen.queryByRole('tab', { name: 'Search' })).not.toBeInTheDocument();
+      await waitFor(() => expect(within(dialog).getByLabelText('Target roles')).toHaveFocus());
     });
 
-    it('a plain visit to Settings afterwards starts on General again', async () => {
+    it('a plain visit to Settings still starts on General', async () => {
       await openSearchProfileFromSearch();
-      await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+      await screen.findByRole('dialog', { name: 'What you are looking for' });
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 
-      fireEvent.click(screen.getByRole('button', { name: 'Search' })); // leave Settings
       fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
 
       await waitFor(() => expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true'));

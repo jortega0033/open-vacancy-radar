@@ -40,21 +40,36 @@ export async function fillEmptySearchProfileFieldsFromCv(doc: CvDocumentRecord):
     .map((entry) => entry.trim())
     .find(Boolean);
   const skills = unique(doc.profile.skills);
+  // Every field copied from the CV is recorded as such, so the summary can say so (#635).
+  const fromCv: NonNullable<CandidateProfilePatch['fieldSources']> = {};
 
-  if (!profile.currentRole && title) patch.currentRole = title;
-  if (!profile.location && nonEmpty(doc.profile.location)) patch.location = doc.profile.location.trim();
-  if (profile.experienceYears === 0 && Number.isFinite(years) && years > 0) patch.experienceYears = years;
+  if (!profile.currentRole && title) {
+    patch.currentRole = title;
+    fromCv.currentRole = 'cv';
+  }
+  if (!profile.location && nonEmpty(doc.profile.location)) {
+    patch.location = doc.profile.location.trim();
+    fromCv.location = 'cv';
+  }
+  if (profile.experienceYears === 0 && Number.isFinite(years) && years > 0) {
+    patch.experienceYears = years;
+    fromCv.experienceYears = 'cv';
+  }
   if (!profile.constraints.professionalLanguage && language) {
     patch.constraints = { professionalLanguage: language };
+    fromCv.professionalLanguage = 'cv';
   }
   if (profile.strongestSkills.length === 0 && skills.length > 0) {
     patch.strongestSkills = skills.slice(0, 10);
+    fromCv.strongestSkills = 'cv';
   }
   if (profile.targetRoles.length === 0 && targetRole) {
     patch.targetRoles = [targetRole];
+    fromCv.targetRoles = 'cv';
   }
 
   if (Object.keys(patch).length === 0) return false;
+  patch.fieldSources = fromCv;
   await window.vacancyRadar.saveSearchProfile(patch);
   return true;
 }

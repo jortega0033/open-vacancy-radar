@@ -12,6 +12,7 @@ import {
   tryFillSearchProfileFromCv,
   type SearchProfileFillOutcome,
 } from './fill-search-profile-from-cv.js';
+import { WhatYouAreLookingFor } from '../profile/WhatYouAreLookingFor.js';
 import { ManualCaseForm } from './ManualCaseForm.js';
 import { describeTailoringCase } from './tailoring-cases.js';
 import { TailoringCases } from './TailoringCases.js';
@@ -51,6 +52,8 @@ export function CvLibraryPage() {
   const [loadError, setLoadError] = useState<string>();
 
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
+  /** Bumped when a CV fill may have changed the search profile, so the summary re-reads it. */
+  const [profileRevision, setProfileRevision] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<CvDocumentRecord | null>(null);
   /** The tailoring cases that go with `deleteTarget`: `null` when they could not be listed. */
   const [deleteCases, setDeleteCases] = useState<CvEvidenceOverlayRecord[] | null>([]);
@@ -104,6 +107,7 @@ export function CvLibraryPage() {
   const closeDrawer = useCallback(() => setDrawerState(null), []);
 
   const showFillOutcome = useCallback((outcome: SearchProfileFillOutcome) => {
+    setProfileRevision((revision) => revision + 1);
     if (outcome.error) {
       setActionError(`CV saved, but the search profile was not filled: ${outcome.error}`);
     } else if (outcome.filled) {
@@ -147,6 +151,7 @@ export function CvLibraryPage() {
       try {
         const filled = await fillEmptySearchProfileFieldsFromCv(promoted);
         if (filled) setActionStatus(SEARCH_PROFILE_FILLED_STATUS);
+        setProfileRevision((revision) => revision + 1);
       } catch (err) {
         setActionError(`Default CV set, but the search profile was not filled: ${describeError(err, 'unknown error')}`);
       }
@@ -316,6 +321,8 @@ export function CvLibraryPage() {
           }
         />
       )}
+
+      {!isLoading && hasAnyDocuments && <WhatYouAreLookingFor refreshKey={profileRevision} />}
 
       {!isLoading && hasAnyDocuments && (
         <div className="mt-4">

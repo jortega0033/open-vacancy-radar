@@ -973,6 +973,27 @@ describe('SearchPage', () => {
     await waitFor(() => expect(getReport).toHaveBeenCalledTimes(1));
   });
 
+  it('shows "Ranking for" with Edit when a role is set, and the single role input when nothing is (#635)', async () => {
+    const configured = {
+      ...DEFAULT_CANDIDATE_PROFILE,
+      targetRoles: ['Data analyst'],
+      constraints: { ...DEFAULT_CANDIDATE_PROFILE.constraints, primaryCountry: 'Netherlands' },
+    };
+    installAllBridges({ getSearchProfile: vi.fn().mockResolvedValue(configured) });
+    const first = render(<SearchPage />);
+
+    expect(await screen.findByText('Ranking for: Data analyst, Netherlands')).toBeInTheDocument();
+    expect(screen.queryByLabelText('What role are you looking for?')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit what you are looking for' }));
+    expect(await screen.findByRole('dialog', { name: 'What you are looking for' })).toBeInTheDocument();
+    first.unmount();
+
+    installAllBridges({ getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE) });
+    render(<SearchPage />);
+    expect(await screen.findByLabelText('What role are you looking for?')).toBeInTheDocument();
+    expect(screen.queryByText(/Ranking for/)).not.toBeInTheDocument();
+  });
+
   it('keeps showing vacancies when the candidate profile has no targets configured', async () => {
     const onOpenSearchProfile = vi.fn();
     installAllBridges({
@@ -987,8 +1008,10 @@ describe('SearchPage', () => {
     expect(screen.getByText(/results are not ranked for you yet/i)).toBeInTheDocument();
     // The banner no longer describes the ordering at all, so it cannot claim one that never happened.
     expect(screen.queryByText(/results are ordered by/i)).not.toBeInTheDocument();
+    // Opens the "What you are looking for" form in place (#635); it no longer navigates away.
     fireEvent.click(screen.getByRole('button', { name: 'Fill search profile' }));
-    expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('dialog', { name: 'What you are looking for' })).toBeInTheDocument();
+    expect(onOpenSearchProfile).not.toHaveBeenCalled();
   });
 
   it('credits the submitted query in the scoreless-results banner once a query was actually searched (issue #395)', async () => {

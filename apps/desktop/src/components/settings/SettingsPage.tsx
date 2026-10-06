@@ -15,7 +15,7 @@ import { DataManagement } from './DataManagement.js';
 import { McpEndpointSection } from './McpEndpointSection.js';
 import { SavedAnswersSection } from './SavedAnswersSection.js';
 import { SourceScoutSection } from './SourceScoutSection.js';
-import { SearchProfileSection } from './SearchProfileSection.js';
+import { SearchProfileLink } from './SearchProfileLink.js';
 import { SupportSection } from './SupportSection.js';
 import { ALL_COUNTRIES } from '../search/countries.js';
 import {
@@ -172,6 +172,8 @@ export interface SettingsPageProps {
   onNavigateToRuntime?: () => void;
   /** Reopens the setup checklist ("Finish setup"). Hidden when not provided. */
   onOpenSetup?: () => void;
+  /** Opens the CV page, where "What you are looking for" lives. The Search tab links to it. */
+  onOpenCvPage?: () => void;
   /** The tab to open on. The shell keeps this in its own state, so it survives the page remounting. */
   initialTab?: SettingsTab;
   /** A section to scroll to and focus once its tab is showing. Only the search profile today. */
@@ -195,6 +197,7 @@ const SETTINGS_TABS: ReadonlyArray<{ readonly id: SettingsTab; readonly label: s
 export function SettingsPage({
   onNavigateToRuntime,
   onOpenSetup,
+  onOpenCvPage,
   initialTab,
   focusSection,
   currentPage,
@@ -526,11 +529,9 @@ export function SettingsPage({
             </SettingsRow>
           </SettingsSection>
 
-          <SearchProfileSection
-            disabled={disabled}
+          <SearchProfileLink
             focusOnOpen={focusSection === 'search-profile'}
-            onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
-            onSaveError={(message, details) => flash({ kind: 'error', message, ...(details ? { details } : {}) })}
+            {...(onOpenCvPage ? { onOpenCvPage } : {})}
           />
 
           <AtsRosterSection

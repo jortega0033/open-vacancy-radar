@@ -53,6 +53,15 @@ const EXPECTED_PATCH = {
   constraints: { professionalLanguage: 'English' },
   strongestSkills: ['React', 'TypeScript'],
   targetRoles: ['Product Engineer'],
+  // Every copied field is recorded as coming from the CV (#635).
+  fieldSources: {
+    currentRole: 'cv',
+    location: 'cv',
+    experienceYears: 'cv',
+    professionalLanguage: 'cv',
+    strongestSkills: 'cv',
+    targetRoles: 'cv',
+  },
 };
 
 const EMPTY_PROFILE = {
@@ -268,8 +277,9 @@ describe('CV paths that fill the empty search profile (#628)', () => {
     await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(2));
     fireEvent.change(select, { target: { value: 'cv-2' } });
 
-    const { location: _kept, ...patchWithoutLocation } = EXPECTED_PATCH;
-    await waitFor(() => expect(save).toHaveBeenCalledWith(patchWithoutLocation));
+    const { location: _kept, fieldSources, ...rest } = EXPECTED_PATCH;
+    const { location: _keptSource, ...sourcesWithoutLocation } = fieldSources;
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ ...rest, fieldSources: sourcesWithoutLocation }));
     expect(await screen.findByText('Search profile filled from the default CV')).toBeInTheDocument();
   });
 });

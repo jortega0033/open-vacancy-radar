@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { CANDIDATE_PROFILE_LIMITS, parseCandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
+import { CANDIDATE_PROFILE_LIMITS, mergeFieldSources, parseCandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 
 describe('vacancy profile input validation', () => {
   it('drops properties the caller was never granted, rather than passing them through to disk', () => {
@@ -111,5 +111,30 @@ describe('vacancy profile input validation', () => {
 
   it('rejects a non-boolean toggle', () => {
     expect(() => parseCandidateProfilePatch({ constraints: { dutchRequired: 'yes' } })).toThrow('must be a boolean');
+  });
+});
+
+describe('field sources (#635)', () => {
+  it('accepts cv and user, and drops keys that are not profile fields', () => {
+    expect(parseCandidateProfilePatch({ fieldSources: { targetRoles: 'cv', primaryCountry: 'user', other: 'cv' } })).toEqual({
+      fieldSources: { targetRoles: 'cv', primaryCountry: 'user' },
+    });
+  });
+
+  it('rejects any other source value without echoing it', () => {
+    expect(() => parseCandidateProfilePatch({ fieldSources: { targetRoles: 'guess' } })).toThrow('"fieldSources.targetRoles" must be');
+    expect(() => parseCandidateProfilePatch({ fieldSources: 'cv' })).toThrow('must be an object');
+  });
+
+  it('records a stated source and clears the source of a field changed without one', () => {
+    expect(mergeFieldSources({ targetRoles: 'cv', strongestSkills: 'cv' }, { targetRoles: ['A'], fieldSources: { targetRoles: 'user' } })).toEqual({
+      targetRoles: 'user',
+      strongestSkills: 'cv',
+    });
+    expect(mergeFieldSources({ targetRoles: 'cv', primaryCountry: 'cv' }, { targetRoles: ['B'], constraints: { primaryCountry: 'X' } })).toBeUndefined();
+  });
+
+  it('leaves a profile with no sources without a fieldSources key', () => {
+    expect(mergeFieldSources(undefined, { candidateName: 'Jane' })).toBeUndefined();
   });
 });

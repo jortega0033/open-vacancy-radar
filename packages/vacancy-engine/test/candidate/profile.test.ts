@@ -61,3 +61,32 @@ describe('loadCandidateProfile', () => {
     await expect(loadCandidateProfile(realPath)).resolves.toEqual(real);
   });
 });
+
+describe('fieldSources (#635)', () => {
+  it('a profile without fieldSources still loads and has none', async () => {
+    const path = join(dir, 'candidate-profile-v1.json');
+    writeFileSync(path, JSON.stringify({ ...EMPTY_CANDIDATE_PROFILE, targetRoles: ['Data analyst'] }), 'utf8');
+    const loaded = await loadCandidateProfile(path);
+    expect(loaded.fieldSources).toBeUndefined();
+  });
+
+  it('keeps recorded sources across a load', async () => {
+    const path = join(dir, 'candidate-profile-v1.json');
+    const real = { ...EMPTY_CANDIDATE_PROFILE, targetRoles: ['Data analyst'], fieldSources: { targetRoles: 'cv', primaryCountry: 'user' } };
+    writeFileSync(path, JSON.stringify(real), 'utf8');
+    await expect(loadCandidateProfile(path)).resolves.toEqual(real);
+  });
+
+  it('rejects a source value other than cv or user', async () => {
+    const path = join(dir, 'candidate-profile-v1.json');
+    writeFileSync(path, JSON.stringify({ ...EMPTY_CANDIDATE_PROFILE, fieldSources: { targetRoles: 'guess' } }), 'utf8');
+    await expect(loadCandidateProfile(path)).rejects.toThrow();
+  });
+
+  it('drops keys that are not profile fields', async () => {
+    const path = join(dir, 'candidate-profile-v1.json');
+    writeFileSync(path, JSON.stringify({ ...EMPTY_CANDIDATE_PROFILE, fieldSources: { targetRoles: 'cv', other: 'cv' } }), 'utf8');
+    const loaded = await loadCandidateProfile(path);
+    expect(loaded.fieldSources).toEqual({ targetRoles: 'cv' });
+  });
+});

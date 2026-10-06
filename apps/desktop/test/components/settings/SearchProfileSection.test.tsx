@@ -8,7 +8,6 @@ import {
 import {
   DEFAULT_CANDIDATE_PROFILE,
   installVacancyRadarBridge,
-  installWorkspaceBridge,
 } from '../../workspace-bridge.js';
 
 function configuredProfile(overrides: Partial<CandidateProfile> = {}): CandidateProfile {
@@ -41,7 +40,29 @@ describe('SearchProfileSection', () => {
     render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.getByRole('heading', { name: 'Search profile' })).toBeInTheDocument();
+  });
+
+  it('puts target roles and country first and keeps everything else under a collapsed More options (#635)', async () => {
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
+    });
+
+    const { container } = render(<SearchProfileSection {...baseProps()} />);
+
+    const targetRoles = await screen.findByLabelText('Target roles');
+    const country = screen.getByLabelText('Country');
+    const details = container.querySelector('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    expect(screen.getByText('More options')).toBeInTheDocument();
+    // Required fields sit outside the collapsed block; every other field sits inside it.
+    expect(details!.contains(targetRoles)).toBe(false);
+    expect(details!.contains(country)).toBe(false);
+    for (const label of ['Name', 'Current role', 'Location', 'Years of experience', 'Professional language', 'Strongest skills', 'Additional skills', 'Considered roles', 'Excluded role families']) {
+      expect(details!.contains(screen.getByLabelText(label))).toBe(true);
+    }
+    expect(targetRoles.compareDocumentPosition(country) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(country.compareDocumentPosition(details!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('shows the unconfigured warning when there are no target roles or strongest skills', async () => {
@@ -80,7 +101,7 @@ describe('SearchProfileSection', () => {
     fireEvent.change(nameInput, { target: { value: 'Jane Doe' } });
     fireEvent.blur(nameInput);
 
-    await waitFor(() => expect(saveSearchProfile).toHaveBeenCalledWith({ candidateName: 'Jane Doe' }));
+    await waitFor(() => expect(saveSearchProfile).toHaveBeenCalledWith({ candidateName: 'Jane Doe', fieldSources: { candidateName: 'user' } }));
     // No toast of its own any more: SettingsPage's one shared toast instance renders it instead,
     // so two autosaving forms on the same tab can never pop overlapping toasts in the same corner.
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
@@ -116,7 +137,10 @@ describe('SearchProfileSection', () => {
     fireEvent.blur(targetRoles);
 
     await waitFor(() =>
-      expect(saveSearchProfile).toHaveBeenCalledWith({ targetRoles: ['Frontend', 'Backend'] }),
+      expect(saveSearchProfile).toHaveBeenCalledWith({
+        targetRoles: ['Frontend', 'Backend'],
+        fieldSources: { targetRoles: 'user' },
+      }),
     );
   });
 
@@ -131,7 +155,28 @@ describe('SearchProfileSection', () => {
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
   });
 
-  it('groups the candidate-profile fields under Identity / Role matching subheadings', async () => {
+  it('records a country edit as added by the user, nested under constraints', async () => {
+    const saveSearchProfile = vi.fn().mockResolvedValue(configuredProfile());
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+      saveSearchProfile,
+    });
+
+    render(<SearchProfileSection {...baseProps()} />);
+
+    const country = await screen.findByLabelText('Country');
+    fireEvent.change(country, { target: { value: 'Portugal' } });
+    fireEvent.blur(country);
+
+    await waitFor(() =>
+      expect(saveSearchProfile).toHaveBeenCalledWith({
+        constraints: { primaryCountry: 'Portugal' },
+        fieldSources: { primaryCountry: 'user' },
+      }),
+    );
+  });
+
+  it('groups the optional fields under Role matching / About you subheadings', async () => {
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
     });
@@ -139,44 +184,19 @@ describe('SearchProfileSection', () => {
     render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.getByRole('heading', { level: 3, name: 'Identity' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'About you' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 3, name: 'Role matching' })).toBeInTheDocument();
   });
 
-  it('shows completion and the current default CV from the workspace bridge', async () => {
+  it('no longer shows the default CV line: that lives on the CV page', async () => {
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockResolvedValue(configuredProfile({ candidateName: 'Jane Doe' })),
     });
-    installWorkspaceBridge({
-      listCvDocuments: vi.fn().mockResolvedValue([
-        {
-          id: 'cv-1',
-          name: 'Jane CV',
-          isDefault: true,
-          text: '',
-          profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
-        },
-      ]),
-    });
 
     render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.getByLabelText('Profile status')).not.toHaveTextContent('Profile completion');
-    expect(screen.getByLabelText('Profile status')).toHaveTextContent('Default CV: Jane CV');
-  });
-
-  it('states when no default CV is selected', async () => {
-    installVacancyRadarBridge({
-      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
-    });
-    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([]) });
-
-    render(<SearchProfileSection {...baseProps()} />);
-
-    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    await waitFor(() =>
-      expect(screen.getByLabelText('Profile status')).toHaveTextContent('Default CV: No default CV selected'),
-    );
+    expect(screen.queryByLabelText('Profile status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Default CV/)).not.toBeInTheDocument();
   });
 });

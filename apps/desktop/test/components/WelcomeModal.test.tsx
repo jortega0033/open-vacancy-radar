@@ -619,7 +619,7 @@ describe('first-launch checklist: search profile could not be loaded', () => {
     await screen.findByRole('dialog', { name: 'Fill search profile from CV' });
   });
 
-  it('Open Settings closes the modal and lands on the Search tab with the profile focused', async () => {
+  it('Open Settings closes the modal and lands on the Search tab with What you are looking for focused', async () => {
     const profileLoads = { ok: false };
     const { workspace } = await uploadWithBrokenProfile(profileLoads);
     await screen.findByText(/Could not fill your profile automatically/);
@@ -630,7 +630,7 @@ describe('first-launch checklist: search profile could not be loaded', () => {
     await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
     expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
-    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'What you are looking for' })).toHaveFocus());
   });
 
   it('Dismiss clears the message', async () => {
@@ -726,7 +726,7 @@ describe('Finish setup (reopening the checklist, #539)', () => {
     expect(workspace.updateSettings).not.toHaveBeenCalledWith(expect.objectContaining({ welcomeSeen: false }));
   });
 
-  it('"Open Settings" from the reopened checklist lands on the Search tab with the profile focused', async () => {
+  it('"Open Settings" from the reopened checklist lands on the Search tab with What you are looking for focused', async () => {
     const profileLoads = { ok: false };
     installVacancyRadarBridge({
       getSearchProfile: vi.fn(async () => {
@@ -755,7 +755,7 @@ describe('Finish setup (reopening the checklist, #539)', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
-    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'What you are looking for' })).toHaveFocus());
   });
 
   it('never auto-opens for a dismissed user, and the entry stays once everything is done', async () => {
