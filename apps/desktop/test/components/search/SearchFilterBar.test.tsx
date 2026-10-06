@@ -21,6 +21,7 @@ function renderBar(filters: SearchFilters, onFiltersChange = vi.fn(), onClear = 
       aiWebDiscovery={false}
       onAiWebDiscoveryChange={vi.fn()}
       aiWebDiscoveryAvailable
+      onOpenSearchProfile={vi.fn()}
     />,
   );
   return onFiltersChange;
@@ -46,6 +47,7 @@ function StatefulBar({ initial = DEFAULT_FILTERS }: { initial?: SearchFilters })
         aiWebDiscovery={false}
         onAiWebDiscoveryChange={vi.fn()}
         aiWebDiscoveryAvailable
+        onOpenSearchProfile={vi.fn()}
       />
       <button type="button">Outside</button>
     </>
@@ -193,5 +195,86 @@ describe('SearchFilterBar hide on-site and hybrid (#565a)', () => {
     renderBar({ ...DEFAULT_FILTERS, hideOnsiteHybrid: true });
     fireEvent.click(filtersButton());
     expect(screen.getByRole('checkbox', { name: 'Hide on-site and hybrid' })).toBeChecked();
+  });
+});
+
+describe('SearchFilterBar AI web discovery (#641)', () => {
+  it('shows a visible explanation when AI web discovery is not available', () => {
+    render(
+      <SearchFilterBar
+        filters={{ ...DEFAULT_FILTERS, query: 'nurse' }}
+        onFiltersChange={vi.fn()}
+        onLocationChange={vi.fn()}
+        onSearch={vi.fn()}
+        onBrowseAll={vi.fn()}
+        onClear={vi.fn()}
+        sources={['remotive']}
+        employmentTypes={['full_time']}
+        busy={false}
+        salaryNote=""
+        hasReport
+        aiWebDiscovery={false}
+        onAiWebDiscoveryChange={vi.fn()}
+        aiWebDiscoveryAvailable={false}
+        onOpenSearchProfile={vi.fn()}
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox', { name: 'Also search the web with AI' });
+    expect(checkbox).toBeDisabled();
+    const helpText = screen.getByText(/Add a role or skill to your profile/);
+    expect(helpText).toBeInTheDocument();
+    expect(checkbox).toHaveAttribute('aria-describedby', helpText.id);
+  });
+
+  it('includes a link to open the search profile when the callback is provided', () => {
+    const onOpenSearchProfile = vi.fn();
+    render(
+      <SearchFilterBar
+        filters={{ ...DEFAULT_FILTERS, query: 'nurse' }}
+        onFiltersChange={vi.fn()}
+        onLocationChange={vi.fn()}
+        onSearch={vi.fn()}
+        onBrowseAll={vi.fn()}
+        onClear={vi.fn()}
+        sources={['remotive']}
+        employmentTypes={['full_time']}
+        busy={false}
+        salaryNote=""
+        hasReport
+        aiWebDiscovery={false}
+        onAiWebDiscoveryChange={vi.fn()}
+        aiWebDiscoveryAvailable={false}
+        onOpenSearchProfile={onOpenSearchProfile}
+      />,
+    );
+    const link = screen.getByRole('button', { name: 'Open search profile' });
+    fireEvent.click(link);
+    expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the explanation when AI web discovery is available', () => {
+    render(
+      <SearchFilterBar
+        filters={{ ...DEFAULT_FILTERS, query: 'nurse' }}
+        onFiltersChange={vi.fn()}
+        onLocationChange={vi.fn()}
+        onSearch={vi.fn()}
+        onBrowseAll={vi.fn()}
+        onClear={vi.fn()}
+        sources={['remotive']}
+        employmentTypes={['full_time']}
+        busy={false}
+        salaryNote=""
+        hasReport
+        aiWebDiscovery={false}
+        onAiWebDiscoveryChange={vi.fn()}
+        aiWebDiscoveryAvailable
+        onOpenSearchProfile={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Add a role or skill to your profile/)).not.toBeInTheDocument();
+    const checkbox = screen.getByRole('checkbox', { name: 'Also search the web with AI' });
+    expect(checkbox).toBeEnabled();
+    expect(checkbox).not.toHaveAttribute('aria-describedby');
   });
 });
