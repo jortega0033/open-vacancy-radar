@@ -303,7 +303,6 @@ export function VacancyDetail({
                 type="button"
                 onClick={onPrepare}
                 disabled={prepareState === 'preparing' || !prepareAvailable}
-                title={prepareAvailable ? undefined : 'Available when this scan finishes'}
               >
                 {prepareState === 'preparing' && (
                   <span className="loading loading-spinner loading-xs" aria-hidden="true" />
