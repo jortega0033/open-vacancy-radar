@@ -1,10 +1,16 @@
 # Loop State: Open Vacancy Radar
 
 Last run: 2026-09-11T17:22:00Z (2026-09-11, Europe/Amsterdam)
-Mode: L1 research with explicitly authorized GitHub ticket publishing; no product-source edits
+Mode: L2 as of 2026-10-06, set by the repo owner who explicitly asked to move the loop from L1 to L2
 Automation status: ACTIVE after the user's 2026-09-11 request to continue researching uncovered areas.
 Kill switch: inactive
 Budget accounting reset: 2026-09-11T08:52:00Z, epoch `substantive-research-v2`. The previous 105,500 estimate mixed substantive research with repeated context recovery and hourly bookkeeping. It remains in the log as historical, non-metered data but is not comparable to the new ledger. Future substantive runs have an 8,000 estimated-token ceiling and a 100,000 rolling-24-hour epoch cap. Budget-only/no-change checks count 0 and do not write state or log. Current epoch usage: 41,000 estimated tokens. Automation is ACTIVE after the user's resume request.
+
+## L2 operating notes
+
+- A run: load `$loop-constraints`, `$loop-budget`, `$loop-triage`; read this file; pick the single most actionable item; implement it in an isolated worktree from fresh `origin/master` with the minimal-fix discipline; an independent `loop-verifier` re-runs tests and checks diff scope and protected paths; open the PR; record the run here and in `loop-run-log.md`; stop.
+- Results go to the PR (one comment with its link on the issue, nothing else on the issue), this file, and `loop-run-log.md`.
+- Merging is a human decision. No pushes to master, no scheduler. Three failed attempts on one item: stop and escalate here.
 
 ## 2026-10-06 user-directed implementation session
 
