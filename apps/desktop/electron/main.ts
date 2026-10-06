@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell, screen } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -113,6 +113,7 @@ import {
   resolveVacancyEngineMigrationsFolder,
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
+import { computeInitialWindowBounds } from './window-size.js';
 import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
 import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
@@ -1274,9 +1275,20 @@ function createWindow(): void {
     resourcesPath: process.resourcesPath,
   });
 
+  // Compute initial window bounds: for e2e tests, use deterministic size; otherwise compute
+  // based on available work area to show the labeled sidebar on first launch.
+  let windowBounds = { width: 1280, height: 800, x: undefined, y: undefined };
+  if (!process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT) {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+    windowBounds = computeInitialWindowBounds(width, height);
+  }
+
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 720,
+    x: windowBounds.x,
+    y: windowBounds.y,
+    width: windowBounds.width,
+    height: windowBounds.height,
     minWidth: 760,
     minHeight: 600,
     autoHideMenuBar: true,
