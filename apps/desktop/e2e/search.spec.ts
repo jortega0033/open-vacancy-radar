@@ -31,7 +31,8 @@ test.describe('Search', () => {
       'Search for Frontend Developer',
       'Search for React Developer',
     ]);
-    await expect(window.getByRole('button', { name: 'Search', exact: true })).toHaveCount(1);
+    // Scoped to the page: the sidebar also has a Search nav button.
+    await expect(window.getByRole('main').getByRole('button', { name: 'Search', exact: true })).toHaveCount(1);
     await expect(window.getByRole('button', { name: 'Browse all vacancies' })).toHaveCount(1);
     // Secondary filters (and the salary note) sit behind the Filters button (#578).
     await expect(window.getByRole('combobox', { name: 'Job source' })).toHaveCount(0);
