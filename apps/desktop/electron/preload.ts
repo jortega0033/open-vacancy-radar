@@ -163,8 +163,6 @@ export interface VacancyRadarBridge {
    * companies on these five providers until `refreshAtsRoster` below runs at least once.
    */
   getAtsRosterStatus(): Promise<AtsRosterStatus>;
-  /** False under the e2e harness, so the automatic company list download never hits the network. */
-  canAutoDownloadAtsRoster(): Promise<boolean>;
   /**
    * Runs the roster import now: fetches each provider's CSV, re-verifies every row through this
    * repo's own ATS URL detectors, and writes the local roster file the next vacancy scan reads.
@@ -359,9 +357,6 @@ const vacancyApi: VacancyRadarBridge = {
   },
   getAtsRosterStatus() {
     return ipcRenderer.invoke('vacancy:ats-roster:get-status');
-  },
-  canAutoDownloadAtsRoster() {
-    return ipcRenderer.invoke('vacancy:ats-roster:can-auto-download');
   },
   refreshAtsRoster() {
     return ipcRenderer.invoke('vacancy:ats-roster:refresh');

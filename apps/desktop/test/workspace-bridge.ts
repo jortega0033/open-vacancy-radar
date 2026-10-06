@@ -198,7 +198,6 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
     // Default: not imported yet, mirroring a fresh checkout/userData directory. A test that cares
     // about a populated roster overrides this with its own resolved status.
     getAtsRosterStatus: vi.fn().mockResolvedValue(null),
-    canAutoDownloadAtsRoster: vi.fn().mockResolvedValue(true),
     refreshAtsRoster: vi.fn().mockResolvedValue({ file: 'ats-roster-v1.json', importedAt: '2026-09-11T00:00:00.000Z', totalEntries: 0, providers: [] }),
     getSourceScoutStatus: vi.fn().mockResolvedValue({
       enabled: false,

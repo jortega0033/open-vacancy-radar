@@ -524,17 +524,15 @@ describe('first-launch checklist: company list is automatic (#637)', () => {
     expect(refreshAtsRoster).not.toHaveBeenCalled();
   });
 
-  it('does not download under the e2e harness', async () => {
+  it('does not download when the main process reports the switch off (as it does under e2e)', async () => {
     const refreshAtsRoster = vi.fn().mockResolvedValue(rosterResult());
-    const canAutoDownloadAtsRoster = vi.fn().mockResolvedValue(false);
-    installVacancyRadarBridge({
-      getAtsRosterStatus: vi.fn().mockResolvedValue(null),
-      refreshAtsRoster,
-      canAutoDownloadAtsRoster,
+    const getAtsRosterStatus = vi.fn().mockResolvedValue(null);
+    installVacancyRadarBridge({ getAtsRosterStatus, refreshAtsRoster });
+    await openWelcome({
+      getSettings: vi.fn().mockResolvedValue({ ...UNSEEN_SETTINGS, autoRosterDownloadEnabled: false }),
     });
-    await openWelcome();
 
-    await waitFor(() => expect(canAutoDownloadAtsRoster).toHaveBeenCalled());
+    await waitFor(() => expect(getAtsRosterStatus).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(refreshAtsRoster).not.toHaveBeenCalled();
   });

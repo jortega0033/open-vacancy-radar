@@ -18,9 +18,10 @@ export function useAutoCompanyList() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([window.workspace.getSettings(), window.vacancyRadar.canAutoDownloadAtsRoster()])
-      .then(([settings, allowed]) => {
-        if (!cancelled) setEnabled(settings.autoRosterDownloadEnabled && allowed);
+    window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) setEnabled(settings.autoRosterDownloadEnabled);
       })
       .catch(() => {
         if (!cancelled) setEnabled(false);

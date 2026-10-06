@@ -2866,9 +2866,6 @@ guardedIpc.handle('vacancy:ats-roster:get-status', async (): Promise<AtsRosterSt
   readAtsRosterStatus(await vacancyEngineDataRoot()),
 );
 
-// Same e2e hook the window size code uses: specs never start a network download on their own.
-guardedIpc.handle('vacancy:ats-roster:can-auto-download', (): boolean => !process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT);
-
 guardedIpc.handle('vacancy:ats-roster:refresh', (): Promise<AtsRosterImportResult> => runAtsRosterRefresh());
 
 // #195: fixed for v1, not user-configurable (see the ticket's own Non-goals) -- a schedule-picker
@@ -3184,7 +3181,12 @@ guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknow
  * ---------------------------------------------------------------------------------------------
  */
 
-guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:settings:get', async () => {
+  const settings = workspace.getSettings(await ensureWorkspaceDb());
+  // Under e2e (the same hook the window size code uses) the automatic company list download reads
+  // as off, so specs never start a network download on their own. Nothing is saved (#637).
+  return process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT ? { ...settings, autoRosterDownloadEnabled: false } : settings;
+});
 
 guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
