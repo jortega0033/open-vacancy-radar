@@ -50,7 +50,7 @@ test.describe('CV library', () => {
     await goto(window, 'CV');
     await expect(window.getByText(/no cv on file/i)).toBeVisible();
 
-    await window.getByRole('button', { name: /add manual profile/i }).first().click();
+    await window.getByRole('button', { name: /type your cv instead/i }).last().click();
     const addDialog = window.getByRole('dialog', { name: /add manual cv profile/i });
     await expect(addDialog).toBeVisible();
 
