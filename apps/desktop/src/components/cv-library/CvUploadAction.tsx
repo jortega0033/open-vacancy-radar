@@ -3,10 +3,13 @@ import { CvTranscriptionFlow } from '../cv/CvTranscriptionFlow.js';
 import { SaveCvToLibrary } from '../cv/SaveCvToLibrary.js';
 import { useCvPicker } from '../cv/useCvPicker.js';
 import type { CvDocument } from '../cv/types.js';
+import type { SearchProfileFillOutcome } from './fill-search-profile-from-cv.js';
 
 export interface CvUploadActionProps {
   /** Called once the picked file has been persisted, so the parent can refresh its list. */
-  onSaved: () => void;
+  onSaved: (id: string, outcome?: SearchProfileFillOutcome) => void;
+  /** The welcome flow fills the profile itself through its reviewed drawer, so it turns this off. */
+  fillSearchProfile?: boolean;
 }
 
 /**
@@ -20,7 +23,7 @@ export interface CvUploadActionProps {
  * thin composition of "pick" (this component) and "persist" (`SaveCvToLibrary`) rather than a
  * second `CvUpload`.
  */
-export function CvUploadAction({ onSaved }: CvUploadActionProps) {
+export function CvUploadAction({ onSaved, fillSearchProfile = true }: CvUploadActionProps) {
   const picker = useCvPicker();
   const [picked, setPicked] = useState<CvDocument | null>(null);
 
@@ -31,10 +34,13 @@ export function CvUploadAction({ onSaved }: CvUploadActionProps) {
     picker.reset();
   }, [picker]);
 
-  const handleSaved = useCallback(() => {
-    setPicked(null);
-    onSaved();
-  }, [onSaved]);
+  const handleSaved = useCallback(
+    (id: string, outcome?: SearchProfileFillOutcome) => {
+      setPicked(null);
+      onSaved(id, outcome);
+    },
+    [onSaved],
+  );
 
   const isPicking = picker.state.phase === 'picking' || picker.state.phase === 'transcribing';
 
@@ -45,7 +51,7 @@ export function CvUploadAction({ onSaved }: CvUploadActionProps) {
           Loaded <span className="font-mono">{picked.fileName}</span> (
           {picked.text.length.toLocaleString('en-US')} characters)
         </span>
-        <SaveCvToLibrary cv={picked} onSaved={handleSaved} />
+        <SaveCvToLibrary cv={picked} onSaved={handleSaved} fillSearchProfile={fillSearchProfile} />
         <button className="btn btn-ghost btn-sm" type="button" onClick={() => setPicked(null)}>
           Cancel
         </button>

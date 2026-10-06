@@ -249,6 +249,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
             >
               {!cvDone && (
                 <CvUploadAction
+                  fillSearchProfile={false}
                   onSaved={() => {
                     setCvSaved(true);
                     setProfileError(undefined);
