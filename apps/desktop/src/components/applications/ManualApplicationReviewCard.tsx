@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { usePrefersReducedMotion } from '../../use-prefers-reduced-motion.js';
 import { describeLetterBlocker } from './letter-blocker.js';
+import { SWIPE_GESTURES_ENABLED } from './swipe-gestures.js';
 import { retryLabel, useWaitingForReset } from './provider-reset.js';
 
 export interface ManualApplicationReviewCardProps {
@@ -58,7 +59,7 @@ export function ManualApplicationReviewCard({
   const letterReason = letterBlocker?.message ?? 'The cover letter still needs attention.';
 
   function endDrag() {
-    if (originRef.current === null) return;
+    if (!SWIPE_GESTURES_ENABLED || originRef.current === null) return;
     originRef.current = null;
     if (!busy) {
       if (dragXRef.current > SWIPE_THRESHOLD_PX) onContinue();
@@ -71,6 +72,8 @@ export function ManualApplicationReviewCard({
   return (
     <div className="mx-auto flex w-full max-w-sm flex-col gap-3">
       <div className="-mx-2 grid overflow-x-clip px-4 pb-2 pt-3">
+        {SWIPE_GESTURES_ENABLED ? (
+          <>
         <div
           aria-hidden="true"
           data-testid="manual-swipe-card-back"
@@ -81,38 +84,39 @@ export function ManualApplicationReviewCard({
           data-testid="manual-swipe-card-back"
           className="pointer-events-none col-start-1 row-start-1 mx-4 translate-y-1 rotate-[2deg] rounded-lg border border-base-300 bg-base-200"
         />
+          </>
+        ) : null}
         <div
           data-testid="manual-application-swipe-card"
           role="group"
           aria-label={`Application decision card for ${attempt.role} at ${attempt.company}`}
-          className={`relative z-10 col-start-1 row-start-1 mx-2 select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
-          style={{
+          className={`relative z-10 col-start-1 row-start-1 mx-2 ${SWIPE_GESTURES_ENABLED ? 'select-none' : ''} overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${SWIPE_GESTURES_ENABLED ? (busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing') : ''}`}
+          style={SWIPE_GESTURES_ENABLED ? {
             transform: reducedMotion
               ? `translateX(${dragX}px)`
               : `translateX(${dragX}px) rotate(${Math.max(-12, Math.min(12, dragX / 10))}deg)`,
             transition: !reducedMotion && originRef.current === null ? 'transform 200ms ease-out' : 'none',
             touchAction: 'pan-y',
-          }}
-          onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
+          } : undefined}
+          onPointerDown={!SWIPE_GESTURES_ENABLED ? undefined : (event: ReactPointerEvent<HTMLDivElement>) => {
             // A press on a control inside the card is a click, not a drag. Capturing it would send
             // the click to the card instead, so Review and Save copy did nothing (#565).
             if (busy || (event.target as Element).closest?.(INTERACTIVE_SELECTOR)) return;
             originRef.current = event.clientX;
             event.currentTarget.setPointerCapture?.(event.pointerId);
           }}
-          onPointerMove={(event) => {
+          onPointerMove={!SWIPE_GESTURES_ENABLED ? undefined : (event) => {
             if (originRef.current !== null) {
               dragXRef.current = event.clientX - originRef.current;
               setDragX(dragXRef.current);
             }
           }}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
+          onPointerUp={SWIPE_GESTURES_ENABLED ? endDrag : undefined}
+          onPointerCancel={SWIPE_GESTURES_ENABLED ? endDrag : undefined}
         >
-          <div
-            aria-hidden="true"
-            className="mx-auto mt-2 h-1 w-7 rounded-full bg-base-content/20"
-          />
+          {SWIPE_GESTURES_ENABLED ? <div aria-hidden="true" className="mx-auto mt-2 h-1 w-7 rounded-full bg-base-content/20" /> : null}
+          {SWIPE_GESTURES_ENABLED ? (
+            <>
           <span
             className="badge badge-success absolute left-4 top-4 z-10 rotate-[-8deg] font-semibold"
             style={{ opacity: Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX)) }}
@@ -127,6 +131,8 @@ export function ManualApplicationReviewCard({
           >
             Skip
           </span>
+            </>
+          ) : null}
 
           <div className="border-b border-base-300 px-5 py-3.5">
             <h2 className="text-sm font-semibold">
