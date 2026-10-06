@@ -659,6 +659,8 @@ export const appSettings = sqliteTable('app_settings', {
    * independent of `autoScanEnabled`: refreshing vacancies and widening the source list are two
    * separate background jobs. It needs a saved role or keyword and never runs while OVR is closed. */
   autoSourceScoutEnabled: integer('auto_source_scout_enabled', { mode: 'boolean' }).notNull().default(false),
+  /** Whether the app downloads the company list by itself when none is saved yet (#637). On by default. */
+  autoRosterDownloadEnabled: integer('auto_roster_download_enabled', { mode: 'boolean' }).notNull().default(true),
   /**
    * Whether this app is allowed to treat any site as automated-submission eligible at all -- the
    * MVP kill switch over #193's auto-apply track. Off by default, and off in every shipped build of

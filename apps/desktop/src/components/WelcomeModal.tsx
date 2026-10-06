@@ -6,7 +6,6 @@ import { PROVIDER_LABEL } from '../provider-labels.js';
 import { Dialog } from './shell/Dialog.js';
 import { CvUploadAction } from './cv-library/CvUploadAction.js';
 import { FillProfileFromCvDrawer } from './settings/FillProfileFromCv.js';
-import { useAtsRoster } from './settings/useAtsRoster.js';
 
 export interface WelcomeModalProps {
   /**
@@ -126,7 +125,7 @@ function ChecklistItem({ title, status, done, detail, skipLabel, onSkip, childre
 }
 
 /**
- * First-launch checklist: a CV, a working AI runtime, and the company list that five providers need.
+ * First-launch checklist: a CV and a working AI runtime.
  * Each item reads its own live status and can be done or skipped on its own; none gates another.
  *
  * Skippable by design: "Skip for now", the close button and the backdrop all dismiss it. The CV
@@ -134,24 +133,20 @@ function ChecklistItem({ title, status, done, detail, skipLabel, onSkip, childre
  * (`SaveCvToLibrary` -> `createCvDocument`) pair the CV Library page's own button uses. A successful
  * upload hands off into `FillProfileFromCvDrawer` with `autoStart` (the same reviewed, AI-assisted
  * fill Settings offers, still gated on the user pressing Save); closing that drawer, saved or not,
- * returns here, since the CV is already in the library either way. The company list reuses
- * `useAtsRoster`, so Settings and this modal share one download path and one status.
+ * returns here, since the CV is already in the library either way. The company list is no longer a
+ * step here: it downloads on its own at first launch (`useAutoCompanyList`).
  *
- * Completed work is never repeated: the CV item reads as done once saved, and the company list reads
- * its status from the saved import, so reopening this modal does not offer the download again.
+ * Completed work is never repeated: the CV item reads as done once saved.
  */
 export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened = false }: WelcomeModalProps) {
   const [step, setStep] = useState<CvStep>('invite');
   const [cvSaved, setCvSaved] = useState(false);
   const [profile, setProfile] = useState<CandidateProfile>();
   const [profileError, setProfileError] = useState<string>();
-  const [skipped, setSkipped] = useState({ cv: false, runtime: false, roster: false });
-  const [rosterError, setRosterError] = useState<string>();
+  const [skipped, setSkipped] = useState({ cv: false, runtime: false });
 
   const cvCheck = useCvCheck();
   const { check, run: recheckRuntime } = useRuntimeCheck();
-  const clearRosterError = useCallback(() => setRosterError(undefined), []);
-  const roster = useAtsRoster({ onRefreshed: clearRosterError, onRefreshError: setRosterError });
 
   const skip = (key: keyof typeof skipped) => setSkipped((current) => ({ ...current, [key]: true }));
 
@@ -191,11 +186,9 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
 
   const cvDone = cvSaved || cvCheck === 'has-cv';
   const runtimeDone = check.kind === 'ready';
-  const rosterDone = roster.loaded && roster.status !== null;
-  const rosterUnknown = roster.loaded && !roster.status && Boolean(roster.loadError);
   const title = reopened ? 'Finish setup' : 'Welcome to Open Vacancy Radar';
   const allAddressed =
-    (cvDone || skipped.cv) && (runtimeDone || skipped.runtime) && (rosterDone || skipped.roster);
+    (cvDone || skipped.cv) && (runtimeDone || skipped.runtime);
   const busy = step === 'loading-profile';
 
   const runtimeDetail = (() => {
@@ -227,7 +220,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
           <p className="text-sm">
             {reopened
               ? 'Pick up where you left off.'
-              : `${runtimeDone ? 'Two' : 'Three'} quick steps. Skip any and come back later.`}
+              : `${runtimeDone ? 'One quick step' : 'Two quick steps'}. Skip any and come back later.`}
           </p>
 
           <ul className="mt-2" aria-label="Setup checklist">
@@ -304,42 +297,6 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
               )}
             </ChecklistItem>
             )}
-
-            <ChecklistItem
-              title="Download the company list"
-              status={rosterDone ? 'Done' : rosterUnknown ? 'Unknown' : skipped.roster ? 'Skipped' : 'To do'}
-              done={rosterDone}
-              detail={
-                !roster.loaded
-                  ? 'Checking…'
-                  : rosterUnknown
-                  ? 'Could not check. You can still download it.'
-                  : roster.status
-                  ? `${roster.status.totalEntries.toLocaleString()} companies ready.`
-                  : 'Needed once so searches can find companies that hire directly.'
-              }
-              skipLabel="Skip downloading the company list"
-              {...(!rosterDone && !skipped.roster && !roster.refreshing ? { onSkip: () => skip('roster') } : {})}
-            >
-              {!rosterDone && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-outline"
-                  disabled={roster.refreshing || !roster.loaded}
-                  onClick={() => {
-                    setRosterError(undefined);
-                    roster.refresh();
-                  }}
-                >
-                  {roster.refreshing ? 'Downloading…' : rosterError ? 'Try download again' : 'Download company list'}
-                </button>
-              )}
-              {(rosterError ?? roster.loadError) && !roster.refreshing && (
-                <p className="w-full text-xs text-error" role="alert">
-                  {rosterError ?? roster.loadError}
-                </p>
-              )}
-            </ChecklistItem>
           </ul>
         </div>
 

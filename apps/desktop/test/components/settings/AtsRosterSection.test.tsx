@@ -9,6 +9,8 @@ import { installVacancyRadarBridge } from '../../workspace-bridge.js';
 
 function baseProps(overrides: Partial<AtsRosterSectionProps> = {}): AtsRosterSectionProps {
   return {
+    autoDownload: true,
+    onAutoDownloadChange: vi.fn(),
     onRefreshed: vi.fn(),
     onRefreshError: vi.fn(),
     ...overrides,
@@ -40,6 +42,19 @@ afterEach(() => {
 });
 
 describe('AtsRosterSection', () => {
+  it('has the automatic download switch, on by default, and reports a change', () => {
+    installVacancyRadarBridge({ getAtsRosterStatus: vi.fn().mockResolvedValue(null) });
+    const onAutoDownloadChange = vi.fn();
+
+    render(<AtsRosterSection {...baseProps({ onAutoDownloadChange })} />);
+
+    const toggle = screen.getByRole('switch', { name: 'Download the company list automatically' });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(onAutoDownloadChange).toHaveBeenCalledWith(false);
+    expect(screen.getByRole('button', { name: 'Update company list' })).toBeInTheDocument();
+  });
+
   it('shows "not yet imported" when the roster has never been imported', async () => {
     installVacancyRadarBridge({
       getAtsRosterStatus: vi.fn().mockResolvedValue(null),

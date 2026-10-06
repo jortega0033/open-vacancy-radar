@@ -10,6 +10,7 @@ import { LettersPage, type SelectedVacancy } from './components/letters/index.js
 import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage, type SettingsFocusSection, type SettingsTab } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
+import { useAutoCompanyList } from './components/settings/useAutoCompanyList.js';
 import { WelcomeModal } from './components/WelcomeModal.js';
 import { SupportPromptProvider } from './components/support/index.js';
 import {
@@ -41,6 +42,7 @@ const ENGINE_HEALTH_REFRESH_MS = 20_000;
 const SIDEBAR_RAIL_BELOW_PX = 1100;
 
 export function App() {
+  const companyList = useAutoCompanyList();
   const [nav, setNav] = useState<NavPage>('search');
   const [previousNav, setPreviousNav] = useState<NavPage>();
   const lastNavRef = useRef<NavPage>(nav);
@@ -527,6 +529,7 @@ export function App() {
               session={searchSession}
               onSessionChange={setSearchSession}
               handoff={searchHandoff}
+              companyList={companyList}
             />
           )}
           {nav === 'saved' && (

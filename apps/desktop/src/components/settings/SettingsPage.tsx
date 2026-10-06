@@ -53,6 +53,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   minimizeToTrayOnClose: false,
   autoScanEnabled: false,
   autoSourceScoutEnabled: false,
+  autoRosterDownloadEnabled: true,
   defaultLocation: '',
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
@@ -534,6 +535,8 @@ export function SettingsPage({
 
           <AtsRosterSection
             disabled={disabled}
+            autoDownload={settings.autoRosterDownloadEnabled}
+            onAutoDownloadChange={(autoRosterDownloadEnabled) => changeField({ autoRosterDownloadEnabled })}
             onRefreshed={(result) =>
               flash({ kind: 'saved', message: `Company list updated (${result.totalEntries.toLocaleString()} companies)` })
             }

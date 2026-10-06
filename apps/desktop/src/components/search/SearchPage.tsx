@@ -186,6 +186,8 @@ export interface SearchPageProps {
   onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
   /** Set once when Welcome closes with a target role: fills the field and focuses its Search button. Never starts a scan. */
   handoff?: { role: string; id: number } | null;
+  /** The automatic company list download (#637): shown as one short line only after it failed. */
+  companyList?: { failed: boolean; retrying: boolean; retry: () => void };
 }
 
 /** Below this much width for the page itself, the list and the detail take turns instead of
@@ -201,6 +203,7 @@ export function SearchPage({
   session: controlledSession,
   onSessionChange,
   handoff = null,
+  companyList,
 }: SearchPageProps = {}) {
   const [localSession, setLocalSession] = useState(createSearchSessionState);
   const session = controlledSession ?? localSession;
@@ -1358,6 +1361,14 @@ export function SearchPage({
               ? 'Rebuilding keeps the damaged file, set aside under a new name, and starts a fresh cache. Searching is paused until then.'
               : 'Your saved results are still here.'}
           </ErrorBanner>
+        )}
+        {companyList?.failed && (
+          <p className="flex flex-wrap items-center gap-x-2 px-6 py-0.5 text-xs text-base-content/70" role="status">
+            <span>Could not download the company list. Searches still use the other sources.</span>
+            <button type="button" className="link link-primary" onClick={companyList.retry}>
+              Try again
+            </button>
+          </p>
         )}
         {cacheNotice && (
           <div className="alert alert-info alert-soft mt-3 text-sm" role="status">
