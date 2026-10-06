@@ -2987,6 +2987,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     welcomeSeen: row.welcomeSeen,
     autoScanEnabled: row.autoScanEnabled,
     autoSourceScoutEnabled: row.autoSourceScoutEnabled,
+    autoRosterDownloadEnabled: row.autoRosterDownloadEnabled,
     autoApplyEnabled: row.autoApplyEnabled,
     defaultLocation: row.defaultLocation,
     defaultCvId: row.defaultCvId,

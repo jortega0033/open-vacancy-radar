@@ -1,0 +1,1 @@
+ALTER TABLE `app_settings` ADD `auto_roster_download_enabled` integer DEFAULT true NOT NULL;

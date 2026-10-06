@@ -957,6 +957,8 @@ export interface AppSettingsRecord {
   autoScanEnabled: boolean;
   /** #348: scout new ATS sources in the background while OVR is open. Off by default. */
   autoSourceScoutEnabled: boolean;
+  /** #637: download the company list automatically when none is saved yet. On by default. */
+  autoRosterDownloadEnabled: boolean;
   /** The auto-apply kill switch (off for this MVP release). Read by main.ts at startup and handed
    * to `application-target-policies.ts`; never writable from the renderer -- `parseSettingsPatch`
    * does not accept it. See `schema.ts`'s comment on the column for the full reasoning. */

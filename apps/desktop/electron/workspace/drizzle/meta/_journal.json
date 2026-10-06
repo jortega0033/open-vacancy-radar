@@ -232,6 +232,13 @@
       "when": 1791191912651,
       "tag": "0032_soft_yellowjacket",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1791296828961,
+      "tag": "0033_sticky_carmella_unuscione",
+      "breakpoints": true
     }
   ]
 }
