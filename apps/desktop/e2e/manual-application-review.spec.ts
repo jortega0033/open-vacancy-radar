@@ -134,7 +134,7 @@ test('Search opens a compact manual swipe review with equivalent controls', asyn
       const skipButton = dialog.getByRole('button', { name: 'Skip', exact: true });
       const continueButton = dialog.getByRole('button', { name: 'Open the posting' });
       await expect(card).toBeVisible();
-      await expect(backs).toHaveCount(2);
+      await expect(backs).toHaveCount(0);
       await expect(skipButton).toBeEnabled();
       await expect(continueButton).toBeEnabled();
       await expect(dialog.getByText('Submit', { exact: true })).toHaveCount(0);
@@ -196,17 +196,15 @@ test('Search opens a compact manual swipe review with equivalent controls', asyn
         });
 
         const frontBefore = await card.boundingBox();
-        const backBefore = await backs.first().boundingBox();
-        if (!frontBefore || !backBefore) throw new Error('manual review deck is not measurable');
+        if (!frontBefore) throw new Error('manual review card is not measurable');
         await window.mouse.move(frontBefore.x + frontBefore.width / 2, frontBefore.y + frontBefore.height / 2);
         await window.mouse.down();
         await window.mouse.move(frontBefore.x + frontBefore.width / 2 + 80, frontBefore.y + frontBefore.height / 2, { steps: 4 });
 
         const frontDuring = await card.boundingBox();
-        const backDuring = await backs.first().boundingBox();
-        if (!frontDuring || !backDuring) throw new Error('manual review deck disappeared while dragging');
-        expect(frontDuring.x).toBeGreaterThan(frontBefore.x + 40);
-        expect(backDuring.x).toBeCloseTo(backBefore.x, 0);
+        if (!frontDuring) throw new Error('manual review card disappeared while dragging');
+        // The swipe gesture is hidden (#630): the card stays where it is.
+        expect(frontDuring.x).toBeCloseTo(frontBefore.x, 0);
         await expect(skipButton).toBeEnabled();
         await expect(continueButton).toBeEnabled();
 

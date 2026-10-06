@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CvDocumentRecord, CvEvidenceOverlayRecord, CvExportFormat } from '../../window.js';
-import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import emptyCvIllustration from '../../../assets/illustrations/empty-cv.svg?no-inline';
 import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
 import { CvLibraryTable } from './CvLibraryTable.js';
 import { CvUploadAction } from './CvUploadAction.js';
+import {
+  fillEmptySearchProfileFieldsFromCv,
+  SEARCH_PROFILE_FILLED_STATUS,
+  tryFillSearchProfileFromCv,
+  type SearchProfileFillOutcome,
+} from './fill-search-profile-from-cv.js';
 import { ManualCaseForm } from './ManualCaseForm.js';
 import { describeTailoringCase } from './tailoring-cases.js';
 import { TailoringCases } from './TailoringCases.js';
@@ -21,57 +26,6 @@ type DrawerState = { mode: 'add' } | { mode: 'edit'; record: CvDocumentRecord };
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
-}
-
-function nonEmpty(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function unique(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed) continue;
-    const key = trimmed.toLocaleLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(trimmed);
-  }
-  return out;
-}
-
-async function fillEmptySearchProfileFieldsFromCv(doc: CvDocumentRecord): Promise<boolean> {
-  if (!('vacancyRadar' in window)) return false;
-  const profile = await window.vacancyRadar.getSearchProfile();
-  const patch: CandidateProfilePatch = {};
-
-  const title = nonEmpty(doc.profile.title);
-  const targetRole = nonEmpty(doc.targetRole) ?? title;
-  const years = Number.parseInt(doc.profile.years.trim(), 10);
-  const language = doc.profile.languages
-    .split(',')
-    .map((entry) => entry.trim())
-    .find(Boolean);
-  const skills = unique(doc.profile.skills);
-
-  if (!profile.currentRole && title) patch.currentRole = title;
-  if (!profile.location && nonEmpty(doc.profile.location)) patch.location = doc.profile.location.trim();
-  if (profile.experienceYears === 0 && Number.isFinite(years) && years > 0) patch.experienceYears = years;
-  if (!profile.constraints.professionalLanguage && language) {
-    patch.constraints = { professionalLanguage: language };
-  }
-  if (profile.strongestSkills.length === 0 && skills.length > 0) {
-    patch.strongestSkills = skills.slice(0, 10);
-  }
-  if (profile.targetRoles.length === 0 && targetRole) {
-    patch.targetRoles = [targetRole];
-  }
-
-  if (Object.keys(patch).length === 0) return false;
-  await window.vacancyRadar.saveSearchProfile(patch);
-  return true;
 }
 
 /**
@@ -149,21 +103,36 @@ export function CvLibraryPage() {
   const openEditDrawer = useCallback((record: CvDocumentRecord) => setDrawerState({ mode: 'edit', record }), []);
   const closeDrawer = useCallback(() => setDrawerState(null), []);
 
+  const showFillOutcome = useCallback((outcome: SearchProfileFillOutcome) => {
+    if (outcome.error) {
+      setActionError(`CV saved, but the search profile was not filled: ${outcome.error}`);
+    } else if (outcome.filled) {
+      setActionStatus(SEARCH_PROFILE_FILLED_STATUS);
+    }
+  }, []);
+
   const handleDrawerSubmit = useCallback(
     async (payload: CvDrawerSubmitPayload) => {
       if (!drawerState) return;
+      setActionError(undefined);
+      setActionStatus(undefined);
+      let saved: CvDocumentRecord;
       if (drawerState.mode === 'add') {
         const created = await window.workspace.createCvDocument({ ...payload, kind: 'manual' });
+        saved = created;
         setDocuments((prev) => [created, ...(prev ?? [])]);
       } else {
         const updated = await window.workspace.updateCvDocument(drawerState.record.id, payload);
+        saved = updated;
         setDocuments((prev) => (prev ?? []).map((doc) => (doc.id === updated.id ? updated : doc)));
         // An open tailoring case re-reads the library, so its source notice clears in place (#447).
         setLibraryRevision((revision) => revision + 1);
       }
       setDrawerState(null);
+      // Only the default CV (the first one, or one edited while it is the default) feeds the profile.
+      if (saved.isDefault) showFillOutcome(await tryFillSearchProfileFromCv(saved));
     },
-    [drawerState],
+    [drawerState, showFillOutcome],
   );
 
   const handleSetDefault = useCallback(async (doc: CvDocumentRecord) => {
@@ -177,7 +146,7 @@ export function CvLibraryPage() {
       const promoted = refreshed.find((entry) => entry.id === doc.id) ?? doc;
       try {
         const filled = await fillEmptySearchProfileFieldsFromCv(promoted);
-        if (filled) setActionStatus('Search profile filled from the default CV');
+        if (filled) setActionStatus(SEARCH_PROFILE_FILLED_STATUS);
       } catch (err) {
         setActionError(`Default CV set, but the search profile was not filled: ${describeError(err, 'unknown error')}`);
       }
@@ -303,7 +272,13 @@ export function CvLibraryPage() {
               Tailor for a job
             </button>
           )}
-          <CvUploadAction onSaved={() => void reloadDocuments()} isPrimary={uploadIsPrimary} />
+          <CvUploadAction
+            onSaved={(_id, outcome) => {
+              void reloadDocuments();
+              if (outcome) showFillOutcome(outcome);
+            }}
+            isPrimary={uploadIsPrimary}
+          />
           {hasAnyDocuments && (
             <>
               {uploadIsPrimary && (
