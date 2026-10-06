@@ -46,7 +46,8 @@ export function SaveCvToLibrary({ cv, onSaved, fillSearchProfile = true }: SaveC
       const outcome = fillSearchProfile && created.isDefault ? await tryFillSearchProfileFromCv(created) : undefined;
       setFillNote(outcome);
       setState('saved');
-      onSaved?.(created.id, outcome);
+      if (outcome?.filled || outcome?.error) onSaved?.(created.id, outcome);
+      else onSaved?.(created.id);
     } catch (err) {
       setState('idle');
       setError(describeError(err, 'could not save this CV to your library'));
