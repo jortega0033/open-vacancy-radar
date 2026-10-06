@@ -1,10 +1,8 @@
 # Release notes: v0.1.4
 
-Windows x64 MVP release candidate for clean-machine testing.
+Windows x64 release.
 
-Independent acceptance is tracked in [issue #354](https://github.com/jortega0033/open-vacancy-radar/issues/354).
-The manual installed-app smoke test and the clean-machine QA (#354, #39) have NOT been done for
-this build yet.
+The maintainer reported the clean-machine QA (#354, #39) as done before this release.
 
 ## What's new since v0.1.3
 
@@ -125,8 +123,6 @@ the full detail.
 
 - Windows 10 or later, x64 only.
 - The installer is unsigned. Windows SmartScreen may show an unknown-publisher warning.
-- The manual installed-app smoke test and clean-machine QA (#354, #39) are not done for this
-  build.
 - Claude Code or Codex must be installed and authenticated separately for AI features.
 - No in-app backup, restore, automatic update or production auto-submit support.
 - Public vacancy cache has no automatic retention limit.
