@@ -81,7 +81,7 @@ function installCvAndAgentBridges(selectAndRead: CvBridge['selectAndRead'] = vi.
 }
 
 async function submitManualCv(name: string) {
-  fireEvent.click(screen.getAllByRole('button', { name: /add manual profile/i })[0]!);
+  fireEvent.click(screen.getAllByRole('button', { name: /type your cv instead/i })[0]!);
   const dialog = await screen.findByRole('dialog', { name: /add manual cv profile/i });
   fireEvent.change(within(dialog).getByLabelText(/^name/i), { target: { value: name } });
   fireEvent.click(within(dialog).getByRole('button', { name: /add cv/i }));

@@ -283,6 +283,12 @@ export function ApplicationsPage({
     if (next) dismissedReviewAttempt.current = null;
   }, [reviewAttempts, reviewingAttempt?.id]);
 
+  // Closing the drawer also drops the focus, otherwise the next attempts refresh reopens it (#629).
+  const closeAttemptDrawer = useCallback(() => {
+    setFocusedAttemptId((current) => (current !== null && current === openAttempt?.id ? null : current));
+    setOpenAttempt(null);
+  }, [openAttempt]);
+
   // A skipped attempt returned to review opens in the review dialog; a failed one that was queued
   // again moves to Preparing. Either way the drawer that started it closes.
   const handleAttemptRecovered = useCallback((kind: 'returned' | 'retried') => {
@@ -562,7 +568,7 @@ export function ApplicationsPage({
       </TabPanel>
 
       {openAttempt && (
-        <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} onChanged={handleAttemptRecovered} />
+        <ApplicationAttemptDrawer attempt={openAttempt} onClose={closeAttemptDrawer} onChanged={handleAttemptRecovered} />
       )}
 
       {interviewPrepTarget && (
