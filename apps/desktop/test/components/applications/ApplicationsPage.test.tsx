@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApplicationsPage } from '../../../src/components/applications/index.js';
 import type { ApplicationAttemptRecord, ApplicationRecord } from '../../../src/window.js';
@@ -563,6 +563,40 @@ describe('ApplicationsPage', () => {
       const closeButtons = within(dialog).getAllByRole('button', { name: /^close$/i });
       fireEvent.click(closeButtons[closeButtons.length - 1]!);
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('keeps the attempt drawer closed when a preparing attempt refreshes (#629)', async () => {
+      const attempt = makeAttempt({ checkpoint: 'tailoring', checkpointDetail: 'Tailoring the CV for this vacancy.' });
+      const listApplicationAttempts = vi
+        .fn()
+        .mockResolvedValueOnce([attempt])
+        .mockResolvedValue([{ ...attempt, updatedAt: '2026-08-20T10:05:00.000Z' }]);
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts,
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Preparing (1)' }));
+      fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getAllByRole('button', { name: /^close$/i })[0]!);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      const callsAfterClose = listApplicationAttempts.mock.calls.length;
+      await waitFor(
+        () => expect(listApplicationAttempts.mock.calls.length).toBeGreaterThanOrEqual(callsAfterClose + 2),
+        { timeout: 6_000 },
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
     });
 
     it('opens the manual swipe card for a ready attempt without an approved target policy', async () => {
