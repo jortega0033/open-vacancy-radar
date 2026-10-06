@@ -1,5 +1,5 @@
 import type { AtsRosterImportResult } from '@open-vacancy-radar/vacancy-engine';
-import { SettingsRow, SettingsSection } from './controls.js';
+import { SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { useAtsRoster } from './useAtsRoster.js';
 
 function formatImportedAt(importedAt: string): string {
@@ -10,6 +10,9 @@ function formatImportedAt(importedAt: string): string {
 
 export interface AtsRosterSectionProps {
   disabled?: boolean;
+  /** The saved `autoRosterDownloadEnabled` setting (#637). */
+  autoDownload: boolean;
+  onAutoDownloadChange: (enabled: boolean) => void;
   /** Reports a successful refresh upward so `SettingsPage` can show it through its one shared
    * toast instance, the same reason `SearchProfileSection` reports through `onSaved` rather than
    * rendering a second toast of its own. */
@@ -28,7 +31,7 @@ export interface AtsRosterSectionProps {
  * it, and sees an honest status" treatment as the rest of this page's data-management actions
  * instead of a new always-on timer.
  */
-export function AtsRosterSection({ disabled, onRefreshed, onRefreshError }: AtsRosterSectionProps) {
+export function AtsRosterSection({ disabled, autoDownload, onAutoDownloadChange, onRefreshed, onRefreshError }: AtsRosterSectionProps) {
   const { status, loadError, refreshing, refresh } = useAtsRoster({ onRefreshed, onRefreshError });
 
   const description = loadError
@@ -39,6 +42,17 @@ export function AtsRosterSection({ disabled, onRefreshed, onRefreshError }: AtsR
 
   return (
     <SettingsSection title="Company list">
+      <SettingsRow
+        label="Download the company list automatically"
+        description="Downloads it when the app first opens and no list is saved yet."
+      >
+        <ToggleSwitch
+          label="Download the company list automatically"
+          checked={autoDownload}
+          disabled={disabled}
+          onChange={onAutoDownloadChange}
+        />
+      </SettingsRow>
       <SettingsRow
         label="Companies to search"
         description={description}

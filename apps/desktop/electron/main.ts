@@ -3181,7 +3181,12 @@ guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknow
  * ---------------------------------------------------------------------------------------------
  */
 
-guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:settings:get', async () => {
+  const settings = workspace.getSettings(await ensureWorkspaceDb());
+  // Under e2e (the same hook the window size code uses) the automatic company list download reads
+  // as off, so specs never start a network download on their own. Nothing is saved (#637).
+  return process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT ? { ...settings, autoRosterDownloadEnabled: false } : settings;
+});
 
 guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
