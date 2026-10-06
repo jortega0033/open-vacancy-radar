@@ -333,7 +333,8 @@ describe('SearchPage', () => {
         'Search for UX Engineer',
         'Search for Web Developer',
       ]);
-      expect(screen.getAllByRole('button', { name: 'Browse all vacancies' })).toHaveLength(2);
+      // One Browse all only: the toolbar hint while the field is empty.
+      expect(screen.getAllByRole('button', { name: 'Browse all vacancies' })).toHaveLength(1);
       expect(bridge.runScan).not.toHaveBeenCalled();
 
       fireEvent.click(buttons[1]!);
@@ -347,7 +348,6 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
       expect(screen.queryByRole('button', { name: /^Search for / })).not.toBeInTheDocument();
-      // Only the toolbar link remains; the empty state adds none without a profile.
       expect(screen.getAllByRole('button', { name: 'Browse all vacancies' })).toHaveLength(1);
       expect(screen.getAllByRole('button', { name: 'Search' })).toHaveLength(1);
       expect(screen.getByText(/enter a role and search to find jobs/i)).toBeInTheDocument();

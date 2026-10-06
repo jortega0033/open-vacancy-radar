@@ -23,9 +23,16 @@ test.describe('Search', () => {
       window.getByText(/Enter a role and search to find jobs/i),
     ).toBeVisible();
     await expect(window.getByRole('button', { name: 'Search', exact: true }).first()).toBeVisible();
-    // No profile roles in a fresh workspace: no role suggestions and no second Search button (#636).
-    await expect(window.getByRole('button', { name: /^Search for / })).toHaveCount(0);
+    // The e2e data root ships the default candidate profile, so the first three of its target
+    // roles show as buttons. No disabled duplicate Search button, and one Browse all (#636).
+    const roleButtons = window.getByRole('button', { name: /^Search for / });
+    await expect(roleButtons).toHaveText([
+      'Search for Senior Frontend Engineer',
+      'Search for Frontend Developer',
+      'Search for React Developer',
+    ]);
     await expect(window.getByRole('button', { name: 'Search', exact: true })).toHaveCount(1);
+    await expect(window.getByRole('button', { name: 'Browse all vacancies' })).toHaveCount(1);
     // Secondary filters (and the salary note) sit behind the Filters button (#578).
     await expect(window.getByRole('combobox', { name: 'Job source' })).toHaveCount(0);
     await window.getByRole('button', { name: /^Filters/ }).click();

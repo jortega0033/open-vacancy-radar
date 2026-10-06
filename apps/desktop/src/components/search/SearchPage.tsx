@@ -1511,9 +1511,12 @@ export function SearchPage({
                       Search for {role}
                     </button>
                   ))}
-                  <button className="btn btn-ghost btn-sm" type="button" onClick={handleBrowseAll} disabled={busy}>
-                    Browse all vacancies
-                  </button>
+                  {/* The toolbar hint already offers this while the field is empty. */}
+                  {filters.query.trim() && (
+                    <button className="btn btn-ghost btn-sm" type="button" onClick={handleBrowseAll} disabled={busy}>
+                      Browse all vacancies
+                    </button>
+                  )}
                 </div>
               )
             }
