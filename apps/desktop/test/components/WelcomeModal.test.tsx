@@ -524,6 +524,21 @@ describe('first-launch checklist: company list is automatic (#637)', () => {
     expect(refreshAtsRoster).not.toHaveBeenCalled();
   });
 
+  it('does not download under the e2e harness', async () => {
+    const refreshAtsRoster = vi.fn().mockResolvedValue(rosterResult());
+    const canAutoDownloadAtsRoster = vi.fn().mockResolvedValue(false);
+    installVacancyRadarBridge({
+      getAtsRosterStatus: vi.fn().mockResolvedValue(null),
+      refreshAtsRoster,
+      canAutoDownloadAtsRoster,
+    });
+    await openWelcome();
+
+    await waitFor(() => expect(canAutoDownloadAtsRoster).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(refreshAtsRoster).not.toHaveBeenCalled();
+  });
+
   it('shows one line on Search after a failure, and Try again runs the download', async () => {
     const refreshAtsRoster = vi
       .fn()

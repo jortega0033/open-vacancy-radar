@@ -2866,6 +2866,9 @@ guardedIpc.handle('vacancy:ats-roster:get-status', async (): Promise<AtsRosterSt
   readAtsRosterStatus(await vacancyEngineDataRoot()),
 );
 
+// Same e2e hook the window size code uses: specs never start a network download on their own.
+guardedIpc.handle('vacancy:ats-roster:can-auto-download', (): boolean => !process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT);
+
 guardedIpc.handle('vacancy:ats-roster:refresh', (): Promise<AtsRosterImportResult> => runAtsRosterRefresh());
 
 // #195: fixed for v1, not user-configurable (see the ticket's own Non-goals) -- a schedule-picker

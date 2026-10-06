@@ -93,6 +93,7 @@ export interface VacancyRadarBridge {
   /** Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
    * `null` when the import has never run yet against this data directory. */
   getAtsRosterStatus(): Promise<AtsRosterStatus>;
+  canAutoDownloadAtsRoster(): Promise<boolean>;
   /** Runs the roster import now. Deliberately manual, never automatic -- see the main-process
    * doc comment on `runAtsRosterRefresh`. */
   refreshAtsRoster(): Promise<AtsRosterImportResult>;

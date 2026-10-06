@@ -1335,12 +1335,12 @@ export function SearchPage({
           </ErrorBanner>
         )}
         {companyList?.failed && (
-          <div className="alert alert-info alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+          <p className="flex flex-wrap items-center gap-x-2 px-6 py-0.5 text-xs text-base-content/70" role="status">
             <span>Could not download the company list. Searches still use the other sources.</span>
-            <button type="button" className="btn btn-ghost btn-xs" onClick={companyList.retry}>
+            <button type="button" className="link link-primary" onClick={companyList.retry}>
               Try again
             </button>
-          </div>
+          </p>
         )}
         {cacheNotice && (
           <div className="alert alert-info alert-soft mt-3 text-sm" role="status">
