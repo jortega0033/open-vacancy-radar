@@ -1,11 +1,18 @@
 import { useCallback, useState } from 'react';
 import { describeError } from './useAgentRun.js';
 import type { CvDocument } from './types.js';
+import {
+  SEARCH_PROFILE_FILLED_STATUS,
+  tryFillSearchProfileFromCv,
+  type SearchProfileFillOutcome,
+} from '../cv-library/fill-search-profile-from-cv.js';
 
 export interface SaveCvToLibraryProps {
   cv: CvDocument;
   /** Called with the new row's id once it is persisted, so a parent can select it. */
-  onSaved?: (id: string) => void;
+  onSaved?: (id: string, outcome?: SearchProfileFillOutcome) => void;
+  /** When the saved CV becomes the default, fill the empty search profile fields from it. Default true. */
+  fillSearchProfile?: boolean;
 }
 
 /**
@@ -19,9 +26,10 @@ export interface SaveCvToLibraryProps {
  * Only the extracted text and the file name cross into the database; the file itself is never
  * copied and its path never leaves the main process (see the `cv` bridge in electron/preload.ts).
  */
-export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
+export function SaveCvToLibrary({ cv, onSaved, fillSearchProfile = true }: SaveCvToLibraryProps) {
   const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [error, setError] = useState<string>();
+  const [fillNote, setFillNote] = useState<SearchProfileFillOutcome>();
 
   const handleSave = useCallback(async () => {
     setError(undefined);
@@ -35,13 +43,16 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
         // fallback) falls through to the column default, `'text_layer'`.
         textSource: cv.textSource,
       });
+      const outcome = fillSearchProfile && created.isDefault ? await tryFillSearchProfileFromCv(created) : undefined;
+      setFillNote(outcome);
       setState('saved');
-      onSaved?.(created.id);
+      if (outcome?.filled || outcome?.error) onSaved?.(created.id, outcome);
+      else onSaved?.(created.id);
     } catch (err) {
       setState('idle');
       setError(describeError(err, 'could not save this CV to your library'));
     }
-  }, [cv.fileName, cv.text, cv.textSource, onSaved]);
+  }, [cv.fileName, cv.text, cv.textSource, onSaved, fillSearchProfile]);
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -52,6 +63,16 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
       {state === 'saved' && (
         <span className="text-sm text-success" role="status">
           Added to your CV library.
+        </span>
+      )}
+      {fillNote?.filled && (
+        <span className="text-sm text-success" role="status">
+          {SEARCH_PROFILE_FILLED_STATUS}.
+        </span>
+      )}
+      {fillNote?.error && (
+        <span className="text-sm text-error" role="alert">
+          Saved, but the search profile was not filled: {fillNote.error}
         </span>
       )}
       {error && (

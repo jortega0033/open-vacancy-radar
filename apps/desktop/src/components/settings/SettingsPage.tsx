@@ -18,6 +18,11 @@ import { SourceScoutSection } from './SourceScoutSection.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
 import { SupportSection } from './SupportSection.js';
 import { ALL_COUNTRIES } from '../search/countries.js';
+import {
+  SEARCH_PROFILE_FILLED_STATUS,
+  tryFillSearchProfileFromCv,
+  type SearchProfileFillOutcome,
+} from '../cv-library/fill-search-profile-from-cv.js';
 
 /**
  * Top-level "Settings" screen. Every control autosaves its own field through
@@ -572,7 +577,15 @@ export function SettingsPage({
                     .setDefaultCvDocument(next)
                     .then((refreshed) => {
                       setCvDocuments(refreshed);
-                      flash({ kind: 'saved', message: 'Default CV saved' });
+                      const promoted = refreshed.find((cv) => cv.id === next);
+                      return promoted ? tryFillSearchProfileFromCv(promoted) : ({ filled: false } as SearchProfileFillOutcome);
+                    })
+                    .then((outcome) => {
+                      if (outcome.error) {
+                        flash({ kind: 'error', message: `Default CV saved, but the search profile was not filled: ${outcome.error}` });
+                      } else {
+                        flash({ kind: 'saved', message: outcome.filled ? SEARCH_PROFILE_FILLED_STATUS : 'Default CV saved' });
+                      }
                     })
                     .catch((err: unknown) => flash({ kind: 'error', message: describeError(err, 'could not set the default CV') }));
                 }}

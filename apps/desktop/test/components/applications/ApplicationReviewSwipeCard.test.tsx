@@ -170,7 +170,7 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
 
   it('keeps the swipe target compact, with the answers open and the rest behind disclosures', () => {
     renderCard();
-    const swipeCard = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    const swipeCard = screen.getByTestId('application-swipe-card');
     const preview = screen.getByRole('img', { name: /live application page preview/i });
     expect(swipeCard).not.toContainElement(preview);
     // Open on first render (#443): the answers are what a person is about to send.
@@ -178,11 +178,10 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     expect(screen.getByText('Review application form').closest('details')).not.toHaveAttribute('open');
   });
 
-  it('looks and behaves like the front card in a swipe deck', () => {
+  it('is a plain static card with no stacked back cards or grab cursor', () => {
     renderCard();
-    const cardBacks = screen.getAllByTestId('swipe-card-back');
-    expect(cardBacks).toHaveLength(2);
-    cardBacks.forEach((cardBack) => expect(cardBack).toHaveAttribute('aria-hidden', 'true'));
+    expect(screen.queryAllByTestId('swipe-card-back')).toHaveLength(0);
+    expect(screen.getByTestId('application-swipe-card')).not.toHaveClass('cursor-grab');
     expect(screen.queryByText(/Drag left/i)).not.toBeInTheDocument();
   });
 
@@ -248,10 +247,11 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
 
-  it('maps only a left drag to skip, and a right drag never submits (#443)', () => {
+  it('is not draggable: a drag in either direction neither skips nor submits, and no badge shows (#630)', () => {
     const { onApprove, onSkip } = renderCard();
-    const card = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
-    expect(card).not.toBeNull();
+    const card = screen.getByTestId('application-swipe-card');
+    const capture = vi.fn();
+    card.setPointerCapture = capture;
 
     function drag(type: string, clientX: number, pointerId: number) {
       const event = new Event(type, { bubbles: true });
@@ -259,19 +259,22 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
         clientX: { value: clientX },
         pointerId: { value: pointerId },
       });
-      fireEvent(card!, event);
+      fireEvent(card, event);
     }
 
     drag('pointerdown', 100, 1);
     drag('pointermove', 400, 1);
+    expect(card.style.transform).toBe('');
     drag('pointerup', 400, 1);
-    expect(onApprove).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('send-confirmation')).not.toBeInTheDocument();
-
     drag('pointerdown', 230, 2);
     drag('pointermove', 90, 2);
     drag('pointerup', 90, 2);
-    expect(onSkip).toHaveBeenCalledTimes(1);
+
+    expect(capture).not.toHaveBeenCalled();
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('send-confirmation')).not.toBeInTheDocument();
+    expect(card.querySelector('.badge-neutral')).toBeNull();
   });
 
   describe('final send confirmation (#443)', () => {
@@ -354,7 +357,7 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     });
   });
 
-  it('does not finish a drag after another decision makes the card busy', () => {
+  it('does not start or finish a drag, busy or not', () => {
     const onApprove = vi.fn();
     const onSkip = vi.fn();
     const props = {
@@ -384,14 +387,14 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     expect(onSkip).not.toHaveBeenCalled();
   });
 
-  it('never submits from a right swipe while readiness blocks the button', () => {
+  it('never submits from a right drag while readiness blocks the button', () => {
     const { onApprove } = renderCard({
       readiness: readiness({
         ready: false,
         blockers: [{ kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' }],
       }),
     });
-    const card = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    const card = screen.getByTestId('application-swipe-card');
     expect(card).not.toBeNull();
 
     const down = new Event('pointerdown', { bubbles: true });
@@ -492,23 +495,22 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
       delete window.matchMedia;
     });
 
-    it('tilts and animates the card by default', () => {
+    it('applies no tilt, translate or transition by default', () => {
       mockReducedMotion(false);
       renderCard();
       const card = dragRight();
-      expect(card.style.transform).toContain('rotate(');
+      expect(card.style.transform).toBe('');
       pointer(card, 'pointerup', 140);
-      expect(card.style.transition).toContain('transform');
+      expect(card.style.transition).toBe('');
     });
 
-    it('drops the tilt and the transform transition when reduced motion is set', () => {
+    it('applies no transform when reduced motion is set either', () => {
       mockReducedMotion(true);
       renderCard();
       const card = dragRight();
-      expect(card.style.transform).toBe('translateX(40px)');
+      expect(card.style.transform).toBe('');
       pointer(card, 'pointerup', 140);
-      expect(card.style.transition).toBe('none');
-      expect(card.style.transform).not.toContain('rotate(');
+      expect(card.style.transition).toBe('');
     });
   });
 });
