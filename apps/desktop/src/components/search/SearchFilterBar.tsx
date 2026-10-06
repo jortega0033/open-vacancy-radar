@@ -85,6 +85,8 @@ export interface SearchFilterBarProps {
    * checkbox stays visible either way -- so it is discoverable even before a profile exists -- but
    * is disabled with an explanatory note until one is. */
   aiWebDiscoveryAvailable: boolean;
+  /** Called when the user clicks the link to open their search profile. Optional; if absent, the explanation is shown without a link. */
+  onOpenSearchProfile?: () => void;
   /** The vacancy engine cannot run (#441): scanning and browsing are disabled, not merely failing. */
   scanUnavailable?: boolean;
 }
@@ -113,6 +115,7 @@ export function SearchFilterBar({
   aiWebDiscovery,
   onAiWebDiscoveryChange,
   aiWebDiscoveryAvailable,
+  onOpenSearchProfile,
   scanUnavailable = false,
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
@@ -130,6 +133,7 @@ export function SearchFilterBar({
   const filtersButtonRef = useRef<HTMLButtonElement>(null);
   const filtersWrapRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
+  const aiWebHelpId = useId();
   const chips = activeFilterChips(filters);
 
   const closeFilters = useCallback((returnFocus: boolean) => {
@@ -346,7 +350,6 @@ export function SearchFilterBar({
 
         <label
           className="flex cursor-pointer items-center gap-2 text-sm text-base-content/70"
-          title={aiWebDiscoveryAvailable ? undefined : 'Fill in your search profile first.'}
         >
           <input
             className="checkbox checkbox-sm"
@@ -355,6 +358,7 @@ export function SearchFilterBar({
             checked={aiWebDiscovery}
             onChange={(event) => onAiWebDiscoveryChange(event.target.checked)}
             disabled={busy || !aiWebDiscoveryAvailable}
+            {...(!aiWebDiscoveryAvailable ? { 'aria-describedby': aiWebHelpId } : {})}
           />
           Also search the web with AI
         </label>
@@ -384,6 +388,24 @@ export function SearchFilterBar({
             </li>
           ))}
         </ul>
+      )}
+
+      {!aiWebDiscoveryAvailable && (
+        <p id={aiWebHelpId} className="mt-2 text-xs text-base-content/60">
+          Add a role or skill to your profile to also search the web with AI.
+          {onOpenSearchProfile && (
+            <>
+              {' '}
+              <button
+                className="link link-primary"
+                type="button"
+                onClick={onOpenSearchProfile}
+              >
+                Open search profile
+              </button>
+            </>
+          )}
+        </p>
       )}
 
       {draftDiffersFromApplied && (
