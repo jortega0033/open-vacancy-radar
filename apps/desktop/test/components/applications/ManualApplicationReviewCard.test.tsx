@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ManualApplicationReviewCard } from '../../../src/components/applications/ManualApplicationReviewCard.js';
 import type { ApplicationAttemptRecord } from '../../../src/window.js';
@@ -58,11 +58,12 @@ describe('ManualApplicationReviewCard', () => {
     expect(screen.queryByRole('button', { name: /submit/i })).not.toBeInTheDocument();
   });
 
-  it('looks like a swipe deck without a hint row', () => {
+  it('is a plain static card with no swipe deck and no hint row', () => {
     renderCard();
 
-    expect(screen.getAllByTestId('manual-swipe-card-back')).toHaveLength(2);
-    expect(screen.getByTestId('manual-application-swipe-card')).toHaveClass('cursor-grab');
+    expect(screen.queryAllByTestId('manual-swipe-card-back')).toHaveLength(0);
+    expect(screen.getByTestId('manual-application-swipe-card')).not.toHaveClass('cursor-grab');
+    expect(screen.getByTestId('manual-application-swipe-card')).not.toHaveClass('cursor-wait');
     // The hint row is gone: the two buttons below say the same thing.
     expect(screen.queryByTestId('manual-swipe-guidance')).not.toBeInTheDocument();
     expect(screen.queryByText(/Manual application/)).not.toBeInTheDocument();
@@ -196,10 +197,11 @@ describe('ManualApplicationReviewCard', () => {
     expect(screen.queryByText('Details')).not.toBeInTheDocument();
   });
 
-  it('maps right and left drags to the same visible decisions', () => {
+  it('is not draggable: a drag in either direction decides nothing and shows no badges', () => {
     const actions = renderCard();
-    const card = screen.getByText('You send this one yourself. Your documents are ready.').closest('div[class*="select-none"]');
-    expect(card).not.toBeNull();
+    const card = screen.getByTestId('manual-application-swipe-card');
+    const capture = vi.fn();
+    card.setPointerCapture = capture;
 
     function drag(type: string, clientX: number, pointerId: number) {
       const event = new Event(type, { bubbles: true });
@@ -207,18 +209,23 @@ describe('ManualApplicationReviewCard', () => {
         clientX: { value: clientX },
         pointerId: { value: pointerId },
       });
-      fireEvent(card!, event);
+      fireEvent(card, event);
     }
 
     drag('pointerdown', 100, 1);
     drag('pointermove', 230, 1);
+    expect(card.style.transform).toBe('');
     drag('pointerup', 230, 1);
-    expect(actions.onContinue).toHaveBeenCalledTimes(1);
-
     drag('pointerdown', 230, 2);
     drag('pointermove', 90, 2);
     drag('pointerup', 90, 2);
-    expect(actions.onSkip).toHaveBeenCalledTimes(1);
+
+    expect(capture).not.toHaveBeenCalled();
+    expect(actions.onContinue).not.toHaveBeenCalled();
+    expect(actions.onSkip).not.toHaveBeenCalled();
+    expect(card).not.toHaveTextContent('Continue');
+    expect(within(card).queryByText('Skip')).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId('manual-swipe-card-back')).toHaveLength(0);
   });
 
   it('blocks duplicate button and swipe decisions while busy', () => {
@@ -265,23 +272,22 @@ describe('ManualApplicationReviewCard', () => {
       delete window.matchMedia;
     });
 
-    it('tilts and animates the card by default', () => {
+    it('applies no tilt, translate or transition by default', () => {
       mockReducedMotion(false);
       renderCard();
       const card = dragRight();
-      expect(card.style.transform).toContain('rotate(');
+      expect(card.style.transform).toBe('');
       pointer(card, 'pointerup', 140);
-      expect(card.style.transition).toContain('transform');
+      expect(card.style.transition).toBe('');
     });
 
-    it('drops the tilt and the transform transition when reduced motion is set', () => {
+    it('applies no transform when reduced motion is set either', () => {
       mockReducedMotion(true);
       renderCard();
       const card = dragRight();
-      expect(card.style.transform).toBe('translateX(40px)');
+      expect(card.style.transform).toBe('');
       pointer(card, 'pointerup', 140);
-      expect(card.style.transition).toBe('none');
-      expect(card.style.transform).not.toContain('rotate(');
+      expect(card.style.transition).toBe('');
     });
   });
 });
