@@ -7,6 +7,8 @@ import type { CvDocument } from '../cv/types.js';
 export interface CvUploadActionProps {
   /** Called once the picked file has been persisted, so the parent can refresh its list. */
   onSaved: () => void;
+  /** If true, the upload button uses btn-primary; if false, btn-outline. Default: true. */
+  isPrimary?: boolean;
 }
 
 /**
@@ -20,7 +22,7 @@ export interface CvUploadActionProps {
  * thin composition of "pick" (this component) and "persist" (`SaveCvToLibrary`) rather than a
  * second `CvUpload`.
  */
-export function CvUploadAction({ onSaved }: CvUploadActionProps) {
+export function CvUploadAction({ onSaved, isPrimary = true }: CvUploadActionProps) {
   const picker = useCvPicker();
   const [picked, setPicked] = useState<CvDocument | null>(null);
 
@@ -37,6 +39,7 @@ export function CvUploadAction({ onSaved }: CvUploadActionProps) {
   }, [onSaved]);
 
   const isPicking = picker.state.phase === 'picking' || picker.state.phase === 'transcribing';
+  const buttonClass = isPrimary ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
 
   if (picked) {
     return (
@@ -56,7 +59,7 @@ export function CvUploadAction({ onSaved }: CvUploadActionProps) {
   return (
     <div className="flex flex-col items-start gap-2">
       <div className="flex items-center gap-2">
-        <button className="btn btn-primary btn-sm" type="button" onClick={() => void picker.pick()} disabled={isPicking}>
+        <button className={buttonClass} type="button" onClick={() => void picker.pick()} disabled={isPicking}>
           {picker.state.phase === 'picking' && (
             <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />
           )}

@@ -13,6 +13,39 @@ const PDF_MAGIC = Buffer.from('%PDF');
 const DOCX_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04": the ZIP local-file header.
 
 test.describe('CV library', () => {
+  test('shows Upload CV as the primary action on the empty state', async ({ window }) => {
+    await goto(window, 'CV');
+
+    // Empty state should be visible
+    await expect(window.getByText(/no cv on file/i)).toBeVisible();
+
+    // Primary button should be Upload CV
+    const uploadButton = window.getByRole('button', { name: /^upload cv$/i }).first();
+    await expect(uploadButton).toBeVisible();
+
+    // Type your CV instead should be reachable as a secondary action
+    const typeButton = window.getByRole('button', { name: /type your cv instead/i }).last();
+    await expect(typeButton).toBeVisible();
+
+    // Tailor for a job should not be present
+    const tailorButtons = window.getByRole('button', { name: /tailor for a job/i });
+    await expect(tailorButtons).not.toBeVisible();
+  });
+
+  test('opens the add drawer when Type your CV instead is clicked in the empty state', async ({ window }) => {
+    await goto(window, 'CV');
+
+    await expect(window.getByText(/no cv on file/i)).toBeVisible();
+
+    // Click "Type your CV instead" button in the empty state
+    const typeButton = window.getByRole('button', { name: /type your cv instead/i }).last();
+    await typeButton.click();
+
+    // Add dialog should open
+    const dialog = window.getByRole('dialog', { name: /add manual cv profile/i });
+    await expect(dialog).toBeVisible();
+  });
+
   test('adds a manual profile, edits it, and deletes it', async ({ window }) => {
     await goto(window, 'CV');
     await expect(window.getByText(/no cv on file/i)).toBeVisible();

@@ -290,18 +290,32 @@ export function CvLibraryPage() {
     );
   }
 
+  const defaultCvId = documents?.find((doc) => doc.isDefault)?.id;
+  const uploadIsPrimary = !hasAnyDocuments || !defaultCvId;
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>{hasAnyDocuments && <p className="text-sm text-base-content/60">{documents?.length} on file</p>}</div>
         <div className="flex items-center gap-2">
-          <button className="btn btn-primary btn-sm" type="button" onClick={() => setTailoring('form')}>
-            Tailor for a job
-          </button>
-          <CvUploadAction onSaved={() => void reloadDocuments()} />
-          <button className="btn btn-outline btn-sm" type="button" onClick={openAddDrawer}>
-            Add manual profile
-          </button>
+          {hasAnyDocuments && !uploadIsPrimary && (
+            <button className="btn btn-primary btn-sm" type="button" onClick={() => setTailoring('form')}>
+              Tailor for a job
+            </button>
+          )}
+          <CvUploadAction onSaved={() => void reloadDocuments()} isPrimary={uploadIsPrimary} />
+          {hasAnyDocuments && (
+            <>
+              {uploadIsPrimary && (
+                <button className="btn btn-outline btn-sm" type="button" onClick={() => setTailoring('form')}>
+                  Tailor for a job
+                </button>
+              )}
+              <button className="btn btn-ghost btn-sm" type="button" onClick={openAddDrawer}>
+                Type your CV instead
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -319,10 +333,10 @@ export function CvLibraryPage() {
         <EmptyState
           illustration={emptyCvIllustration}
           title="No CV on file"
-          description="Upload a PDF, Word, plain text or Markdown file, or add a manual profile, to enable job match analysis and tailored cover letters."
+          description="Upload a PDF, Word, plain text or Markdown file, or type your information manually, to enable job match analysis and tailored cover letters."
           action={
-            <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>
-              Add manual profile
+            <button className="btn btn-ghost btn-sm" type="button" onClick={openAddDrawer}>
+              Type your CV instead
             </button>
           }
         />
