@@ -2,7 +2,7 @@ import { expect, goto, test } from './fixtures.js';
 
 /**
  * Search e2e coverage is deliberately scoped to UI mechanics that need no real data: this suite
- * never clicks either "Search" button (the filter bar one and the empty-state one start a scan; there is
+ * never clicks either "Search" button (the filter bar one and the empty-state role buttons start a scan; there is
  * no separate, merely-filtering action), because both hit real external job-board APIs
  * (SearchPage.tsx's docstring: "Scanning hits real external feeds and can take a couple of
  * minutes"), which would be slow, flaky, and inappropriate for CI. `window.vacancyRadar.getStatus`/
@@ -23,6 +23,9 @@ test.describe('Search', () => {
       window.getByText(/Enter a role and search to find jobs/i),
     ).toBeVisible();
     await expect(window.getByRole('button', { name: 'Search', exact: true }).first()).toBeVisible();
+    // No profile roles in a fresh workspace: no role suggestions and no second Search button (#636).
+    await expect(window.getByRole('button', { name: /^Search for / })).toHaveCount(0);
+    await expect(window.getByRole('button', { name: 'Search', exact: true })).toHaveCount(1);
     // Secondary filters (and the salary note) sit behind the Filters button (#578).
     await expect(window.getByRole('combobox', { name: 'Job source' })).toHaveCount(0);
     await window.getByRole('button', { name: /^Filters/ }).click();

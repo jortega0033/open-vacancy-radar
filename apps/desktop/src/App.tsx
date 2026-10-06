@@ -91,6 +91,7 @@ export function App() {
   // flag has never been set, *and* the CV library is actually empty. Anything less would flash a
   // "welcome, upload a CV" modal at an upgrading user who has had one in the library for months.
   const [showWelcome, setShowWelcome] = useState(false);
+  const [searchHandoff, setSearchHandoff] = useState<{ role: string; id: number } | null>(null);
   // "Finish setup" in Settings: the same checklist, opened on purpose. Never touches `welcomeSeen`.
   const [showSetup, setShowSetup] = useState(false);
 
@@ -169,6 +170,22 @@ export function App() {
     setShowWelcome(false);
     void window.workspace.updateSettings({ welcomeSeen: true }).catch(() => {});
   }, []);
+
+  // Done / close with a target role in the profile: land on Search with the role in the field and
+  // focus on its button. Navigation only, never a scan. Skipped for the Settings and Runtime exits.
+  const handleWelcomeDone = useCallback(() => {
+    handleWelcomeClosed();
+    void window.vacancyRadar
+      .getSearchProfile()
+      .then((profile) => {
+        const role = profile?.targetRoles.map((r) => r.trim()).find(Boolean);
+        if (!role) return;
+        hasNavigatedRef.current = true;
+        setNav('search');
+        setSearchHandoff((current) => ({ role, id: (current?.id ?? 0) + 1 }));
+      })
+      .catch(() => {});
+  }, [handleWelcomeClosed]);
 
   const refreshCounts = useCallback(async () => {
     try {
@@ -509,6 +526,7 @@ export function App() {
               onViewApplicationAttempt={handleViewApplicationAttempt}
               session={searchSession}
               onSessionChange={setSearchSession}
+              handoff={searchHandoff}
             />
           )}
           {nav === 'saved' && (
@@ -585,7 +603,7 @@ export function App() {
       )}
       {showWelcome && (
         <WelcomeModal
-          onClose={handleWelcomeClosed}
+          onClose={handleWelcomeDone}
           onOpenSettings={() => {
             handleWelcomeClosed();
             handleOpenSearchProfile();

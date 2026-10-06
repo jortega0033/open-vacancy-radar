@@ -202,6 +202,42 @@ describe('first-launch welcome modal', () => {
     expect(workspace.createCvDocument).not.toHaveBeenCalled();
   });
 
+  it('closing with a target role in the profile lands on Search with the role and focus on its button, and starts no scan (#636)', async () => {
+    const vacancyRadar = installVacancyRadarBridge({
+      getStatus: vi.fn().mockResolvedValue({ ready: true }),
+      getSearchProfile: vi.fn().mockResolvedValue({ ...DEFAULT_CANDIDATE_PROFILE, targetRoles: ['Frontend Engineer'] }),
+      runScan: vi.fn(),
+    });
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue({ ...UNSEEN_SETTINGS, lastOpenedPage: 'saved', startPage: 'saved' }),
+      listCvDocuments: vi.fn().mockResolvedValue([]),
+    });
+
+    render(<App />);
+    await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+
+    const button = await screen.findByRole('button', { name: 'Search for Frontend Engineer' });
+    await waitFor(() => expect(button).toHaveFocus());
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Frontend Engineer');
+    expect(vacancyRadar.runScan).not.toHaveBeenCalled();
+  });
+
+  it('closing without a target role does not move the person to Search (#636)', async () => {
+    installVacancyRadarBridge({ getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE) });
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue({ ...UNSEEN_SETTINGS, lastOpenedPage: 'saved', startPage: 'saved' }),
+      listCvDocuments: vi.fn().mockResolvedValue([]),
+    });
+
+    render(<App />);
+    await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
+
+    await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
+    expect(screen.queryByRole('searchbox', { name: 'Role or keywords' })).not.toBeInTheDocument();
+  });
+
   it('the close button dismisses it too, so the modal never blocks the app', async () => {
     const workspace = installWorkspaceBridge({
       getSettings: vi.fn().mockResolvedValue(UNSEEN_SETTINGS),

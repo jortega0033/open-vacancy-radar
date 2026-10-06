@@ -184,6 +184,8 @@ export interface SearchPageProps {
   preferredSelectedKey?: string | null;
   session?: SearchSessionState;
   onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
+  /** Set once when Welcome closes with a target role: fills the field and focuses its Search button. Never starts a scan. */
+  handoff?: { role: string; id: number } | null;
 }
 
 /** Below this much width for the page itself, the list and the detail take turns instead of
@@ -198,6 +200,7 @@ export function SearchPage({
   preferredSelectedKey = null,
   session: controlledSession,
   onSessionChange,
+  handoff = null,
 }: SearchPageProps = {}) {
   const [localSession, setLocalSession] = useState(createSearchSessionState);
   const session = controlledSession ?? localSession;
@@ -821,6 +824,15 @@ export function SearchPage({
     searchProfile?.targetRoles.find((role) => role.trim())?.trim() ??
     searchProfile?.strongestSkills.find((skill) => skill.trim())?.trim() ??
     '';
+  const emptyStateRoles = [
+    ...new Set((searchProfile?.targetRoles ?? []).map((role) => role.trim()).filter(Boolean)),
+  ].slice(0, 3);
+  // Runs after every render until the button exists (the profile loads asynchronously).
+  useEffect(() => {
+    if (!handoffFocusPendingRef.current || !firstRoleButtonRef.current) return;
+    handoffFocusPendingRef.current = false;
+    firstRoleButtonRef.current.focus();
+  });
   const profileNotConfigured = reportHasOnlyUnscoredRows && searchProfile !== null && !currentProfileConfigured;
   const reportNeedsRescore = reportHasOnlyUnscoredRows && currentProfileConfigured;
   const profileScoringUnknown = reportHasOnlyUnscoredRows && searchProfileError;
@@ -1093,6 +1105,22 @@ export function SearchPage({
   const handleSearch = useCallback(() => {
     void runScan();
   }, [runScan]);
+
+  const handleRoleSearch = useCallback((role: string) => {
+    setFilters((current) => ({ ...current, query: role }));
+    void runScan(role);
+  }, [runScan, setFilters]);
+
+  // Welcome handoff: only puts the role in the field and moves focus. The person still clicks.
+  const handoffFocusPendingRef = useRef(false);
+  const firstRoleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const handoffId = handoff?.id;
+  const handoffRole = handoff?.role;
+  useEffect(() => {
+    if (handoffId === undefined || !handoffRole) return;
+    setFilters((current) => (current.query.trim() ? current : { ...current, query: handoffRole }));
+    handoffFocusPendingRef.current = true;
+  }, [handoffId, handoffRole, setFilters]);
 
   const handleBrowseAll = useCallback(() => {
     if (engineState === 'unavailable') return;
@@ -1469,10 +1497,24 @@ export function SearchPage({
                 : 'Enter a role and search to find jobs.'
             }
             action={
-              engineState === 'unavailable' ? undefined : (
-                <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
-                  Search
-                </button>
+              engineState === 'unavailable' || emptyStateRoles.length === 0 ? undefined : (
+                <div className="flex flex-wrap justify-center gap-2">
+                  {emptyStateRoles.map((role, index) => (
+                    <button
+                      key={role}
+                      ref={index === 0 ? firstRoleButtonRef : undefined}
+                      className={`btn btn-sm ${index === 0 ? 'btn-primary' : 'btn-outline'}`}
+                      type="button"
+                      onClick={() => handleRoleSearch(role)}
+                      disabled={busy}
+                    >
+                      Search for {role}
+                    </button>
+                  ))}
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={handleBrowseAll} disabled={busy}>
+                    Browse all vacancies
+                  </button>
+                </div>
               )
             }
           />
