@@ -113,7 +113,7 @@ import {
   resolveVacancyEngineMigrationsFolder,
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
-import { computeInitialWindowBounds } from './window-size.js';
+import { chooseInitialBounds, loadWindowState, saveWindowState, type WindowState } from './window-state.js';
 import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
 import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
@@ -1275,14 +1275,18 @@ function createWindow(): void {
     resourcesPath: process.resourcesPath,
   });
 
-  // Compute initial window bounds: for e2e tests, use deterministic size; otherwise compute
-  // based on available work area to show the labeled sidebar on first launch.
-  let windowBounds = { width: 1280, height: 800, x: undefined, y: undefined };
-  if (!process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT) {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.workAreaSize;
-    windowBounds = computeInitialWindowBounds(width, height);
-  }
+  // Under e2e the size stays the old deterministic 1000x720 (specs and screenshot baselines depend
+  // on it) and nothing is remembered. Otherwise restore the saved bounds when they still fit a
+  // connected display, else open at about 80% of the primary work area (#638).
+  const isE2e = Boolean(process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT);
+  const userDataDir = app.getPath('userData');
+  const windowBounds: Partial<WindowState> = isE2e
+    ? { width: 1000, height: 720 }
+    : chooseInitialBounds(
+        loadWindowState(userDataDir),
+        screen.getAllDisplays().map((d) => d.workArea),
+        screen.getPrimaryDisplay().workArea,
+      );
 
   mainWindow = new BrowserWindow({
     x: windowBounds.x,
@@ -1360,6 +1364,28 @@ function createWindow(): void {
   mainWindow.webContents.on('did-finish-load', () => {
     if (client) sendStatus({ state: 'ready' });
   });
+
+  if (!isE2e) {
+    const win = mainWindow;
+    if (windowBounds.maximized) win.maximize();
+    const persist = (): void => {
+      if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+      const maximized = win.isMaximized();
+      // A maximized window comes back maximized, over its normal (restored) bounds.
+      saveWindowState(userDataDir, { ...win.getNormalBounds(), ...(maximized ? { maximized } : {}) });
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const persistSoon = (): void => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(persist, 500);
+    };
+    win.on('resize', persistSoon);
+    win.on('move', persistSoon);
+    win.on('close', () => {
+      if (timer) clearTimeout(timer);
+      persist();
+    });
+  }
 
   // #194: when the setting is on, closing the window hides it to the tray instead of quitting --
   // `isQuitting` (set only by the tray's own "Quit" item and `before-quit`) distinguishes that from

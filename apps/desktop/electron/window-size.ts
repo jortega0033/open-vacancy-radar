@@ -1,27 +1,26 @@
 import type { Rectangle } from 'electron';
 
 /**
- * Computes the initial window bounds for first launch or when no saved bounds exist.
+ * Computes the default window bounds, used on first launch and whenever saved bounds are missing
+ * or no longer fit a connected display.
  *
- * On first launch, opens at about 80% of the work area to show the labeled sidebar (which requires
- * at least 1100px width). On smaller screens, uses the entire work area. Later launches restore
- * the saved size (handled at the call site).
+ * Targets about 80% of the work area, at least 1280x800 when the work area allows (the labeled
+ * sidebar needs about 1100px), never larger than the work area, and centered inside it. The work
+ * area may start away from (0,0) (taskbar on the left or top, a primary display not at the origin),
+ * so the result is offset by `workArea.x` and `workArea.y`.
  *
- * @param workAreaWidth Work area width in pixels
- * @param workAreaHeight Work area height in pixels
- * @returns Window bounds { x, y, width, height }
+ * @param workArea The display's work area (`screen.getPrimaryDisplay().workArea`)
+ * @returns Window bounds { x, y, width, height } in screen coordinates
  */
-export function computeInitialWindowBounds(workAreaWidth: number, workAreaHeight: number): Rectangle {
-  const targetWidth = Math.max(1280, Math.round(workAreaWidth * 0.8));
-  const targetHeight = Math.max(800, Math.round(workAreaHeight * 0.8));
+export function computeInitialWindowBounds(workArea: Rectangle): Rectangle {
+  const targetWidth = Math.max(1280, Math.round(workArea.width * 0.8));
+  const targetHeight = Math.max(800, Math.round(workArea.height * 0.8));
 
-  // Clamp to work area
-  const width = Math.min(targetWidth, workAreaWidth);
-  const height = Math.min(targetHeight, workAreaHeight);
+  const width = Math.min(targetWidth, workArea.width);
+  const height = Math.min(targetHeight, workArea.height);
 
-  // Center in work area
-  const x = Math.round((workAreaWidth - width) / 2);
-  const y = Math.round((workAreaHeight - height) / 2);
+  const x = workArea.x + Math.round((workArea.width - width) / 2);
+  const y = workArea.y + Math.round((workArea.height - height) / 2);
 
   return { x, y, width, height };
 }
