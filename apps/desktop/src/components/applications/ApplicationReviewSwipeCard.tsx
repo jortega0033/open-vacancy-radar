@@ -4,6 +4,7 @@ import type { FormReadiness, FormSnapshot, SnapshotField } from '@agent-dock/app
 import type { ApplicationAnswerRecord, ApplicationArtifactSummary, ApplicationAttemptRecord, ConfirmApplicationAnswerResult } from '../../window.js';
 import { usePrefersReducedMotion } from '../../use-prefers-reduced-motion.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
+import { SWIPE_GESTURES_ENABLED } from './swipe-gestures.js';
 import { ReviewScreenshot } from './ReviewScreenshot.js';
 
 export interface ApplicationReviewSwipeCardProps {
@@ -241,7 +242,7 @@ export function ApplicationReviewSwipeCard({
   const formIsEmbedded = otherFrameFields.some((field) => field.active);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (busy) return;
+    if (!SWIPE_GESTURES_ENABLED || busy) return;
     dragOriginRef.current = event.clientX;
     setDragging(true);
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -280,7 +281,7 @@ export function ApplicationReviewSwipeCard({
     >
     <div className="flex min-w-0 flex-col gap-3">
       <div className="-mx-2 grid overflow-x-clip px-4 pb-2 pt-3">
-      {wide ? null : (
+      {wide || !SWIPE_GESTURES_ENABLED ? null : (
         <>
           <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-6 translate-y-2 rotate-[-2deg] rounded-lg border border-base-300 bg-base-300/70" />
           <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-4 translate-y-1 rotate-[2deg] rounded-lg border border-base-300 bg-base-200" />
@@ -290,20 +291,21 @@ export function ApplicationReviewSwipeCard({
         data-testid="application-swipe-card"
         role="group"
         aria-label={`Application decision card for ${attempt.role} at ${attempt.company}`}
-        className={`relative z-10 col-start-1 row-start-1 mx-2 select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
-        style={{
+        className={`relative z-10 col-start-1 row-start-1 mx-2 ${SWIPE_GESTURES_ENABLED ? 'select-none' : ''} overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${SWIPE_GESTURES_ENABLED ? (busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing') : ''}`}
+        style={SWIPE_GESTURES_ENABLED ? {
           // Reduced motion keeps the card following the pointer, but drops the tilt and the
           // settle-back animation.
           transform: reducedMotion ? `translateX(${dragX}px)` : `translateX(${dragX}px) rotate(${rotation}deg)`,
           transition: reducedMotion || dragging ? 'none' : 'transform 200ms ease-out',
           touchAction: 'pan-y',
-        }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        } : undefined}
+        onPointerDown={SWIPE_GESTURES_ENABLED ? handlePointerDown : undefined}
+        onPointerMove={SWIPE_GESTURES_ENABLED ? handlePointerMove : undefined}
+        onPointerUp={SWIPE_GESTURES_ENABLED ? endDrag : undefined}
+        onPointerCancel={SWIPE_GESTURES_ENABLED ? endDrag : undefined}
       >
-        <div aria-hidden="true" className="mx-auto mt-2 h-1 w-7 rounded-full bg-base-content/20" />
+        {SWIPE_GESTURES_ENABLED ? <div aria-hidden="true" className="mx-auto mt-2 h-1 w-7 rounded-full bg-base-content/20" /> : null}
+        {SWIPE_GESTURES_ENABLED ? (
         <div
           className="badge badge-neutral absolute right-4 top-4 z-10 rotate-[8deg] text-sm font-semibold"
           style={{ opacity: skipOpacity }}
@@ -311,6 +313,7 @@ export function ApplicationReviewSwipeCard({
         >
           Skip
         </div>
+        ) : null}
 
         <div className="px-4 py-3">
           <div className="mb-2 flex items-center justify-between gap-3">
