@@ -80,7 +80,7 @@ function installManualExecutor() {
 }
 
 async function openHistoryRow() {
-  fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Ready to apply' }));
   fireEvent.click(await screen.findByRole('button', { name: 'History (1)' }));
   fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
   return screen.findByRole('dialog');
@@ -101,7 +101,7 @@ describe('skip undo (#468)', () => {
     installManualExecutor();
 
     render(<ApplicationsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Ready to apply' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Skip' }));
 
@@ -127,7 +127,7 @@ describe('skip undo (#468)', () => {
     installManualExecutor();
 
     render(<ApplicationsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Ready to apply' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Skip' }));
     const toast = await screen.findByRole('status');

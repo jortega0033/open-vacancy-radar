@@ -472,7 +472,7 @@ export function ApplicationsPage({
           ...APPLICATIONS_FILTER_TABS.map((tab) => ({ id: tab.key as PageTab, label: tab.label })),
           {
             id: 'in_progress' as const,
-            label: `Review queue${attempts ? ` (${reviewAttempts.length + preparingAttempts.length})` : ''}`,
+            label: `Ready to apply${attempts ? ` (${reviewAttempts.length + preparingAttempts.length})` : ''}`,
           },
         ]}
       />
@@ -531,7 +531,7 @@ export function ApplicationsPage({
 
       {isInProgressTab && (
         <>
-          <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Review queue view">
+          <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Ready to apply view">
             <button type="button" className={`btn btn-sm ${attemptView === 'review' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAttemptView('review')}>
               Review ({reviewAttempts.length})
             </button>

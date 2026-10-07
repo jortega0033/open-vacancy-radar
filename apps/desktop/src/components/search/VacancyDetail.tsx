@@ -310,7 +310,7 @@ export function VacancyDetail({
                 {prepareState === 'preparing'
                   ? 'Starting…'
                   : prepareAvailable
-                    ? 'Start application'
+                    ? 'Get ready to apply'
                     : 'Finishing scan…'}
               </button>
               <div className="text-xs text-base-content/60">Builds a draft for you to review. Nothing is sent.</div>

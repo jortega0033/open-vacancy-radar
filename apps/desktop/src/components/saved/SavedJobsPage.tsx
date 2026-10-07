@@ -313,7 +313,7 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
       {hasAnyJobs && !explained && (
         <div className="alert alert-info mt-4 flex items-start justify-between gap-3 text-sm" role="note">
           <span>
-            <strong>Prepare application</strong> tailors your CV to the job and fills in the employer&apos;s form,
+            <strong>Get ready to apply</strong> tailors your CV to the job and fills in the employer&apos;s form,
             then stops for your review.{' '}
             {autoApplyEnabled
               ? 'Sites you have approved for automatic sending can be scheduled to send after a short cancel window that stays visible on every page. Every other site waits for you to choose Send application.'

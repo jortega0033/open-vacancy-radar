@@ -726,7 +726,7 @@ export function SettingsPage({
               <ul className="mt-1 list-disc pl-5">
                 <li>your saved jobs</li>
                 <li>your applications and application history</li>
-                <li>your CVs and tailoring cases</li>
+                <li>your CVs and applications in progress</li>
                 <li>your letters</li>
                 <li>generated application files</li>
                 <li>your saved answers and what you are looking for</li>

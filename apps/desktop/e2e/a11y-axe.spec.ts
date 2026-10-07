@@ -96,7 +96,7 @@ test.describe('axe accessibility audit (issue #501)', () => {
     await addDialog.getByRole('button', { name: /^save$/i }).click();
     await expect(addDialog).toBeHidden();
 
-    const hint = window.getByRole('note').filter({ hasText: 'Prepare application' });
+    const hint = window.getByRole('note').filter({ hasText: 'Get ready to apply' });
     await expect(hint).toBeVisible();
     for (const theme of ['openvacancyradar', 'openvacancyradar-dark']) {
       await window.evaluate((value) => {

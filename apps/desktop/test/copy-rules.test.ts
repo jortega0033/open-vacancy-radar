@@ -188,6 +188,11 @@ describe('copy rules: pipeline jargon', () => {
 //    CV                        the candidate document. A CV the person types in is "Type your CV".
 //    What you are looking for  the ranking input (roles, skills, country). Banned variants: "search profile",
 //                              "manual profile", "Add manual profile", "Fill search profile", "your profile".
+//  #639 part 2 (apply flow):
+//    Get ready to apply        the one verb for starting the apply flow from any job. Banned: "Start application",
+//                              "Prepare application", "Tailor for a job". "Compare with my CV" stays as the read-only check.
+//    Ready to apply            the Applications tab for drafts waiting on you. Banned: "Review queue".
+//    application               what a tailoring case or attempt is called on screen. Banned: "tailoring case", "attempt".
 //  Internal names (CvProfile, getSearchProfile, the 'search-profile' focus section) stay as they are.
 const BANNED_VARIANTS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'Saved Jobs', pattern: /\bSaved Jobs\b/ },
@@ -203,6 +208,12 @@ const BANNED_VARIANTS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'manual profile (use "Type your CV")', pattern: /\bmanual (?:CV )?profile\b/i },
   { label: 'your profile (use "what you are looking for")', pattern: /\b(?:your|my|the) profile\b/i },
   { label: 'fill in a profile (use "what you are looking for")', pattern: /\bfill (?:in )?(?:your |the |a )?profile\b/i },
+  { label: 'Start application (use "Get ready to apply")', pattern: /\bstart application\b/i },
+  { label: 'Prepare application (use "Get ready to apply")', pattern: /\bprepare application\b/i },
+  { label: 'Tailor for a job (use "Get ready to apply")', pattern: /\btailor for a job\b/i },
+  { label: 'Review queue (use "Ready to apply")', pattern: /\breview queue\b/i },
+  { label: 'tailoring case (show it as the application)', pattern: /\btailoring cases?\b/i },
+  { label: 'attempt (show it as the application)', pattern: /^(?!attempts?$)(?=[\s\S]*\battempts?\b)/i }, // a bare 'attempt' is a type key, not copy
 ];
 
 /** Pieces that may keep a banned variant. Every entry needs a reason. */
@@ -250,5 +261,20 @@ describe('copy rules: profile terms (#639)', () => {
     ].join('\n');
     const hits = collectPieces('sample.tsx', sample).filter((p) => BANNED_VARIANTS.some((b) => b.pattern.test(p.text)));
     expect(hits.map((h) => h.line)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('copy rules: apply flow terms (#639)', () => {
+  it('flags the banned apply flow variants (self check)', () => {
+    const sample = [
+      "const a = 'Start application';",
+      'const b = <button>Prepare application</button>;',
+      "const c = 'Review queue';",
+      "const d = 'Open the application attempt';",
+      "const e = 'Get ready to apply';",
+      "const f = 'attempt';",
+    ].join('\n');
+    const hits = collectPieces('sample.tsx', sample).filter((p) => BANNED_VARIANTS.some((b) => b.pattern.test(p.text)));
+    expect(hits.map((h) => h.line)).toEqual([1, 2, 3, 4]);
   });
 });

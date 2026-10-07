@@ -113,9 +113,9 @@ export function ApplicationsTable({
                         type="button"
                         className="link"
                         onClick={() => onOpenAttempt(application.attempt!.attemptId)}
-                        aria-label={`Open the application attempt for ${application.role} at ${application.company}`}
+                        aria-label={`Open the review for ${application.role} at ${application.company}`}
                       >
-                        Open attempt
+                        Open review
                       </button>
                     )}
                   </div>
