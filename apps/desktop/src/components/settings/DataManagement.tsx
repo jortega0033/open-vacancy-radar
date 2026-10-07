@@ -45,7 +45,7 @@ export function DataManagement({ busy, onRequestRebuildCache, onRequestResetSett
 
         <SettingsRow
           label="Delete my data"
-          description="Permanently deletes your saved jobs, applications, CVs, letters, generated files, saved answers and search profile. There is no backup. Deleted CVs, applications and letters cannot be recovered."
+          description="Permanently deletes your saved jobs, applications, CVs, letters, generated files, saved answers and what you are looking for. There is no backup. Deleted CVs, applications and letters cannot be recovered."
         >
           <button type="button" className="btn btn-sm btn-outline btn-error" disabled={busy} onClick={onRequestResetData}>
             Delete my data

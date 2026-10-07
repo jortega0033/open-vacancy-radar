@@ -169,7 +169,7 @@ describe('CvLibraryPage', () => {
     const typeButtons = screen.getAllByRole('button', { name: /type your cv instead/i });
     fireEvent.click(typeButtons[0]!);
 
-    const dialog = await screen.findByRole('dialog', { name: /add manual cv profile/i });
+    const dialog = await screen.findByRole('dialog', { name: /type your cv/i });
     expect(dialog).toBeInTheDocument();
   });
 
@@ -218,7 +218,7 @@ describe('CvLibraryPage', () => {
     const typeButton = typeButtons[typeButtons.length - 1];
     if (!typeButton) throw new Error('expected "Type your CV instead" button in empty state');
     fireEvent.click(typeButton);
-    const dialog = await screen.findByRole('dialog', { name: /add manual cv profile/i });
+    const dialog = await screen.findByRole('dialog', { name: /type your cv/i });
 
     // Submitting a blank name shows the inline validation message and does not call the bridge.
     fireEvent.click(within(dialog).getByRole('button', { name: /add cv/i }));
@@ -239,7 +239,7 @@ describe('CvLibraryPage', () => {
     );
 
     await waitFor(() => expect(screen.getByText('New Manual CV')).toBeInTheDocument());
-    expect(screen.queryByRole('dialog', { name: /add manual cv profile/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /type your cv/i })).not.toBeInTheDocument();
   });
 
   it('pre-fills the drawer on edit, joining skills back to comma text, and calls updateCvDocument', async () => {
@@ -672,7 +672,7 @@ describe('CvLibraryPage', () => {
         },
       }),
     );
-    expect(screen.getByText(/search profile filled from the default cv/i)).toBeInTheDocument();
+    expect(screen.getByText(/What you are looking for filled in from the default cv/i)).toBeInTheDocument();
     // Exactly one badge (excluding the "Default" column header): proves the demotion round-tripped.
     await waitFor(() => expect(screen.getAllByText('Default', { selector: '.badge' })).toHaveLength(1));
 

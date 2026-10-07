@@ -586,7 +586,7 @@ export function SettingsPage({
                     })
                     .then((outcome) => {
                       if (outcome.error) {
-                        flash({ kind: 'error', message: `Default CV saved, but the search profile was not filled: ${outcome.error}` });
+                        flash({ kind: 'error', message: `Default CV saved, but what you are looking for was not filled in: ${outcome.error}` });
                       } else {
                         flash({ kind: 'saved', message: outcome.filled ? SEARCH_PROFILE_FILLED_STATUS : 'Default CV saved' });
                       }
@@ -729,7 +729,7 @@ export function SettingsPage({
                 <li>your CVs and tailoring cases</li>
                 <li>your letters</li>
                 <li>generated application files</li>
-                <li>your saved answers and search profile</li>
+                <li>your saved answers and what you are looking for</li>
               </ul>
               <p className="mt-2">Settings go back to their defaults. Your downloaded job cache is kept.</p>
               <p className="mt-2 font-medium">There is no backup. Deleted CVs, applications and letters cannot be recovered.</p>

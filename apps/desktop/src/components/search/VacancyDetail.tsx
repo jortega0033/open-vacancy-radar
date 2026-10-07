@@ -115,7 +115,7 @@ function FitSummary({ result }: { result: SearchResult }) {
       <p className="mt-1 text-xs text-base-content/60">
         {score === null
           ? 'Not scored yet.'
-          : 'Based on your search profile.'}
+          : 'Based on what you are looking for.'}
       </p>
       {(signals.length > 0 || gaps.length > 0) && (
         <div className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm text-base-content/70 sm:grid-cols-2">
@@ -382,7 +382,7 @@ export function VacancyDetail({
           <SectionHeading
             aside={
               result.profileScore !== null && result.profileMatch
-                ? 'Based on your search profile only'
+                ? 'Based on what you are looking for only'
                 : undefined
             }
           >
@@ -399,7 +399,7 @@ export function VacancyDetail({
                 <span className="font-semibold text-base-content">
                   Profile fit: {result.profileScore} out of 100.
                 </span>{' '}
-                Based on your search profile.
+                Based on what you are looking for.
               </p>
 
               {result.profileMatch.matchingSkills.length > 0 && (

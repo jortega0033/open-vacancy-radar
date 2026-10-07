@@ -109,7 +109,7 @@ export function CvLibraryPage() {
   const showFillOutcome = useCallback((outcome: SearchProfileFillOutcome) => {
     setProfileRevision((revision) => revision + 1);
     if (outcome.error) {
-      setActionError(`CV saved, but the search profile was not filled: ${outcome.error}`);
+      setActionError(`CV saved, but what you are looking for was not filled in: ${outcome.error}`);
     } else if (outcome.filled) {
       setActionStatus(SEARCH_PROFILE_FILLED_STATUS);
     }
@@ -153,7 +153,7 @@ export function CvLibraryPage() {
         if (filled) setActionStatus(SEARCH_PROFILE_FILLED_STATUS);
         setProfileRevision((revision) => revision + 1);
       } catch (err) {
-        setActionError(`Default CV set, but the search profile was not filled: ${describeError(err, 'unknown error')}`);
+        setActionError(`Default CV set, but what you are looking for was not filled in: ${describeError(err, 'unknown error')}`);
       }
     } catch (err) {
       setActionError(describeError(err, 'could not set this CV as default'));

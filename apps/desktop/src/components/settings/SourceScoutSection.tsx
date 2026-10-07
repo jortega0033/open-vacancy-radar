@@ -123,7 +123,7 @@ export function SourceScoutSection({ enabled, disabled, onEnabledChange }: Sourc
       {enabled && (
         <>
           {noProfile && (
-            <SettingsRow label="Needs a role" description="Save a role or keyword in your search profile to start." />
+            <SettingsRow label="Needs a role" description="Add a role or keyword under What you are looking for to start." />
           )}
           <SettingsRow
             label="Schedule"

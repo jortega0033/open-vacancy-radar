@@ -42,7 +42,7 @@ test.describe('CV library', () => {
     await typeButton.click();
 
     // Add dialog should open
-    const dialog = window.getByRole('dialog', { name: /add manual cv profile/i });
+    const dialog = window.getByRole('dialog', { name: /type your cv/i });
     await expect(dialog).toBeVisible();
   });
 
@@ -51,7 +51,7 @@ test.describe('CV library', () => {
     await expect(window.getByText(/no cv on file/i)).toBeVisible();
 
     await window.getByRole('button', { name: /type your cv instead/i }).last().click();
-    const addDialog = window.getByRole('dialog', { name: /add manual cv profile/i });
+    const addDialog = window.getByRole('dialog', { name: /type your cv/i });
     await expect(addDialog).toBeVisible();
 
     await addDialog.getByLabel(/^name/i).fill('Frontend CV — Netherlands');

@@ -684,7 +684,7 @@ export function SearchPage({
       .catch((error) => {
         if (!cancelled) {
           setSearchProfile(null);
-          setSearchProfileError(describeError(error, 'could not load the search profile'));
+          setSearchProfileError(describeError(error, 'could not load what you are looking for'));
         }
       });
     return () => {
@@ -1560,17 +1560,17 @@ export function SearchPage({
           {profileNotConfigured && (
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
-                Results are not ranked for you yet. Fill in your search profile to see how well each job fits.
+                Results are not ranked for you yet. Fill in what you are looking for to see how well each job fits.
               </span>
               <button type="button" className="btn btn-warning btn-sm" onClick={() => setProfileEditorOpen(true)}>
-                Fill search profile
+                Fill it in
               </button>
             </div>
           )}
           {reportNeedsRescore && (
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
-                These results were found before your profile was saved. Search again to score them.
+                These results were found before what you are looking for was saved. Search again to score them.
               </span>
               <button type="button" className="btn btn-warning btn-sm" onClick={handleRescore} disabled={busy || !currentProfileScanQuery}>
                 Search again
@@ -1579,7 +1579,7 @@ export function SearchPage({
           )}
           {profileScoringUnknown && (
             <WarningBanner className="mx-6 mt-3" role="status">
-              Could not check your profile.
+              Could not check what you are looking for.
             </WarningBanner>
           )}
           <div

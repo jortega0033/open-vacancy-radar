@@ -1073,7 +1073,7 @@ describe('SearchPage', () => {
     // The banner no longer describes the ordering at all, so it cannot claim one that never happened.
     expect(screen.queryByText(/results are ordered by/i)).not.toBeInTheDocument();
     // Opens the "What you are looking for" form in place (#635); it no longer navigates away.
-    fireEvent.click(screen.getByRole('button', { name: 'Fill search profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Fill it in' }));
     expect(await screen.findByRole('dialog', { name: 'What you are looking for' })).toBeInTheDocument();
     expect(onOpenSearchProfile).not.toHaveBeenCalled();
   });
@@ -1147,13 +1147,13 @@ describe('SearchPage', () => {
     render(<SearchPage />);
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-    await waitFor(() => expect(screen.getByText(/these results were found before your profile was saved/i)).toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: 'Fill search profile' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/these results were found before what you are looking for was saved/i)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Fill it in' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Search again' }));
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.queryByText(/found before your profile was saved/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/found before what you are looking for was saved/i)).not.toBeInTheDocument());
     expect(screen.getAllByText('Profile fit 82/100').length).toBeGreaterThan(0);
   });
 
@@ -1169,7 +1169,7 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
     await waitFor(() =>
-      expect(screen.getByText(/could not check your profile/i)).toBeInTheDocument(),
+      expect(screen.getByText(/could not check what you are looking for/i)).toBeInTheDocument(),
     );
     expect(screen.queryByText(/profile read failed/i)).not.toBeInTheDocument();
   });

@@ -1,7 +1,7 @@
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import type { CvDocumentRecord } from '../../window.js';
 
-export const SEARCH_PROFILE_FILLED_STATUS = 'Search profile filled from the default CV';
+export const SEARCH_PROFILE_FILLED_STATUS = 'What you are looking for filled in from the default CV';
 
 function nonEmpty(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();

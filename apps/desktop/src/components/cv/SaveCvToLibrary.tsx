@@ -72,7 +72,7 @@ export function SaveCvToLibrary({ cv, onSaved, fillSearchProfile = true }: SaveC
       )}
       {fillNote?.error && (
         <span className="text-sm text-error" role="alert">
-          Saved, but the search profile was not filled: {fillNote.error}
+          Saved, but what you are looking for was not filled in: {fillNote.error}
         </span>
       )}
       {error && (

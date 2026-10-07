@@ -182,7 +182,13 @@ describe('copy rules: pipeline jargon', () => {
   });
 });
 
-// Glossary: vacancy (the posting), role (job title), CV, letter, tailoring. Sentence case for labels.
+// Glossary of user-facing terms. Sentence case for labels.
+//  #495: vacancy (the posting), role (job title), CV, letter, tailoring.
+//  #639 part 1 (one name per concept):
+//    CV                        the candidate document. A CV the person types in is "Type your CV".
+//    What you are looking for  the ranking input (roles, skills, country). Banned variants: "search profile",
+//                              "manual profile", "Add manual profile", "Fill search profile", "your profile".
+//  Internal names (CvProfile, getSearchProfile, the 'search-profile' focus section) stay as they are.
 const BANNED_VARIANTS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'Saved Jobs', pattern: /\bSaved Jobs\b/ },
   { label: 'AI Runtime', pattern: /\bAI Runtime\b/ },
@@ -193,7 +199,10 @@ const BANNED_VARIANTS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'resume (use CV)', pattern: /\b(?:your|a|an|the|this|that|uploaded|my|saved) resumes?\b/i },
   { label: 'Analyse (use US spelling)', pattern: /\b[Aa]nalys(?:e|ed|es|ing)\b/ },
   { label: 'Title Case "Cover Letter"', pattern: /\bCover Letter\b/ },
-  { label: 'Title Case "Search Profile"', pattern: /\bSearch Profile\b/ },
+  { label: 'search profile (use "What you are looking for")', pattern: /\bsearch profile\b/i },
+  { label: 'manual profile (use "Type your CV")', pattern: /\bmanual (?:CV )?profile\b/i },
+  { label: 'your profile (use "what you are looking for")', pattern: /\b(?:your|my|the) profile\b/i },
+  { label: 'fill in a profile (use "what you are looking for")', pattern: /\bfill (?:in )?(?:your |the |a )?profile\b/i },
 ];
 
 /** Pieces that may keep a banned variant. Every entry needs a reason. */
@@ -227,5 +236,19 @@ describe('copy rules: antithesis phrasing', () => {
   it('has no ", not X" antithesis in rendered copy', () => {
     const hits = allPieces.filter((p) => isAppCopy(p) && ANTITHESIS.test(p.text) && !allowed(ANTITHESIS_ALLOWLIST, p));
     expectNone('State the point directly instead of "X, not Y"', hits);
+  });
+});
+
+describe('copy rules: profile terms (#639)', () => {
+  it('flags the banned profile variants (self check)', () => {
+    const sample = [
+      "const a = 'Add manual profile';",
+      'const b = <button>Fill search profile</button>;',
+      "const c = 'Could not check your profile.';",
+      "const d = 'What you are looking for';",
+      "const e = 'Type your CV';",
+    ].join('\n');
+    const hits = collectPieces('sample.tsx', sample).filter((p) => BANNED_VARIANTS.some((b) => b.pattern.test(p.text)));
+    expect(hits.map((h) => h.line)).toEqual([1, 2, 3]);
   });
 });

@@ -85,7 +85,7 @@ const GOOD_RESPONSE = JSON.stringify({
 });
 
 function dialog() {
-  return within(screen.getByRole('dialog', { name: 'Fill search profile from CV' }));
+  return within(screen.getByRole('dialog', { name: 'Fill from CV' }));
 }
 
 /** Drives one full run of the drawer's agent session to completion with `raw` as the answer. */
@@ -260,7 +260,7 @@ describe('FillProfileFromCvDrawer', () => {
     await waitFor(() => expect(dialog().getByLabelText('Current role')).toBeInTheDocument());
 
     fireEvent.change(dialog().getByLabelText('Current role'), { target: { value: 'Lead Frontend Engineer' } });
-    fireEvent.click(dialog().getByRole('button', { name: 'Save to profile' }));
+    fireEvent.click(dialog().getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
     expect(onApply).toHaveBeenCalledWith({
@@ -304,7 +304,7 @@ describe('FillProfileFromCvDrawer', () => {
       }),
     );
     await waitFor(() => expect(dialog().getByLabelText('Current role')).toBeInTheDocument());
-    fireEvent.click(dialog().getByRole('button', { name: 'Save to profile' }));
+    fireEvent.click(dialog().getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onApply).toHaveBeenCalled());
     const patch = onApply.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -341,7 +341,7 @@ describe('FillProfileFromCvDrawer', () => {
     );
     await runExtraction(bridges, GOOD_RESPONSE);
     await waitFor(() => expect(dialog().getByLabelText('Current role')).toBeInTheDocument());
-    fireEvent.click(dialog().getByRole('button', { name: 'Save to profile' }));
+    fireEvent.click(dialog().getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(dialog().getByRole('alert')).toHaveTextContent('disk write failed'));
     expect(onClose).not.toHaveBeenCalled();
@@ -355,7 +355,7 @@ describe('FillProfileFromCvDrawer', () => {
     await runExtraction(bridges, 'I could not read that CV.');
 
     await waitFor(() => expect(dialog().getByRole('alert')).toHaveTextContent(/Could not read your CV this time/));
-    expect(dialog().getByRole('button', { name: 'Save to profile' })).toBeDisabled();
+    expect(dialog().getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
   describe('autoStart', () => {
@@ -420,7 +420,7 @@ describe('FillProfileFromCv (the Settings entry point)', () => {
     render(<FillProfileFromCv profile={USER_SET_PROFILE} onApply={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Fill from CV' }));
 
-    expect(await screen.findByRole('dialog', { name: 'Fill search profile from CV' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Fill from CV' })).toBeInTheDocument();
   });
 });
 
@@ -454,7 +454,7 @@ describe('SearchProfileSection: filling from a CV merges into the profile', () =
     fireEvent.click(await screen.findByRole('button', { name: 'Fill from CV' }));
     await runExtraction(bridges, GOOD_RESPONSE);
     await waitFor(() => expect(dialog().getByLabelText('Current role')).toBeInTheDocument());
-    fireEvent.click(dialog().getByRole('button', { name: 'Save to profile' }));
+    fireEvent.click(dialog().getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(saveSearchProfile).toHaveBeenCalledTimes(1));
     expect(saveSearchProfile).toHaveBeenCalledWith({

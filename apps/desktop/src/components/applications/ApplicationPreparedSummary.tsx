@@ -94,7 +94,7 @@ const STATUS_BADGE: Record<PreparedApplicationField['status'], string> = {
 
 const PROVENANCE_LABEL: Record<NonNullable<PreparedApplicationField['provenance']>, string> = {
   cv: 'from your CV',
-  profile: 'from your search profile',
+  profile: 'from what you are looking for',
   user_answer: 'from an answer you gave',
   jd: 'from the job description',
 };
