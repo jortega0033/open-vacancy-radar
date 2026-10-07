@@ -208,7 +208,7 @@ base.describe('Escape dismissal for seeded-workspace overlays', () => {
           await window.waitForLoadState('domcontentloaded');
           await ensureLightTheme(window);
           await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'Search', exact: true }).click();
-          await window.getByRole('button', { name: 'Start application' }).click();
+          await window.getByRole('button', { name: 'Get ready to apply' }).click();
 
           const dialog = window.getByRole('dialog');
           await expect(dialog.getByTestId('manual-application-swipe-card')).toBeVisible();
@@ -266,7 +266,7 @@ base.describe('Escape dismissal for seeded-workspace overlays', () => {
         await window.waitForLoadState('domcontentloaded');
         await ensureLightTheme(window);
         await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'Applications', exact: true }).click();
-        await window.getByRole('tab', { name: 'Review queue' }).click();
+        await window.getByRole('tab', { name: 'Ready to apply' }).click();
         await window.getByRole('button', { name: /^History/ }).click();
         await window.getByRole('row', { name: /Attempt Drawer Regression Co/ }).click();
 

@@ -2089,7 +2089,7 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Mid Rescan Streamed Role').length).toBeGreaterThan(0));
     });
 
-    it('never lets a provisional live row (with an old report loaded) start application preparation (issue #363)', async () => {
+    it('never lets a provisional live row (with an old report loaded) get an application prepared (issue #363)', async () => {
       const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
       const { emit } = installProgressCapturingBridge({
         getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Existing Role' })])),
@@ -2109,7 +2109,7 @@ describe('SearchPage', () => {
       });
       await waitFor(() => expect(screen.getAllByText('Mid Rescan Streamed Role').length).toBeGreaterThan(0));
 
-      const prepareButton = screen.getByRole('button', { name: /prepare application|finishing scan/i });
+      const prepareButton = screen.getByRole('button', { name: /get ready to apply|finishing scan/i });
       expect(prepareButton).toBeDisabled();
     });
   });
@@ -2223,7 +2223,7 @@ describe('SearchPage', () => {
 
       // A saved-report row (not provisional) keeps its safe actions enabled during the rescan.
       expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Start application' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeEnabled();
     });
   });
@@ -2474,9 +2474,9 @@ describe('SearchPage', () => {
     const onViewApplicationAttempt = vi.fn();
 
     render(<SearchPage onViewApplicationAttempt={onViewApplicationAttempt} />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start application' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Get ready to apply' }));
 
     await waitFor(() => expect(pipeline.startFromVacancy).toHaveBeenCalledWith('ww-1'));
     await waitFor(() => expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-search-1'));

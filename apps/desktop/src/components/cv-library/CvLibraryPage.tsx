@@ -274,7 +274,7 @@ export function CvLibraryPage() {
         <div className="flex items-center gap-2">
           {hasAnyDocuments && !uploadIsPrimary && (
             <button className="btn btn-primary btn-sm" type="button" onClick={() => setTailoring('form')}>
-              Tailor for a job
+              Get ready to apply
             </button>
           )}
           <CvUploadAction
@@ -288,7 +288,7 @@ export function CvLibraryPage() {
             <>
               {uploadIsPrimary && (
                 <button className="btn btn-outline btn-sm" type="button" onClick={() => setTailoring('form')}>
-                  Tailor for a job
+                  Get ready to apply
                 </button>
               )}
               <button className="btn btn-ghost btn-sm" type="button" onClick={openAddDrawer}>
@@ -355,17 +355,17 @@ export function CvLibraryPage() {
               </p>
               {deleteCases === null && (
                 <p className="mt-2">
-                  The tailoring cases for this CV could not be listed, so any that exist will be deleted
+                  The applications for this CV could not be listed, so any that exist will be deleted
                   without being shown here.
                 </p>
               )}
               {deleteCases !== null && deleteCases.length > 0 && (
                 <div className="mt-2">
                   <p>
-                    {deleteCases.length === 1 ? 'This tailoring case is' : `These ${deleteCases.length} tailoring cases are`}{' '}
+                    {deleteCases.length === 1 ? 'This application is' : `These ${deleteCases.length} applications are`}{' '}
                     deleted with it, including their job descriptions, answers and approvals:
                   </p>
-                  <ul className="mt-1 list-disc pl-5" aria-label="Tailoring cases that will be deleted">
+                  <ul className="mt-1 list-disc pl-5" aria-label="Applications that will be deleted">
                     {deleteCases.map((tailoringCase) => (
                       <li key={tailoringCase.id}>{describeTailoringCase(tailoringCase)}</li>
                     ))}

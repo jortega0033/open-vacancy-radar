@@ -149,9 +149,9 @@ describe('ApplicationsTable', () => {
     expect(screen.getByText('Reported by you')).toBeInTheDocument();
     expect(screen.getByText('Not confirmed')).toBeInTheDocument();
     // A hand-entered row has no attempt and therefore no attempt link.
-    expect(screen.getAllByRole('button', { name: /open the application attempt/i })).toHaveLength(3);
+    expect(screen.getAllByRole('button', { name: /open the review/i })).toHaveLength(3);
 
-    fireEvent.click(screen.getByRole('button', { name: /open the application attempt for senior frontend engineer/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open the review for senior frontend engineer/i }));
     expect(onOpenAttempt).toHaveBeenCalledWith('att-1');
   });
 });

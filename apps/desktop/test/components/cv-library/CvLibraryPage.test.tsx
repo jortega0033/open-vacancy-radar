@@ -147,15 +147,15 @@ describe('CvLibraryPage', () => {
     expect(typeButtons.length).toBeGreaterThan(0);
   });
 
-  it('does not show Tailor for a job when there are no CVs', async () => {
+  it('does not show Get ready to apply when there are no CVs', async () => {
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([]) });
     installCvBridge();
 
     render(<CvLibraryPage />);
 
     await waitFor(() => expect(screen.getByText(/no cv on file/i)).toBeInTheDocument());
-    // Tailor for a job should not be visible in the empty state
-    const tailorButtons = screen.queryAllByRole('button', { name: /tailor for a job/i });
+    // Get ready to apply should not be visible in the empty state
+    const tailorButtons = screen.queryAllByRole('button', { name: /get ready to apply/i });
     expect(tailorButtons).toHaveLength(0);
   });
 
@@ -903,8 +903,8 @@ describe('CvLibraryPage', () => {
       installCvBridge();
       render(<CvLibraryPage />);
 
-      fireEvent.click(await screen.findByRole('button', { name: /tailor for a job/i }));
-      const form = await screen.findByRole('form', { name: /tailor for a job/i });
+      fireEvent.click(await screen.findByRole('button', { name: /get ready to apply/i }));
+      const form = await screen.findByRole('form', { name: /get ready to apply/i });
       fireEvent.change(within(form).getByLabelText('Role (required)'), { target: { value: 'Platform Engineer' } });
       fireEvent.change(within(form).getByLabelText('Company (required)'), { target: { value: 'Northwind Freight' } });
       fireEvent.change(within(form).getByLabelText('Job description (required)'), { target: { value: 'Build the freight planner.' } });
@@ -925,18 +925,18 @@ describe('CvLibraryPage', () => {
     });
   });
 
-  describe('Tailor for a job (#419)', () => {
+  describe('Get ready to apply (#419)', () => {
     async function openForm() {
       render(<CvLibraryPage />);
-      fireEvent.click(await screen.findByRole('button', { name: /tailor for a job/i }));
-      return screen.findByRole('form', { name: /tailor for a job/i });
+      fireEvent.click(await screen.findByRole('button', { name: /get ready to apply/i }));
+      return screen.findByRole('form', { name: /get ready to apply/i });
     }
 
     it('is a visible action on the page', async () => {
       installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
       installCvBridge();
       render(<CvLibraryPage />);
-      expect(await screen.findByRole('button', { name: /tailor for a job/i })).toBeVisible();
+      expect(await screen.findByRole('button', { name: /get ready to apply/i })).toBeVisible();
     });
 
     it('requires role, company and a pasted job description, but not a link', async () => {
@@ -1095,7 +1095,7 @@ describe('CvLibraryPage', () => {
       expect(within(other).queryByText('Requirement mapping')).not.toBeInTheDocument();
     });
 
-    it('lists the case under Tailoring cases when the candidate leaves right after opening', async () => {
+    it('lists the case under Your applications when the candidate leaves right after opening', async () => {
       const stored: unknown[] = [];
       const createCvEvidenceOverlay = vi.fn().mockImplementation(async (input: Record<string, unknown>) => {
         stored.push({
@@ -1126,7 +1126,7 @@ describe('CvLibraryPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /back to cv library/i }));
 
-      expect(await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV' })).toHaveTextContent('Platform Engineer at Northwind Freight');
+      expect(await screen.findByRole('table', { name: 'Applications for Frontend CV' })).toHaveTextContent('Platform Engineer at Northwind Freight');
     });
 
     it('keeps the form and the pasted text when storing the case fails, and retries on the next press', async () => {
@@ -1156,10 +1156,10 @@ describe('CvLibraryPage', () => {
       installCvBridge();
       render(<CvLibraryPage />);
 
-      // In empty state, "Tailor for a job" is not shown, so click the secondary button if available
+      // In empty state, "Get ready to apply" is not shown, so click the secondary button if available
       // or access it through a different method. For an empty library, we should not be able to
       // open the tailor form. Skip this test behavior or update the test.
-      // Since the empty state no longer shows "Tailor for a job", this test scenario is not applicable.
+      // Since the empty state no longer shows "Get ready to apply", this test scenario is not applicable.
       // The form should be opened from a state that has CVs.
 
       // Updated test: This scenario is no longer valid since you cannot tailor without a CV.
@@ -1172,7 +1172,7 @@ describe('CvLibraryPage', () => {
       installCvBridge();
       await openForm();
       fireEvent.click(screen.getByRole('button', { name: /back to cv library/i }));
-      expect(await screen.findByRole('button', { name: /tailor for a job/i })).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: /get ready to apply/i })).toBeInTheDocument();
     });
   });
 
@@ -1215,13 +1215,13 @@ describe('CvLibraryPage', () => {
       const dialog = await screen.findByRole('alertdialog');
 
       expect(listCvEvidenceOverlays).toHaveBeenCalledWith('cv-1');
-      const list = within(dialog).getByRole('list', { name: /tailoring cases that will be deleted/i });
+      const list = within(dialog).getByRole('list', { name: /applications that will be deleted/i });
       expect(within(list).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
         'platform engineer at northwind freight',
         'Pasted job: Build the freight planner.',
         'https://jobs.example.invalid/3',
       ]);
-      expect(dialog).toHaveTextContent(/These 3 tailoring cases are deleted with it/);
+      expect(dialog).toHaveTextContent(/These 3 applications are deleted with it/);
       expect(dialog).toHaveTextContent(/Files you already exported from this CV outside the app are not deleted/);
     });
 

@@ -88,7 +88,7 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
 
   return (
     <Dialog
-      aria-label={`Application attempt for ${attempt.role} at ${attempt.company}`}
+      aria-label={`Application for ${attempt.role} at ${attempt.company}`}
       placement="end"
       boxClassName="flex max-w-md flex-col rounded-none p-0"
       onClose={onClose}

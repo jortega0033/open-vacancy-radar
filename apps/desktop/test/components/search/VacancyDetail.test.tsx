@@ -114,7 +114,7 @@ describe('VacancyDetail', () => {
     renderDetail(worldwideResult());
 
     expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start application' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeInTheDocument();
   });
 

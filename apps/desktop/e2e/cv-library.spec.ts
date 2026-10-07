@@ -27,8 +27,8 @@ test.describe('CV library', () => {
     const typeButton = window.getByRole('button', { name: /type your cv instead/i }).last();
     await expect(typeButton).toBeVisible();
 
-    // Tailor for a job should not be present
-    const tailorButtons = window.getByRole('button', { name: /tailor for a job/i });
+    // Get ready to apply should not be present
+    const tailorButtons = window.getByRole('button', { name: /get ready to apply/i });
     await expect(tailorButtons).not.toBeVisible();
   });
 

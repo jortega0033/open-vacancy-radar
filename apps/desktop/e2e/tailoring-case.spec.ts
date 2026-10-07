@@ -76,7 +76,7 @@ const nativeRecord = (electronApp: ElectronApplication) =>
 
 async function openSeededCase(window: Page): Promise<Locator> {
   await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'CV', exact: true }).click();
-  const table = window.getByRole('table', { name: `Tailoring cases for ${SEEDED_CV_NAME}` });
+  const table = window.getByRole('table', { name: `Applications for ${SEEDED_CV_NAME}` });
   await window.getByRole('button', { name: `Open ${SEEDED_CASE_LABEL}` }).click();
   await expect(table).toBeHidden();
   const panel = window.getByRole('region', { name: 'Exported files' });
@@ -91,7 +91,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
   test.setTimeout(90_000);
   await withSeededApp(async ({ electronApp, window, saveDir }) => {
     await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'CV', exact: true }).click();
-    const casesTable = window.getByRole('table', { name: `Tailoring cases for ${SEEDED_CV_NAME}` });
+    const casesTable = window.getByRole('table', { name: `Applications for ${SEEDED_CV_NAME}` });
     await expect(casesTable).toBeVisible();
     const caseRow = casesTable.getByRole('row', { name: new RegExp(SEEDED_CASE_LABEL) });
     await expect(caseRow.getByRole('cell').nth(2)).toHaveText('CV approved');

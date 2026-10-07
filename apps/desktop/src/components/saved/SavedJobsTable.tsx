@@ -134,7 +134,7 @@ export function SavedJobsTable({
                       aria-label={
                         preparingJobIds.has(job.id)
                           ? `Preparing application for ${job.role} at ${job.company}`
-                          : `Prepare application for ${job.role} at ${job.company}`
+                          : `Get ready to apply for ${job.role} at ${job.company}`
                       }
                     >
                       {preparingJobIds.has(job.id) ? (
@@ -143,7 +143,7 @@ export function SavedJobsTable({
                           Preparing…
                         </>
                       ) : (
-                        'Prepare application'
+                        'Get ready to apply'
                       )}
                     </button>
                   )}

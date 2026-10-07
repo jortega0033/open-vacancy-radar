@@ -161,7 +161,7 @@ describe('reopening tailoring cases from the CV Library', () => {
 
     render(<CvLibraryPage />);
 
-    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    const table = await screen.findByRole('table', { name: 'Applications for Frontend CV.pdf' }, SLOW);
     const rows = within(table).getAllByRole('row');
     const manualRow = rows.find((row) => within(row).queryByText('Platform Engineer at Northwind Freight'));
     const foundRow = rows.find((row) => within(row).queryByText('Data Engineer at Acme'));
@@ -248,9 +248,9 @@ describe('reopening tailoring cases from the CV Library', () => {
     });
     render(<CvLibraryPage />);
     await screen.findByText('Frontend CV.pdf');
-    expect(await screen.findByRole('heading', { name: 'Tailoring cases' }, SLOW)).toBeInTheDocument();
-    expect(await screen.findByText('Cases you start with Tailor for a job, or from a vacancy, appear here.', undefined, SLOW)).toBeInTheDocument();
-    expect(screen.queryByRole('table', { name: /tailoring cases for/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Your applications' }, SLOW)).toBeInTheDocument();
+    expect(await screen.findByText('Applications you start with Get ready to apply, or from a vacancy, appear here.', undefined, SLOW)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /applications for/i })).not.toBeInTheDocument();
   });
 });
 
@@ -277,7 +277,7 @@ describe('a CV change that puts cases on hold (#449)', () => {
 
     render(<CvLibraryPage />);
 
-    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    const table = await screen.findByRole('table', { name: 'Applications for Frontend CV.pdf' }, SLOW);
     const rows = within(table).getAllByRole('row');
     const heldRow = rows.find((row) => within(row).queryByText('Held Role at Held Co'));
     const plainRow = rows.find((row) => within(row).queryByText('Plain Role at Plain Co'));
@@ -296,7 +296,7 @@ describe('a CV change that puts cases on hold (#449)', () => {
       previewCvEvidenceRebase,
     });
     render(<CvLibraryPage />);
-    await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    await screen.findByRole('table', { name: 'Applications for Frontend CV.pdf' }, SLOW);
     expect(previewCvEvidenceRebase).not.toHaveBeenCalled();
   });
 
@@ -313,8 +313,8 @@ describe('a CV change that puts cases on hold (#449)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
-    expect(await within(dialog).findByText(/2 tailoring cases use this CV./)).toHaveTextContent(
-      '2 tailoring cases use this CV. Saving changes puts them on hold until you review what changed. Files you already exported stay on disk.',
+    expect(await within(dialog).findByText(/2 applications use this CV./)).toHaveTextContent(
+      '2 applications use this CV. Saving changes puts them on hold until you review what changed. Files you already exported stay on disk.',
     );
   });
 
@@ -326,7 +326,7 @@ describe('a CV change that puts cases on hold (#449)', () => {
     await screen.findByText('Frontend CV.pdf', undefined, SLOW);
     fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
-    expect(await within(dialog).findByText(/1 tailoring case uses this CV./)).toHaveTextContent(
+    expect(await within(dialog).findByText(/1 application uses this CV./)).toHaveTextContent(
       'Saving changes puts it on hold',
     );
     unmount();
@@ -340,7 +340,7 @@ describe('a CV change that puts cases on hold (#449)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
     const emptyDialog = await screen.findByRole('dialog', { name: /edit cv/i });
     await waitFor(() => expect(within(emptyDialog).getByRole('button', { name: /save changes/i })).toBeEnabled());
-    expect(within(emptyDialog).queryByText(/tailoring cases? uses? this CV/)).not.toBeInTheDocument();
+    expect(within(emptyDialog).queryByText(/applications? uses? this CV/)).not.toBeInTheDocument();
   });
 });
 
@@ -457,7 +457,7 @@ describe('the Tailoring cases list shows state and next step (#499)', () => {
     });
     render(<CvLibraryPage />);
 
-    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    const table = await screen.findByRole('table', { name: 'Applications for Frontend CV.pdf' }, SLOW);
     expect(within(table).getByRole('columnheader', { name: 'Next step' })).toBeInTheDocument();
     const bodyRows = within(table).getAllByRole('row').slice(1);
     expect(bodyRows).toHaveLength(4);
@@ -482,13 +482,13 @@ describe('the Tailoring cases list shows state and next step (#499)', () => {
     });
     render(<CvLibraryPage />);
 
-    expect(await screen.findByText('Loading your tailoring cases…', undefined, SLOW)).toBeInTheDocument();
+    expect(await screen.findByText('Loading your applications…', undefined, SLOW)).toBeInTheDocument();
     expect(screen.queryByText(/appear here/)).not.toBeInTheDocument();
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
 
     release([makeCase()]);
-    expect(await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW)).toBeInTheDocument();
-    expect(screen.queryByText('Loading your tailoring cases…')).not.toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: 'Applications for Frontend CV.pdf' }, SLOW)).toBeInTheDocument();
+    expect(screen.queryByText('Loading your applications…')).not.toBeInTheDocument();
   });
 
   it('shows the error rather than an empty list when the cases cannot be loaded', async () => {

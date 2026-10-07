@@ -414,7 +414,7 @@ describe('ApplicationsPage', () => {
     await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
   });
 
-  describe('Review queue tab (issue #326)', () => {
+  describe('Ready to apply tab (issue #326)', () => {
     it('labels the tablist, shows the count in the tab name and links a tabpanel', async () => {
       installWorkspaceBridge({
         listApplications: vi.fn().mockResolvedValue([]),
@@ -427,9 +427,9 @@ describe('ApplicationsPage', () => {
       expect(screen.getByRole('tabpanel', { name: 'Active' })).toBeInTheDocument();
 
       fireEvent.keyDown(screen.getByRole('tab', { name: 'Active' }), { key: 'End' });
-      const queueTab = await screen.findByRole('tab', { name: 'Review queue (0)' });
+      const queueTab = await screen.findByRole('tab', { name: 'Ready to apply (0)' });
       expect(queueTab).toHaveAttribute('aria-selected', 'true');
-      expect(screen.getByRole('tabpanel', { name: 'Review queue (0)' })).toBeInTheDocument();
+      expect(screen.getByRole('tabpanel', { name: 'Ready to apply (0)' })).toBeInTheDocument();
     });
 
     it('loads attempts only when the tab is opened, never alongside the applications tabs', async () => {
@@ -441,7 +441,7 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(listApplications).toHaveBeenCalledWith('active'));
       expect(listApplicationAttempts).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(listApplicationAttempts).toHaveBeenCalledTimes(1));
     });
 
@@ -452,7 +452,7 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
 
       await waitFor(() => expect(screen.getByText('Nothing to review')).toBeInTheDocument());
     });
@@ -467,7 +467,7 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       fireEvent.click(await screen.findByRole('button', { name: 'Preparing (2)' }));
 
       await waitFor(() => expect(screen.getByText('Newer Attempt')).toBeInTheDocument());
@@ -496,7 +496,7 @@ describe('ApplicationsPage', () => {
 
       render(<ApplicationsPage focusAttemptId="attempt-focus" onFocusAttemptConsumed={onFocusAttemptConsumed} />);
 
-      expect(await screen.findByRole('tab', { name: 'Review queue' })).toHaveAttribute('aria-selected', 'true');
+      expect(await screen.findByRole('tab', { name: 'Ready to apply' })).toHaveAttribute('aria-selected', 'true');
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByText('Review the prepared application.')).toBeInTheDocument();
       expect(onFocusAttemptConsumed).toHaveBeenCalledTimes(1);
@@ -546,7 +546,7 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       fireEvent.click(await screen.findByRole('button', { name: 'Preparing (1)' }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
@@ -578,7 +578,7 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       fireEvent.click(await screen.findByRole('button', { name: 'Preparing (1)' }));
       fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
       const dialog = await screen.findByRole('dialog');
@@ -617,7 +617,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
 
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByText(/review application/i)).toBeInTheDocument();
@@ -640,7 +640,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Newest Role')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /newest role/i }));
 
@@ -672,7 +672,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -706,7 +706,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
 
       const dialog = await screen.findByRole('dialog');
@@ -738,7 +738,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
 
       const dialog = await screen.findByRole('dialog');
@@ -759,7 +759,7 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
 
       const dialog = await screen.findByRole('dialog');
@@ -781,7 +781,7 @@ describe('ApplicationsPage', () => {
       const onGenerateLetter = vi.fn();
 
       render(<ApplicationsPage onGenerateLetter={onGenerateLetter} />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       const dialog = await screen.findByRole('dialog');
       fireEvent.click(within(dialog).getByRole('button', { name: 'Generate letter' }));
 
@@ -811,7 +811,7 @@ describe('ApplicationsPage', () => {
       const onGenerateLetter = vi.fn();
 
       render(<ApplicationsPage onGenerateLetter={onGenerateLetter} />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
 
       const dialog = await screen.findByRole('dialog');
       expect(await within(dialog).findByText('Tailored CV')).toBeInTheDocument();
@@ -843,7 +843,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -887,7 +887,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -931,7 +931,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -975,7 +975,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -1007,7 +1007,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -1038,7 +1038,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -1067,7 +1067,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
       const row = screen.getByRole('row', { name: /senior frontend engineer/i });
@@ -1088,12 +1088,12 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
 
       await waitFor(() => expect(screen.getByText('We could not load your applications.')).toBeInTheDocument());
     });
 
-    it('hides the "Add application" button while on the Review queue tab', async () => {
+    it('hides the "Add application" button while on the Ready to apply tab', async () => {
       installWorkspaceBridge({
         listApplications: vi.fn().mockResolvedValue([]),
         listApplicationAttempts: vi.fn().mockResolvedValue([]),
@@ -1102,7 +1102,7 @@ describe('ApplicationsPage', () => {
       render(<ApplicationsPage />);
       expect(screen.getByRole('button', { name: /^add application$/i })).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('tab', { name: /^Review queue/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^Ready to apply/ }));
       await waitFor(() => expect(screen.getByText('Nothing to review')).toBeInTheDocument());
       expect(screen.queryByRole('button', { name: /^add application$/i })).not.toBeInTheDocument();
     });

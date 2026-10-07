@@ -84,13 +84,13 @@ export function ManualCaseForm({ documents, onSubmit, onCancel }: ManualCaseForm
       });
       onSubmit(vacancy, cv.id);
     } catch (err) {
-      setError(describeError(err, 'could not save this tailoring case'));
+      setError(describeError(err, 'could not save this application'));
       setSaving(false);
     }
   }
 
   return (
-    <form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)} aria-label="Tailor for a job">
+    <form className="flex flex-col gap-3" onSubmit={(event) => void handleSubmit(event)} aria-label="Get ready to apply">
       <p className="text-sm text-base-content/60">
         Paste the full job description. It is not added to your saved jobs. The link is optional.
       </p>

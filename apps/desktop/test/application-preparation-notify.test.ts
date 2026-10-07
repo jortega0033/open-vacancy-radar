@@ -22,10 +22,10 @@ beforeEach(() => {
 });
 
 describe('application preparation notification', () => {
-  it('names the application that is ready in the review queue', () => {
+  it('names the application that is ready under Ready to apply', () => {
     expect(buildApplicationPreparationNotification({ company: 'Acme', role: 'Engineer', needsUser: false })).toEqual({
       title: 'Application ready to review',
-      body: 'Engineer at Acme is ready in your Review queue.',
+      body: 'Engineer at Acme is ready under Ready to apply.',
     });
   });
 

@@ -593,7 +593,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
           {isEdit && caseCount > 0 && (
             <p className="border-t border-base-300 px-5 py-3 text-sm text-base-content/70" role="status">
-              {caseCount === 1 ? '1 tailoring case uses this CV.' : `${caseCount} tailoring cases use this CV.`} Saving
+              {caseCount === 1 ? '1 application uses this CV.' : `${caseCount} applications use this CV.`} Saving
               changes puts {caseCount === 1 ? 'it' : 'them'} on hold until you review what changed. Files you already
               exported stay on disk.
             </p>

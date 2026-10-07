@@ -10,11 +10,11 @@ export function buildApplicationPreparationNotification(input: ApplicationPrepar
   return input.needsUser
     ? {
         title: 'Application needs your attention',
-        body: `${input.role} at ${input.company} is waiting in your Review queue.`,
+        body: `${input.role} at ${input.company} is waiting under Ready to apply.`,
       }
     : {
         title: 'Application ready to review',
-        body: `${input.role} at ${input.company} is ready in your Review queue.`,
+        body: `${input.role} at ${input.company} is ready under Ready to apply.`,
       };
 }
 

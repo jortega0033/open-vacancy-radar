@@ -297,7 +297,7 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
 
     render(<SavedJobsPage onViewApplicationAttempt={onViewApplicationAttempt} />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /prepare application/i }));
+    fireEvent.click(screen.getByRole('button', { name: /get ready to apply/i }));
 
     // The id and nothing else: the renderer never names a URL, a CV, or a job description.
     await waitFor(() => expect(start).toHaveBeenCalledWith('job-7'));
@@ -321,7 +321,7 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
 
     render(<SavedJobsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /prepare application for/i }));
+    fireEvent.click(screen.getByRole('button', { name: /get ready to apply for/i }));
 
     expect(await screen.findByRole('status')).toHaveTextContent('already in progress');
   });
@@ -361,7 +361,7 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
       expect(screen.getByText(/^Sent /)).toBeInTheDocument();
       expect(screen.getByText('Not started')).toBeInTheDocument();
       // Only the untouched row still offers Prepare.
-      expect(screen.getAllByRole('button', { name: /^prepare application for/i })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /^get ready to apply for/i })).toHaveLength(1);
       fireEvent.click(screen.getByRole('button', { name: /open review for platform engineer/i }));
       expect(onView).toHaveBeenCalledWith('att-a');
     });
@@ -396,18 +396,18 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
       });
       render(<SavedJobsPage />);
 
-      fireEvent.click(await screen.findByRole('button', { name: /prepare application for platform engineer/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /get ready to apply for platform engineer/i }));
 
       const busy = await screen.findByRole('button', { name: /preparing application for platform engineer/i });
       expect(busy).toHaveTextContent('Preparing…');
       expect(busy).toBeDisabled();
-      expect(screen.getByRole('button', { name: /prepare application for data engineer/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /get ready to apply for data engineer/i })).toBeEnabled();
 
       finish({ ok: true, attemptId: 'att-1' });
       await waitFor(() => expect(screen.queryByRole('button', { name: /preparing application for/i })).not.toBeInTheDocument());
     });
 
-    it('explains Prepare application once, under the current automatic-sending setting', async () => {
+    it('explains Get ready to apply once, under the current automatic-sending setting', async () => {
       installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([makeJob({ id: 'a' })]) });
       render(<SavedJobsPage />);
 

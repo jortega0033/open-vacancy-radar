@@ -43,10 +43,14 @@ export const displayDay = (date: Date): string =>
 /** Every sentence this module writes into `next_step`. Anything else there is the person's own. */
 const AUTO_NEXT_STEPS = [
   'Preparing the application.',
+  'Ready for your review under Ready to apply.',
   'Ready for your review in the Review queue.',
   'Sending now.',
+  'Needs your input under Ready to apply.',
   'Needs your input in the Review queue.',
+  'Preparation failed. Open Ready to apply to retry.',
   'Preparation failed. Open the Review queue to retry.',
+  'Skipped from Ready to apply.',
   'Skipped from the Review queue.',
   'Sent, but no confirmation was seen.',
   'Sent ',
@@ -93,13 +97,13 @@ export function deriveApplicationState(
         savedJobStatus: 'preparing',
       };
     case 'skipped':
-      return { ...base, status: 'preparing', archived: true, nextStep: 'Skipped from the Review queue.', savedJobStatus: 'considering' };
+      return { ...base, status: 'preparing', archived: true, nextStep: 'Skipped from Ready to apply.', savedJobStatus: 'considering' };
     case 'failed':
-      return { ...base, status: 'preparing', nextStep: 'Preparation failed. Open the Review queue to retry.', savedJobStatus: 'preparing' };
+      return { ...base, status: 'preparing', nextStep: 'Preparation failed. Open Ready to apply to retry.', savedJobStatus: 'preparing' };
     case 'needs_user':
-      return { ...base, status: 'preparing', nextStep: 'Needs your input in the Review queue.', savedJobStatus: 'preparing' };
+      return { ...base, status: 'preparing', nextStep: 'Needs your input under Ready to apply.', savedJobStatus: 'preparing' };
     case 'ready':
-      return { ...base, status: 'preparing', nextStep: 'Ready for your review in the Review queue.', savedJobStatus: 'preparing' };
+      return { ...base, status: 'preparing', nextStep: 'Ready for your review under Ready to apply.', savedJobStatus: 'preparing' };
     case 'submitting':
       return { ...base, status: 'preparing', nextStep: 'Sending now.', savedJobStatus: 'preparing' };
     default:

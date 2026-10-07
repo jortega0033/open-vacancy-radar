@@ -84,7 +84,7 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
         if (!cancelled) setGroups(loaded.filter((group) => group.cases.length > 0));
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'could not load your tailoring cases');
+        if (!cancelled) setError(err instanceof Error ? err.message : 'could not load your applications');
       });
     return () => {
       cancelled = true;
@@ -102,10 +102,10 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
     return (
       <section className="mt-8" aria-labelledby="tailoring-cases-heading">
         <h2 id="tailoring-cases-heading" className="text-base font-semibold">
-          Tailoring cases
+          Your applications
         </h2>
         <p className="mt-1 text-sm text-base-content/60" role="status">
-          Loading your tailoring cases…
+          Loading your applications…
         </p>
       </section>
     );
@@ -114,7 +114,7 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
   return (
     <section className="mt-8" aria-labelledby="tailoring-cases-heading">
       <h2 id="tailoring-cases-heading" className="text-base font-semibold">
-        Tailoring cases
+        Your applications
       </h2>
       <p className="mt-1 text-sm text-base-content/60">
         Open a case to continue where you left off. Its job description, requirements, facts, wording and files are
@@ -122,14 +122,14 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
       </p>
       {groups.length === 0 && (
         <p className="mt-3 text-sm text-base-content/60">
-          Cases you start with Tailor for a job, or from a vacancy, appear here.
+          Applications you start with Get ready to apply, or from a vacancy, appear here.
         </p>
       )}
       {groups.map(({ cv, cases, cvChanged }) => (
         <div key={cv.id} className="mt-3">
           <div className="text-sm font-medium">{cv.name}</div>
           <div className="ovr-responsive-table overflow-x-auto">
-            <table className="table" aria-label={`Tailoring cases for ${cv.name}`}>
+            <table className="table" aria-label={`Applications for ${cv.name}`}>
               <thead>
                 <tr>
                   <th>Job</th>
