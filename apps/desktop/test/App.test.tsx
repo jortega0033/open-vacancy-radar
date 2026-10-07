@@ -179,14 +179,14 @@ describe('App', () => {
     expect(main).not.toHaveClass('overflow-hidden');
   });
 
-  describe('Fill search profile (issue #480)', () => {
+  describe('Fill it in (issue #480)', () => {
     async function openSearchProfileFromSearch() {
       installVacancyRadarBridge({
         getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
         getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: null })])),
       });
       render(<App />);
-      fireEvent.click(await screen.findByRole('button', { name: 'Fill search profile' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Fill it in' }));
     }
 
     it('opens "What you are looking for" in place with the target roles field focused (#635)', async () => {

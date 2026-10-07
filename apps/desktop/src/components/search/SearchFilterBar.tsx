@@ -392,7 +392,7 @@ export function SearchFilterBar({
 
       {!aiWebDiscoveryAvailable && (
         <p id={aiWebHelpId} className="mt-2 text-xs text-base-content/60">
-          Add a role or skill to your profile to also search the web with AI.
+          Add a role or skill under What you are looking for to also search the web with AI.
           {onOpenSearchProfile && (
             <>
               {' '}
@@ -401,7 +401,7 @@ export function SearchFilterBar({
                 type="button"
                 onClick={onOpenSearchProfile}
               >
-                Open search profile
+                What you are looking for
               </button>
             </>
           )}

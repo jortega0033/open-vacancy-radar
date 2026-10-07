@@ -86,7 +86,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
         setProfile(loaded);
         setDraft(toDraft(loaded));
       } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load the search profile'));
+        if (!cancelled) setLoadError(describeError(err, 'could not load what you are looking for'));
       }
     })();
     return () => {
@@ -110,7 +110,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
             setProfile(profile);
             setDraft(toDraft(profile));
           }
-          onSaveError('Could not save your search profile.', ...(err instanceof Error && err.message ? [err.message] : []));
+          onSaveError('Could not save what you are looking for.', ...(err instanceof Error && err.message ? [err.message] : []));
         }
       })();
     },
@@ -149,7 +149,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
   }
 
   if (!profile || !draft) {
-    return <div className="alert alert-info mt-2 text-sm">Loading search profile…</div>;
+    return <div className="alert alert-info mt-2 text-sm">Loading what you are looking for…</div>;
   }
 
   // Mirrors isCandidateProfileConfigured in packages/vacancy-engine/src/candidate/profile.ts:
@@ -222,7 +222,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
 
       <details className="mt-4 border-t border-base-300 pt-2">
         <summary className="cursor-pointer py-1 text-sm font-medium">More options</summary>
-        <SettingsRow label="Fill from CV" description="Fills in your profile from a CV for you to review.">
+        <SettingsRow label="Fill from CV" description="Fills this in from a CV for you to review.">
           <FillProfileFromCv profile={profile} disabled={disabled} onApply={applyFromCv} />
         </SettingsRow>
         <SettingsSubheading>Role matching</SettingsSubheading>

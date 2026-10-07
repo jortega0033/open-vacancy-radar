@@ -281,7 +281,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
       });
       onClose();
     } catch (err) {
-      setSaveError(describeError(err, 'could not save the search profile'));
+      setSaveError(describeError(err, 'could not save what you are looking for'));
     } finally {
       setSaving(false);
     }
@@ -295,7 +295,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
 
   return (
     <Dialog
-      aria-label="Fill search profile from CV"
+      aria-label="Fill from CV"
       placement="end"
       boxClassName="flex max-w-md flex-col rounded-none p-0"
       onClose={onClose}
@@ -549,7 +549,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
             </button>
             <button type="button" className="btn btn-primary" onClick={() => void handleSave()} disabled={!form || busy}>
               {saving && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
-              Save to profile
+              Save
             </button>
           </div>
         </div>

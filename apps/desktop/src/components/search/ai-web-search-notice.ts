@@ -47,7 +47,7 @@ export function describeAiWebSearchFailure(
     return { message: 'AI web search needs Claude Code, which is not installed.' };
   }
   if (/no candidate search profile/i.test(reason)) {
-    return { message: 'AI web search needs a role or skill in your search profile.' };
+    return { message: 'AI web search needs a role or skill under What you are looking for.' };
   }
   if (/failed to start|daemon was not ready|availability could not be determined/i.test(reason)) {
     return { message: 'AI web search could not start, so these results are from job sites only.' };

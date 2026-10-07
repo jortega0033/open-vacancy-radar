@@ -341,14 +341,14 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
   return (
     <Dialog
-      aria-label={isEdit ? 'Edit CV' : 'Add manual CV profile'}
+      aria-label={isEdit ? 'Edit CV' : 'Type your CV'}
       placement="end"
       boxClassName="flex max-w-md flex-col rounded-none p-0"
       onClose={onCancel}
       closeDisabled={submitting}
     >
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
-          <h2 className="text-sm font-semibold">{isEdit ? 'Edit CV' : 'Add manual profile'}</h2>
+          <h2 className="text-sm font-semibold">{isEdit ? 'Edit CV' : 'Type your CV'}</h2>
           <button
             type="button"
             aria-label="Close"

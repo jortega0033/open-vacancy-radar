@@ -101,7 +101,7 @@ export const SearchResultRow = memo(function SearchResultRow({
           {result.profileScore != null && (
             <span
               className="badge badge-xs badge-soft badge-primary flex-none whitespace-nowrap font-mono"
-              title="Deterministic score against your search profile. It does not compare this vacancy to a CV."
+              title="Deterministic score against what you are looking for. It does not compare this vacancy to a CV."
             >
               <span aria-hidden="true">{profileFitText(result.profileScore)}</span>
               <span className="sr-only">{profileFitSpoken(result.profileScore)}</span>

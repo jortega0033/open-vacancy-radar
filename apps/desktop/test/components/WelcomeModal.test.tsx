@@ -294,12 +294,12 @@ describe('first-launch welcome modal', () => {
     fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
     await waitFor(() => expect(createCvDocument).toHaveBeenCalledTimes(1));
 
-    // The hand-off: the welcome dialog is gone and a differently-labelled one (Fill search profile
+    // The hand-off: the welcome dialog is gone and a differently-labelled one (Fill it in
     // from CV) has replaced it, and a real AI session was already started -- proof `autoStart` fired
     // `handleRead` itself, with no "Read CV" click anywhere in this test. The button itself still
     // renders (disabled, mid-spin): autoStart shortens the path to it, it does not hide it.
     await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
-    const drawer = await screen.findByRole('dialog', { name: 'Fill search profile from CV' });
+    const drawer = await screen.findByRole('dialog', { name: 'Fill from CV' });
     expect(agentDock.createSession).toHaveBeenCalledTimes(1);
     expect(within(drawer).getByRole('button', { name: 'Read CV' })).toBeDisabled();
 
@@ -325,12 +325,12 @@ describe('first-launch welcome modal', () => {
     fireEvent.click(screen.getByRole('button', { name: /upload cv/i }));
     fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
 
-    await screen.findByRole('dialog', { name: 'Fill search profile from CV' });
+    await screen.findByRole('dialog', { name: 'Fill from CV' });
     emit('sess-welcome-cv', { type: 'assistant.message', text: GOOD_PROFILE_RESPONSE });
     emit('sess-welcome-cv', { type: 'session.completed' });
     await waitFor(() => expect(screen.getByLabelText('Current role')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save to profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(vacancyRadar.saveSearchProfile).toHaveBeenCalledTimes(1));
     // Back on the checklist: the CV is done and the other two items are still on offer.
@@ -360,7 +360,7 @@ describe('first-launch welcome modal', () => {
     fireEvent.click(screen.getByRole('button', { name: /upload cv/i }));
     fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
 
-    const drawer = await screen.findByRole('dialog', { name: 'Fill search profile from CV' });
+    const drawer = await screen.findByRole('dialog', { name: 'Fill from CV' });
     // Cancel is disabled while the auto-started run is still in flight (Stop is the way to
     // interrupt that, so a session is never abandoned mid-run) -- stop it first, matching what a
     // user who does not want to wait actually has to do. `cancel()` only requests cancellation; the
@@ -635,7 +635,7 @@ describe('first-launch checklist: search profile could not be loaded', () => {
     const { workspace } = await uploadWithBrokenProfile({ ok: false });
 
     const alert = await screen.findByText(
-      'CV saved. Could not fill your profile automatically. You can do it in Settings.',
+      'CV saved. Could not fill in what you are looking for automatically. You can do it in Settings.',
     );
     expect(alert).toBeInTheDocument();
     // Still open, and not yet marked seen: the message has to be readable before anything closes.
@@ -647,18 +647,18 @@ describe('first-launch checklist: search profile could not be loaded', () => {
   it('Try again reloads the profile and goes on to the review', async () => {
     const profileLoads = { ok: false };
     await uploadWithBrokenProfile(profileLoads);
-    await screen.findByText(/Could not fill your profile automatically/);
+    await screen.findByText(/Could not fill in what you are looking for automatically/);
 
     profileLoads.ok = true;
     fireEvent.click(within(welcomeDialog()!).getByRole('button', { name: 'Try again' }));
 
-    await screen.findByRole('dialog', { name: 'Fill search profile from CV' });
+    await screen.findByRole('dialog', { name: 'Fill from CV' });
   });
 
   it('Open Settings closes the modal and lands on the Search tab with What you are looking for focused', async () => {
     const profileLoads = { ok: false };
     const { workspace } = await uploadWithBrokenProfile(profileLoads);
-    await screen.findByText(/Could not fill your profile automatically/);
+    await screen.findByText(/Could not fill in what you are looking for automatically/);
 
     profileLoads.ok = true;
     fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
@@ -671,11 +671,11 @@ describe('first-launch checklist: search profile could not be loaded', () => {
 
   it('Dismiss clears the message', async () => {
     await uploadWithBrokenProfile({ ok: false });
-    await screen.findByText(/Could not fill your profile automatically/);
+    await screen.findByText(/Could not fill in what you are looking for automatically/);
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
-    expect(screen.queryByText(/Could not fill your profile automatically/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Could not fill in what you are looking for automatically/)).not.toBeInTheDocument();
     expect(welcomeDialog()).toBeInTheDocument();
   });
 });
@@ -785,7 +785,7 @@ describe('Finish setup (reopening the checklist, #539)', () => {
 
     fireEvent.click(await within(dialog).findByRole('button', { name: /upload cv/i }));
     fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
-    await screen.findByText(/Could not fill your profile automatically/);
+    await screen.findByText(/Could not fill in what you are looking for automatically/);
     profileLoads.ok = true;
     fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
 

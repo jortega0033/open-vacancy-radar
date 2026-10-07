@@ -37,7 +37,7 @@ describe('SourceScoutSection', () => {
     installVacancyRadarBridge({ getSourceScoutStatus: vi.fn().mockResolvedValue(status({ hasProfile: false })) });
     render(<SourceScoutSection enabled onEnabledChange={vi.fn()} />);
 
-    await waitFor(() => expect(screen.getByText(/Save a role or keyword in your search profile/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Add a role or keyword under What you are looking for/)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
   });
 

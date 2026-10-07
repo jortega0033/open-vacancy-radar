@@ -221,7 +221,7 @@ describe('SearchFilterBar AI web discovery (#641)', () => {
     );
     const checkbox = screen.getByRole('checkbox', { name: 'Also search the web with AI' });
     expect(checkbox).toBeDisabled();
-    const helpText = screen.getByText(/Add a role or skill to your profile/);
+    const helpText = screen.getByText(/Add a role or skill under What you are looking for/);
     expect(helpText).toBeInTheDocument();
     expect(checkbox).toHaveAttribute('aria-describedby', helpText.id);
   });
@@ -247,7 +247,7 @@ describe('SearchFilterBar AI web discovery (#641)', () => {
         onOpenSearchProfile={onOpenSearchProfile}
       />,
     );
-    const link = screen.getByRole('button', { name: 'Open search profile' });
+    const link = screen.getByRole('button', { name: 'What you are looking for' });
     fireEvent.click(link);
     expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
   });
@@ -272,7 +272,7 @@ describe('SearchFilterBar AI web discovery (#641)', () => {
         onOpenSearchProfile={vi.fn()}
       />,
     );
-    expect(screen.queryByText(/Add a role or skill to your profile/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Add a role or skill under What you are looking for/)).not.toBeInTheDocument();
     const checkbox = screen.getByRole('checkbox', { name: 'Also search the web with AI' });
     expect(checkbox).toBeEnabled();
     expect(checkbox).not.toHaveAttribute('aria-describedby');

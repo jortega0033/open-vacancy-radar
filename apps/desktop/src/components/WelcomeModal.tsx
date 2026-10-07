@@ -165,7 +165,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
         if (cancelled) return;
         // The CV is already saved by this point. Stay open and say so: closing here unmounted the
         // message before anyone could read it.
-        setProfileError('CV saved. Could not fill your profile automatically. You can do it in Settings.');
+        setProfileError('CV saved. Could not fill in what you are looking for automatically. You can do it in Settings.');
         setStep('invite');
       });
     return () => {
@@ -235,7 +235,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
                   ? 'CV saved to your library.'
                   : cvCheck === 'unavailable'
                   ? 'Could not check. You can still add one.'
-                  : 'Used to rank jobs for you and fill in your search profile. Stays on this computer.'
+                  : 'Used to rank jobs for you and fill in what you are looking for. Stays on this computer.'
               }
               skipLabel="Skip adding a CV"
               {...(!cvDone && !skipped.cv && !busy ? { onSkip: () => skip('cv') } : {})}
@@ -252,8 +252,8 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
               )}
               {busy && (
                 <p className="w-full text-xs text-base-content/60" role="status">
-                  <span className="loading loading-spinner loading-xs" aria-hidden="true" /> CV saved. Filling in your
-                  profile...
+                  <span className="loading loading-spinner loading-xs" aria-hidden="true" /> CV saved. Filling in what you are
+                  looking for...
                 </p>
               )}
               {profileError && (

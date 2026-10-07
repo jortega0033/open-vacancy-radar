@@ -91,7 +91,7 @@ function installCvAndAgentBridges(selectAndRead: CvBridge['selectAndRead'] = vi.
 
 async function submitManualCv(name: string) {
   fireEvent.click(screen.getAllByRole('button', { name: /type your cv instead/i })[0]!);
-  const dialog = await screen.findByRole('dialog', { name: /add manual cv profile/i });
+  const dialog = await screen.findByRole('dialog', { name: /type your cv/i });
   fireEvent.change(within(dialog).getByLabelText(/^name/i), { target: { value: name } });
   fireEvent.click(within(dialog).getByRole('button', { name: /add cv/i }));
 }
@@ -114,7 +114,7 @@ describe('CV paths that fill the empty search profile (#628)', () => {
     await submitManualCv('Frontend CV');
 
     await waitFor(() => expect(save).toHaveBeenCalledWith(EXPECTED_PATCH));
-    expect(await screen.findByText('Search profile filled from the default CV')).toBeInTheDocument();
+    expect(await screen.findByText('What you are looking for filled in from the default CV')).toBeInTheDocument();
   });
 
   it('leaves a filled profile alone when a new default CV is created', async () => {
@@ -131,7 +131,7 @@ describe('CV paths that fill the empty search profile (#628)', () => {
 
     await waitFor(() => expect(screen.getByText('Frontend CV')).toBeInTheDocument());
     expect(save).not.toHaveBeenCalled();
-    expect(screen.queryByText(/search profile filled/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/what you are looking for filled in/i)).not.toBeInTheDocument();
   });
 
   it('does not touch the profile when the created CV is not the default', async () => {
@@ -202,7 +202,7 @@ describe('CV paths that fill the empty search profile (#628)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
 
     await waitFor(() => expect(save).toHaveBeenCalledWith(EXPECTED_PATCH));
-    expect(await screen.findByText('Search profile filled from the default CV')).toBeInTheDocument();
+    expect(await screen.findByText('What you are looking for filled in from the default CV')).toBeInTheDocument();
   });
 
   it('SaveCvToLibrary fills on its own and says so', async () => {
@@ -213,7 +213,7 @@ describe('CV paths that fill the empty search profile (#628)', () => {
     fireEvent.click(screen.getByRole('button', { name: /save to cv library/i }));
 
     await waitFor(() => expect(save).toHaveBeenCalledWith(EXPECTED_PATCH));
-    expect(await screen.findByText(/search profile filled from the default cv/i)).toBeInTheDocument();
+    expect(await screen.findByText(/What you are looking for filled in from the default cv/i)).toBeInTheDocument();
   });
 
   it('SaveCvToLibrary never overwrites filled fields', async () => {
@@ -256,7 +256,7 @@ describe('CV paths that fill the empty search profile (#628)', () => {
     render(<SaveCvToLibrary cv={{ fileName: 'resume.pdf', text: 'Text.' }} />);
     fireEvent.click(screen.getByRole('button', { name: /save to cv library/i }));
 
-    expect(await screen.findByText(/search profile was not filled: profile locked/i)).toBeInTheDocument();
+    expect(await screen.findByText(/what you are looking for was not filled in: profile locked/i)).toBeInTheDocument();
     expect(screen.getByText('Saved to library')).toBeInTheDocument();
   });
 
@@ -280,6 +280,6 @@ describe('CV paths that fill the empty search profile (#628)', () => {
     const { location: _kept, fieldSources, ...rest } = EXPECTED_PATCH;
     const { location: _keptSource, ...sourcesWithoutLocation } = fieldSources;
     await waitFor(() => expect(save).toHaveBeenCalledWith({ ...rest, fieldSources: sourcesWithoutLocation }));
-    expect(await screen.findByText('Search profile filled from the default CV')).toBeInTheDocument();
+    expect(await screen.findByText('What you are looking for filled in from the default CV')).toBeInTheDocument();
   });
 });
