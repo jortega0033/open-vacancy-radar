@@ -50,6 +50,13 @@ interface ReviewForm {
   primaryCountry: string;
 }
 
+/** The review form as first shown, and which of its fields the CV supplied (#635). A field the
+ * person then changes is recorded as theirs; one left as shown keeps the origin it was seeded with. */
+interface ReviewSeed {
+  form: ReviewForm;
+  cvKeys: ReadonlySet<keyof ReviewForm>;
+}
+
 function parsedCvReviewForm(profile: CvDocumentRecord['profile'], current: CandidateProfile): ReviewForm {
   const skills = profile.skills.filter((skill) => skill.trim().length > 0);
   return {
@@ -94,6 +101,23 @@ function reviewedExperienceYears(text: string, fallback: number): number {
   return Math.min(parsed, SEARCH_PROFILE_CV_LIMITS.experienceYearsMax);
 }
 
+function parsedCvSeed(profile: CvDocumentRecord['profile'], current: CandidateProfile): ReviewSeed {
+  const cvKeys = new Set<keyof ReviewForm>();
+  if (profile.title.trim()) cvKeys.add('currentRole');
+  if (profile.years.trim()) cvKeys.add('experienceYears');
+  if (profile.languages.trim()) cvKeys.add('professionalLanguage');
+  if (profile.skills.some((skill) => skill.trim().length > 0)) cvKeys.add('strongestSkills');
+  return { form: parsedCvReviewForm(profile, current), cvKeys };
+}
+
+function extractedSeed(extracted: Partial<SearchProfileCvFields>, profile: CandidateProfile): ReviewSeed {
+  const cvKeys = new Set<keyof ReviewForm>();
+  for (const key of Object.keys(extracted) as (keyof ReviewForm)[]) {
+    if (extracted[key] !== undefined) cvKeys.add(key);
+  }
+  return { form: toReviewForm(extracted, profile), cvKeys };
+}
+
 export interface FillProfileFromCvProps {
   /** The profile as currently saved: the per-field fallback for anything the CV does not state. */
   profile: CandidateProfile;
@@ -135,6 +159,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   const [listError, setListError] = useState<string>();
   const [selectedId, setSelectedId] = useState('');
   const [form, setForm] = useState<ReviewForm>();
+  const seedRef = useRef<ReviewSeed>();
   const [parseError, setParseError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
@@ -172,7 +197,9 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
     if (run.status !== 'completed' || appliedRef.current) return;
     appliedRef.current = true;
     try {
-      setForm(toReviewForm(parseSearchProfileCvResponse(run.text), profile));
+      const seed = extractedSeed(parseSearchProfileCvResponse(run.text), profile);
+      seedRef.current = seed;
+      setForm(seed.form);
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'could not read the AI response');
     }
@@ -228,8 +255,18 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
     setSaving(true);
     setSaveError(undefined);
     try {
-      await onApply(
-        toSearchProfilePatch({
+      const seed = seedRef.current;
+      const sources: NonNullable<CandidateProfilePatch['fieldSources']> = {};
+      for (const key of Object.keys(form) as (keyof ReviewForm)[]) {
+        if (seed && form[key] !== seed.form[key]) sources[key] = 'user';
+        else if (seed?.cvKeys.has(key)) sources[key] = 'cv';
+        else {
+          const recorded = profile.fieldSources?.[key];
+          if (recorded) sources[key] = recorded;
+        }
+      }
+      await onApply({
+        ...toSearchProfilePatch({
           currentRole: form.currentRole.trim(),
           experienceYears: reviewedExperienceYears(form.experienceYears, profile.experienceYears),
           location: form.location.trim(),
@@ -240,7 +277,8 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
           consideredRoles: textToSkills(form.consideredRoles),
           primaryCountry: form.primaryCountry.trim(),
         }),
-      );
+        fieldSources: sources,
+      });
       onClose();
     } catch (err) {
       setSaveError(describeError(err, 'could not save the search profile'));
@@ -330,7 +368,11 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                       type="button"
                       className="btn btn-outline btn-sm"
                       disabled={busy}
-                      onClick={() => setForm(parsedCvReviewForm(selected!.profile, profile))}
+                      onClick={() => {
+                        const seed = parsedCvSeed(selected!.profile, profile);
+                        seedRef.current = seed;
+                        setForm(seed.form);
+                      }}
                     >
                       Use saved CV details
                     </button>

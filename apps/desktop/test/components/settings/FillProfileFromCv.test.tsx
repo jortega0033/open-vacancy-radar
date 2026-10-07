@@ -272,6 +272,18 @@ describe('FillProfileFromCvDrawer', () => {
       targetRoles: ['Senior Frontend Engineer'],
       consideredRoles: ['Frontend Architect'],
       constraints: { professionalLanguage: 'English', primaryCountry: 'Netherlands' },
+      // The role the user retyped is theirs; everything left as the CV gave it stays "cv".
+      fieldSources: { ...{
+        additionalSkills: 'cv',
+        consideredRoles: 'cv',
+        currentRole: 'cv',
+        experienceYears: 'cv',
+        location: 'cv',
+        primaryCountry: 'cv',
+        professionalLanguage: 'cv',
+        strongestSkills: 'cv',
+        targetRoles: 'cv',
+      }, currentRole: 'user' },
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
@@ -302,11 +314,14 @@ describe('FillProfileFromCvDrawer', () => {
       'constraints',
       'currentRole',
       'experienceYears',
+      'fieldSources',
       'location',
       'strongestSkills',
       'targetRoles',
     ]);
     expect(Object.keys(patch.constraints as object).sort()).toEqual(['primaryCountry', 'professionalLanguage']);
+    // Only the field the response actually supplied is recorded as coming from the CV.
+    expect(patch.fieldSources).toEqual({ currentRole: 'cv' });
     // The user's own excluded-role-family and salary-floor answers were never even offered to the save.
     expect(patch.excludedRoleFamilies).toBeUndefined();
     expect((patch.constraints as Record<string, unknown>).minimumMonthlyBaseEur).toBeUndefined();
@@ -451,6 +466,17 @@ describe('SearchProfileSection: filling from a CV merges into the profile', () =
       targetRoles: ['Senior Frontend Engineer'],
       consideredRoles: ['Frontend Architect'],
       constraints: { professionalLanguage: 'English', primaryCountry: 'Netherlands' },
+      fieldSources: {
+        additionalSkills: 'cv',
+        consideredRoles: 'cv',
+        currentRole: 'cv',
+        experienceYears: 'cv',
+        location: 'cv',
+        primaryCountry: 'cv',
+        professionalLanguage: 'cv',
+        strongestSkills: 'cv',
+        targetRoles: 'cv',
+      },
     });
 
     // The section re-renders from what the merge returned: the nine bridged fields changed, and

@@ -80,32 +80,36 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('opens on the Search tab and focuses the first search-profile field when asked (issue #480)', async () => {
+  it('opens on the Search tab and focuses the "What you are looking for" section when asked (issue #480)', async () => {
     setup();
     render(<SettingsPage initialTab="search" focusSection="search-profile" />);
 
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
     expect(screen.queryByLabelText('Start page')).not.toBeInTheDocument(); // not the General tab's startup toggles
-    expect(screen.getByRole('heading', { name: 'Search profile' })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+    const heading = screen.getByRole('heading', { name: 'What you are looking for' });
+    await waitFor(() => expect(heading).toHaveFocus());
   });
 
   it('opens the Search tab without stealing focus when no section is asked for', async () => {
     setup();
     render(<SettingsPage initialTab="search" />);
 
-    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.getByLabelText('Name')).not.toHaveFocus();
+    const heading = await screen.findByRole('heading', { name: 'What you are looking for' });
+    expect(heading).not.toHaveFocus();
   });
 
-  it('focuses the search-profile heading and shows the reason when the profile cannot be loaded (issue #480)', async () => {
+  it('no longer renders the search profile form on the Search tab, and points to the CV page instead (#635)', async () => {
     setup();
-    installVacancyRadarBridge({ getSearchProfile: vi.fn().mockRejectedValue(new Error('profile file unreadable')) });
-    render(<SettingsPage initialTab="search" focusSection="search-profile" />);
+    const onOpenCvPage = vi.fn();
+    render(<SettingsPage initialTab="search" onOpenCvPage={onOpenCvPage} />);
 
-    const heading = await screen.findByRole('heading', { name: 'Search profile' });
-    await waitFor(() => expect(heading).toHaveFocus());
-    expect(screen.getByText('profile file unreadable')).toBeInTheDocument();
+    await screen.findByRole('heading', { name: 'What you are looking for' });
+    for (const label of ['Name', 'Target roles', 'Strongest skills', 'Country', 'Years of experience']) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    }
+    expect(screen.getByLabelText('Default search location')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open on CV page' }));
+    expect(onOpenCvPage).toHaveBeenCalledTimes(1);
   });
 
   it('loads settings on mount and populates the form without saving anything', async () => {
@@ -158,7 +162,7 @@ describe('SettingsPage', () => {
 
     openTab('Search');
     await waitFor(() =>
-      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company list', 'Company discovery']),
+      expect(headingsNow()).toEqual(['Default search location', 'What you are looking for', 'Company list', 'Company discovery']),
     );
 
     openTab('Workspace');

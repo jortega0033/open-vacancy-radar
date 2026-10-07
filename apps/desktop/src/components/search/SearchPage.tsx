@@ -25,6 +25,8 @@ import { summarizeSourceCoverage } from './source-coverage.js';
 import { describeAiWebSearchFailure } from './ai-web-search-notice.js';
 import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
 import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
+import { ProfileEditDialog } from '../profile/ProfileEditDialog.js';
+import { RankingSummary } from '../profile/RankingSummary.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
 import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
 import {
@@ -290,6 +292,9 @@ export function SearchPage({
   const [viewingSaved, setViewingSaved] = useState(false);
   const [searchProfile, setSearchProfile] = useState<CandidateProfile | null>(null);
   const [searchProfileError, setSearchProfileError] = useState<string>();
+  /** The "What you are looking for" form, opened in place from the Ranking line and the profile prompts. */
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [profileRevision, setProfileRevision] = useState(0);
   // Issue #398 Phase 1: a plain, un-persisted scan-time toggle -- deliberately not part of
   // `SearchFilters`/the session-restore machinery those other fields use (see `SearchFilterBar`'s
   // own doc comment on this prop): it is a one-off request option for the next scan, not a
@@ -685,7 +690,7 @@ export function SearchPage({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [profileRevision]);
 
   const worldwideReportRef = useRef(worldwideReport);
   worldwideReportRef.current = worldwideReport;
@@ -1316,9 +1321,19 @@ export function SearchPage({
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
-          onOpenSearchProfile={onOpenSearchProfile}
+          onOpenSearchProfile={() => setProfileEditorOpen(true)}
           scanUnavailable={engineState === 'unavailable'}
         />
+        {/* Only over ranked results: the empty page keeps its one role flow (the field and the role buttons). */}
+        {worldwideReport !== null && currentProfileConfigured && !reportHasOnlyUnscoredRows && (
+          <RankingSummary profile={searchProfile} onEdit={() => setProfileEditorOpen(true)} />
+        )}
+        {profileEditorOpen && (
+          <ProfileEditDialog
+            onClose={() => setProfileEditorOpen(false)}
+            onChanged={() => setProfileRevision((revision) => revision + 1)}
+          />
+        )}
       </div>
 
       <div className="flex-none px-6">
@@ -1547,11 +1562,9 @@ export function SearchPage({
               <span>
                 Results are not ranked for you yet. Fill in your search profile to see how well each job fits.
               </span>
-              {onOpenSearchProfile && (
-                <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>
-                  Fill search profile
-                </button>
-              )}
+              <button type="button" className="btn btn-warning btn-sm" onClick={() => setProfileEditorOpen(true)}>
+                Fill search profile
+              </button>
             </div>
           )}
           {reportNeedsRescore && (

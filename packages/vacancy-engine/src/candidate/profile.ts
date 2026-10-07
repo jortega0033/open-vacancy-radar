@@ -3,6 +3,10 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
+/** `cv` when a CV fill copied the value, `user` when the person typed or edited it (#635). */
+export const profileFieldSourceSchema = z.enum(['cv', 'user']);
+export type ProfileFieldSource = z.infer<typeof profileFieldSourceSchema>;
+
 /**
  * `.min(1)`/`.positive()` constraints were dropped deliberately: a profile the user hasn't
  * configured yet is a legitimate, expected state (a fresh install ships with every field empty,
@@ -44,6 +48,26 @@ export const candidateProfileSchema = z.object({
      */
     relocationWilling: z.boolean().optional(),
   }),
+  /**
+   * Where each field's current value came from (#635). Optional and sparse: a field with no entry
+   * has no recorded origin, and the UI then shows no label rather than guessing one. Unknown keys
+   * are dropped on parse.
+   */
+  fieldSources: z
+    .object({
+      candidateName: profileFieldSourceSchema.optional(),
+      currentRole: profileFieldSourceSchema.optional(),
+      location: profileFieldSourceSchema.optional(),
+      experienceYears: profileFieldSourceSchema.optional(),
+      professionalLanguage: profileFieldSourceSchema.optional(),
+      primaryCountry: profileFieldSourceSchema.optional(),
+      strongestSkills: profileFieldSourceSchema.optional(),
+      additionalSkills: profileFieldSourceSchema.optional(),
+      targetRoles: profileFieldSourceSchema.optional(),
+      consideredRoles: profileFieldSourceSchema.optional(),
+      excludedRoleFamilies: profileFieldSourceSchema.optional(),
+    })
+    .optional(),
 });
 export type CandidateProfile = z.infer<typeof candidateProfileSchema>;
 

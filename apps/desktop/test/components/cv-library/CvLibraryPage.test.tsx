@@ -550,6 +550,39 @@ describe('CvLibraryPage', () => {
     expect(screen.queryByRole('dialog', { name: /edit cv/i })).not.toBeInTheDocument();
   });
 
+  it('shows the "What you are looking for" summary next to the CVs, with one Edit button (#635)', async () => {
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv({ id: 'a', name: 'CV A', isDefault: true })]) });
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue({
+        candidateName: '',
+        currentRole: '',
+        location: '',
+        experienceYears: 0,
+        strongestSkills: ['React'],
+        additionalSkills: [],
+        targetRoles: ['Frontend Engineer'],
+        consideredRoles: [],
+        excludedRoleFamilies: [],
+        constraints: {
+          professionalLanguage: '',
+          dutchRequired: false,
+          primaryCountry: '',
+          allowRemoteEuSupportingNetherlands: false,
+          minimumMonthlyBaseEur: 0,
+        },
+        fieldSources: { targetRoles: 'cv', strongestSkills: 'cv' },
+        profileVersion: 'test',
+      }),
+    });
+
+    render(<CvLibraryPage />);
+
+    const region = await screen.findByRole('region', { name: 'What you are looking for' });
+    expect(within(region).getByText('Frontend Engineer')).toBeInTheDocument();
+    expect(within(region).getAllByText('From your CV')).toHaveLength(2);
+    expect(within(region).getByRole('button', { name: 'Edit what you are looking for' })).toBeInTheDocument();
+  });
+
   it('sets a CV as default and updates the list from the returned array', async () => {
     const a = makeCv({ id: 'a', name: 'CV A', isDefault: true });
     const b = makeCv({
@@ -629,6 +662,14 @@ describe('CvLibraryPage', () => {
         constraints: { professionalLanguage: 'English' },
         strongestSkills: ['React', 'TypeScript'],
         targetRoles: ['Product Engineer'],
+        fieldSources: {
+          currentRole: 'cv',
+          location: 'cv',
+          experienceYears: 'cv',
+          professionalLanguage: 'cv',
+          strongestSkills: 'cv',
+          targetRoles: 'cv',
+        },
       }),
     );
     expect(screen.getByText(/search profile filled from the default cv/i)).toBeInTheDocument();

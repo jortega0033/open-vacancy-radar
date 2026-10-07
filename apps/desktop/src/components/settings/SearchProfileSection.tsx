@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
-import { SettingsRow, SettingsSection, SettingsSubheading } from './controls.js';
+import { SettingsRow, SettingsSubheading } from './controls.js';
 import { FillProfileFromCv } from './FillProfileFromCv.js';
 
 function describeError(err: unknown, fallback: string): string {
@@ -43,48 +43,39 @@ function toDraft(profile: CandidateProfile): Draft {
 
 export interface SearchProfileSectionProps {
   disabled?: boolean;
-  /** Reports a candidate-profile save result upward so `SettingsPage` can show it through its one
-   * toast instance, instead of this section rendering a second, independent one: two autosaving
-   * forms on the same tab each popping their own toast in the same corner can overlap. */
+  /** Reports a candidate-profile save upward so the host (the edit dialog) can show it through its
+   * one status line, instead of this form rendering a second, independent one. */
   onSaved: () => void;
   onSaveError: (message: string, details?: string) => void;
-  /** Opened from "Fill search profile" (#480): scroll here and focus the first field once the
-   * profile has loaded, or the heading if it could not be loaded, so the reason is in view. */
-  focusOnOpen?: boolean;
+  /** Lands on the target roles field once the profile has loaded (the form loads after it mounts). */
+  focusOnLoad?: boolean;
 }
 
 /**
- * Lets a user edit the candidate profile the worldwide pipeline's deterministic scoring matches
- * every result against, instead of hand-editing `config/candidate-profile-v1.json`. Every field
- * commits on blur (text/number/list fields), the same autosave convention as the rest of the
- * Settings page, through the narrow `vacancyRadar.saveSearchProfile` IPC bridge rather than any
- * direct file access.
+ * The search profile form behind "What you are looking for" (#635): the two fields that decide
+ * ranking, target roles and country, come first, and everything else sits under a collapsed
+ * "More options". Every field commits on blur (text/number/list fields), through the narrow
+ * `vacancyRadar.saveSearchProfile` IPC bridge rather than any direct file access, and records the
+ * field as added by the user.
  *
  * There is deliberately no default target role, country, or salary floor prefilled anywhere here:
- * a fresh profile ships empty (see `config/candidate-profile-v1.json`), and this section only ever
+ * a fresh profile ships empty (see `config/candidate-profile-v1.json`), and this form only ever
  * writes back what the user actually typed.
  */
-export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOpen }: SearchProfileSectionProps) {
+export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLoad }: SearchProfileSectionProps) {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadError, setLoadError] = useState<string>();
-  const [defaultCvName, setDefaultCvName] = useState<string | null | undefined>();
 
   const saveSeq = useRef(0);
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  const nameInputRef = useRef<HTMLInputElement>(null);
+  const targetRolesRef = useRef<HTMLTextAreaElement>(null);
   const focusedRef = useRef(false);
 
-  // Waits out the loading state, then lands once: on the first field when the form is there, on the
-  // heading when the load failed (the error alert sits right under it).
   useEffect(() => {
-    if (!focusOnOpen || focusedRef.current) return;
-    const target = draft ? nameInputRef.current : loadError ? headingRef.current : null;
-    if (!target) return;
+    if (!focusOnLoad || focusedRef.current || !draft) return;
     focusedRef.current = true;
-    target.focus();
-    target.scrollIntoView?.({ block: 'center' });
-  }, [focusOnOpen, draft, loadError]);
+    targetRolesRef.current?.focus();
+  }, [focusOnLoad, draft]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,32 +94,12 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const workspace = window.workspace;
-    if (!workspace?.listCvDocuments) {
-      setDefaultCvName(null);
-      return;
-    }
-    void workspace
-      .listCvDocuments()
-      .then((documents) => {
-        if (!cancelled) setDefaultCvName(documents.find((document) => document.isDefault)?.name ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setDefaultCvName(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const commit = useCallback(
-    (patch: Parameters<typeof window.vacancyRadar.saveSearchProfile>[0]) => {
+    (patch: CandidateProfilePatch, edited: keyof Draft) => {
       const seq = ++saveSeq.current;
       void (async () => {
         try {
-          const saved = await window.vacancyRadar.saveSearchProfile(patch);
+          const saved = await window.vacancyRadar.saveSearchProfile({ ...patch, fieldSources: { [edited]: 'user' } });
           if (seq !== saveSeq.current) return;
           setProfile(saved);
           setDraft(toDraft(saved));
@@ -156,7 +127,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
    * Awaited rather than fire-and-forget like `commit` above, because the drawer needs the outcome:
    * it stays open and shows the failure inline instead of closing on a save that did not land. The
    * error is deliberately not also routed to `onSaveError`, or one failure would report itself
-   * twice, once in the drawer and once in the page's toast.
+   * twice, once in the drawer and once in the host's status line.
    */
   const applyFromCv = useCallback(
     async (patch: CandidateProfilePatch) => {
@@ -174,19 +145,11 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
   );
 
   if (loadError) {
-    return (
-      <SettingsSection title="Search profile" headingRef={headingRef}>
-        <div className="alert alert-error alert-soft mt-2 text-sm">{loadError}</div>
-      </SettingsSection>
-    );
+    return <div className="alert alert-error alert-soft mt-2 text-sm">{loadError}</div>;
   }
 
   if (!profile || !draft) {
-    return (
-      <SettingsSection title="Search profile" headingRef={headingRef}>
-        <div className="alert alert-info mt-2 text-sm">Loading search profile…</div>
-      </SettingsSection>
-    );
+    return <div className="alert alert-info mt-2 text-sm">Loading search profile…</div>;
   }
 
   // Mirrors isCandidateProfileConfigured in packages/vacancy-engine/src/candidate/profile.ts:
@@ -204,11 +167,11 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
     const next = draft[key].trim();
     if (next === current) return;
     if (key === 'strongestSkills' || key === 'additionalSkills' || key === 'targetRoles' || key === 'consideredRoles' || key === 'excludedRoleFamilies') {
-      commit({ [key]: textToSkills(next) });
+      commit({ [key]: textToSkills(next) }, key);
     } else if (key === 'professionalLanguage' || key === 'primaryCountry') {
-      commit({ constraints: { [key]: next } });
+      commit({ constraints: { [key]: next } }, key);
     } else {
-      commit({ [key]: next });
+      commit({ [key]: next }, key);
     }
   };
 
@@ -216,21 +179,12 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
     const parsed = Number.parseInt(draft.experienceYears, 10);
     const next = Number.isFinite(parsed) && parsed >= 0 ? parsed : profile.experienceYears;
     setDraft({ ...draft, experienceYears: String(next) });
-    if (next !== profile.experienceYears) commit({ experienceYears: next });
+    if (next !== profile.experienceYears) commit({ experienceYears: next }, 'experienceYears');
   };
 
   return (
-    <SettingsSection title="Search profile" headingRef={headingRef}>
-      <p className="mt-1 text-sm text-base-content/60">
-        Used to rank jobs for you. Leave a field empty to ignore it.
-      </p>
-
-      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm" aria-label="Profile status">
-        <span>
-          <strong>Default CV:</strong>{' '}
-          {defaultCvName === undefined ? 'Loading…' : defaultCvName ?? 'No default CV selected'}
-        </span>
-      </div>
+    <div>
+      <p className="mt-1 text-sm text-base-content/60">Used to rank jobs for you. Leave a field empty to ignore it.</p>
 
       {unconfigured && (
         <div className="alert alert-warning alert-soft mt-2 text-sm">
@@ -238,58 +192,18 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
         </div>
       )}
 
-      <SettingsSubheading>Identity</SettingsSubheading>
       <SettingsRow
-        label="Fill from CV"
-        description="Fills in your profile from a CV for you to review."
+        label="Target roles"
+        description="Comma-separated. Used to score matching vacancies."
+        htmlFor="profile-target-roles"
       >
-        <FillProfileFromCv profile={profile} disabled={disabled} onApply={applyFromCv} />
-      </SettingsRow>
-      <SettingsRow label="Name" htmlFor="profile-candidate-name">
-        <input
-          id="profile-candidate-name"
-          ref={nameInputRef}
-          type="text"
-          className="input input-sm w-64"
-          {...field('candidateName')}
-          onBlur={() => commitText('candidateName', profile.candidateName)}
-        />
-      </SettingsRow>
-      <SettingsRow label="Current role" htmlFor="profile-current-role">
-        <input
-          id="profile-current-role"
-          type="text"
-          className="input input-sm w-64"
-          {...field('currentRole')}
-          onBlur={() => commitText('currentRole', profile.currentRole)}
-        />
-      </SettingsRow>
-      <SettingsRow label="Location" htmlFor="profile-location">
-        <input
-          id="profile-location"
-          type="text"
-          className="input input-sm w-64"
-          {...field('location')}
-          onBlur={() => commitText('location', profile.location)}
-        />
-      </SettingsRow>
-      <SettingsRow label="Years of experience" htmlFor="profile-experience-years">
-        <input
-          id="profile-experience-years"
-          type="number"
-          min={0}
-          className="input input-sm w-24"
-          {...field('experienceYears')}
-          onBlur={commitExperienceYears}
-        />
-      </SettingsRow>
-      <SettingsRow label="Professional language" htmlFor="profile-professional-language">
-        <input
-          id="profile-professional-language"
-          type="text"
-          className="input input-sm w-64"
-          {...field('professionalLanguage')}
-          onBlur={() => commitText('professionalLanguage', profile.constraints.professionalLanguage)}
+        <textarea
+          id="profile-target-roles"
+          ref={targetRolesRef}
+          rows={2}
+          className="textarea textarea-sm w-full max-w-md"
+          {...field('targetRoles')}
+          onBlur={() => commitText('targetRoles', skillsToText(profile.targetRoles))}
         />
       </SettingsRow>
       <SettingsRow
@@ -305,64 +219,105 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnOp
           onBlur={() => commitText('primaryCountry', profile.constraints.primaryCountry)}
         />
       </SettingsRow>
-      <SettingsSubheading>Role matching</SettingsSubheading>
-      <SettingsRow
-        label="Strongest skills"
-        description="Comma-separated. Used to score matching vacancies."
-        htmlFor="profile-strongest-skills"
-      >
-        <textarea
-          id="profile-strongest-skills"
-          rows={2}
-          className="textarea textarea-sm w-full max-w-md"
-          {...field('strongestSkills')}
-          onBlur={() => commitText('strongestSkills', skillsToText(profile.strongestSkills))}
-        />
-      </SettingsRow>
-      <SettingsRow label="Additional skills" description="Comma-separated." htmlFor="profile-additional-skills">
-        <textarea
-          id="profile-additional-skills"
-          rows={2}
-          className="textarea textarea-sm w-full max-w-md"
-          {...field('additionalSkills')}
-          onBlur={() => commitText('additionalSkills', skillsToText(profile.additionalSkills))}
-        />
-      </SettingsRow>
-      <SettingsRow
-        label="Target roles"
-        description="Comma-separated. Used to score matching vacancies."
-        htmlFor="profile-target-roles"
-      >
-        <textarea
-          id="profile-target-roles"
-          rows={2}
-          className="textarea textarea-sm w-full max-w-md"
-          {...field('targetRoles')}
-          onBlur={() => commitText('targetRoles', skillsToText(profile.targetRoles))}
-        />
-      </SettingsRow>
-      <SettingsRow label="Considered roles" description="Comma-separated." htmlFor="profile-considered-roles">
-        <textarea
-          id="profile-considered-roles"
-          rows={2}
-          className="textarea textarea-sm w-full max-w-md"
-          {...field('consideredRoles')}
-          onBlur={() => commitText('consideredRoles', skillsToText(profile.consideredRoles))}
-        />
-      </SettingsRow>
-      <SettingsRow
-        label="Excluded role families"
-        description="Comma-separated. Roles to never surface."
-        htmlFor="profile-excluded-role-families"
-      >
-        <textarea
-          id="profile-excluded-role-families"
-          rows={2}
-          className="textarea textarea-sm w-full max-w-md"
-          {...field('excludedRoleFamilies')}
-          onBlur={() => commitText('excludedRoleFamilies', skillsToText(profile.excludedRoleFamilies))}
-        />
-      </SettingsRow>
-    </SettingsSection>
+
+      <details className="mt-4 border-t border-base-300 pt-2">
+        <summary className="cursor-pointer py-1 text-sm font-medium">More options</summary>
+        <SettingsRow label="Fill from CV" description="Fills in your profile from a CV for you to review.">
+          <FillProfileFromCv profile={profile} disabled={disabled} onApply={applyFromCv} />
+        </SettingsRow>
+        <SettingsSubheading>Role matching</SettingsSubheading>
+        <SettingsRow
+          label="Strongest skills"
+          description="Comma-separated. Used to score matching vacancies."
+          htmlFor="profile-strongest-skills"
+        >
+          <textarea
+            id="profile-strongest-skills"
+            rows={2}
+            className="textarea textarea-sm w-full max-w-md"
+            {...field('strongestSkills')}
+            onBlur={() => commitText('strongestSkills', skillsToText(profile.strongestSkills))}
+          />
+        </SettingsRow>
+        <SettingsRow label="Additional skills" description="Comma-separated." htmlFor="profile-additional-skills">
+          <textarea
+            id="profile-additional-skills"
+            rows={2}
+            className="textarea textarea-sm w-full max-w-md"
+            {...field('additionalSkills')}
+            onBlur={() => commitText('additionalSkills', skillsToText(profile.additionalSkills))}
+          />
+        </SettingsRow>
+        <SettingsRow label="Considered roles" description="Comma-separated." htmlFor="profile-considered-roles">
+          <textarea
+            id="profile-considered-roles"
+            rows={2}
+            className="textarea textarea-sm w-full max-w-md"
+            {...field('consideredRoles')}
+            onBlur={() => commitText('consideredRoles', skillsToText(profile.consideredRoles))}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Excluded role families"
+          description="Comma-separated. Roles to never surface."
+          htmlFor="profile-excluded-role-families"
+        >
+          <textarea
+            id="profile-excluded-role-families"
+            rows={2}
+            className="textarea textarea-sm w-full max-w-md"
+            {...field('excludedRoleFamilies')}
+            onBlur={() => commitText('excludedRoleFamilies', skillsToText(profile.excludedRoleFamilies))}
+          />
+        </SettingsRow>
+        <SettingsSubheading>About you</SettingsSubheading>
+        <SettingsRow label="Name" htmlFor="profile-candidate-name">
+          <input
+            id="profile-candidate-name"
+            type="text"
+            className="input input-sm w-64"
+            {...field('candidateName')}
+            onBlur={() => commitText('candidateName', profile.candidateName)}
+          />
+        </SettingsRow>
+        <SettingsRow label="Current role" htmlFor="profile-current-role">
+          <input
+            id="profile-current-role"
+            type="text"
+            className="input input-sm w-64"
+            {...field('currentRole')}
+            onBlur={() => commitText('currentRole', profile.currentRole)}
+          />
+        </SettingsRow>
+        <SettingsRow label="Location" htmlFor="profile-location">
+          <input
+            id="profile-location"
+            type="text"
+            className="input input-sm w-64"
+            {...field('location')}
+            onBlur={() => commitText('location', profile.location)}
+          />
+        </SettingsRow>
+        <SettingsRow label="Years of experience" htmlFor="profile-experience-years">
+          <input
+            id="profile-experience-years"
+            type="number"
+            min={0}
+            className="input input-sm w-24"
+            {...field('experienceYears')}
+            onBlur={commitExperienceYears}
+          />
+        </SettingsRow>
+        <SettingsRow label="Professional language" htmlFor="profile-professional-language">
+          <input
+            id="profile-professional-language"
+            type="text"
+            className="input input-sm w-64"
+            {...field('professionalLanguage')}
+            onBlur={() => commitText('professionalLanguage', profile.constraints.professionalLanguage)}
+          />
+        </SettingsRow>
+      </details>
+    </div>
   );
 }

@@ -8,7 +8,7 @@
  * Pure (no filesystem, no Electron), so it is unit-testable on its own.
  */
 
-import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfile, ProfileFieldSource } from '@open-vacancy-radar/vacancy-engine';
 
 export const CANDIDATE_PROFILE_LIMITS = {
   /** candidateName / currentRole / location / a single skill or role entry */
@@ -82,6 +82,35 @@ function patch<T, K extends keyof T & string>(
   target[key] = parse(source[key]) as Partial<T>[K];
 }
 
+/** Mirrors `PROFILE_SOURCE_FIELDS` in the engine's profile schema (#635). */
+const FIELD_SOURCE_KEYS = [
+  'candidateName',
+  'currentRole',
+  'location',
+  'experienceYears',
+  'professionalLanguage',
+  'primaryCountry',
+  'strongestSkills',
+  'additionalSkills',
+  'targetRoles',
+  'consideredRoles',
+  'excludedRoleFamilies',
+] as const satisfies readonly (keyof NonNullable<CandidateProfile['fieldSources']>)[];
+
+type FieldSources = NonNullable<CandidateProfile['fieldSources']>;
+
+function parseFieldSources(value: unknown): FieldSources {
+  const input = asRecord(value, '"fieldSources"');
+  const out: FieldSources = {};
+  for (const key of FIELD_SOURCE_KEYS) {
+    const entry = input[key];
+    if (entry === undefined) continue;
+    if (entry !== 'cv' && entry !== 'user') fail(`"fieldSources.${key}" must be "cv" or "user"`);
+    out[key] = entry satisfies ProfileFieldSource;
+  }
+  return out;
+}
+
 export type CandidateProfileConstraintsPatch = Partial<CandidateProfile['constraints']>;
 export type CandidateProfilePatch = Partial<Omit<CandidateProfile, 'profileVersion' | 'constraints'>> & {
   constraints?: CandidateProfileConstraintsPatch;
@@ -117,5 +146,28 @@ export function parseCandidateProfilePatch(value: unknown): CandidateProfilePatc
   patch(input, out, 'consideredRoles', (v) => stringList(v, 'consideredRoles'));
   patch(input, out, 'excludedRoleFamilies', (v) => stringList(v, 'excludedRoleFamilies'));
   patch(input, out, 'constraints', (v) => parseConstraintsPatch(v));
+  patch(input, out, 'fieldSources', (v) => parseFieldSources(v));
   return out;
+}
+
+/**
+ * The `fieldSources` a save should write (#635). A field the patch changes keeps no recorded
+ * origin unless the patch states one in the same save, so a caller that predates provenance can
+ * never leave a stale "from your CV" behind on a value it just replaced. Undefined when nothing
+ * is recorded, so a profile that never had sources stays byte-identical.
+ */
+export function mergeFieldSources(
+  current: CandidateProfile['fieldSources'],
+  patch: CandidateProfilePatch,
+): CandidateProfile['fieldSources'] {
+  const merged: FieldSources = { ...current };
+  for (const key of FIELD_SOURCE_KEYS) {
+    const changed =
+      key === 'professionalLanguage' || key === 'primaryCountry'
+        ? patch.constraints !== undefined && key in patch.constraints
+        : key in patch;
+    if (changed) delete merged[key];
+  }
+  Object.assign(merged, patch.fieldSources);
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
