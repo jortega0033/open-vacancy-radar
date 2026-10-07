@@ -308,12 +308,64 @@ describe('SearchPage', () => {
     await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Browse all vacancies' })[0]!);
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
 
     await waitFor(() =>
       expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'browse_all', aiWebDiscovery: true }),
     );
+  });
+
+  describe('empty state suggestions (#636)', () => {
+    it('shows one button per target role, at most three, and starts that search on click', async () => {
+      const bridge = installAllBridges({
+        runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
+        getSearchProfile: vi.fn().mockResolvedValue({
+          ...DEFAULT_CANDIDATE_PROFILE,
+          targetRoles: ['Frontend Engineer', 'UX Engineer', 'Web Developer', 'Fourth Role'],
+        }),
+      });
+      render(<SearchPage />);
+
+      const buttons = await screen.findAllByRole('button', { name: /^Search for / });
+      expect(buttons.map((button) => button.textContent)).toEqual([
+        'Search for Frontend Engineer',
+        'Search for UX Engineer',
+        'Search for Web Developer',
+      ]);
+      // One Browse all only: the toolbar hint while the field is empty.
+      expect(screen.getAllByRole('button', { name: 'Browse all vacancies' })).toHaveLength(1);
+      expect(bridge.runScan).not.toHaveBeenCalled();
+
+      fireEvent.click(buttons[1]!);
+      await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'UX Engineer' }));
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('UX Engineer');
+    });
+
+    it('with no profile shows no role buttons and no disabled duplicate Search button', async () => {
+      const bridge = installAllBridges({ runScan: vi.fn() });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+      expect(screen.queryByRole('button', { name: /^Search for / })).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Browse all vacancies' })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: 'Search' })).toHaveLength(1);
+      expect(screen.getByText(/enter a role and search to find jobs/i)).toBeInTheDocument();
+      expect(bridge.runScan).not.toHaveBeenCalled();
+    });
+
+    it('a handoff fills the field and focuses the role button without starting a scan', async () => {
+      const bridge = installAllBridges({
+        runScan: vi.fn(),
+        getSearchProfile: vi.fn().mockResolvedValue({ ...DEFAULT_CANDIDATE_PROFILE, targetRoles: ['Frontend Engineer'] }),
+      });
+      render(<SearchPage handoff={{ role: 'Frontend Engineer', id: 1 }} />);
+
+      const button = await screen.findByRole('button', { name: 'Search for Frontend Engineer' });
+      await waitFor(() => expect(button).toHaveFocus());
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Frontend Engineer');
+      expect(bridge.runScan).not.toHaveBeenCalled();
+    });
   });
 
   it('blocks a blank or whitespace-only query before any scan request', async () => {
