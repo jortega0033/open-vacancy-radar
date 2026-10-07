@@ -1025,24 +1025,36 @@ describe('SearchPage', () => {
     await waitFor(() => expect(getReport).toHaveBeenCalledTimes(1));
   });
 
-  it('shows "Ranking for" with Edit when a role is set, and the single role input when nothing is (#635)', async () => {
+  it('shows "Ranking for" with Edit over ranked results only, and never a second role input (#635)', async () => {
     const configured = {
       ...DEFAULT_CANDIDATE_PROFILE,
       targetRoles: ['Data analyst'],
       constraints: { ...DEFAULT_CANDIDATE_PROFILE.constraints, primaryCountry: 'Netherlands' },
     };
-    installAllBridges({ getSearchProfile: vi.fn().mockResolvedValue(configured) });
-    const first = render(<SearchPage />);
-
+    // Ranked results: the line and its Edit button.
+    installAllBridges({
+      getSearchProfile: vi.fn().mockResolvedValue(configured),
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: 80 })])),
+    });
+    const ranked = render(<SearchPage />);
     expect(await screen.findByText('Ranking for: Data analyst, Netherlands')).toBeInTheDocument();
     expect(screen.queryByLabelText('What role are you looking for?')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit what you are looking for' }));
     expect(await screen.findByRole('dialog', { name: 'What you are looking for' })).toBeInTheDocument();
-    first.unmount();
+    ranked.unmount();
 
+    // Empty page with a role: the role buttons stay, no Ranking line.
+    installAllBridges({ getSearchProfile: vi.fn().mockResolvedValue(configured) });
+    const empty = render(<SearchPage />);
+    expect(await screen.findByRole('button', { name: 'Search for Data analyst' })).toBeInTheDocument();
+    expect(screen.queryByText(/Ranking for/)).not.toBeInTheDocument();
+    empty.unmount();
+
+    // Nothing set: one role flow only, the toolbar field.
     installAllBridges({ getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE) });
     render(<SearchPage />);
-    expect(await screen.findByLabelText('What role are you looking for?')).toBeInTheDocument();
+    await screen.findByRole('searchbox', { name: 'Role or keywords' });
+    expect(screen.queryByLabelText('What role are you looking for?')).not.toBeInTheDocument();
     expect(screen.queryByText(/Ranking for/)).not.toBeInTheDocument();
   });
 

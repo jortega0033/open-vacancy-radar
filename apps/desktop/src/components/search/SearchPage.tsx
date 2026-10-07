@@ -1324,11 +1324,10 @@ export function SearchPage({
           onOpenSearchProfile={() => setProfileEditorOpen(true)}
           scanUnavailable={engineState === 'unavailable'}
         />
-        <RankingSummary
-          profile={searchProfile}
-          onEdit={() => setProfileEditorOpen(true)}
-          onProfileSaved={setSearchProfile}
-        />
+        {/* Only over ranked results: the empty page keeps its one role flow (the field and the role buttons). */}
+        {worldwideReport !== null && currentProfileConfigured && !reportHasOnlyUnscoredRows && (
+          <RankingSummary profile={searchProfile} onEdit={() => setProfileEditorOpen(true)} />
+        )}
         {profileEditorOpen && (
           <ProfileEditDialog
             onClose={() => setProfileEditorOpen(false)}

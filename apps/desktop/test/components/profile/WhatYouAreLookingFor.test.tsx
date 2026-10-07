@@ -195,30 +195,20 @@ describe('WhatYouAreLookingFor', () => {
 describe('RankingSummary', () => {
   it('shows one "Ranking for" line with an Edit button when something is set', () => {
     const onEdit = vi.fn();
-    render(<RankingSummary profile={FROM_CV} onEdit={onEdit} onProfileSaved={vi.fn()} />);
+    render(<RankingSummary profile={FROM_CV} onEdit={onEdit} />);
 
     expect(screen.getByText('Ranking for: Data analyst, Netherlands')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit what you are looking for' }));
     expect(onEdit).toHaveBeenCalledTimes(1);
-    expect(screen.queryByLabelText('What role are you looking for?')).not.toBeInTheDocument();
   });
 
-  it('shows the single role input when nothing is set, and reports the saved profile', async () => {
-    const saved = profile({ targetRoles: ['Welder'], fieldSources: { targetRoles: 'user' } });
-    const saveSearchProfile = vi.fn().mockResolvedValue(saved);
-    installVacancyRadarBridge({ saveSearchProfile });
-    const onProfileSaved = vi.fn();
-    render(<RankingSummary profile={EMPTY} onEdit={vi.fn()} onProfileSaved={onProfileSaved} />);
-
-    expect(screen.queryByText(/Ranking for/)).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('What role are you looking for?'), { target: { value: 'Welder' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-
-    await waitFor(() => expect(onProfileSaved).toHaveBeenCalledWith(saved));
+  it('renders nothing when nothing is set, so the empty page keeps one role flow', () => {
+    const { container } = render(<RankingSummary profile={EMPTY} onEdit={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('renders nothing until the profile has loaded', () => {
-    const { container } = render(<RankingSummary profile={null} onEdit={vi.fn()} onProfileSaved={vi.fn()} />);
+    const { container } = render(<RankingSummary profile={null} onEdit={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
   });
 });
