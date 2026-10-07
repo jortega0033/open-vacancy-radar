@@ -1,5 +1,6 @@
 import {
   GROUNDING_RULES,
+  UNTRUSTED_CV_RULE,
   MAX_CV_PROMPT_CHARS,
   clampPromptText,
   fieldPromptText,
@@ -119,6 +120,7 @@ export function buildSearchProfileFromCvPrompt(fileName: string, text: string): 
   return `You extract structured fields from one candidate's CV text. Read the CV below and reply with a single JSON object only: no Markdown code fence, no commentary before or after it.
 
 ${GROUNDING_RULES}
+${UNTRUSTED_CV_RULE}
 Never invent a value: if a field is not stated or cannot be inferred from the CV text, use an empty string (""), an empty array ([]) or 0 for it, do not guess.
 
 Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
