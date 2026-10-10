@@ -1,0 +1,23 @@
+{
+  "candidateName": "Tobias Reinhardt-Kühn",
+  "currentRole": ["Konstrukteur Fahrwerk", "Konstrukteur", "Chassis Design Engineer"],
+  "location": ["Stuttgart", "Stuttgart, Germany", "Stuttgart, Deutschland"],
+  "primaryCountry": "Germany",
+  "experienceYears": { "value": 12, "tolerance": 1 },
+  "languages": ["German", "English", "French"],
+  "skills": ["CATIA V5", "SolidWorks", "ANSYS", "FEM", "SAP PLM", "GD&T", "Six Sigma", "MS Office"],
+  "skillsOptional": ["Tolerance analysis", "Technical drawings", "Prototyping", "DIN ISO", "CAD"],
+  "targetRoles": [
+    "Konstrukteur",
+    "Konstrukteur Fahrwerk",
+    "Design Engineer",
+    "Mechanical Engineer",
+    "Mechanical Design Engineer",
+    "Entwicklungsingenieur",
+    "Development Engineer",
+    "Chassis Engineer",
+    "Chassis Design Engineer",
+    "CAD Engineer"
+  ],
+  "links": []
+}

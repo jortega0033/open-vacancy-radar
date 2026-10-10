@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Mia Kowalczyk", "confidence": "high", "evidence": "Mia Kowalczyk"},
+"currentRole": {"value": "Barista", "confidence": "high", "evidence": "Barista at Kawiarnia Pod Lipami since 2023"},
+"location": {"value": "Kraków, Poland", "confidence": "high", "evidence": "Kraków, Poland"},
+"primaryCountry": {"value": "Poland", "confidence": "high", "evidence": "Kraków, Poland"},
+"experienceYears": {"value": 5, "confidence": "low", "evidence": "Before that 2 years at a bakery counter."},
+"languages": {"value": ["Polish", "English"], "confidence": "high", "evidence": "Polish, English."},
+"strongestSkills": {"value": ["Latte art", "Espresso machine maintenance", "Cash handling"], "confidence": "high", "evidence": "Latte art, espresso machine maintenance, cash handling"},
+"additionalSkills": {"value": [], "confidence": "low", "evidence": ""},
+"targetRoles": {"value": ["Barista", "Head Barista"], "confidence": "low", "evidence": "Barista at Kawiarnia Pod Lipami"},
+"consideredRoles": {"value": ["Cafe Supervisor"], "confidence": "low", "evidence": "opening and closing shifts"},
+"links": {"value": [], "confidence": "high", "evidence": ""},
+"summary": {"value": "Barista since 2023 with earlier bakery counter experience.", "confidence": "high", "evidence": "Barista at Kawiarnia Pod Lipami since 2023"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

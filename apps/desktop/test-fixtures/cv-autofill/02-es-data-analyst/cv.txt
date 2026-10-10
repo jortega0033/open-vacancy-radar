@@ -1,0 +1,31 @@
+LUCIA FERRER CASTELLO
+Analista de Datos
+Valencia, España · lucia.ferrer@example.com · +34 600 000 002
+Portfolio: luciaferrer-example.dev
+
+PERFIL PROFESIONAL
+Analista de datos con seis años de experiencia en comercio electrónico y logística. Convierto datos en decisiones con SQL, Python y cuadros de mando en Power BI.
+
+EXPERIENCIA
+Analista de Datos Senior, Envíos Levante S.L., Valencia
+Junio 2022 - actualidad
+• Diseño de modelos de previsión de demanda con Python (pandas, scikit-learn)
+• Cuadros de mando en Power BI para dirección; consultas en SQL Server
+
+Analista de Datos, TiendaClick, Madrid (remoto)
+Marzo 2020 - Mayo 2022
+• Análisis de embudos de conversión con Google Analytics y BigQuery
+• Pruebas A/B y automatización de informes en Excel con VBA
+
+Becaria de Business Intelligence, Grupo Turia, Valencia
+Septiembre 2019 - Febrero 2020
+• Limpieza de datos y ETL con Talend
+
+FORMACIÓN
+Grado en Estadística, Universitat de València, 2015 - 2019
+
+IDIOMAS
+Español (nativo), Valenciano (nativo), Inglés (C1)
+
+HERRAMIENTAS
+SQL, Python, pandas, scikit-learn, Power BI, BigQuery, Google Analytics, Excel, VBA, Talend, Tableau

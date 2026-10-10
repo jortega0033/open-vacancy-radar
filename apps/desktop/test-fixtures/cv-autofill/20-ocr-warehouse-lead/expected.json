@@ -1,0 +1,43 @@
+{
+  "candidateName": "Bogdan Petrescu-Vlasveld",
+  "currentRole": ["Teamleider Magazijn", "Warehouse Team Leader", "Warehouse Team Lead"],
+  "location": ["Rotterdam", "Rotterdam, Netherlands", "3011 Rotterdam"],
+  "primaryCountry": "Netherlands",
+  "experienceYears": { "value": 15, "tolerance": 1 },
+  "languages": ["Dutch", "Romanian", "English"],
+  "skills": [
+    "WMS",
+    "Manhattan WMS",
+    "Stock counts",
+    "VCA",
+    "Excel",
+    "KPI reporting",
+    "Forklift",
+    "Reach truck",
+    "Team leadership",
+    "BHV"
+  ],
+  "skillsOptional": [
+    "Order picking",
+    "Cross-dock",
+    "Loading and unloading",
+    "EHBO",
+    "Inventory management",
+    "Shift management",
+    "Logistics",
+    "First aid"
+  ],
+  "targetRoles": [
+    "Warehouse Team Leader",
+    "Teamleider Magazijn",
+    "Warehouse Supervisor",
+    "Shift Leader Warehouse",
+    "Warehouse Manager",
+    "Logistics Team Leader",
+    "Shift Supervisor",
+    "Warehouse Team Lead",
+    "Teamleider Logistiek",
+    "Ploegleider Magazijn"
+  ],
+  "links": []
+}

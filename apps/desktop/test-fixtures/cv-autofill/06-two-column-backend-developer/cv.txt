@@ -1,0 +1,24 @@
+Rafael Monteiro Quintas        | Backend Engineer
+-------------------------------+----------------------------------------------
+Lisbon, Portugal               | Backend engineer building payment and
+rafa.quintas@example.com       | ledger services in Go and Java. Comfortable
+github.com/example-rquintas    | owning a service from design to on-call.
+                               |
+TECH                           | EXPERIENCE
+Go                             | Backend Engineer, Ledgerly, Lisbon
+Java                           | 01/2021 - present
+Kotlin                         | Built the double-entry ledger in Go on
+PostgreSQL                     | PostgreSQL; event streaming with Kafka.
+Kafka                          | Cut settlement latency from 4 h to 20 min.
+Docker                         |
+Kubernetes                     | Software Developer, Correio Digital, Porto
+AWS                            | 06/2017 - 12/2020
+Terraform                      | Java and Spring Boot microservices for parcel
+Spring Boot                    | tracking; moved CI to GitLab CI.
+gRPC                           |
+GitLab CI                      | Intern, Universidade do Minho IT services
+                               | 02/2017 - 05/2017
+LANGUAGES                      | Python scripts for lab inventory.
+Portuguese - native            |
+English - C1                   | EDUCATION
+Spanish - B1                   | MSc Informatics Engineering, Univ. do Minho, 2017

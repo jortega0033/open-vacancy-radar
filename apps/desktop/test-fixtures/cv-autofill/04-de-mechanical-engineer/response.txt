@@ -1,0 +1,14 @@
+Here is the extracted profile:
+{"candidateName": {"value": "Tobias Reinhardt-Kühn", "confidence": "high", "evidence": "Name: Tobias Reinhardt-Kühn"},
+"currentRole": {"value": "Konstrukteur Fahrwerk", "confidence": "high", "evidence": "Konstrukteur Fahrwerk, Schwabenmobil AG, Stuttgart"},
+"location": {"value": "Stuttgart", "confidence": "high", "evidence": "70173 Stuttgart"},
+"primaryCountry": {"value": "Germany", "confidence": "low", "evidence": "70173 Stuttgart"},
+"experienceYears": {"value": 15, "confidence": "low", "evidence": "2008 - 2014 Maschinenbau"},
+"languages": {"value": ["German", "English", "French"], "confidence": "high", "evidence": "Deutsch (Muttersprache), Englisch (verhandlungssicher)"},
+"strongestSkills": {"value": ["CATIA V5", "ANSYS", "FEM", "SolidWorks"], "confidence": "high", "evidence": "Auslegung von Achskomponenten in CATIA V5"},
+"additionalSkills": {"value": ["SAP PLM", "GD&T", "Six Sigma Green Belt", "MS Office", "Tolerance analysis"], "confidence": "high", "evidence": "MS Office, SAP PLM, GD&T, Six Sigma Green Belt"},
+"targetRoles": {"value": ["Design Engineer", "Mechanical Engineer", "Chassis Engineer"], "confidence": "high", "evidence": "Konstrukteur Fahrwerk"},
+"consideredRoles": {"value": ["Simulation Engineer"], "confidence": "low", "evidence": "FEM-Berechnungen mit ANSYS"},
+"links": {"value": [], "confidence": "high", "evidence": ""},
+"summary": {"value": "Mechanical engineer designing chassis components in CATIA V5 with FEM analysis, previously development engineer for fixtures.", "confidence": "high", "evidence": "Konstrukteur Fahrwerk"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

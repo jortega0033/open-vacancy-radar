@@ -1,0 +1,28 @@
+Lebenslauf
+
+Persönliche Daten
+Name: Tobias Reinhardt-Kühn
+Anschrift: Musterweg 4, 70173 Stuttgart
+E-Mail: tobias.rk@example.com
+Telefon: +49 170 0000004
+
+Berufserfahrung
+
+seit 04/2019  Konstrukteur Fahrwerk, Schwabenmobil AG, Stuttgart
+              Auslegung von Achskomponenten in CATIA V5, FEM-Berechnungen mit ANSYS,
+              Abstimmung mit Lieferanten, Toleranzanalysen
+
+09/2014 - 03/2019  Entwicklungsingenieur, Fischer Präzisionstechnik GmbH, Esslingen
+              Konstruktion von Vorrichtungen in SolidWorks, Erstellung technischer Zeichnungen
+              nach DIN ISO, Prototypenbau
+
+Ausbildung
+2008 - 2014  Maschinenbau (Dipl.-Ing.), Universität Stuttgart
+
+Kenntnisse
+CAD: CATIA V5, SolidWorks
+Simulation: ANSYS, FEM
+Sonstiges: MS Office, SAP PLM, GD&T, Six Sigma Green Belt
+
+Sprachen
+Deutsch (Muttersprache), Englisch (verhandlungssicher), Französisch (Grundkenntnisse)

@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Dr. Anneleen Wouters-Ibrahim", "confidence": "high", "evidence": "Dr. Anneleen Wouters-Ibrahim"},
+"currentRole": {"value": "Postdoctoral Researcher", "confidence": "high", "evidence": "Postdoctoral Researcher (FWO senior postdoctoral fellow), KU Leuven"},
+"location": {"value": "Leuven, Belgium", "confidence": "high", "evidence": "3000 Leuven, Belgium"},
+"primaryCountry": {"value": "Belgium", "confidence": "high", "evidence": "3000 Leuven, Belgium"},
+"experienceYears": {"value": 11, "confidence": "low", "evidence": "2015 - 2019 PhD candidate, Rega Institute, KU Leuven"},
+"languages": {"value": ["Dutch", "English", "French", "Arabic"], "confidence": "high", "evidence": "Dutch (native), English (fluent), French (good), Arabic (conversational)"},
+"strongestSkills": {"value": ["Single-cell RNA-seq", "Organoid culture", "CRISPR screening", "Flow cytometry", "R", "Seurat", "Mouse models"], "confidence": "high", "evidence": "Single-cell RNA-seq (10x Genomics), flow cytometry, organoid culture"},
+"additionalSkills": {"value": ["Confocal microscopy", "DESeq2", "Python", "Bash", "Grant writing", "Scientific writing", "Student supervision", "10x Genomics"], "confidence": "high", "evidence": "R (Seurat, DESeq2), Python, bash, grant writing"},
+"targetRoles": {"value": ["Postdoctoral Researcher", "Research Scientist", "Assistant Professor"], "confidence": "high", "evidence": "Postdoctoral Researcher"},
+"consideredRoles": {"value": ["Senior Scientist", "Bioinformatics Scientist"], "confidence": "low", "evidence": "R (Seurat, DESeq2)"},
+"links": {"value": ["anneleenwi-example.org"], "confidence": "high", "evidence": "anneleenwi-example.org"},
+"summary": {"value": "Microbiology postdoctoral researcher at KU Leuven working on host-pathogen interactions and single-cell transcriptomics, with 23 publications.", "confidence": "high", "evidence": "Host-pathogen interactions, antimicrobial resistance, single-cell transcriptomics"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

@@ -1,0 +1,40 @@
+{
+  "candidateName": "Hannelore Biesheuvel-Achterberg",
+  "currentRole": ["Director of Engineering", "Director of Engineering, Payments Platform"],
+  "location": ["Amsterdam, the Netherlands", "Amsterdam, Netherlands"],
+  "primaryCountry": "Netherlands",
+  "experienceYears": { "value": 24, "tolerance": 1 },
+  "languages": ["Dutch", "English", "German"],
+  "skills": [
+    "Engineering management",
+    "Organisation design",
+    "Hiring",
+    "OKRs",
+    "SLOs",
+    "Incident management",
+    "Budgeting",
+    "AWS",
+    "Kubernetes",
+    "Microservices",
+    "Java",
+    "Kotlin",
+    "Go",
+    "Elasticsearch",
+    "Oracle",
+    "PHP",
+    "MySQL",
+    "C++"
+  ],
+  "skillsOptional": ["Quarterly planning", "Spring", "Java EE", "Leadership", "Payments"],
+  "targetRoles": [
+    "Director of Engineering",
+    "VP of Engineering",
+    "VP Engineering",
+    "Head of Engineering",
+    "CTO",
+    "Engineering Director",
+    "Senior Director of Engineering",
+    "Chief Technology Officer"
+  ],
+  "links": ["linkedin.com/in/example-hannelore-ba"]
+}

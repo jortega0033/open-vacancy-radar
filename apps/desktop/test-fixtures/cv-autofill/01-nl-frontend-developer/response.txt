@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Maartje van Doorn", "confidence": "high", "evidence": "Maartje van Doorn"},
+"currentRole": {"value": "Senior Frontend Developer", "confidence": "high", "evidence": "Senior Frontend Developer, Zorgportaal BV, Utrecht"},
+"location": {"value": "Utrecht, Nederland", "confidence": "high", "evidence": "Utrecht, Nederland"},
+"primaryCountry": {"value": "Netherlands", "confidence": "high", "evidence": "Utrecht, Nederland"},
+"experienceYears": {"value": 11, "confidence": "high", "evidence": "september 2015 - december 2016"},
+"languages": {"value": ["Dutch", "English", "German"], "confidence": "high", "evidence": "Nederlands (moedertaal), Engels (vloeiend), Duits (basis)"},
+"strongestSkills": {"value": ["React", "TypeScript", "Storybook", "Playwright", "WCAG", "Vue.js", "JavaScript"], "confidence": "high", "evidence": "Bouwt het patientenportaal in React en TypeScript"},
+"additionalSkills": {"value": ["HTML", "CSS", "Sass", "GraphQL", "Node.js", "Git"], "confidence": "high", "evidence": "React, TypeScript, Vue.js, JavaScript, HTML, CSS, Sass"},
+"targetRoles": {"value": ["Senior Frontend Developer", "Frontend Engineer", "React Developer"], "confidence": "high", "evidence": "Senior Frontend Developer"},
+"consideredRoles": {"value": ["Accessibility Specialist", "Design System Engineer"], "confidence": "low", "evidence": "Sterk in toegankelijkheid en design systems"},
+"links": {"value": ["linkedin.com/in/example-maartje-vandoorn", "github.com/example-mvdoorn"], "confidence": "high", "evidence": "linkedin.com/in/example-maartje-vandoorn"},
+"summary": {"value": "Frontend developer with over ten years of experience building web applications for healthcare and government, focused on accessibility and design systems.", "confidence": "high", "evidence": "Frontend developer met ruim tien jaar ervaring"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}
