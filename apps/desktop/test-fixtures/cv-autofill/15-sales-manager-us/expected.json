@@ -1,0 +1,40 @@
+{
+  "candidateName": "Brandon T. Whitfield",
+  "currentRole": ["Regional Sales Manager", "Regional Sales Manager, South Central"],
+  "location": ["Austin, TX", "Austin, TX 78701", "Austin, Texas", "Austin, Texas, United States"],
+  "primaryCountry": "United States",
+  "experienceYears": { "value": 13, "tolerance": 1 },
+  "languages": [],
+  "skills": [
+    "Salesforce",
+    "HubSpot",
+    "Gong",
+    "Outreach",
+    "MEDDICC",
+    "Challenger Sale",
+    "Forecasting",
+    "Pipeline management",
+    "Coaching",
+    "Negotiation",
+    "Territory planning"
+  ],
+  "skillsOptional": [
+    "Outbound sales",
+    "B2B SaaS",
+    "Sales leadership",
+    "Team building",
+    "Account management"
+  ],
+  "targetRoles": [
+    "Regional Sales Manager",
+    "Sales Manager",
+    "Director of Sales",
+    "Sales Director",
+    "Regional Sales Director",
+    "Head of Sales",
+    "Senior Account Executive",
+    "Area Sales Manager",
+    "VP of Sales"
+  ],
+  "links": ["linkedin.com/in/example-brandon-whitfield"]
+}

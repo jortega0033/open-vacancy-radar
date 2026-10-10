@@ -1,0 +1,38 @@
+{
+  "candidateName": "Valeria Guadalupe Ríos Treviño",
+  "currentRole": ["Diseñadora Gráfica Senior", "Senior Graphic Designer", "Diseñadora Gráfica"],
+  "location": [
+    "Guadalajara, Jalisco, México",
+    "Guadalajara, Mexico",
+    "Guadalajara, Jalisco, Mexico"
+  ],
+  "primaryCountry": "Mexico",
+  "experienceYears": { "value": 9, "tolerance": 1 },
+  "languages": ["Spanish", "English"],
+  "skills": ["Adobe Illustrator", "Photoshop", "InDesign", "After Effects", "Figma", "Procreate"],
+  "skillsOptional": [
+    "Branding",
+    "Brand identity",
+    "Packaging design",
+    "Typography",
+    "Illustration",
+    "Prepress",
+    "Photo retouching",
+    "Layout",
+    "Editorial design",
+    "Logo design",
+    "Social media design"
+  ],
+  "targetRoles": [
+    "Senior Graphic Designer",
+    "Graphic Designer",
+    "Brand Designer",
+    "Diseñadora Gráfica Senior",
+    "Diseñadora Gráfica",
+    "Packaging Designer",
+    "Art Director",
+    "Visual Designer",
+    "Brand Identity Designer"
+  ],
+  "links": ["behance.net/example-valeria-rios"]
+}

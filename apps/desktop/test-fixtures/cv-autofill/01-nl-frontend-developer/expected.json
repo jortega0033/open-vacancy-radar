@@ -1,0 +1,35 @@
+{
+  "candidateName": "Maartje van Doorn",
+  "currentRole": ["Senior Frontend Developer"],
+  "location": ["Utrecht, Nederland", "Utrecht, Netherlands"],
+  "primaryCountry": "Netherlands",
+  "experienceYears": { "value": 11, "tolerance": 1 },
+  "languages": ["Dutch", "English", "German"],
+  "skills": [
+    "React",
+    "TypeScript",
+    "Vue.js",
+    "JavaScript",
+    "HTML",
+    "CSS",
+    "Sass",
+    "Storybook",
+    "Playwright",
+    "GraphQL",
+    "Node.js",
+    "WCAG",
+    "Git"
+  ],
+  "skillsOptional": ["Accessibility", "Design systems"],
+  "targetRoles": [
+    "Senior Frontend Developer",
+    "Frontend Developer",
+    "Frontend Engineer",
+    "Senior Frontend Engineer",
+    "React Developer",
+    "UI Developer",
+    "Web Developer",
+    "Accessibility Specialist"
+  ],
+  "links": ["linkedin.com/in/example-maartje-vandoorn", "github.com/example-mvdoorn"]
+}

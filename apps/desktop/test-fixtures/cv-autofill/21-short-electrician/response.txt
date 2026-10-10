@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Tomás Ó Briain", "confidence": "high", "evidence": "Tomás Ó Briain - Electrician"},
+"currentRole": {"value": "Electrician", "confidence": "high", "evidence": "Tomás Ó Briain - Electrician"},
+"location": {"value": "Galway, Ireland", "confidence": "high", "evidence": "Galway, Ireland."},
+"primaryCountry": {"value": "Ireland", "confidence": "high", "evidence": "Galway, Ireland."},
+"experienceYears": {"value": 12, "confidence": "high", "evidence": "12 years domestic and commercial"},
+"languages": {"value": [], "confidence": "low", "evidence": ""},
+"strongestSkills": {"value": ["Fault finding", "Rewires", "EV charger installs", "Solar PV", "Fire alarm systems"], "confidence": "high", "evidence": "Fault finding, rewires, EV charger installs, solar PV, fire alarm systems."},
+"additionalSkills": {"value": ["Full clean driving licence"], "confidence": "high", "evidence": "Full clean driving licence."},
+"targetRoles": {"value": ["Electrician", "Commercial Electrician", "EV Charger Installer"], "confidence": "high", "evidence": "Qualified electrician (Safe Electric registered)"},
+"consideredRoles": {"value": ["Solar PV Installer"], "confidence": "low", "evidence": "solar PV"},
+"links": {"value": [], "confidence": "high", "evidence": ""},
+"summary": {"value": "Registered electrician with 12 years of domestic and commercial work, including EV chargers and solar PV.", "confidence": "high", "evidence": "12 years domestic and commercial"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

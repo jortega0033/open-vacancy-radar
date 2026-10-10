@@ -1,0 +1,17 @@
+```json
+{
+  "candidateName": {"value": "Lucía Ferrer Castelló", "confidence": "high", "evidence": "LUCIA FERRER CASTELLO"},
+  "currentRole": {"value": "Analista de Datos Senior", "confidence": "high", "evidence": "Analista de Datos Senior, Envíos Levante S.L., Valencia"},
+  "location": {"value": "Valencia, España", "confidence": "high", "evidence": "Valencia, España"},
+  "primaryCountry": {"value": "Spain", "confidence": "high", "evidence": "Valencia, España"},
+  "experienceYears": {"value": "7", "confidence": "low", "evidence": "Septiembre 2019 - Febrero 2020"},
+  "languages": {"value": ["Spanish", "Valencian", "English"], "confidence": "high", "evidence": "Español (nativo), Valenciano (nativo), Inglés (C1)"},
+  "strongestSkills": {"value": ["SQL", "Python", "Power BI", "pandas", "scikit-learn", "BigQuery"], "confidence": "high", "evidence": "SQL, Python y cuadros de mando en Power BI"},
+  "additionalSkills": {"value": ["Google Analytics", "Excel", "VBA", "Talend", "Tableau", "A/B testing"], "confidence": "high", "evidence": "SQL, Python, pandas, scikit-learn"},
+  "targetRoles": {"value": ["Senior Data Analyst", "Business Intelligence Analyst"], "confidence": "high", "evidence": "Analista de Datos Senior"},
+  "consideredRoles": {"value": ["Analytics Engineer"], "confidence": "low", "evidence": "ETL con Talend"},
+  "links": {"value": ["luciaferrer-example.dev"], "confidence": "high", "evidence": "Portfolio: luciaferrer-example.dev"},
+  "summary": {"value": "Data analyst with six years in e-commerce and logistics, working with SQL, Python and Power BI dashboards.", "confidence": "high", "evidence": "Analista de datos con seis años de experiencia"},
+  "workAuthorization": {"value": "", "confidence": "low", "evidence": ""}
+}
+```

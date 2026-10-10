@@ -1,0 +1,35 @@
+{
+  "candidateName": "Rafael Monteiro Quintas",
+  "currentRole": ["Backend Engineer"],
+  "location": ["Lisbon, Portugal"],
+  "primaryCountry": "Portugal",
+  "experienceYears": { "value": 9, "tolerance": 1 },
+  "languages": ["Portuguese", "English", "Spanish"],
+  "skills": [
+    "Go",
+    "Java",
+    "Kotlin",
+    "PostgreSQL",
+    "Kafka",
+    "Docker",
+    "Kubernetes",
+    "AWS",
+    "Terraform",
+    "Spring Boot",
+    "gRPC",
+    "GitLab CI"
+  ],
+  "skillsOptional": ["Python", "Microservices", "Event streaming", "Payments"],
+  "targetRoles": [
+    "Backend Engineer",
+    "Senior Backend Engineer",
+    "Backend Developer",
+    "Software Engineer",
+    "Go Developer",
+    "Golang Developer",
+    "Java Developer",
+    "Platform Engineer",
+    "Software Developer"
+  ],
+  "links": ["github.com/example-rquintas"]
+}

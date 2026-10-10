@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Sander Hoogendijk", "confidence": "high", "evidence": "CV - Sander Hoogendijk"},
+"currentRole": {"value": "Senior Transport Planner", "confidence": "high", "evidence": "Senior Transport Planner | Brabant Cargo Logistics, Eindhoven | 2020 - nu"},
+"location": {"value": "Eindhoven, Netherlands", "confidence": "high", "evidence": "Woonplaats: Eindhoven (NL)"},
+"primaryCountry": {"value": "Netherlands", "confidence": "high", "evidence": "Woonplaats: Eindhoven (NL)"},
+"experienceYears": {"value": 13, "confidence": "high", "evidence": "Magazijnmedewerker | Diverse uitzendbureaus | 2013 - 2016"},
+"languages": {"value": ["Dutch", "English", "German"], "confidence": "high", "evidence": "Nederlands - moedertaal | English - fluent | Deutsch - goed"},
+"strongestSkills": {"value": ["Route planning", "Transporeon", "SAP SD", "Carrier management", "Excel"], "confidence": "high", "evidence": "Plannen van 120 FTL/LTL ritten per dag"},
+"additionalSkills": {"value": ["VBA", "Power BI", "Incoterms", "Lean Six Sigma Yellow Belt", "Track & trace"], "confidence": "high", "evidence": "SAP SD, Transporeon, Excel, VBA, Power BI"},
+"targetRoles": {"value": ["Senior Transport Planner", "Logistics Planner", "Transport Manager"], "confidence": "high", "evidence": "Senior Transport Planner"},
+"consideredRoles": {"value": ["Supply Chain Planner"], "confidence": "low", "evidence": ""},
+"links": {"value": ["linkedin.com/in/example-sander-hoogendijk"], "confidence": "high", "evidence": "LinkedIn: linkedin.com/in/example-sander-hoogendijk"},
+"summary": {"value": "Transport planner in Eindhoven planning international road freight, working in Dutch, English and German.", "confidence": "high", "evidence": "Logistiek planner met een passie voor efficiente supply chains"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

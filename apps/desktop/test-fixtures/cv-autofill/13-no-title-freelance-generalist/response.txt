@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Inês Carvalho Batista", "confidence": "high", "evidence": "Inês Carvalho Batista"},
+"currentRole": {"value": "Freelance E-commerce Consultant", "confidence": "low", "evidence": "Clients hire me to plan and launch their online shops"},
+"location": {"value": "Porto, Portugal", "confidence": "high", "evidence": "Porto, Portugal"},
+"primaryCountry": {"value": "Portugal", "confidence": "high", "evidence": "Porto, Portugal"},
+"experienceYears": {"value": 9, "confidence": "low", "evidence": "Two years in the marketing team of a Porto shoe brand (2017 - 2019)"},
+"languages": {"value": ["Portuguese", "English", "German"], "confidence": "high", "evidence": "Portuguese (native), English (C1), German (B1)"},
+"strongestSkills": {"value": ["Shopify", "WooCommerce", "Google Ads", "Meta Ads", "Mailchimp"], "confidence": "high", "evidence": "I set up Shopify and WooCommerce stores"},
+"additionalSkills": {"value": ["Google Analytics 4", "Canva", "Lightroom", "WordPress", "SEO", "Copywriting", "Product photography"], "confidence": "high", "evidence": "Google Analytics 4, Mailchimp, Canva, Lightroom"},
+"targetRoles": {"value": ["E-commerce Manager", "Digital Marketing Specialist", "E-commerce Consultant"], "confidence": "low", "evidence": "plan and launch their online shops"},
+"consideredRoles": {"value": ["Performance Marketing Specialist", "Email Marketing Specialist"], "confidence": "low", "evidence": "run the Google Ads and Meta Ads campaigns"},
+"links": {"value": ["inescb-example.pt"], "confidence": "high", "evidence": "inescb-example.pt"},
+"summary": {"value": "Independent e-commerce and digital marketing specialist running a small studio in Porto since 2019.", "confidence": "high", "evidence": "For the past seven years I have run my own small studio"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}
