@@ -24,9 +24,9 @@
     "better-sqlite3": "^13.0.3",
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
-    "drizzle-orm": "^0.45.3",
+    "drizzle-orm": "^0.45.4",
     "entities": "^7.0.1",
-    "pino": "^10.3.1",
+    "pino": "^10.4.0",
     "saxes": "^6.0.0",
     "zod": "^4.4.3"
   },
