@@ -55,7 +55,9 @@ its web searches; a minimum salary cannot be searched on the web, so the AI is t
 same local filter that checks every other source applies it afterwards (salaries the AI reads from a
 page are unverified, so with "hide unknown salaries" on they do not pass). Your saved profile only
 adds background (skills, years of experience, and your home country when you did not pick one) and
-its target roles are never searched. "Browse all" stays browse-all: no role is searched. The scan
+its target roles are never searched. "Browse all" stays browse-all: no role is searched. "Unspecified
+location" is not a place: the AI is told you want vacancies that name no country, is not asked to search
+for it, and the local filter keeps only such rows. The scan
 panel shows what the run is searching for, and "Copy diagnostics" lists how each criterion reached
 the AI step, using search terms and counts only, never CV text or the prompt. The local filter
 still decides what is kept.

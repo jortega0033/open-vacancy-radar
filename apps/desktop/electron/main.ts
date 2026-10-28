@@ -118,10 +118,10 @@ import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVaca
 import {
   captureVacancyRunIntent,
   describeVacancyRunIntent,
-  deterministicScanCriteria,
   type VacancyRunIntent,
 } from './vacancy-run-intent.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
+import { runVacancyScanBranches } from './vacancy-scan-orchestration.js';
 import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
 import {
   cleanupStagedPath,
@@ -2738,78 +2738,45 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         };
         activeVacancyScan = scan;
         try {
-        // Issue #398 Phase 1: an additional, on-demand AI-web-search discovery pass, entirely
-        // inline here inside the `runExclusiveScan` guard this closure already runs under.
-        // `runAiWebDiscovery` itself never acquires `ScanGuard` (see its own doc comment) -- this
-        // is just more work done under the one exclusive scan this handler already holds, never a
-        // second, nested acquisition of it. Skipped entirely (not even called) when not requested,
-        // so every existing caller/test that never sets `aiWebDiscovery` sees byte-identical
-        // `GlobalRemoteScanOptions` to before this feature existed.
-        let aiWebDiscovery: Awaited<ReturnType<typeof runAiWebDiscovery>> | undefined;
-        if (intent.aiWebDiscovery) {
-          // `runAiWebDiscovery` itself never throws (see its own doc comment), but the setup calls
-          // around it -- `loadCandidateProfile` (rethrows for a malformed/unreadable existing profile
-          // file, only swallowing ENOENT) and `ensureAiWorkspaceDir` (disk full, permission error) --
-          // are not similarly guarded. A failure here must degrade exactly the way an internal
-          // `runAiWebDiscovery` failure already does (`aiWebDiscovery` left undefined, i.e. treated as
-          // if `intent.aiWebDiscovery` had been false), never abort the whole scan.
-          try {
-            const profile = await loadCandidateProfile(await candidateProfilePath());
-            scan.aiWebSearch = 'running';
-            aiWebDiscovery = await runAiWebDiscovery(client, {
-              profile,
-              intent,
-              cwd: await ensureAiWorkspaceDir(),
-            });
-            const aiAudit = aiWebDiscovery.sourceAudit;
-            const aiFailed = aiAudit.status === 'error' || aiAudit.status === 'blocked';
-            scan.aiWebSearch = aiFailed ? 'failed' : 'done';
-            // At warn, not only debug: a failed AI step used to leave no trace outside the report (#559).
-            if (aiFailed) {
-              logger.warn({ sourceAudit: aiAudit }, 'AI web discovery did not run to completion');
-              console.warn(`[ai-web-search] ${aiAudit.status}: ${aiAudit.error ?? aiAudit.completenessReason ?? 'no reason given'}`);
-            }
-            // Issue #398: "the actual queries used in a run are persisted/reportable" -- logged here,
-            // alongside the resulting source audit, since Phase 1 needs no dedicated DB persistence
-            // for this (see `runAiWebDiscovery`'s own doc comment on `queriesUsed`).
-            logger.debug(
-              { queriesUsed: aiWebDiscovery.queriesUsed, sourceAudit: aiWebDiscovery.sourceAudit },
-              'AI web discovery pass finished',
-            );
-            // Which of this run's submitted criteria the model was given (#684). Search terms and
-            // counts only: no CV text, skill names or prompt.
-            if (aiWebDiscovery.intentProvenance) {
-              logger.info({ aiSearchIntent: aiWebDiscovery.intentProvenance }, 'AI web discovery intent');
-            }
-          } catch (error) {
-            scan.aiWebSearch = 'failed';
-            logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
-          }
-        }
-        if (scan.controller.signal.aborted) throw new ScanCancelledError();
-        const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
-          signal: scan.controller.signal,
-          ...deterministicScanCriteria(intent, BROWSE_ALL_RESULT_CAP),
-          onProgress: (event: ScanProgressEvent) => {
-            // A stopped run's late events must not reach the page: it has already gone back to the
-            // previous report.
-            if (scan.controller.signal.aborted) return;
-            scan.doneSources.add(event.sourceId);
-            scan.vacancies += event.vacancies.length;
-            sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, {
-              ...event,
-              scanId: scan.id,
-              sourcesDone: scan.doneSources.size,
-              sourcesTotal: scan.total,
-            });
+        // Issue #398 Phase 1: an additional, on-demand AI-web-search discovery pass, then the
+        // deterministic scan, both inline here inside the `runExclusiveScan` guard this closure already
+        // runs under. `runAiWebDiscovery` never acquires `ScanGuard` (see its own doc comment) -- it is
+        // just more work done under the one exclusive scan this handler already holds. The two branches
+        // and their hand-off live in `runVacancyScanBranches` so that both take their criteria from the
+        // one `intent` snapshot above (#684); a run that did not ask for AI search never touches the AI
+        // dependencies, so its `GlobalRemoteScanOptions` stay byte-identical to before that feature.
+        const result = await runVacancyScanBranches(
+          {
+            loadProfile: async () => loadCandidateProfile(await candidateProfilePath()),
+            ensureAiWorkspace: ensureAiWorkspaceDir,
+            runAiWebDiscovery: (options) => runAiWebDiscovery(client, options),
+            runGlobalRemoteScan: async (options) =>
+              runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), options),
+            logger,
+            signal: scan.controller.signal,
+            throwCancelled: () => {
+              throw new ScanCancelledError();
+            },
+            onAiState: (state) => {
+              scan.aiWebSearch = state;
+            },
+            onProgress: (event: ScanProgressEvent) => {
+              // A stopped run's late events must not reach the page: it has already gone back to the
+              // previous report.
+              if (scan.controller.signal.aborted) return;
+              scan.doneSources.add(event.sourceId);
+              scan.vacancies += event.vacancies.length;
+              sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, {
+                ...event,
+                scanId: scan.id,
+                sourcesDone: scan.doneSources.size,
+                sourcesTotal: scan.total,
+              });
+            },
+            browseAllResultCap: BROWSE_ALL_RESULT_CAP,
           },
-          ...(aiWebDiscovery
-            ? {
-                aiWebDiscoveryVacancies: aiWebDiscovery.vacancies,
-                aiWebDiscoverySourceAudit: aiWebDiscovery.sourceAudit,
-              }
-            : {}),
-        });
+          intent,
+        );
         // A scan with no matches must not displace the last report that had some (#561): saved jobs
         // and prepare still resolve rows against it, and the renderer keeps showing it.
         lastVacancyScanAt = result.report.generatedAt;

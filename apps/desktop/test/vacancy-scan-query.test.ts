@@ -91,11 +91,11 @@ describe('requiredScanQuery', () => {
 
   it('runs the AI web discovery pass only inside the already-acquired scan guard, and never at all unless explicitly requested (issue #398)', () => {
     const mainSource = source('main.ts');
-    // The `runAiWebDiscovery` call site sits textually between the guard's `async () => {` open and
-    // the `runGlobalRemoteScan` call it feeds -- i.e. inside `runExclusiveScan`'s own callback, never
-    // wrapping or preceding the acquisition of that guard itself.
+    // The AI branch is reached only through `runVacancyScanBranches`, which skips it unless the run
+    // asked for it (executed in vacancy-scan-orchestration.test.ts). That call sits inside
+    // `runExclusiveScan`'s own callback, never wrapping or preceding the acquisition of that guard.
     expect(mainSource).toMatch(
-      /runExclusiveScan\(\s*async \(\) => \{[\s\S]*if \(intent\.aiWebDiscovery\) \{[\s\S]*runAiWebDiscovery\(client, \{[\s\S]*runGlobalRemoteScan\(/,
+      /runExclusiveScan\(\s*async \(\) => \{[\s\S]*runVacancyScanBranches\([\s\S]*runAiWebDiscovery\(client, options\)/,
     );
   });
 });

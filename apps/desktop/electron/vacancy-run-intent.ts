@@ -1,4 +1,8 @@
-import type { AiSearchIntentProvenance, SalaryFilterCriteria } from '@open-vacancy-radar/vacancy-engine';
+import {
+  isUnspecifiedCountry,
+  type AiSearchIntentProvenance,
+  type SalaryFilterCriteria,
+} from '@open-vacancy-radar/vacancy-engine';
 import type { ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 
 /**
@@ -105,10 +109,18 @@ export interface AiIntentContextUsed {
 }
 
 /**
+ * The Search page's "Unspecified location" choice is not a country: the shared filter keeps only
+ * vacancies whose location names no identifiable country. Same trim/case rule as that filter.
+ */
+export function isUnspecifiedCountryIntent(intent: VacancyRunIntent): boolean {
+  return intent.country !== null && isUnspecifiedCountry(intent.country);
+}
+
+/**
  * What the AI branch was told about this run, for the source audit and the log. Web search can take
- * a role, country and employment type as wording in its queries; it has no way to filter by salary,
- * so a requested salary floor is recorded as unsupported there and left to the shared local filter.
- * Holds search terms only: no CV text, no skill names, no prompt.
+ * a role, country and employment type as wording in its queries; it has no way to filter by salary
+ * or to search for "no country", so those are recorded as unsupported there and left to the shared
+ * local filter. Holds search terms only: no CV text, no skill names, no prompt.
  */
 export function buildAiIntentProvenance(
   intent: VacancyRunIntent,
@@ -127,7 +139,7 @@ export function buildAiIntentProvenance(
     mode: intent.mode,
     criteria: {
       role: criterion(intent.query, 'prompt_guidance'),
-      country: criterion(intent.country, 'prompt_guidance'),
+      country: criterion(intent.country, isUnspecifiedCountryIntent(intent) ? 'unsupported' : 'prompt_guidance'),
       employment: criterion(intent.employment, 'prompt_guidance'),
       salary: criterion(
         intent.salary

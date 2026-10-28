@@ -14,7 +14,12 @@ import {
   type DiscoveryVacancyAudit,
   type SourceRegistryEntry,
 } from '@open-vacancy-radar/vacancy-engine';
-import { buildAiIntentProvenance, type AiIntentContextUsed, type VacancyRunIntent } from './vacancy-run-intent.js';
+import {
+  buildAiIntentProvenance,
+  isUnspecifiedCountryIntent,
+  type AiIntentContextUsed,
+  type VacancyRunIntent,
+} from './vacancy-run-intent.js';
 
 /**
  * Issue #398 (Phase 1) -- on-demand AI-web-search vacancy discovery, orchestrated entirely from the
@@ -147,6 +152,19 @@ function quoted(value: string): string {
   return JSON.stringify(value);
 }
 
+/**
+ * The submitted employment value as the model should read it. The token is what the person's filter
+ * and the local match use (e.g. `full_time`), so it stays quoted; a human wording is added beside it
+ * when that reads differently, because `full_time` is not how a job page or a search query says it.
+ */
+export function employmentGuidance(value: string): string {
+  const words = value.trim().toLocaleLowerCase().split(/[\s_-]+/u).filter(Boolean);
+  const human = words.length === 2 && (words[0] === 'full' || words[0] === 'part') && words[1] === 'time'
+    ? `${words[0]}-time`
+    : words.join(' ');
+  return human === value.trim().toLocaleLowerCase() ? quoted(value) : `${quoted(value)} (read as: ${human})`;
+}
+
 function runRequestLines(intent: VacancyRunIntent): string {
   if (intent.mode === 'browse_all') {
     return `- Mode: browse all. The person asked for vacancies without a role, country, employment type or salary restriction.
@@ -162,9 +180,17 @@ function runRequestLines(intent: VacancyRunIntent): string {
     : 'none requested';
   return `- Mode: targeted search.
 - Role: ${quoted(intent.query ?? '')}
-- Country: ${intent.country ? quoted(intent.country) : 'none requested; do not restrict by country'}
-- Employment type: ${intent.employment ? quoted(intent.employment) : 'none requested'}
+- Country: ${countryRequestText(intent)}
+- Employment type: ${intent.employment ? employmentGuidance(intent.employment) : 'none requested'}
 - Minimum salary: ${salary}`;
+}
+
+function countryRequestText(intent: VacancyRunIntent): string {
+  if (intent.country === null) return 'none requested; do not restrict by country';
+  if (isUnspecifiedCountryIntent(intent)) {
+    return 'no identifiable country. The person wants vacancies whose posting names no country at all (this is not the name of a place).';
+  }
+  return quoted(intent.country);
 }
 
 /** Mirrors what the shared local filter (`applyFocusedScanCriteria`) does with each criterion. */
@@ -175,14 +201,18 @@ function criteriaUseLines(intent: VacancyRunIntent): string {
   const lines = [
     `- Role: put the role wording in your WebSearch queries. A reported vacancy is later kept only if its title or description contains ${quoted(intent.query ?? '')} (case-insensitive), so one that does not use that wording is discarded.`,
   ];
-  if (intent.country) {
+  if (isUnspecifiedCountryIntent(intent)) {
+    lines.push(
+      '- Country: do not put a country name or a placeholder such as "unspecified" in your WebSearch queries; there is no place to search for. A vacancy is later kept only if its stated location names no identifiable country (for example "Remote" or "Worldwide" with no country), and one whose location names a country is discarded. Report the location exactly as the page states it, or "Not stated" if it never says.',
+    );
+  } else if (intent.country) {
     lines.push(
       `- Country: put ${quoted(intent.country)} in your WebSearch queries. A vacancy is later kept only if its stated location names that country; a worldwide-remote vacancy that does not name it is discarded. Report the location exactly as the page states it.`,
     );
   }
   if (intent.employment) {
     lines.push(
-      `- Employment type: put ${quoted(intent.employment)} in your WebSearch queries. A vacancy is later kept only if its page states a matching employment type, so report evidence.employmentType exactly; one that states none is discarded.`,
+      `- Employment type: put ${employmentGuidance(intent.employment)} in your WebSearch queries, using the readable wording. A vacancy is later kept only if its page states a matching employment type, so report evidence.employmentType exactly; one that states none is discarded.`,
     );
   }
   if (intent.salary) {
@@ -227,7 +257,13 @@ export function buildAiWebDiscoveryPrompt(
   const target =
     intent.mode === 'browse_all'
       ? 'a broad range of current job vacancies'
-      : `current job vacancies for the requested role${intent.country ? ' in the requested country' : ''}`;
+      : `current job vacancies for the requested role${
+          isUnspecifiedCountryIntent(intent)
+            ? ' whose posting names no country'
+            : intent.country
+              ? ' in the requested country'
+              : ''
+        }`;
 
   return `You are searching the live web for current, real job vacancies on behalf of a job-seeking candidate. Use only your WebSearch and WebFetch tools -- you have no other tools in this session.
 

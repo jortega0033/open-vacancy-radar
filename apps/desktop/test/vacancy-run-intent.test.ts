@@ -150,23 +150,35 @@ describe('buildAiIntentProvenance', () => {
   });
 });
 
+describe('unspecified-location country (#684)', () => {
+  const provenanceFor = (country: string) =>
+    buildAiIntentProvenance(
+      captureVacancyRunIntent('scan-12', parseVacancyScanRequest({ mode: 'query', query: 'UI engineer', country }), CAPTURED_AT),
+      { skillCount: 0, experienceYearsIncluded: false, homeCountryIncluded: false },
+    ).criteria.country;
+
+  it.each(['Unspecified location', 'unspecified location', '  UNSPECIFIED Location '])(
+    'records %j as a local-only criterion, not prompt guidance',
+    (country) => {
+      expect(provenanceFor(country)).toMatchObject({ requested: true, pushdown: 'unsupported', enforcedLocally: true });
+    },
+  );
+
+  it('keeps an ordinary country as prompt guidance', () => {
+    expect(provenanceFor('Germany')).toEqual({ requested: true, value: 'Germany', pushdown: 'prompt_guidance', enforcedLocally: true });
+    expect(provenanceFor('Unspecified')).toMatchObject({ pushdown: 'prompt_guidance' });
+  });
+});
+
 describe('main process wiring (#684)', () => {
-  it('captures the intent before any saved profile is read and hands the same snapshot to both branches', () => {
+  // The behaviour is covered by vacancy-scan-orchestration.test.ts, which runs the real function with
+  // fakes. This only checks that main.ts still routes through it with the captured snapshot.
+  it('captures the intent from the validated request and passes that snapshot to the orchestration', () => {
     const main = mainSource();
     const capture = main.indexOf('captureVacancyRunIntent(scanId, request)');
-    const profileRead = main.indexOf('await loadCandidateProfile(await candidateProfilePath())', capture);
-    const aiCall = main.indexOf('runAiWebDiscovery(client, {');
-    const deterministic = main.indexOf('...deterministicScanCriteria(intent, BROWSE_ALL_RESULT_CAP)');
+    const branches = main.indexOf('runVacancyScanBranches(');
     expect(capture).toBeGreaterThan(-1);
-    expect(profileRead).toBeGreaterThan(capture);
-    // The profile read that feeds the AI branch is the one right after the capture, inside this run.
-    expect(main.slice(capture, aiCall)).toContain('await loadCandidateProfile(await candidateProfilePath())');
-    expect(aiCall).toBeGreaterThan(profileRead);
-    expect(deterministic).toBeGreaterThan(aiCall);
-    expect(main).toMatch(/runAiWebDiscovery\(client, \{\s*profile,\s*intent,/u);
-    // The AI gate reads the snapshot, not the raw request, and the request's criteria are no longer
-    // read again after capture.
-    expect(main).toContain('if (intent.aiWebDiscovery) {');
-    expect(main).not.toMatch(/request\.(query|country|employment|salary)\b/u);
+    expect(branches).toBeGreaterThan(capture);
+    expect(main.slice(branches, branches + 2500)).toMatch(/\},\s*intent,\s*\);/u);
   });
 });

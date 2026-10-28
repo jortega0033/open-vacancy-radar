@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { ALL_COUNTRIES } from '../../src/geo/countries.js';
 import {
   applyFocusedScanCriteria,
+  isUnspecifiedCountry,
   SOURCE_FILTER_CAPABILITIES,
   upstreamCountryFor,
   upstreamEmploymentFor,
   withFocusedScanPlan,
 } from '../../src/global-remote/focused-scan.js';
 import type {
+  AiSearchIntentProvenance,
   DiscoverySourceAudit,
   DiscoveryVacancyAudit,
 } from '../../src/global-remote/models.js';
@@ -81,6 +83,42 @@ describe('focused scan capability contract', () => {
       expect.objectContaining({ criterion: 'country', normalizedValue: 'Netherlands', reason: expect.any(String) }),
       expect.objectContaining({ criterion: 'employment', normalizedValue: 'full_time', reason: expect.any(String) }),
     ]);
+  });
+
+  it('keeps the AI search-intent provenance on the source audit that reaches report.discoverySources (#684)', () => {
+    // `runGlobalRemoteScan` maps every discovery source through `withFocusedScanPlan` to build
+    // `report.discoverySources`; the AI source arrives with `aiSearchIntent` already attached.
+    const aiSearchIntent: AiSearchIntentProvenance = {
+      intentVersion: 1,
+      scanId: 'scan-684',
+      mode: 'query',
+      criteria: {
+        role: { requested: true, value: 'UI engineer', pushdown: 'prompt_guidance', enforcedLocally: true },
+        country: { requested: true, value: 'Unspecified location', pushdown: 'unsupported', enforcedLocally: true },
+        employment: { requested: false, value: null, pushdown: 'not_requested', enforcedLocally: false },
+        salary: { requested: false, value: null, pushdown: 'not_requested', enforcedLocally: false },
+      },
+      candidateContext: { skillCount: 2, experienceYearsIncluded: true, homeCountryIncluded: false, savedTargetRolesSearched: false },
+    };
+    const planned = withFocusedScanPlan(
+      { ...source, id: 'ai_web_search', provider: 'ai_web_search', aiSearchIntent },
+      { role: 'UI engineer', country: 'Unspecified location', employment: null },
+    );
+    expect(planned.aiSearchIntent).toEqual(aiSearchIntent);
+    // The engine's own evidence still says there is no structured upstream parameter for this source.
+    expect(planned.focusedScan?.applied).toEqual([]);
+    expect(planned.focusedScan?.requested).toEqual({ role: 'UI engineer', country: 'Unspecified location' });
+    // A source that has no intent record (every older report, every other provider) gains none.
+    expect(withFocusedScanPlan(source, { role: 'frontend', country: null, employment: null })).not.toHaveProperty('aiSearchIntent');
+  });
+
+  it('compares the "Unspecified location" sentinel exactly as the country filter does', () => {
+    for (const variant of ['Unspecified location', '  unspecified LOCATION  ', 'UNSPECIFIED LOCATION']) {
+      expect(isUnspecifiedCountry(variant)).toBe(true);
+    }
+    for (const other of ['Unspecified', 'Germany', '', 'unspecified location, Germany']) {
+      expect(isUnspecifiedCountry(other)).toBe(false);
+    }
   });
 
   it('audits salary as deferred until a source has reviewed salary semantics', () => {

@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentEventEnvelope } from '@agent-dock/shared';
 import {
   EMPTY_CANDIDATE_PROFILE,
-  applyFocusedScanCriteria,
   type CandidateProfile,
   type SalaryFilterCriteria,
 } from '@open-vacancy-radar/vacancy-engine';
@@ -16,6 +15,7 @@ import {
   AI_WEB_DISCOVERY_MAX_QUERIES,
   AI_WEB_DISCOVERY_TIMEOUT_MS,
   buildAiWebDiscoveryPrompt,
+  employmentGuidance,
   extractFinalJsonPayload,
   projectCandidateProfile,
   runAiWebDiscovery,
@@ -625,7 +625,9 @@ describe('runAiWebDiscovery uses the submitted run intent (#684)', () => {
     });
     const outcome = await runAiWebDiscovery(client as never, { profile: SAVED_FRONTEND_NL, intent, cwd: CWD });
     const { prompt } = sessionRequestOf(client);
-    expect(prompt).toContain('- Employment type: "full_time"');
+    // The submitted token stays (it is what the local match uses); a readable wording sits beside it.
+    expect(prompt).toContain('- Employment type: "full_time" (read as: full-time)');
+    expect(prompt).toContain('put "full_time" (read as: full-time) in your WebSearch queries, using the readable wording');
     expect(prompt).toContain('- Minimum salary: EUR 65,000 a year (vacancies that state no salary are hidden)');
     expect(prompt).toContain('web search cannot filter by salary');
     expect(prompt).toContain('never estimate one');
@@ -775,68 +777,78 @@ describe('runAiWebDiscovery uses the submitted run intent (#684)', () => {
   });
 });
 
-describe('same synthetic fixture, profile-derived request versus submitted intent (#684 measurement)', () => {
-  // A deterministic stand-in for the model: it "finds" every fixture posting whose location and
-  // title fit the Role and Country lines it reads from the request it was actually sent. It is not
-  // a model, so this measures only how many returned rows the shared local filter would reject for
-  // each request, and how many session calls each run makes. It says nothing about real-model
-  // recall or cost, and no such gain is claimed.
-  const FIXTURE_POSTINGS = [
-    { company: 'A', title: 'Frontend Engineer', location: 'Amsterdam, Netherlands' },
-    { company: 'B', title: 'Frontend Engineer', location: 'Utrecht, Netherlands' },
-    { company: 'C', title: 'UI Engineer', location: 'Berlin, Germany' },
-    { company: 'D', title: 'UI Engineer', location: 'Munich, Germany' },
-    { company: 'E', title: 'UI Engineer', location: 'Amsterdam, Netherlands' },
-    { company: 'F', title: 'Backend Engineer', location: 'Berlin, Germany' },
-  ];
+describe('the "Unspecified location" country is not a place to search for (#684)', () => {
+  // The Search page offers it as a country choice, but the shared filter reads it as "keep only
+  // vacancies whose location names no identifiable country". Same trim/case rule as that filter.
+  const VARIANTS = ['Unspecified location', '  unspecified LOCATION  ', 'UNSPECIFIED LOCATION'];
 
-  function standInAnswer(prompt: string): string {
-    const role = /- Role: "([^"]*)"/u.exec(prompt)?.[1] ?? '';
-    const country = /- Country: "([^"]*)"/u.exec(prompt)?.[1] ?? null;
-    const found = FIXTURE_POSTINGS.filter(
-      (posting) =>
-        posting.title.toLowerCase().includes(role.toLowerCase()) && (country === null || posting.location.includes(country)),
-    );
-    return fencedJson({
-      candidates: found.map((posting) =>
-        candidate({
-          company: posting.company,
-          title: posting.title,
-          location: posting.location,
-          url: `https://fixture.example/${posting.company}`,
-          description: null,
-        }),
-      ),
-      queriesUsed: ['fixture'],
+  for (const variant of VARIANTS) {
+    it(`states the no-country rule and never asks the model to search for ${JSON.stringify(variant)}`, async () => {
+      const client = completedClient();
+      const intent = queryIntent({ query: 'UI engineer', country: variant });
+      const outcome = await runAiWebDiscovery(client as never, { profile: SAVED_FRONTEND_NL, intent, cwd: CWD });
+      const { prompt } = sessionRequestOf(client);
+      expect(prompt).toContain('- Country: no identifiable country. The person wants vacancies whose posting names no country at all');
+      expect(prompt).toContain('current job vacancies for the requested role whose posting names no country');
+      expect(prompt).toContain('do not put a country name or a placeholder such as "unspecified" in your WebSearch queries');
+      expect(prompt).toContain('kept only if its stated location names no identifiable country');
+      // The sentinel text is never in the prompt, quoted or not, so it cannot become a search term.
+      expect(prompt.toLowerCase()).not.toContain('unspecified location');
+      expect(prompt).not.toContain('in the requested country');
+      expect(prompt).not.toMatch(/put "[^"]*unspecified/iu);
+      // A real country was not requested, so the saved home country is neither a criterion nor background.
+      expect(prompt).not.toContain('Home country');
+      expect(prompt).not.toContain('Netherlands');
+      // Local-only: the model was not given a searchable criterion, so it is not "prompt guidance".
+      expect(outcome.intentProvenance?.criteria.country).toMatchObject({
+        requested: true,
+        value: variant,
+        pushdown: 'unsupported',
+        enforcedLocally: true,
+      });
+      expect(outcome.intentProvenance?.criteria.role.pushdown).toBe('prompt_guidance');
+      expect(outcome.intentProvenance?.candidateContext.homeCountryIncluded).toBe(false);
+      expect(outcome.sourceAudit.aiSearchIntent?.criteria.country.pushdown).toBe('unsupported');
     });
   }
 
-  async function offIntentFor(aiIntent: VacancyRunIntent) {
-    const client = fakeClient([{ type: 'session.completed' }]);
-    client.sessions.events.mockImplementation(() =>
-      eventsOf([
-        { type: 'assistant.message', text: standInAnswer(client.sessions.createVacancyWebDiscovery.mock.calls[0]![0].prompt) },
-        { type: 'session.completed' },
-      ]),
-    );
-    const outcome = await runAiWebDiscovery(client as never, { profile: SAVED_FRONTEND_NL, intent: aiIntent, cwd: CWD });
-    // The person's submitted criteria, applied by the shared local filter as in `runGlobalRemoteScan`.
-    const submitted = { role: 'UI engineer', country: 'Germany', employment: null };
-    const filtered = applyFocusedScanCriteria(outcome.vacancies, submitted);
-    return {
-      returned: outcome.vacancies.length,
-      kept: filtered.vacancies.length,
-      offIntent: outcome.vacancies.length - filtered.vacancies.length,
-      sessionCalls: client.sessions.createVacancyWebDiscovery.mock.calls.length,
-    };
-  }
+  it('leaves an ordinary country as prompt guidance and an absent country as not requested', async () => {
+    const germany = completedClient();
+    const withCountry = await runAiWebDiscovery(germany as never, {
+      profile: SAVED_FRONTEND_NL,
+      intent: queryIntent({ query: 'UI engineer', country: 'Germany' }),
+      cwd: CWD,
+    });
+    const { prompt } = sessionRequestOf(germany);
+    expect(prompt).toContain('- Country: "Germany"');
+    expect(prompt).toContain('put "Germany" in your WebSearch queries');
+    expect(prompt).toContain('in the requested country');
+    expect(prompt).not.toContain('no identifiable country');
+    expect(withCountry.intentProvenance?.criteria.country).toMatchObject({ value: 'Germany', pushdown: 'prompt_guidance' });
 
-  it('the submitted-intent request returns no rows the local filter rejects, with one session call either way', async () => {
-    // Before #684 the request was built from the saved profile, so it carried frontend/Netherlands.
-    const profileDerived = await offIntentFor(queryIntent({ query: 'Frontend Engineer', country: 'Netherlands' }));
-    const submittedIntent = await offIntentFor(queryIntent({ query: 'UI engineer', country: 'Germany' }));
+    const absent = completedClient();
+    const withoutCountry = await runAiWebDiscovery(absent as never, {
+      profile: SAVED_FRONTEND_NL,
+      intent: queryIntent({ query: 'UI engineer' }),
+      cwd: CWD,
+    });
+    expect(sessionRequestOf(absent).prompt).not.toContain('no identifiable country');
+    expect(withoutCountry.intentProvenance?.criteria.country).toEqual({
+      requested: false,
+      value: null,
+      pushdown: 'not_requested',
+      enforcedLocally: false,
+    });
+  });
+});
 
-    expect(profileDerived).toEqual({ returned: 2, kept: 0, offIntent: 2, sessionCalls: 1 });
-    expect(submittedIntent).toEqual({ returned: 2, kept: 2, offIntent: 0, sessionCalls: 1 });
+describe('employmentGuidance (#684)', () => {
+  it('keeps the submitted token and adds readable wording only where it differs', () => {
+    expect(employmentGuidance('full_time')).toBe('"full_time" (read as: full-time)');
+    expect(employmentGuidance('Full Time')).toBe('"Full Time" (read as: full-time)');
+    expect(employmentGuidance('Part_Time')).toBe('"Part_Time" (read as: part-time)');
+    expect(employmentGuidance('part-time')).toBe('"part-time"');
+    expect(employmentGuidance('fixed_term')).toBe('"fixed_term" (read as: fixed term)');
+    expect(employmentGuidance('contract')).toBe('"contract"');
   });
 });

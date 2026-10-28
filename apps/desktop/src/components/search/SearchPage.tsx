@@ -886,12 +886,14 @@ export function SearchPage({
     const lines = [
       `Run ${worldwideReport.runId}, generated ${new Date(worldwideReport.generatedAt).toLocaleString()}`,
       `${(stats.rawRowsFetched ?? stats.discoveryListings).toLocaleString()} listings fetched, ${stats.discoveryUniqueListings.toLocaleString()} unique vacancies`,
+      // What the AI step was told about this run (#684): submitted search terms and counts only. The
+      // terms are free text the person typed, so they go through the same redaction as the warnings below, and a
+      // saved report from another build is described defensively rather than trusted.
+      ...worldwideReport.discoverySources.flatMap((source) =>
+        source.aiSearchIntent ? [describeAiIntentProvenance(source.aiSearchIntent, redactDiagnosticsText)] : [],
+      ),
       // Both the summary and the underlying reason: the summary alone ("the session failed to
       // start") hid why AI web search failed (#559).
-      // What the AI step was told about this run (#684): submitted search terms and counts only.
-      ...worldwideReport.discoverySources.flatMap((source) =>
-        source.aiSearchIntent ? [describeAiIntentProvenance(source.aiSearchIntent)] : [],
-      ),
       ...sourceWarnings.map((source) => {
         const summary = source.completenessReason ?? source.error ?? source.status;
         const reason = source.error && source.error !== summary ? ` ${source.error}` : '';
