@@ -169,7 +169,7 @@ export type CapabilitySelectionV2 = z.infer<typeof capabilitySelectionV2Schema>;
 export const agentSessionV2ViewSchema = z
   .object({
     schemaVersion: z.literal(1),
-    id: z.string().uuid(),
+    id: z.guid(),
     provider: providerIdSchema,
     protocolVersion: z.union([z.literal(1), z.literal(2)]),
     transportId: z.literal('legacy-one-shot'),
@@ -179,8 +179,8 @@ export const agentSessionV2ViewSchema = z
     terminalReason: terminalReasonV2Schema.optional(),
     acceptedWork: z.enum(['not_accepted', 'accepted', 'unknown']),
     providerSessionId: z.string().optional(),
-    rootSessionId: z.string().uuid(),
-    parentSessionId: z.string().uuid().optional(),
+    rootSessionId: z.guid(),
+    parentSessionId: z.guid().optional(),
     continuationKind: z.enum(['fresh', 'resume']),
     startedAt: z.string(),
     completedAt: z.string().optional(),

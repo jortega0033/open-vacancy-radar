@@ -140,7 +140,7 @@ export const workspaceConsumeGrantRequestSchema = z
     provider: providerIdSchema,
     workspaceId: workspaceDigestSchema,
     incarnation: workspaceDigestSchema,
-    sessionId: z.string().uuid().optional(),
+    sessionId: z.guid().optional(),
   })
   .strict();
 
@@ -226,14 +226,14 @@ export const auditEntryV2Schema = z
   .object({
     schemaVersion: z.literal(1),
     sequence: z.number().int().nonnegative(),
-    entryId: z.string().uuid(),
+    entryId: z.guid(),
     recordedAt: z.string().min(1).max(64),
     event: auditEventV2Schema,
     workspaceId: workspaceDigestSchema,
     incarnation: workspaceDigestSchema,
     provider: providerIdSchema,
     transport: z.literal('legacy-one-shot'),
-    sessionId: z.string().uuid().optional(),
+    sessionId: z.guid().optional(),
     reason: auditReasonV2Schema.optional(),
     actor: auditActorV2Schema,
   })

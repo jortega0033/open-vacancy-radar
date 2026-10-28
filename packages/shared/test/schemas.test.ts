@@ -392,4 +392,13 @@ describe('sessionIdParamSchema', () => {
   it('rejects a non-uuid string', () => {
     expect(sessionIdParamSchema.safeParse({ sessionId: 'not-a-uuid' }).success).toBe(false);
   });
+
+  // #696: zod 4's `.uuid()` also checks the RFC 9562 version/variant nibbles, which zod 3's `.uuid()`
+  // never did. These ids use `z.guid()` (zod 3's exact 8-4-4-4-12 hex pattern), so an id this schema
+  // accepted before the zod 4 migration is still accepted after it.
+  it('keeps accepting any 8-4-4-4-12 hex id, as before the zod 4 migration', () => {
+    expect(sessionIdParamSchema.safeParse({ sessionId: '00000000-0000-0000-0000-000000000001' }).success).toBe(true);
+    expect(sessionIdParamSchema.safeParse({ sessionId: 'ABCDEF01-2345-6789-0abc-def012345678' }).success).toBe(true);
+    expect(sessionIdParamSchema.safeParse({ sessionId: '00000000-0000-0000-0000-00000000000g' }).success).toBe(false);
+  });
 });

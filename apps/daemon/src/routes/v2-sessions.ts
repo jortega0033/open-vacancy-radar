@@ -17,8 +17,8 @@ import type { AttachmentStore } from '../attachment-store.js';
 
 /** `GET /v2/sessions/:sessionId/attachments/:attachmentId`'s params (ADI-29). */
 const attachmentParamSchema = z.object({
-  sessionId: z.string().uuid(),
-  attachmentId: z.string().uuid(),
+  sessionId: z.guid(),
+  attachmentId: z.guid(),
 });
 
 /**

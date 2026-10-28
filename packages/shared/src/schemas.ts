@@ -77,13 +77,13 @@ export const createSessionRequestSchema = z.object({
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
 export const sessionIdParamSchema = z.object({
-  sessionId: z.string().uuid(),
+  sessionId: z.guid(),
 });
 
 export const sessionStatusSchema = z.enum(['starting', 'running', 'completed', 'failed', 'cancelled']);
 
 export const agentSessionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   provider: providerIdSchema,
   cwd: z.string(),
   prompt: z.string(),
@@ -138,7 +138,7 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
     toolCallId: z.string().optional(),
     result: z.unknown().optional(),
     isError: z.boolean().optional(),
-    resultAttachmentId: z.string().uuid().optional(),
+    resultAttachmentId: z.guid().optional(),
   }),
   agentEventBaseSchema.extend({
     type: z.literal('usage'),
@@ -225,7 +225,7 @@ export const healthResponseSchema = z
      * would have honored it has been replaced by one that never saw the user's confirmation.
      * Bounded and charset-pinned like every other v2 identifier.
      */
-    daemonInstanceId: z.string().uuid().optional(),
+    daemonInstanceId: z.guid().optional(),
   })
   .superRefine((health, ctx) => {
     // A daemon that still supports v1 must say so in both fields consistently: `protocolVersion`
