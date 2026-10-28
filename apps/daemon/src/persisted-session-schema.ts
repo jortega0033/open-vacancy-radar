@@ -251,7 +251,7 @@ export const persistedEventRecordV1Schema = z.discriminatedUnion('type', [
       isError: z.boolean().optional(),
       resultBytes: z.number().int().nonnegative().optional(),
       resultSha256: z.string().optional(),
-      resultAttachmentId: z.string().uuid().optional(),
+      resultAttachmentId: z.guid().optional(),
     })
     .strict(),
   z
@@ -598,7 +598,7 @@ export const persistedSessionRecordV1Schema = z
     protocolVersion: z.union([z.literal(1), z.literal(2)]),
     session: z
       .object({
-        id: z.string().uuid(),
+        id: z.guid(),
         provider: providerIdSchema,
         cwd: z.string(),
         model: z.string().optional(),
@@ -609,8 +609,8 @@ export const persistedSessionRecordV1Schema = z
         completedAt: z.string().optional(),
         acceptedWork: z.enum(['unknown', 'accepted']),
         transportId: z.literal('legacy-one-shot'),
-        rootSessionId: z.string().uuid(),
-        parentSessionId: z.string().uuid().optional(),
+        rootSessionId: z.guid(),
+        parentSessionId: z.guid().optional(),
         continuationKind: z.enum(['fresh', 'resume']),
         earliestSequence: z.number().int().nonnegative(),
         eventCount: z.number().int().nonnegative(),
