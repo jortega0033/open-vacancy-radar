@@ -296,6 +296,37 @@ describe('local MCP endpoint tool surface (#421)', () => {
     await client.close();
   });
 
+  // #696: the tools' zod input schemas moved from zod 3 to zod 4. This pins, through a real SDK client,
+  // that the SDK still advertises them as JSON Schema, still applies `.default()`, and still rejects
+  // input those schemas refuse before any handler runs. Without that check, a page of -1 or "0" would
+  // reach the handler and quietly succeed.
+  it('advertises and enforces the zod input schemas (default applied, invalid input refused)', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+
+    const { tools } = await client.listTools();
+    const schema = tools.find((t) => t.name === 'get_tailoring_case')?.inputSchema as
+      | { type?: string; properties?: Record<string, { type?: string; minimum?: number; default?: unknown }>; required?: string[] }
+      | undefined;
+    expect(schema?.type).toBe('object');
+    expect(schema?.properties?.caseId?.type).toBe('string');
+    expect(schema?.properties?.page).toMatchObject({ type: 'integer', minimum: 0, default: 0 });
+    expect(schema?.required).toContain('caseId');
+    expect(schema?.required ?? []).not.toContain('page');
+
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'Short JD text.' } } }),
+    );
+
+    const defaulted = await client.callTool({ name: 'get_tailoring_case', arguments: { caseId } });
+    expect(defaulted.isError).toBeFalsy();
+    expect(toolJson<{ jd: { page: number } }>(defaulted).jd.page).toBe(0);
+
+    expect((await client.callTool({ name: 'get_tailoring_case', arguments: { caseId, page: -1 } })).isError).toBe(true);
+    expect((await client.callTool({ name: 'get_tailoring_case', arguments: { caseId, page: '0' } })).isError).toBe(true);
+    await client.close();
+  });
+
   it('propose_fact rejects a parentId that does not resolve in the reviewed source', async () => {
     const { credential } = createGrant({ withSource: true });
     const client = await connectedClient(credential);

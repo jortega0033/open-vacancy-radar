@@ -27,13 +27,13 @@ const valueRefSchema = z.string().regex(VALUE_REF_PATTERN, 'must be a valueRef f
 const assignmentSourceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('value'), valueRef: valueRefSchema }).strict(),
   z.object({ kind: z.literal('option'), optionRef: optionRefSchema }).strict(),
-  z.object({ kind: z.literal('artifact'), artifactId: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal('artifact'), artifactId: z.guid() }).strict(),
   z.object({ kind: z.literal('skip'), reason: z.enum(['no_source_value', 'not_applicable']) }).strict(),
 ]);
 
 export const fieldMapSchema = z
   .object({
-    attemptId: z.string().uuid(),
+    attemptId: z.guid(),
     snapshotGeneration: z.number().int().nonnegative(),
     assignments: z
       .array(z.object({ fieldRef: fieldRefSchema, source: assignmentSourceSchema }).strict())

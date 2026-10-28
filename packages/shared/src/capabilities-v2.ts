@@ -119,7 +119,7 @@ export type BoundedJson =
   | BoundedJson[]
   | { [key: string]: BoundedJson };
 
-export const boundedJsonSchema: z.ZodType<BoundedJson, z.ZodTypeDef, unknown> = z
+export const boundedJsonSchema: z.ZodType<BoundedJson, unknown> = z
   .unknown()
   .superRefine((value, ctx) => {
     const issue = validateJsonBounds(value, OPAQUE_JSON_BOUNDS);
