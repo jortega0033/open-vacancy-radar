@@ -95,7 +95,7 @@ describe('requiredScanQuery', () => {
     // the `runGlobalRemoteScan` call it feeds -- i.e. inside `runExclusiveScan`'s own callback, never
     // wrapping or preceding the acquisition of that guard itself.
     expect(mainSource).toMatch(
-      /runExclusiveScan\(\s*async \(\) => \{[\s\S]*if \(request\.aiWebDiscovery === true\) \{[\s\S]*runAiWebDiscovery\(client, \{[\s\S]*runGlobalRemoteScan\(/,
+      /runExclusiveScan\(\s*async \(\) => \{[\s\S]*if \(intent\.aiWebDiscovery\) \{[\s\S]*runAiWebDiscovery\(client, \{[\s\S]*runGlobalRemoteScan\(/,
     );
   });
 });

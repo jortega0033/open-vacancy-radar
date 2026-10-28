@@ -545,6 +545,30 @@ describe('SearchPage', () => {
       resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
     });
 
+    it('shows a compact description of what the active run was asked to look for (#684)', async () => {
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise((resolve) => { resolveScan = resolve; })),
+        getScanProgress: vi.fn().mockResolvedValue({
+          scanning: true,
+          scanId: 'scan-intent',
+          startedAt: Date.now(),
+          intent: 'Role: UI engineer · Country: Germany · Minimum salary: EUR 65,000 a year',
+        }),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      enterSearchQuery('UI engineer');
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+      expect(await screen.findByTestId('scan-intent')).toHaveTextContent(
+        'Searching for: Role: UI engineer · Country: Germany · Minimum salary: EUR 65,000 a year',
+      );
+      resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
+    });
+
     it('stops the exact run, keeps the previous report, and says so instead of reporting a failure', async () => {
       let rejectScan: (error: Error) => void = () => {};
       const cancelScan = vi.fn().mockImplementation(async () => {
@@ -1638,6 +1662,54 @@ describe('SearchPage', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0]![0]).toContain(`Workable (workable_global:all-customers, partial): ${warning}`);
     expect(writeText.mock.calls[0]![0]).toContain('Run ww-run-1');
+  });
+
+  it('copies the AI search intent provenance with the diagnostics, without profile text (#684)', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([makeWorldwideVacancy()], [
+          {
+            id: 'ai_web_search',
+            provider: 'ai_web_search',
+            url: 'https://github.com/jortega0033/open-vacancy-radar/issues/398',
+            requests: 1,
+            listings: 0,
+            status: 'partial',
+            error: 'Dropped 1 candidate(s) failed schema validation.',
+            networkAttempts: 2,
+            retries: 0,
+            complete: true,
+            completenessReason: null,
+            continuationCursor: null,
+            aiSearchIntent: {
+              intentVersion: 1,
+              scanId: 'scan-684',
+              mode: 'query',
+              criteria: {
+                role: { requested: true, value: 'UI engineer', pushdown: 'prompt_guidance', enforcedLocally: true },
+                country: { requested: true, value: 'Germany', pushdown: 'prompt_guidance', enforcedLocally: true },
+                employment: { requested: false, value: null, pushdown: 'not_requested', enforcedLocally: false },
+                salary: { requested: true, value: 'EUR 65,000; unknown salaries kept', pushdown: 'unsupported', enforcedLocally: true },
+              },
+              candidateContext: { skillCount: 2, experienceYearsIncluded: true, homeCountryIncluded: false, savedTargetRolesSearched: false },
+            },
+          },
+        ]),
+      ),
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getByText(/some sources could not be checked/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /some sources could not be checked/i }));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const copied = writeText.mock.calls[0]![0] as string;
+    expect(copied).toContain(
+      'AI search intent v1, run scan-684: role "UI engineer" (sent to AI as guidance), country "Germany" (sent to AI as guidance), salary "EUR 65,000; unknown salaries kept" (not searchable, applied locally); 2 saved skill(s) as background, saved target roles not searched',
+    );
   });
 
   describe('AI web search failure notice (#559)', () => {

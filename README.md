@@ -47,6 +47,19 @@ profile is configured, never blocks the rest of a scan if it fails or times out,
 it returns is schema-validated and checked against the same blocked/prohibited source list as the
 deterministic sources before being accepted.
 
+The AI step searches for what you submitted for that scan, not for your saved profile. When you run
+a search, the role, country, employment type and minimum salary you entered are captured once as the
+scan's intent and given to both the AI step and the job-site sources, so editing your profile while
+a scan runs cannot change it. A role, country or employment type is passed to the AI as wording for
+its web searches; a minimum salary cannot be searched on the web, so the AI is told that and the
+same local filter that checks every other source applies it afterwards (salaries the AI reads from a
+page are unverified, so with "hide unknown salaries" on they do not pass). Your saved profile only
+adds background (skills, years of experience, and your home country when you did not pick one) and
+its target roles are never searched. "Browse all" stays browse-all: no role is searched. The scan
+panel shows what the run is searching for, and "Copy diagnostics" lists how each criterion reached
+the AI step, using search terms and counts only, never CV text or the prompt. The local filter
+still decides what is kept.
+
 Vacancy coverage is a product requirement: a lawful public source is integrated by default in the
 broadest mode its evidence supports. Sources that take longer to implement remain planned.
 Unclear republication rights use a factual linked index; explicit prohibitions, authentication or

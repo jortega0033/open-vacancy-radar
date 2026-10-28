@@ -21,6 +21,8 @@ export interface VacancyScanStatus {
   vacanciesSoFar?: number;
   /** True once a stop was requested and the run is winding down. */
   stopping?: boolean;
+  /** Compact description of what this run was asked to look for, fixed when it started (#684). */
+  intent?: string;
   /** Where the optional AI web search step is (#559). Absent when the run did not ask for it. */
   aiWebSearch?: VacancyScanAiWebSearchState;
 }

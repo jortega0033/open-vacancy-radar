@@ -115,6 +115,12 @@ import {
 import { sendToRenderer } from './send-to-renderer.js';
 import { chooseInitialBounds, loadWindowState, saveWindowState, type WindowState } from './window-state.js';
 import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
+import {
+  captureVacancyRunIntent,
+  describeVacancyRunIntent,
+  deterministicScanCriteria,
+  type VacancyRunIntent,
+} from './vacancy-run-intent.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
 import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
 import {
@@ -2623,6 +2629,8 @@ interface ActiveVacancyScan {
   doneSources: Set<string>;
   total: number;
   vacancies: number;
+  /** What this run was asked to look for, fixed when it started (#684). */
+  intent: VacancyRunIntent;
   /** Only set when this run was asked to also search the web with AI (#559). */
   aiWebSearch?: VacancyScanAiWebSearchState;
 }
@@ -2642,6 +2650,7 @@ guardedIpc.handle('vacancy:get-scan-progress', (): VacancyScanStatus => {
     sourcesDone: scan.doneSources.size,
     sourcesTotal: scan.total,
     vacanciesSoFar: scan.vacancies,
+    intent: describeVacancyRunIntent(scan.intent),
     ...(scan.aiWebSearch ? { aiWebSearch: scan.aiWebSearch } : {}),
     ...(scan.controller.signal.aborted ? { stopping: true } : {}),
   };
@@ -2713,14 +2722,19 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
       async () => {
         const config = vacancyEngineConfig();
         const logger = createLogger(config);
+        const scanId = randomUUID();
+        // Fixed here, from the validated request, before any saved profile is read: the AI branch and
+        // the deterministic branch below both take their criteria from this snapshot (#684).
+        const intent = captureVacancyRunIntent(scanId, request);
         const scan: ActiveVacancyScan = {
-          id: randomUUID(),
+          id: scanId,
           startedAt: Date.now(),
           controller: new AbortController(),
           doneSources: new Set(),
           total: SCAN_PROGRESS_SOURCE_IDS.length,
           vacancies: 0,
-          ...(request.aiWebDiscovery === true ? { aiWebSearch: 'waiting' as const } : {}),
+          intent,
+          ...(intent.aiWebDiscovery ? { aiWebSearch: 'waiting' as const } : {}),
         };
         activeVacancyScan = scan;
         try {
@@ -2732,18 +2746,19 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         // so every existing caller/test that never sets `aiWebDiscovery` sees byte-identical
         // `GlobalRemoteScanOptions` to before this feature existed.
         let aiWebDiscovery: Awaited<ReturnType<typeof runAiWebDiscovery>> | undefined;
-        if (request.aiWebDiscovery === true) {
+        if (intent.aiWebDiscovery) {
           // `runAiWebDiscovery` itself never throws (see its own doc comment), but the setup calls
           // around it -- `loadCandidateProfile` (rethrows for a malformed/unreadable existing profile
           // file, only swallowing ENOENT) and `ensureAiWorkspaceDir` (disk full, permission error) --
           // are not similarly guarded. A failure here must degrade exactly the way an internal
           // `runAiWebDiscovery` failure already does (`aiWebDiscovery` left undefined, i.e. treated as
-          // if `request.aiWebDiscovery` had been false), never abort the whole scan.
+          // if `intent.aiWebDiscovery` had been false), never abort the whole scan.
           try {
             const profile = await loadCandidateProfile(await candidateProfilePath());
             scan.aiWebSearch = 'running';
             aiWebDiscovery = await runAiWebDiscovery(client, {
               profile,
+              intent,
               cwd: await ensureAiWorkspaceDir(),
             });
             const aiAudit = aiWebDiscovery.sourceAudit;
@@ -2761,6 +2776,11 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
               { queriesUsed: aiWebDiscovery.queriesUsed, sourceAudit: aiWebDiscovery.sourceAudit },
               'AI web discovery pass finished',
             );
+            // Which of this run's submitted criteria the model was given (#684). Search terms and
+            // counts only: no CV text, skill names or prompt.
+            if (aiWebDiscovery.intentProvenance) {
+              logger.info({ aiSearchIntent: aiWebDiscovery.intentProvenance }, 'AI web discovery intent');
+            }
           } catch (error) {
             scan.aiWebSearch = 'failed';
             logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
@@ -2769,9 +2789,7 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         if (scan.controller.signal.aborted) throw new ScanCancelledError();
         const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
           signal: scan.controller.signal,
-          ...(request.mode === 'query'
-            ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
-            : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
+          ...deterministicScanCriteria(intent, BROWSE_ALL_RESULT_CAP),
           onProgress: (event: ScanProgressEvent) => {
             // A stopped run's late events must not reach the page: it has already gone back to the
             // previous report.

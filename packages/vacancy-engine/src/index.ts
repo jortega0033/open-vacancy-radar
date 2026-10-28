@@ -120,6 +120,9 @@ export {
 } from './pipeline/ats-source-observation-import.js';
 
 export type {
+  AiSearchIntentCriterion,
+  AiSearchIntentProvenance,
+  AiSearchIntentPushdown,
   GlobalRemoteReport,
   DiscoveryProvider,
   DiscoverySourceAudit,
