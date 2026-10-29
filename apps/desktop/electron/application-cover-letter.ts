@@ -142,6 +142,8 @@ export interface ApplicationCoverLetterResult {
   body: string;
   /** The sourced company claims the finished letter actually carries (empty when it carries none). */
   usedCompanyEvidence: CompanyEvidenceProseFact[];
+  /** The source-fact ids the finished letter was assembled from (#690 records them with the draft). */
+  factIds?: string[];
 }
 
 /**
@@ -174,27 +176,26 @@ export interface CoverLetterEvidenceOptions {
   now?: () => Date;
 }
 
-export async function generateApplicationCoverLetterWithEvidence(
+/**
+ * Everything after the model's selection: refuse a selection that is only company facts, re-check
+ * every selected company fact against the CURRENT approved list, and assemble the letter from the
+ * app's own sentences. Shared by drafting and by the independent critique's revision (#690), so a
+ * revised letter is built, and its employer claims re-validated, by exactly the code that built the
+ * original -- the critic never supplies prose.
+ */
+export async function assembleCoverLetterFromSelection(
   attempt: ApplicationAttemptRecord,
   cv: CvDocumentRecord,
-  generate: (prompt: string) => Promise<ApplicationCoverLetterGenerationResult>,
-  companyEvidence: readonly CompanyEvidenceProseFact[] = [],
+  facts: readonly GroundedSourceFact[],
+  companyEvidence: readonly CompanyEvidenceProseFact[],
   options: CoverLetterEvidenceOptions = {},
-): Promise<ApplicationCoverLetterResult> {
+): Promise<ApplicationCoverLetterResult & { factIds: string[] }> {
   if (!cv.source) {
     throw new Error(
       'this CV has no reviewed source record. Review the CV source before generating a cover letter.',
     );
   }
-  const generated = await generate(buildApplicationCoverLetterPrompt(attempt, cv, companyEvidence));
-  if (!generated.ok)
-    throw new Error(generated.error ?? 'the cover letter generation session failed');
   const companyFacts = buildCompanyEvidenceSourceFacts(attempt.company, companyEvidence);
-  const facts = selectGroundedFacts(
-    generated.text.trim(),
-    [...buildApplicationCoverLetterSourceFacts(cv), ...companyFacts],
-    LABELS,
-  );
   const candidateFacts = facts.filter((fact) => !fact.id.startsWith(COMPANY_FACT_ID_PREFIX));
   if (candidateFacts.length === 0) {
     throw new Error('the generated cover letter selected only company facts and none of your reviewed CV facts');
@@ -216,9 +217,10 @@ export async function generateApplicationCoverLetterWithEvidence(
     });
   }
   const keptIds = new Set(selectedCompany.map((fact) => fact.id));
+  const kept = facts.filter((fact) => !fact.id.startsWith(COMPANY_FACT_ID_PREFIX) || keptIds.has(fact.id));
   const body = assembleGroundedLetter({
     ...UNATTENDED_SHAPE,
-    facts: facts.filter((fact) => !fact.id.startsWith(COMPANY_FACT_ID_PREFIX) || keptIds.has(fact.id)),
+    facts: kept,
     role: attempt.role,
     company: attempt.company,
     candidateName: cv.source.contact.name,
@@ -228,7 +230,35 @@ export async function generateApplicationCoverLetterWithEvidence(
     .map((fact) => companyFacts.find((candidate) => candidate.id === fact.id))
     .filter((candidate): candidate is GroundedSourceFact => candidate !== undefined && body.includes(candidate.sentence))
     .map((candidate) => offeredById.get(candidate.id)!);
-  return { body, usedCompanyEvidence: used };
+  return { body, usedCompanyEvidence: used, factIds: kept.map((fact) => fact.id) };
+}
+
+/** The labels the critique reuses so a refused revision reads like a refused draft. */
+export const COVER_LETTER_SELECTION_LABELS = LABELS;
+
+export async function generateApplicationCoverLetterWithEvidence(
+  attempt: ApplicationAttemptRecord,
+  cv: CvDocumentRecord,
+  generate: (prompt: string) => Promise<ApplicationCoverLetterGenerationResult>,
+  companyEvidence: readonly CompanyEvidenceProseFact[] = [],
+  options: CoverLetterEvidenceOptions = {},
+): Promise<ApplicationCoverLetterResult> {
+  if (!cv.source) {
+    throw new Error(
+      'this CV has no reviewed source record. Review the CV source before generating a cover letter.',
+    );
+  }
+  const generated = await generate(buildApplicationCoverLetterPrompt(attempt, cv, companyEvidence));
+  if (!generated.ok)
+    throw new Error(generated.error ?? 'the cover letter generation session failed');
+  const companyFacts = buildCompanyEvidenceSourceFacts(attempt.company, companyEvidence);
+  const facts = selectGroundedFacts(
+    generated.text.trim(),
+    [...buildApplicationCoverLetterSourceFacts(cv), ...companyFacts],
+    LABELS,
+  );
+  const assembled = await assembleCoverLetterFromSelection(attempt, cv, facts, companyEvidence, options);
+  return { body: assembled.body, usedCompanyEvidence: assembled.usedCompanyEvidence, factIds: assembled.factIds };
 }
 
 export async function generateApplicationCoverLetter(

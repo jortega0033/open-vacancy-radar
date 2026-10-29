@@ -57,6 +57,7 @@ import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
 import { deleteAllCompanyEvidence } from './company-evidence-store.js';
 import { deleteAllApplicationBriefs, pruneUnreferencedBriefs } from './application-brief-store.js';
+import { deleteAllCritiques } from './application-critique-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -3065,6 +3066,8 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       ...deleteAllCompanyEvidence(tx),
       // #688: the application briefs, their source references and the pinned preparation copies.
       ...deleteAllApplicationBriefs(tx),
+      // #690: the critiques and the structured drafts they describe.
+      ...deleteAllCritiques(tx),
     };
 
     tx.delete(applicationAttempts).run();

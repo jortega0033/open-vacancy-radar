@@ -28,16 +28,35 @@ export interface FieldMapGenerationResult {
   error?: string;
 }
 
-export type TextGenerationResult = FieldMapGenerationResult;
+export interface TextGenerationResult extends FieldMapGenerationResult {
+  /** Token counts exactly as the provider reported them (the latest `usage` event); absent when none arrived. */
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
+export interface TextGenerationOptions {
+  /** Aborting stops the session and reports it as cancelled (the person pressed Cancel, or a reset began). */
+  signal?: AbortSignal;
+}
 
 async function drainGenerationSession(
   client: AgentDockClient,
   sessionPromise: Promise<AgentSession>,
   failureLabel: string,
+  options: TextGenerationOptions = {},
 ): Promise<TextGenerationResult> {
   const session = await sessionPromise;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FIELD_MAP_GENERATION_TIMEOUT_MS);
+  let cancelledByCaller = options.signal?.aborted === true;
+  const onCallerAbort = (): void => {
+    cancelledByCaller = true;
+    controller.abort();
+  };
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener('abort', onCallerAbort, { once: true });
+  }
+  let usage: TextGenerationResult['usage'];
   let text = '';
   let fallbackError: string | undefined;
   let terminalError: string | undefined;
@@ -47,6 +66,14 @@ async function drainGenerationSession(
       switch (event.type) {
         case 'assistant.message':
           text += event.text;
+          break;
+        case 'usage':
+          if (typeof event.inputTokens === 'number' || typeof event.outputTokens === 'number') {
+            usage = {
+              ...(typeof event.inputTokens === 'number' ? { inputTokens: event.inputTokens } : {}),
+              ...(typeof event.outputTokens === 'number' ? { outputTokens: event.outputTokens } : {}),
+            };
+          }
           break;
         case 'error':
           if (event.recoverable) fallbackError ??= event.message;
@@ -65,16 +92,19 @@ async function drainGenerationSession(
     }
   } catch (err) {
     if (!controller.signal.aborted) throw err;
-    terminalError = `no response after ${Math.round(FIELD_MAP_GENERATION_TIMEOUT_MS / 1000)}s: the session was stopped`;
+    terminalError = cancelledByCaller
+      ? `${failureLabel} was cancelled`
+      : `no response after ${Math.round(FIELD_MAP_GENERATION_TIMEOUT_MS / 1000)}s: the session was stopped`;
     await client.sessions.cancel(session.id).catch(() => {});
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', onCallerAbort);
   }
 
   if (terminalError === undefined && text.trim().length === 0) {
     terminalError = fallbackError ?? 'the agent finished without returning any text';
   }
-  return { ok: terminalError === undefined, text, error: terminalError };
+  return { ok: terminalError === undefined, text, error: terminalError, ...(usage ? { usage } : {}) };
 }
 
 /**
@@ -94,8 +124,9 @@ export async function runFieldMapGeneration(
 export function runTextGeneration(
   client: AgentDockClient,
   input: FieldMapGenerationRequest,
+  options: TextGenerationOptions = {},
 ): Promise<TextGenerationResult> {
   // This client capability selects the daemon's closed-tool, no-network application-generation
   // profile. Its historical name mentions field maps, but the hardening contract is generic.
-  return drainGenerationSession(client, client.sessions.createFieldMapGeneration(input), 'the document generation session');
+  return drainGenerationSession(client, client.sessions.createFieldMapGeneration(input), 'the document generation session', options);
 }

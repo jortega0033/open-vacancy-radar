@@ -245,17 +245,31 @@ describe('routeStage: the operator preference and price ordering', () => {
 });
 
 describe('stage contracts', () => {
-  it('names a capability requirement for the field-map stage and for no other stage today', () => {
+  it('names a capability requirement for the field-map stage and the critique stage, and for no other stage today', () => {
     const withRequirements = Object.values(STAGE_CONTRACTS)
       .filter((contract) => contract.requiredCapabilities.length > 0)
       .map((contract) => contract.stage);
-    expect(withRequirements).toEqual(['application_field_map']);
+    expect(withRequirements).toEqual(['application_critique', 'application_field_map']);
+    // The critique embeds a scraped posting, so it needs the same no-network profile (#690).
+    expect(stageContract('application_critique').requiredCapabilities).toEqual(['hardenedNoNetwork']);
   });
 
-  it('bounds every stage to at most two model attempts', () => {
+  it('bounds every stage to two model attempts, except the critique, which gets exactly one', () => {
     for (const contract of Object.values(STAGE_CONTRACTS)) {
-      expect(contract.maxAttempts).toBe(2);
+      expect(contract.maxAttempts).toBe(contract.stage === 'application_critique' ? 1 : 2);
     }
+  });
+
+  it('refuses a provider without the no-network profile for the critique, however cheap it is', () => {
+    const decision = routeStage({
+      stage: 'application_critique',
+      candidates: [
+        candidate({ providerId: 'codex', model: 'cheap-model', capabilities: { hardenedNoNetwork: false }, price: priced(0, 0), ...tiered('capable') }),
+      ],
+    });
+    expect(decision.outcome).toBe('no_eligible_candidate');
+    if (decision.outcome !== 'no_eligible_candidate') throw new Error('unreachable');
+    expect(decision.rejected[0]).toMatchObject({ reason: 'missing_capability', missingCapabilities: ['hardenedNoNetwork'] });
   });
 
   it('sends a cover letter straight to the candidate for a missing fact: there is nothing to retrieve', () => {

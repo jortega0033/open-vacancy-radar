@@ -261,6 +261,15 @@ stored in the local workspace database and goes nowhere else.
   (which deletes every evidence table). Deleting or correcting evidence does not change a document already prepared;
   a prepared letter keeps its own record of the sourced claims it used until that attempt is deleted. See
   [company-evidence.md](company-evidence.md).
+- **Independent review of a prepared package** (#690): the exact CV and letter text of each prepared application
+  (the structured draft, a content hash and the hash of the PDF it produced) and, after you press "Review this
+  application", the review itself: findings with the quotes they cite, suggested changes, and how many AI requests
+  and tokens it used. This is your CV and letter text, kept in `workspace.db` next to the rendered files. The review
+  sends a model your CV and letter drafts, the job description, your reviewed CV facts and only the company facts that
+  are currently adequate, in one separate no-network, no-tool session; it does not look anything up. Opening the
+  panel never starts a session. Retained until you delete the application, delete `workspace.db`, or use Settings >
+  Advanced > Reset application data. Drafts and reviews of a package that was already sent are never changed. See
+  [application-critique.md](application-critique.md).
 - **Application brief** (#688): one decision record per job, kept in `workspace.db`: the scan's own score and
   reasons, work-eligibility answers with their sources, every original source link of the job, the posting text
   saved with it (cut at 80,000 characters), a summary of the CV assessment with the versions it was made under, and

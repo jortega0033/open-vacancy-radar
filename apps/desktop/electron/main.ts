@@ -63,6 +63,8 @@ import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './appli
 import type { ApplicationQueueEvent } from './application-queue-types.js';
 import { ApplicationDataResetGate } from './application-data-reset-gate.js';
 import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
+import { createApplicationCritiqueHandlers } from './application-critique-ipc.js';
+import { cancelAllCritiques, type CritiqueDeps } from './application-critique-service.js';
 import { readPostingVerification } from './application-posting-verification.js';
 import { runCompanyResearchSession } from './company-evidence-research.js';
 import { createCompanyEvidenceHandlers } from './company-evidence-ipc.js';
@@ -2426,6 +2428,40 @@ guardedIpc.handle('application-brief:prepare-assessment', (_event, input: unknow
 guardedIpc.handle('application-brief:commit-assessment', (_event, input: unknown) => applicationBriefHandlers['application-brief:commit-assessment']!(input));
 guardedIpc.handle('application-brief:correct-preference', (_event, input: unknown) => applicationBriefHandlers['application-brief:correct-preference']!(input));
 
+/**
+ * #690: the optional independent critique. The review runs in the SAME closed-tool, no-network text
+ * session profile as drafting (Claude's hardened profile; nothing else implements it) and in a fresh
+ * session, so it shares no context with the run that wrote the documents. Company facts are only what
+ * the support policy already approved; this never starts research or a request.
+ */
+async function applicationCritiqueDeps(): Promise<CritiqueDeps> {
+  const db = await ensureWorkspaceDb();
+  return {
+    db,
+    storageRoot: applicationArtifactStorageRoot(),
+    now: () => new Date(),
+    async generate(prompt, signal) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      return runTextGeneration(client, { provider: 'claude', cwd: await ensureAiWorkspaceDir(), prompt }, { signal });
+    },
+    async loadCompanyEvidence(attempt) {
+      return proseEvidence(await companyEvidenceDeps(), { attemptId: attempt.id }, 'letter');
+    },
+    provider: 'claude',
+    log: (message, meta) => console.warn(`[application-critique] ${message}`, meta ?? {}),
+  };
+}
+const applicationCritiqueHandlers = createApplicationCritiqueHandlers({
+  service: applicationCritiqueDeps,
+  mutate: (task) => applicationDataResetGate.runMutation(task),
+});
+// Literal channel names on purpose: the sender-guard test reads this file to prove every channel is guarded.
+guardedIpc.handle('application-critique:get', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:get']!(input));
+guardedIpc.handle('application-critique:run', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:run']!(input));
+guardedIpc.handle('application-critique:cancel', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:cancel']!(input));
+guardedIpc.handle('application-critique:reject', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:reject']!(input));
+guardedIpc.handle('application-critique:accept', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:accept']!(input));
+
 guardedIpc.handle('application-pipeline:attach-letter', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
     const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
@@ -3335,6 +3371,8 @@ guardedIpc.handle('workspace:data:reset', async () => {
     await sourceScout.cancel();
     // #689: an in-flight company research or refresh would write to tables this reset clears.
     companyEvidenceRuns.cancelAll();
+    // #690: a running review would otherwise finish after the data it describes is gone.
+    cancelAllCritiques();
     closeAllApplicationReviews();
     const queueStatus = await daemonGetJson('/v2/applications');
     const lease = queueStatus?.lease;
