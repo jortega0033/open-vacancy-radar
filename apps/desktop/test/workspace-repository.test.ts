@@ -152,6 +152,10 @@ describe('settings', () => {
       mcpClientGrants: 1,
       mcpAuditLogEntries: 1,
       cvTailoringProposals: 1,
+      companyEvidenceRecords: 0,
+      companyEvidenceFacts: 0,
+      companyEvidenceLinks: 0,
+      companyEvidenceUses: 0,
     });
     expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null, mcpEndpointEnabled: false });
     expect(workspace.listSavedJobs(db)).toEqual([]);

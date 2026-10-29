@@ -1030,6 +1030,11 @@ export interface ApplicationDataResetResult {
     mcpClientGrants: number;
     mcpAuditLogEntries: number;
     cvTailoringProposals: number;
+    /** #689: the company-evidence record and everything hanging off it. */
+    companyEvidenceRecords: number;
+    companyEvidenceFacts: number;
+    companyEvidenceLinks: number;
+    companyEvidenceUses: number;
   };
 }
 

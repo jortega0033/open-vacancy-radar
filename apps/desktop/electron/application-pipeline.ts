@@ -12,9 +12,11 @@ import {
   type ApplicationQueueEntryState,
 } from './application-attempt-transitions.js';
 import {
-  generateApplicationCoverLetter,
+  generateApplicationCoverLetterWithEvidence,
   type ApplicationCoverLetterGenerationResult,
 } from './application-cover-letter.js';
+import type { CompanyEvidenceProseFact } from './company-evidence.js';
+import { recordEvidenceUses } from './workspace/company-evidence-store.js';
 import {
   applyApplicationFieldMap,
   closeApplicationReview,
@@ -153,6 +155,13 @@ export interface ApplicationPipelineDeps {
    * every behaviour below is exactly what it was before this existed.
    */
   verifyPosting?: PostingVerifierPort['verify'];
+  /**
+   * Sourced company evidence for the letter step (#689): ONLY facts that already passed the support
+   * policy (current, confirmed, uncontested, this employer and this role). Absent, throwing or empty
+   * means the letter is built exactly as before. This runs in the no-network drafting stage and
+   * reads only the local store; it never starts research or a fetch.
+   */
+  loadCompanyEvidence?(attempt: ApplicationAttemptRecord): CompanyEvidenceProseFact[] | Promise<CompanyEvidenceProseFact[]>;
   /**
    * How long one attempt's preparation may go without settling before `runNextApplicationAttempt`
    * stops waiting for it, hands the daemon's lease back, and fences everything the abandoned run
@@ -753,17 +762,33 @@ export async function runApplicationAttempt(
   // Policy cannot truthfully be guessed from a URL before the policy resolver runs. #326 requires
   // every unsupported-target handoff to contain a letter, so an absent user-final letter is the
   // narrow pre-policy signal that this attempt needs an automatically generated cover letter.
+  let usedCompanyEvidence: CompanyEvidenceProseFact[] = [];
   if (letters.length === 0) {
+    let companyEvidence: CompanyEvidenceProseFact[] = [];
     try {
-      letters = [{
-        kind: 'cover_letter',
-        title: 'Cover Letter',
-        body: await generateApplicationCoverLetter(attempt, cv, deps.generateCoverLetter),
-      }];
+      companyEvidence = deps.loadCompanyEvidence ? await deps.loadCompanyEvidence(attempt) : [];
+    } catch (err) {
+      // Evidence is optional: a store problem never blocks a letter that does not need it.
+      deps.log?.('company evidence unavailable for the letter; continuing without it', { error: describeError(err) });
+    }
+    try {
+      const generated = await generateApplicationCoverLetterWithEvidence(
+        attempt,
+        cv,
+        deps.generateCoverLetter,
+        companyEvidence,
+      );
+      letters = [{ kind: 'cover_letter', title: 'Cover Letter', body: generated.body }];
+      usedCompanyEvidence = generated.usedCompanyEvidence;
     } catch (err) {
       letterBlocker = `automatic cover letter generation stopped: ${describeError(err)}`;
     }
   }
+  // Snapshot what this attempt's letter actually says about the employer (nothing, for a letter the
+  // person supplied or one that failed), so later evidence edits or deletions cannot change the
+  // record of what was prepared. A regenerated attempt replaces its own snapshot; a submitted
+  // attempt's is never touched (the store refuses).
+  fencedWrite(run, () => recordEvidenceUses(deps.db, attemptId, usedCompanyEvidence, new Date(nowIso(deps))));
 
   try {
     // Stage the useful CV independently. A failed letter must not erase the manual handoff an

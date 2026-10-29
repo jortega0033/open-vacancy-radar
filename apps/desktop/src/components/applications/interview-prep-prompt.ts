@@ -6,6 +6,13 @@ import {
   MAX_CV_PROMPT_CHARS,
   UNTRUSTED_VACANCY_RULE,
 } from '../cv/prompts.js';
+import type { CompanyEvidenceProseFact } from '../../../electron/company-evidence.js';
+import {
+  COMPANY_EVIDENCE_RULE,
+  NO_COMPANY_EVIDENCE_RULE,
+  companyEvidenceBlock,
+  currentCompanyEvidence,
+} from './interview-prompt-company-evidence.js';
 
 /**
  * Prompt builder for "Prepare interview" (issue #358): one bounded, grounded, review-only prep
@@ -52,6 +59,13 @@ export interface InterviewPrepContext {
   cv: { name: string; text: string } | null;
   /** null when no letter is linked, or the linked id no longer resolves. */
   letter: { type: string; body: string } | null;
+  /**
+   * Sourced public facts about the employer (#689), already filtered by the support policy.
+   * `undefined` = the caller did not ask for company evidence (nothing about it is said);
+   * an array, even an empty one, = it did, and the prompt states plainly what is and is not on file.
+   * Kept apart from `cv` and `letter`: nothing in here is a fact about the candidate.
+   */
+  companyEvidence?: readonly CompanyEvidenceProseFact[];
 }
 
 /** Exported so a test (or a future caller) can read the exact bound this prompt applies to the
@@ -199,8 +213,15 @@ function letterBlock(context: InterviewPrepContext): string {
   return `\n=== YOUR CURRENT LINKED LETTER (may differ from what you actually submitted) ===\nType: ${fieldPromptText(context.letter.type)}\n${text}`;
 }
 
-export function buildInterviewPrepPrompt(context: InterviewPrepContext): string {
+function companyEvidenceRule(context: InterviewPrepContext, now: Date): string {
+  if (context.companyEvidence === undefined) return '';
+  return `\n${currentCompanyEvidence(context.companyEvidence, now).length > 0 ? COMPANY_EVIDENCE_RULE : NO_COMPANY_EVIDENCE_RULE}`;
+}
+
+export function buildInterviewPrepPrompt(context: InterviewPrepContext, now: Date = new Date()): string {
   const untrustedVacancyRule = context.jdSnapshot ? `\n${UNTRUSTED_VACANCY_RULE}` : '';
+  const companyEvidenceSection =
+    context.companyEvidence === undefined ? '' : companyEvidenceBlock(context.companyEvidence, now);
 
   return `${roleFraming(context)}
 
@@ -208,13 +229,13 @@ ${GROUNDING_RULES}${untrustedVacancyRule}
 ${INTERVIEW_PREP_EXTRA_RULES}
 ${PROVENANCE_RULE}
 ${jdProvenanceRule(context)}
-${STAR_RULE}
+${STAR_RULE}${companyEvidenceRule(context, now)}
 This is a review-only preparation pack: never claim to know how any past interview for this candidate went, and never promise this preparation guarantees an outcome.
 
 ${headings()}
 
 ${applicationContextBlock(context)}${savedJobBlock(context)}
-${jdBlock(context)}
+${jdBlock(context)}${companyEvidenceSection}
 ${cvBlock(context)}
 ${letterBlock(context)}`;
 }

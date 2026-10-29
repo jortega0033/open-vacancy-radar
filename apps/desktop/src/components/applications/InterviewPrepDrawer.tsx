@@ -15,6 +15,8 @@ import { Dialog } from '../shell/Dialog.js';
 import { INTERVIEW_PREPARABLE_STATUSES } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
 import { buildInterviewPrepPrompt, type InterviewPrepContext, type InterviewPrepStage } from './interview-prep-prompt.js';
+import { CompanyEvidencePanel } from './CompanyEvidencePanel.js';
+import type { CompanyEvidenceProseFact } from '../../../electron/company-evidence.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
 export interface InterviewPrepDrawerProps {
@@ -67,6 +69,10 @@ export function InterviewPrepDrawer({
   const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
   const [attemptsError, setAttemptsError] = useState<string>();
   const { provider, providerStatus } = useEffectiveProvider();
+  // #689: sourced company facts the support policy approved, or undefined until they have loaded (and
+  // on a build with no such bridge, where the prompt says nothing about company evidence at all).
+  const [companyEvidence, setCompanyEvidence] = useState<CompanyEvidenceProseFact[] | undefined>(undefined);
+  const [evidenceVersion, setEvidenceVersion] = useState(0);
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [copyError, setCopyError] = useState<string>();
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
@@ -102,6 +108,24 @@ export function InterviewPrepDrawer({
       cancelled = true;
     };
   }, [application.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCompanyEvidence(undefined);
+    if (typeof window.companyEvidence?.prose !== 'function') return undefined;
+    void window.companyEvidence
+      .prose({ applicationId: application.id })
+      .then((result) => {
+        if (!cancelled) setCompanyEvidence(result.ok ? result.facts : []);
+      })
+      .catch(() => {
+        // Evidence is optional: fail to "none on file", never to an unchecked list.
+        if (!cancelled) setCompanyEvidence([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [application.id, evidenceVersion]);
 
   const context = useMemo<InterviewPrepContext | null>(() => {
     const status = application.status;
@@ -139,8 +163,9 @@ export function InterviewPrepDrawer({
           : null,
       cv: cv ? { name: cv.name, text: cv.text } : null,
       letter: letter ? { type: letter.type, body: letter.body } : null,
+      ...(companyEvidence === undefined ? {} : { companyEvidence }),
     };
-  }, [application, savedJobs, cvDocuments, letters, attempts]);
+  }, [application, savedJobs, cvDocuments, letters, attempts, companyEvidence]);
 
   const attemptsLoaded = attempts !== null;
   const providerUnavailable = providerStatus && !providerStatus.installed;
@@ -214,6 +239,12 @@ export function InterviewPrepDrawer({
                   {attemptsError}
                 </ErrorBanner>
               )}
+
+              <CompanyEvidencePanel
+                target={{ applicationId: application.id }}
+                reloadKey={application.id}
+                onChanged={() => setEvidenceVersion((version) => version + 1)}
+              />
 
               <div className="flex flex-wrap items-center gap-2">
                 <button className="btn btn-primary" type="button" onClick={handleRun} disabled={!canRun}>

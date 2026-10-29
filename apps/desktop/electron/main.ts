@@ -64,6 +64,9 @@ import type { ApplicationQueueEvent } from './application-queue-types.js';
 import { ApplicationDataResetGate } from './application-data-reset-gate.js';
 import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
 import { readPostingVerification } from './application-posting-verification.js';
+import { runCompanyResearchSession } from './company-evidence-research.js';
+import { createCompanyEvidenceHandlers } from './company-evidence-ipc.js';
+import { CompanyEvidenceRuns, proseEvidence, type CompanyEvidenceDeps } from './company-evidence-service.js';
 import {
   recoverInterruptedApplicationAttempts,
   resumeApplicationAttempt,
@@ -2130,6 +2133,26 @@ async function fetchOnDemandJobDescription(canonicalUrl: string): Promise<string
   return workableJob === null ? null : (await fetchWorkableJobDetail(http, workableJob)).description;
 }
 
+// #689: company evidence. One run registry for the process so a data reset can cancel every
+// in-flight research or refresh before it clears the tables they write to.
+const companyEvidenceRuns = new CompanyEvidenceRuns();
+
+async function companyEvidenceDeps(): Promise<CompanyEvidenceDeps> {
+  const db = await ensureWorkspaceDb();
+  return {
+    db,
+    now: () => new Date(),
+    // The same shared safe-HTTP client #687 uses: public-address validation, origin-locked
+    // redirects; the evidence code asks it for no cache and no retries.
+    getHttp: ensureApplicationJdHttpClient,
+    // The EXISTING web-only research capability. The input type carries a company name, its
+    // verified host, a role title and topic names, and nothing else.
+    runResearch: async (input, signal) =>
+      runCompanyResearchSession(client, { input, cwd: await ensureAiWorkspaceDir(), signal }),
+    log: (message, meta) => console.warn(`[company-evidence] ${message}`, meta ?? {}),
+  };
+}
+
 async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
   const db = await ensureWorkspaceDb();
   return {
@@ -2170,6 +2193,11 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
     // description fetch uses. Built lazily so an app that never prepares anything never opens the engine DB.
     async verifyPosting(input) {
       return createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+    },
+    // #689: the drafting stage reads only what the support policy already approved from the local
+    // store. It never starts research and never fetches.
+    async loadCompanyEvidence(attempt) {
+      return proseEvidence(await companyEvidenceDeps(), { attemptId: attempt.id }, 'letter');
     },
     async fetchMissingJobDescription(canonicalUrl: string) {
       const description = await fetchOnDemandJobDescription(canonicalUrl);
@@ -2327,6 +2355,26 @@ guardedIpc.handle('application-pipeline:refresh-from-posting', async (_event, in
     return result;
   });
 });
+
+const companyEvidenceHandlers = createCompanyEvidenceHandlers({
+  service: companyEvidenceDeps,
+  runs: companyEvidenceRuns,
+  mutate: (task) => applicationDataResetGate.runMutation(task),
+});
+// Literal channel names on purpose: the sender-guard test reads this file to prove every channel is guarded.
+guardedIpc.handle('company-evidence:get', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:get']!(input));
+guardedIpc.handle('company-evidence:prose', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:prose']!(input));
+guardedIpc.handle('company-evidence:confirm-domain', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:confirm-domain']!(input));
+guardedIpc.handle('company-evidence:add-fact', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:add-fact']!(input));
+guardedIpc.handle('company-evidence:confirm-fact', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:confirm-fact']!(input));
+guardedIpc.handle('company-evidence:correct-fact', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:correct-fact']!(input));
+guardedIpc.handle('company-evidence:withdraw-fact', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:withdraw-fact']!(input));
+guardedIpc.handle('company-evidence:resolve-contradiction', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:resolve-contradiction']!(input));
+guardedIpc.handle('company-evidence:decide-link', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:decide-link']!(input));
+guardedIpc.handle('company-evidence:delete', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:delete']!(input));
+guardedIpc.handle('company-evidence:refresh', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:refresh']!(input));
+guardedIpc.handle('company-evidence:research', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:research']!(input));
+guardedIpc.handle('company-evidence:cancel', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:cancel']!(input));
 
 guardedIpc.handle('application-pipeline:attach-letter', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
@@ -3233,6 +3281,8 @@ guardedIpc.handle('workspace:data:reset', async () => {
 
     // A scout run reads the roster and observation files this reset may clear.
     await sourceScout.cancel();
+    // #689: an in-flight company research or refresh would write to tables this reset clears.
+    companyEvidenceRuns.cancelAll();
     closeAllApplicationReviews();
     const queueStatus = await daemonGetJson('/v2/applications');
     const lease = queueStatus?.lease;
