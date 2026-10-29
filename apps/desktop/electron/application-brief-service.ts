@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { vacancyIdentityFor, type DiscoveryVacancyAudit, type VacancyIdentity } from '@open-vacancy-radar/vacancy-engine';
 import {
+  BRIEF_WORKFLOW_VERSION,
   composeBriefView,
   evaluateAssessment,
   freezeBrief,
@@ -583,12 +584,13 @@ async function build(deps: BriefServiceDeps, target: BriefTarget): Promise<Built
       stored.inputs.cvHash !== cvHash ||
       stored.inputs.jdHash !== brief.jdHash ||
       stored.inputs.overlayId !== picked.overlay.id ||
+      stored.inputs.workflowVersion !== BRIEF_WORKFLOW_VERSION ||
       JSON.stringify(stored.summary) !== JSON.stringify(fresh);
     if (changed && brief.jdHash !== null && cvHash !== null) {
       saveAssessment(
         deps.db,
         brief.id,
-        { summary: fresh, inputs: { cvId: cv.id, cvHash, jdHash: brief.jdHash, overlayId: picked.overlay.id, derivedAt: now.toISOString() } },
+        { summary: fresh, inputs: { cvId: cv.id, cvHash, jdHash: brief.jdHash, overlayId: picked.overlay.id, derivedAt: now.toISOString(), workflowVersion: BRIEF_WORKFLOW_VERSION } },
         { jdHash: brief.jdHash, factsVersion: brief.factsVersion },
         now,
       );

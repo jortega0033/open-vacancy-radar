@@ -8,6 +8,7 @@ import { SavedJobFilterBox } from './SavedJobFilterBox.js';
 import { toSavedJobInput } from './saved-job-input.js';
 import { newestAttemptBySavedJob } from './saved-job-application.js';
 import { SavedJobsTable } from './SavedJobsTable.js';
+import { AssessSelectedJobs } from './AssessSelectedJobs.js';
 
 type DrawerState = { mode: 'add' } | { mode: 'edit'; job: SavedJobRecord };
 
@@ -81,6 +82,8 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
   /** The newest attempt per saved job (#467), so each row says where its application stands. */
   const [attemptsByJobId, setAttemptsByJobId] = useState<ReadonlyMap<string, ApplicationAttemptRecord>>(() => new Map());
   const [explained, setExplained] = useState(readExplained);
+  /** #688: the jobs ticked for "Assess selected jobs". Ticking starts nothing. */
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [autoApplyEnabled, setAutoApplyEnabled] = useState(false);
 
   useEffect(() => {
@@ -132,6 +135,16 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
       cancelled = true;
     };
   }, []);
+
+  const toggleSelected = useCallback((job: SavedJobRecord) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(job.id)) next.add(job.id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const selectedJobs = useMemo(() => (jobs ?? []).filter((job) => selectedIds.has(job.id)), [jobs, selectedIds]);
 
   const dismissExplanation = useCallback(() => {
     setExplained(true);
@@ -348,6 +361,8 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
         />
       )}
 
+      <AssessSelectedJobs selected={selectedJobs} onClearSelection={clearSelection} onFinished={() => void refreshAttempts()} />
+
       {!isLoading && filteredJobs.length > 0 && (
         <div className="mt-4">
           <SavedJobsTable
@@ -358,6 +373,8 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
             onPrepareApplication={handlePrepare}
             preparingJobIds={preparingJobIds}
             attemptsByJobId={attemptsByJobId}
+            selectedIds={selectedIds}
+            onToggleSelected={toggleSelected}
             {...(onViewApplicationAttempt ? { onOpenReview: onViewApplicationAttempt } : {})}
           />
         </div>

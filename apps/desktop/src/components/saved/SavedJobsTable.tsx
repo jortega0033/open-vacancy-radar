@@ -19,6 +19,9 @@ export interface SavedJobsTableProps {
   attemptsByJobId?: ReadonlyMap<string, ApplicationAttemptRecord>;
   /** Opens the job's attempt in the Applications review queue. */
   onOpenReview?: (attemptId: string) => void;
+  /** #688: the ticked jobs for "Assess selected jobs". Selecting starts nothing. */
+  selectedIds?: ReadonlySet<string>;
+  onToggleSelected?: (job: SavedJobRecord) => void;
 }
 
 const TONE_BADGE: Record<ReturnType<typeof describeSavedJobApplication>['tone'], string> = {
@@ -49,6 +52,8 @@ export function SavedJobsTable({
   preparingJobIds,
   attemptsByJobId,
   onOpenReview,
+  selectedIds,
+  onToggleSelected,
 }: SavedJobsTableProps) {
   return (
     <div className="saved-jobs-table-shell">
@@ -81,7 +86,20 @@ export function SavedJobsTable({
             return (
             <tr key={job.id} className="ovr-row hover:bg-base-200">
               <td data-label="Role" className="font-medium">
-                {job.role}
+                {onToggleSelected ? (
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm mt-0.5"
+                      checked={selectedIds?.has(job.id) ?? false}
+                      onChange={() => onToggleSelected(job)}
+                      aria-label={`Select ${job.role} at ${job.company} for assessment`}
+                    />
+                    <span>{job.role}</span>
+                  </label>
+                ) : (
+                  job.role
+                )}
               </td>
               <td data-label="Company" className="text-base-content/80">
                 {job.company}

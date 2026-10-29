@@ -388,6 +388,31 @@ describe('version invalidation', () => {
     expect(brief.relevance.reason).toContain('saved your search profile after this scan');
   });
 
+  it('a summary kept from an older brief version is history only, and a current assessment re-derives under the current one', async () => {
+    const cv = seedCv();
+    const row = world.rows.get('gh:1001')!;
+    const job = saveJob(row);
+    seedAssessment(row, cv.id);
+    expect((await view(job.id)).assessment.state).toBe('current');
+    // Pretend the stored summary was written by an older version of the brief.
+    const stored = briefStore.listBriefs(db)[0]!;
+    db.update(schema.applicationBriefs)
+      .set({ assessment: { ...stored.assessment!, inputs: { ...stored.assessment!.inputs, workflowVersion: 'application-brief-v0' } } })
+      .run();
+    // The overlay still matches, so the current rules simply re-derive it.
+    expect((await view(job.id)).assessment.state).toBe('current');
+    expect(briefStore.listBriefs(db)[0]!.assessment!.inputs.workflowVersion).toBe('application-brief-v1');
+
+    // Once the grounded assessment itself is gone, only the old summary is left, and it says why it is only history.
+    db.update(schema.applicationBriefs)
+      .set({ assessment: { ...stored.assessment!, inputs: { ...stored.assessment!.inputs, workflowVersion: 'application-brief-v0' } } })
+      .run();
+    db.delete(schema.cvEvidenceOverlays).run();
+    const history = await view(job.id);
+    expect(history.assessment.state).toBe('stale');
+    expect(history.assessment.reason).toContain('older version of the brief');
+  });
+
   it('submitted evidence, the attempt and the pinned brief are never rewritten by any of those changes', async () => {
     const cv = seedCv();
     const row = world.rows.get('gh:1001')!;
@@ -858,11 +883,11 @@ describe('pure policy', () => {
   });
 
   it('describes a batch honestly: only a fully assessed batch is "Finished"', () => {
-    expect(describeBatchOutcome({ total: 3, assessed: 3, unassessed: 0, failed: 0, cancelled: 0, discarded: 0 }, false)).toBe('Finished: 3 of 3 assessed.');
-    expect(describeBatchOutcome({ total: 5, assessed: 2, unassessed: 1, failed: 1, cancelled: 1, discarded: 0 }, true)).toBe(
-      'Stopped: 2 of 5 assessed, 1 failed, 1 could not be assessed, 1 not started.',
+    expect(describeBatchOutcome({ total: 3, assessed: 3, partial: 0, unassessed: 0, failed: 0, cancelled: 0, discarded: 0 }, false)).toBe('Finished: 3 of 3 assessed.');
+    expect(describeBatchOutcome({ total: 5, assessed: 2, partial: 0, unassessed: 1, failed: 1, cancelled: 1, discarded: 0 }, true)).toBe(
+      'Stopped: 2 of 5 assessed, 1 failed, 1 could not be assessed, 1 not finished.',
     );
-    expect(describeBatchOutcome({ total: 2, assessed: 1, unassessed: 0, failed: 0, cancelled: 0, discarded: 1 }, false)).toContain('Finished with gaps');
+    expect(describeBatchOutcome({ total: 2, assessed: 1, partial: 0, unassessed: 0, failed: 0, cancelled: 0, discarded: 1 }, false)).toContain('Finished with gaps');
     expect(BATCH_LIMITS).toMatchObject({ maxJobs: 5, concurrency: 1, passesPerJob: 2 });
   });
 

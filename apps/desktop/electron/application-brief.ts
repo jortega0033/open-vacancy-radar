@@ -431,6 +431,8 @@ export interface AssessmentInputs {
   jdHash: string;
   overlayId: string;
   derivedAt: string;
+  /** The `BRIEF_WORKFLOW_VERSION` whose rules summarised it. A summary kept from another version is history only. */
+  workflowVersion: string;
 }
 
 export interface StoredAssessment {
@@ -514,7 +516,10 @@ export function evaluateAssessment(input: {
   if (stored !== null) {
     return {
       state: 'stale',
-      reason: input.cvChangedSinceAssessment
+      reason:
+        stored.inputs.workflowVersion !== BRIEF_WORKFLOW_VERSION
+          ? 'This earlier assessment was summarised by an older version of the brief, so it is kept as history only. Assess the job again to refresh it.'
+          : input.cvChangedSinceAssessment
         ? 'You are now using a different CV than the one this job was assessed against.'
         : 'The assessment this summary came from is no longer in your library.',
       summary: stored.summary,
@@ -892,19 +897,26 @@ export function freezeBrief(view: ApplicationBriefView): FrozenBrief {
 /** One honest summary line for a finished or interrupted "Assess selected jobs" action. */
 export interface BatchTally {
   total: number;
+  /** Read end to end and saved. */
   assessed: number;
+  /** Saved, but only part of the posting's requirements was read (the per-job request cap was reached). */
+  partial: number;
+  /** Refused before any request (no CV, no posting text, already current, ...). */
   unassessed: number;
   failed: number;
+  /** Not started, or stopped mid-way, because the person cancelled or the time limit was reached. */
   cancelled: number;
+  /** Finished, but the inputs changed meanwhile, so the result was thrown away. */
   discarded: number;
 }
 
 export function describeBatchOutcome(tally: BatchTally, cancelled: boolean): string {
   const parts: string[] = [`${tally.assessed} of ${tally.total} assessed`];
+  if (tally.partial > 0) parts.push(`${tally.partial} only partly read`);
   if (tally.failed > 0) parts.push(`${tally.failed} failed`);
   if (tally.unassessed > 0) parts.push(`${tally.unassessed} could not be assessed`);
   if (tally.discarded > 0) parts.push(`${tally.discarded} result${tally.discarded === 1 ? '' : 's'} discarded because the inputs changed`);
-  if (tally.cancelled > 0) parts.push(`${tally.cancelled} not started`);
+  if (tally.cancelled > 0) parts.push(`${tally.cancelled} not finished`);
   const complete = tally.assessed === tally.total;
   return `${complete ? 'Finished' : cancelled ? 'Stopped' : 'Finished with gaps'}: ${parts.join(', ')}.`;
 }

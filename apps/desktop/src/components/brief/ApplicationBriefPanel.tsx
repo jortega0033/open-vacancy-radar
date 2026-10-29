@@ -246,7 +246,7 @@ export function ApplicationBriefPanel({ target, reloadKey }: ApplicationBriefPan
           <ul className="mt-1 list-disc space-y-0.5 pl-4">
             {view.notices.slice(0, 4).map((notice) => (
               <li key={`${notice.at}-${notice.text}`}>
-                {notice.text} <span className="text-base-content/50">({formatDay(notice.at)})</span>
+                {notice.text} <span className="text-base-content/60">({formatDay(notice.at)})</span>
               </li>
             ))}
           </ul>
@@ -272,7 +272,7 @@ export function ApplicationBriefPanel({ target, reloadKey }: ApplicationBriefPan
                 Technical {relevance.fits.technical} · Role {relevance.fits.role} · Seniority {relevance.fits.seniority}
               </p>
             )}
-            {relevance.reason && <p className="text-xs text-warning-content/90 text-base-content">{relevance.reason}</p>}
+            {relevance.reason && <p className="text-xs">{relevance.reason}</p>}
             {relevance.signals.length > 0 && (
               <p className="text-sm">
                 <span className="font-medium">Matches what you are looking for:</span> {relevance.signals.join(', ')}
