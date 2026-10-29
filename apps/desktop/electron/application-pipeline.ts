@@ -149,6 +149,12 @@ export interface ApplicationPipelineDeps {
    */
   fetchMissingJobDescription?(canonicalUrl: string): Promise<{ description: string; complete: boolean } | null>;
   /**
+   * #688: records the application brief as it reads when preparation starts, so the review can show what
+   * the person knew then. Insert-only and best-effort: a failure is logged and never blocks preparation,
+   * and nothing it stores is ever rewritten by a later change to the posting, the CV or a preference.
+   */
+  pinApplicationBrief?(attempt: ApplicationAttemptRecord): Promise<void>;
+  /**
    * The ONE bounded, authoritative check of the live posting (#687), run when an attempt is prepared
    * or resumed even though a stored snapshot exists. Reuses a stored finding younger than the
    * freshness window; see `application-posting-verification.ts`. Absent means no check at all, and
@@ -336,6 +342,13 @@ export async function startApplicationAttempt(
     throw err;
   }
 
+  if (deps.pinApplicationBrief) {
+    try {
+      await deps.pinApplicationBrief(attempt);
+    } catch (error) {
+      deps.log?.('application brief could not be pinned', { attemptId: attempt.id, error: describeError(error) });
+    }
+  }
   await enqueueApplicationAttempt(deps, attempt.id);
   return {
     ok: true,

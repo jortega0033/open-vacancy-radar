@@ -56,6 +56,7 @@ import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
 import { deleteAllCompanyEvidence } from './company-evidence-store.js';
+import { deleteAllApplicationBriefs, pruneUnreferencedBriefs } from './application-brief-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -337,6 +338,9 @@ export function deleteSavedJob(db: WorkspaceDb, id: string): DeleteResult {
   // the `applications` table in `schema.ts`), so deleting the saved job here does not touch them --
   // it only clears the link.
   const removed = db.delete(savedJobs).where(eq(savedJobs.id, id)).returning({ id: savedJobs.id }).all();
+  // #688: a brief nobody references any more (no saved job, no attempt) goes with the last reference.
+  // Pinned preparation copies follow their attempt, not the brief, and are untouched.
+  if (removed.length > 0) pruneUnreferencedBriefs(db);
   return { deleted: removed.length > 0 };
 }
 
@@ -3059,6 +3063,8 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       // #689: counted and deleted explicitly (not left to a cascade) so the reset reports them and no
       // evidence record, fact, link or "what the letter used" snapshot can survive it.
       ...deleteAllCompanyEvidence(tx),
+      // #688: the application briefs, their source references and the pinned preparation copies.
+      ...deleteAllApplicationBriefs(tx),
     };
 
     tx.delete(applicationAttempts).run();

@@ -5,6 +5,7 @@ import { Dialog } from '../shell/Dialog.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
 import { PostingVerificationNotice } from './PostingVerificationNotice.js';
 import { CompanyEvidencePanel } from './CompanyEvidencePanel.js';
+import { ApplicationBriefPanel } from '../brief/ApplicationBriefPanel.js';
 
 export interface ApplicationAttemptDrawerProps {
   attempt: ApplicationAttemptRecord;
@@ -117,6 +118,9 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
               {recoveryError}
             </div>
           )}
+
+          {/* #688: the brief this application was prepared from, plus what you knew when you started. */}
+          <ApplicationBriefPanel target={{ attemptId: attempt.id }} reloadKey={attempt.updatedAt} />
 
           <PostingVerificationNotice
             attemptId={attempt.id}

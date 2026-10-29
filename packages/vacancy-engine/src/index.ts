@@ -19,6 +19,8 @@ export {
   type GlobalRemoteScanOptions,
   type GlobalRemoteScanResult,
 } from './pipeline/global-remote.js';
+// Canonical job identity (#278), so a host can recognise two source copies of one requisition (#688).
+export { vacancyIdentityFor, type VacancyIdentity, type VacancyIdentityKind } from './vacancies/identity.js';
 export { readGlobalRemoteReport, readGlobalRemoteReportWithFallback, type LoadedGlobalRemoteReport } from './global-remote/report.js';
 export { createDatabaseBackedAtsHttpClient } from './pipeline/ats-http-client.js';
 export { AtsResponseError, type AtsHttpClient, type AtsHttpRequestOptions, type AtsHttpResponse } from './ats/http.js';

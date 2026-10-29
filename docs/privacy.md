@@ -261,6 +261,19 @@ stored in the local workspace database and goes nowhere else.
   (which deletes every evidence table). Deleting or correcting evidence does not change a document already prepared;
   a prepared letter keeps its own record of the sourced claims it used until that attempt is deleted. See
   [company-evidence.md](company-evidence.md).
+- **Application brief** (#688): one decision record per job, kept in `workspace.db`: the scan's own score and
+  reasons, work-eligibility answers with their sources, every original source link of the job, the posting text
+  saved with it (cut at 80,000 characters), a summary of the CV assessment with the versions it was made under, and
+  a short list of why a section went out of date. The assessment summary, in the brief and in its pinned copy, keeps
+  short labels derived from your CV for each strength: a role title and employer, a project name, or the first 80
+  characters of a statement you confirmed. It holds no other CV text, and no letters or notes. Viewing it makes no
+  request and starts no model session. The only AI in this feature is the explicit "Assess selected jobs" action,
+  which sends the posting text, your CV text (shortened to fit the request) and the roles, employers and projects from
+  your reviewed CV details to your chosen provider after a confirmation that names the limits (see
+  [application-brief.md](application-brief.md)). A copy of the brief as it read when you started
+  preparing an application is kept with that attempt and is never rewritten. Retained until you delete the last saved
+  job and application for that job, delete `workspace.db`, or use Settings > Advanced > Reset application data
+  (which deletes all three brief tables).
 - **Saved application answers**: retained until you edit or delete them from Settings > Workspace >
   Saved application answers, or delete `workspace.db` directly; Settings > Advanced > Reset
   application data removes them too, alongside the other application-related tables listed above.

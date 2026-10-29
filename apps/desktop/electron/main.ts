@@ -66,7 +66,9 @@ import { runFieldMapGeneration, runTextGeneration } from './application-generati
 import { readPostingVerification } from './application-posting-verification.js';
 import { runCompanyResearchSession } from './company-evidence-research.js';
 import { createCompanyEvidenceHandlers } from './company-evidence-ipc.js';
-import { CompanyEvidenceRuns, proseEvidence, type CompanyEvidenceDeps } from './company-evidence-service.js';
+import { CompanyEvidenceRuns, getView as companyEvidenceView, proseEvidence, type CompanyEvidenceDeps } from './company-evidence-service.js';
+import { createApplicationBriefHandlers } from './application-brief-ipc.js';
+import { getBrief, pinForAttempt, summariseCompanyView, type BriefServiceDeps } from './application-brief-service.js';
 import {
   recoverInterruptedApplicationAttempts,
   resumeApplicationAttempt,
@@ -2153,6 +2155,40 @@ async function companyEvidenceDeps(): Promise<CompanyEvidenceDeps> {
   };
 }
 
+/**
+ * #688: the application brief's inputs. Everything here is a LOCAL read (the stored scan row, the saved
+ * profile, the stored #687 finding, the #689 evidence tables); nothing starts a model session or a request.
+ */
+async function applicationBriefDeps(): Promise<BriefServiceDeps> {
+  const db = await ensureWorkspaceDb();
+  return {
+    db,
+    now: () => new Date(),
+    findReportRow(vacancyKey) {
+      const report = latestVacancyReport;
+      const row = report?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+      return report && row ? { row, runId: report.runId, generatedAt: report.generatedAt, profileVersion: report.profileVersion } : null;
+    },
+    async loadProfile() {
+      try {
+        return await loadCandidateProfile(await candidateProfilePath());
+      } catch {
+        return null;
+      }
+    },
+    postingView: (attemptId) => readPostingVerification({ db }, attemptId),
+    companyEvidence(attemptId) {
+      const now = new Date();
+      return summariseCompanyView(companyEvidenceView({ db, now: () => now }, { attemptId }), now);
+    },
+    // The same serialized profile writer `vacancy:save-search-profile` uses; the reset gate is already held by the caller.
+    async saveProfilePatch(patch) {
+      await saveSearchProfilePatch(patch);
+    },
+    log: (message, meta) => console.warn(`[application-brief] ${message}`, meta ?? {}),
+  };
+}
+
 async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
   const db = await ensureWorkspaceDb();
   return {
@@ -2198,6 +2234,10 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
     // store. It never starts research and never fetches.
     async loadCompanyEvidence(attempt) {
       return proseEvidence(await companyEvidenceDeps(), { attemptId: attempt.id }, 'letter');
+    },
+    // #688: the brief as it reads when preparation starts. Local reads only; never blocks preparation.
+    async pinApplicationBrief(attempt) {
+      await pinForAttempt(await applicationBriefDeps(), attempt.id);
     },
     async fetchMissingJobDescription(canonicalUrl: string) {
       const description = await fetchOnDemandJobDescription(canonicalUrl);
@@ -2375,6 +2415,16 @@ guardedIpc.handle('company-evidence:delete', (_event, input: unknown) => company
 guardedIpc.handle('company-evidence:refresh', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:refresh']!(input));
 guardedIpc.handle('company-evidence:research', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:research']!(input));
 guardedIpc.handle('company-evidence:cancel', (_event, input: unknown) => companyEvidenceHandlers['company-evidence:cancel']!(input));
+
+const applicationBriefHandlers = createApplicationBriefHandlers({
+  service: applicationBriefDeps,
+  mutate: (task) => applicationDataResetGate.runMutation(task),
+});
+// Literal channel names on purpose: the sender-guard test reads this file to prove every channel is guarded.
+guardedIpc.handle('application-brief:get', (_event, input: unknown) => applicationBriefHandlers['application-brief:get']!(input));
+guardedIpc.handle('application-brief:prepare-assessment', (_event, input: unknown) => applicationBriefHandlers['application-brief:prepare-assessment']!(input));
+guardedIpc.handle('application-brief:commit-assessment', (_event, input: unknown) => applicationBriefHandlers['application-brief:commit-assessment']!(input));
+guardedIpc.handle('application-brief:correct-preference', (_event, input: unknown) => applicationBriefHandlers['application-brief:correct-preference']!(input));
 
 guardedIpc.handle('application-pipeline:attach-letter', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
@@ -3163,29 +3213,31 @@ function nextProfileVersion(): string {
  * keys its cached deterministic scores off this version, so a save that left it unchanged would let
  * stale scores survive a profile edit.
  */
-guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
-  return applicationDataResetGate.runMutation(() => {
-    const patch = parseCandidateProfilePatch(rawPatch);
-    return withProfileSaveQueue(async () => {
-      const path = await candidateProfilePath();
-      const current = await loadCandidateProfile(path);
-      const next: CandidateProfile = candidateProfileSchema.parse({
-        ...current,
-        ...patch,
-        constraints: { ...current.constraints, ...patch.constraints },
-        fieldSources: mergeFieldSources(current.fieldSources, patch),
-        profileVersion: nextProfileVersion(),
-      });
-      const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-      try {
-        await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-        await rename(temporary, path);
-      } finally {
-        await rm(temporary, { force: true });
-      }
-      return next;
+function saveSearchProfilePatch(rawPatch: unknown): Promise<CandidateProfile> {
+  const patch = parseCandidateProfilePatch(rawPatch);
+  return withProfileSaveQueue(async () => {
+    const path = await candidateProfilePath();
+    const current = await loadCandidateProfile(path);
+    const next: CandidateProfile = candidateProfileSchema.parse({
+      ...current,
+      ...patch,
+      constraints: { ...current.constraints, ...patch.constraints },
+      fieldSources: mergeFieldSources(current.fieldSources, patch),
+      profileVersion: nextProfileVersion(),
     });
+    const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    return next;
   });
+}
+
+guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
+  return applicationDataResetGate.runMutation(() => saveSearchProfilePatch(rawPatch));
 });
 
 async function searchPlanPath(): Promise<string> {
@@ -3343,9 +3395,17 @@ guardedIpc.handle('workspace:data:reset', async () => {
 guardedIpc.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
-  applicationDataResetGate.runMutation(async () =>
-    workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
-  ),
+  applicationDataResetGate.runMutation(async () => {
+    const created = workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input));
+    // #688: take the brief's scan facts and posting text NOW, while the scan row is still loaded, so the
+    // brief exists (and survives the next scan replacing the report). Local only; never fails the save.
+    try {
+      await getBrief(await applicationBriefDeps(), { savedJobId: created.id });
+    } catch (error) {
+      console.warn('[application-brief] could not capture the brief for a new saved job', error instanceof Error ? error.name : 'unknown');
+    }
+    return created;
+  }),
 );
 
 guardedIpc.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
