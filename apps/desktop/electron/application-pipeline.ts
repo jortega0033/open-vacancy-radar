@@ -17,6 +17,8 @@ import {
 } from './application-cover-letter.js';
 import type { CompanyEvidenceProseFact } from './company-evidence.js';
 import { recordEvidenceUses } from './workspace/company-evidence-store.js';
+import { currentDrafts, recordPreparedDraft } from './workspace/application-critique-store.js';
+import { draftContentHash, type DraftKind, type LetterDraftContent } from './application-critique.js';
 import {
   applyApplicationFieldMap,
   closeApplicationReview,
@@ -51,6 +53,7 @@ import { cvDocumentToTailoredResume } from './cv-export.js';
 import type { TailoredResume } from './resume-schema.js';
 import {
   generateApplicationTailoredResume,
+  validateGeneratedResume,
   type ApplicationTailoringGenerationResult,
 } from './application-tailoring.js';
 import * as workspace from './workspace/repository.js';
@@ -602,6 +605,49 @@ interface RequestedLetter {
   body: string;
 }
 
+/** The current accepted-revision draft of a kind, if it still describes this attempt's inputs. */
+function reusableRevisionDraft(db: WorkspaceDb, attempt: ApplicationAttemptRecord, cv: CvDocumentRecord, kind: DraftKind) {
+  const draft = currentDrafts(db, attempt.id).find((candidate) => candidate.kind === kind && candidate.origin === 'critique_revision');
+  if (!draft) return undefined;
+  if (draft.jdHash !== attempt.jdSnapshotHash || draft.sourceCvHash !== attempt.sourceCvContentHash) return undefined;
+  if (sha256(cv.text) !== draft.sourceCvHash) return undefined;
+  if (draftContentHash(draft.content) !== draft.contentHash) return undefined;
+  return draft;
+}
+
+/** Records the exact draft a preparation just rendered (#690). Fenced; best effort, never blocks preparation. */
+function recordDraftOf(
+  run: PipelineRun,
+  attempt: ApplicationAttemptRecord,
+  kind: DraftKind,
+  input: {
+    content: Parameters<typeof recordPreparedDraft>[1]['content'];
+    artifactHash: string | undefined;
+    origin: Parameters<typeof recordPreparedDraft>[1]['origin'];
+    critiqueRunId: string | null;
+  },
+): void {
+  const artifactHash = input.artifactHash;
+  if (!artifactHash) return;
+  try {
+    fencedWrite(run, () =>
+      recordPreparedDraft(run.deps.db, {
+        attemptId: attempt.id,
+        kind,
+        origin: input.origin,
+        content: input.content,
+        artifactHash,
+        jdHash: attempt.jdSnapshotHash,
+        sourceCvHash: attempt.sourceCvContentHash,
+        critiqueRunId: input.critiqueRunId,
+        now: new Date(nowIso(run.deps)),
+      }),
+    );
+  } catch (error) {
+    run.deps.log?.('the prepared draft could not be recorded; the package cannot be reviewed', { attemptId: attempt.id, error: describeError(error) });
+  }
+}
+
 /**
  * Carries one attempt from `queued` to `ready` (or to an honest stop short of it).
  *
@@ -734,7 +780,32 @@ export async function runApplicationAttempt(
   let resume: TailoredResume;
   let tailoringSummary: string;
   let skillsMissing = false;
-  if (attempt.tailoringMode === 'original') {
+  // #690: a CV revision the person accepted from the independent critique outlives a re-preparation
+  // while the posting and the reviewed CV are unchanged, so preparing the form again never silently
+  // regenerates it away. Re-validated against the reviewed CV first; anything that no longer holds
+  // falls back to ordinary drafting.
+  const revisedCv = reusableRevisionDraft(deps.db, attempt, cv, 'cv');
+  let reusedCvVersion: { critiqueRunId: string | null; resume: TailoredResume; summary: string } | null = null;
+  if (revisedCv && revisedCv.content.type === 'cv' && attempt.tailoringMode === 'ai' && cv.source) {
+    let valid: boolean;
+    try {
+      valid = validateGeneratedResume(revisedCv.content.resume, cv).dropped.length === 0;
+    } catch {
+      valid = false;
+    }
+    if (valid) {
+      reusedCvVersion = {
+        critiqueRunId: revisedCv.critiqueRunId,
+        resume: revisedCv.content.resume,
+        summary: `CV revised after your review (version ${revisedCv.version}) from the reviewed source.`,
+      };
+    }
+  }
+  if (reusedCvVersion) {
+    // nothing to generate: the accepted revision is the CV
+    resume = reusedCvVersion.resume;
+    tailoringSummary = reusedCvVersion.summary;
+  } else if (attempt.tailoringMode === 'original') {
     resume = cvDocumentToTailoredResume(cv, profile);
     tailoringSummary = 'Original reviewed CV used by your explicit choice after automatic tailoring stopped.';
   } else {
@@ -776,6 +847,14 @@ export async function runApplicationAttempt(
   // every unsupported-target handoff to contain a letter, so an absent user-final letter is the
   // narrow pre-policy signal that this attempt needs an automatically generated cover letter.
   let usedCompanyEvidence: CompanyEvidenceProseFact[] = [];
+  // What each staged letter is, so the draft record names its author and the facts it was built from.
+  const letterMeta = new Map<
+    DraftKind,
+    Pick<LetterDraftContent, 'authored' | 'factIds' | 'companyClaims'> & { revisedFrom: string | null; reusedVersion: boolean }
+  >();
+  for (const requested of letters) {
+    letterMeta.set(requested.kind, { authored: 'user', factIds: [], companyClaims: [], revisedFrom: null, reusedVersion: false });
+  }
   if (letters.length === 0) {
     let companyEvidence: CompanyEvidenceProseFact[] = [];
     try {
@@ -784,6 +863,22 @@ export async function runApplicationAttempt(
       // Evidence is optional: a store problem never blocks a letter that does not need it.
       deps.log?.('company evidence unavailable for the letter; continuing without it', { error: describeError(err) });
     }
+    // #690: an accepted letter revision is reused (not regenerated) while every company claim it
+    // carries is still approved right now.
+    const revisedLetter = reusableRevisionDraft(deps.db, attempt, cv, 'cover_letter');
+    const currentClaims = new Set(companyEvidence.map((fact) => fact.claim));
+    const revisedContent = revisedLetter?.content.type === 'letter' ? revisedLetter.content : null;
+    if (revisedLetter && revisedContent && revisedContent.authored === 'generated' && revisedContent.companyClaims.every((claim) => currentClaims.has(claim))) {
+      letters = [{ kind: 'cover_letter', title: revisedContent.title, body: revisedContent.body }];
+      usedCompanyEvidence = companyEvidence.filter((fact) => revisedContent.companyClaims.includes(fact.claim));
+      letterMeta.set('cover_letter', {
+        authored: 'generated',
+        factIds: revisedContent.factIds,
+        companyClaims: revisedContent.companyClaims,
+        revisedFrom: revisedLetter.critiqueRunId,
+        reusedVersion: true,
+      });
+    } else
     try {
       const loadCompanyEvidence = deps.loadCompanyEvidence;
       const generated = await generateApplicationCoverLetterWithEvidence(
@@ -800,6 +895,13 @@ export async function runApplicationAttempt(
       );
       letters = [{ kind: 'cover_letter', title: 'Cover Letter', body: generated.body }];
       usedCompanyEvidence = generated.usedCompanyEvidence;
+      letterMeta.set('cover_letter', {
+        authored: 'generated',
+        factIds: generated.factIds ?? [],
+        companyClaims: generated.usedCompanyEvidence.map((fact) => fact.claim),
+        revisedFrom: null,
+        reusedVersion: false,
+      });
     } catch (err) {
       letterBlocker = `automatic cover letter generation stopped: ${describeError(err)}`;
     }
@@ -834,6 +936,12 @@ export async function runApplicationAttempt(
     );
     if (!staged) return abandoned(run, attemptId);
     stagedRecords = staged.records;
+    recordDraftOf(run, attempt, 'cv', {
+      content: { type: 'cv', resume, basis: reusedCvVersion ? 'revision' : attempt.tailoringMode === 'original' ? 'original' : 'tailored' },
+      artifactHash: stagedRecords.find((record) => record.kind === 'cv_pdf')?.contentHash,
+      origin: reusedCvVersion ? 'critique_revision' : 'prepared',
+      critiqueRunId: reusedCvVersion?.critiqueRunId ?? null,
+    });
   } catch (err) {
     // Not a failed document: a document this run was no longer entitled to write. No artifact row
     // was registered and none was taken away, and the attempt belongs to a newer run -- so this
@@ -863,6 +971,20 @@ export async function runApplicationAttempt(
       );
       if (!stagedLetter) return abandoned(run, attemptId);
       stagedRecords.push(stagedLetter);
+      const meta = letterMeta.get(letter.kind);
+      recordDraftOf(run, attempt, letter.kind, {
+        content: {
+          type: 'letter',
+          title: letter.title,
+          body: letter.body,
+          authored: meta?.authored ?? 'user',
+          factIds: meta?.factIds ?? [],
+          companyClaims: meta?.companyClaims ?? [],
+        },
+        artifactHash: stagedLetter.contentHash,
+        origin: meta?.reusedVersion ? 'critique_revision' : meta?.authored === 'generated' ? 'prepared' : 'user_letter',
+        critiqueRunId: meta?.revisedFrom ?? null,
+      });
     } catch (err) {
       // As above: an abandoned letter render is not a letter blocker to tell anyone about.
       if (err instanceof StagingAbandonedError) return abandoned(run, attemptId);
@@ -1099,7 +1221,7 @@ export async function attachLetterToAttempt(
 
   const cv = workspace.listCvDocuments(deps.db).find((document) => document.id === attempt.sourceCvId);
   try {
-    await stageLetterArtifact({
+    const staged = await stageLetterArtifact({
       db: deps.db,
       attemptId,
       kind: letter.type,
@@ -1109,6 +1231,20 @@ export async function attachLetterToAttempt(
       target: { company: attempt.company, role: attempt.role },
       storageRoot: deps.storageRoot,
     });
+    try {
+      recordPreparedDraft(deps.db, {
+        attemptId,
+        kind: letter.type,
+        origin: 'user_letter',
+        content: { type: 'letter', title: letter.title, body: letter.body, authored: 'user', factIds: [], companyClaims: [] },
+        artifactHash: staged.contentHash,
+        jdHash: attempt.jdSnapshotHash,
+        sourceCvHash: attempt.sourceCvContentHash,
+        now: new Date(nowIso(deps)),
+      });
+    } catch (error) {
+      deps.log?.('the attached letter could not be recorded for review', { attemptId, error: describeError(error) });
+    }
   } catch (err) {
     return { ok: false, attemptId, detail: `the letter could not be added: ${describeError(err)}` };
   }

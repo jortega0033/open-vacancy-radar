@@ -23,6 +23,7 @@ import type { SupportPromptState } from './support-prompt.js';
 import type { CompanyResearchDiagnostics } from '../company-evidence.js';
 import type { PreparedApplicationFields } from './types.js';
 import type { BriefNotice, BriefSourceFacts, FrozenBrief, StoredAssessment } from '../application-brief.js';
+import type { DraftContent, InputFence, RefusedFinding, StoredFinding, StoredProposal } from '../application-critique.js';
 
 /**
  * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
@@ -1003,4 +1004,70 @@ export const applicationBriefPins = sqliteTable('application_brief_pins', {
     .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
   snapshot: text('snapshot', { mode: 'json' }).notNull().$type<FrozenBrief>(),
   pinnedAt: integer('pinned_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+/**
+ * #690: the exact documents of a prepared package, as structured drafts. Before this the resume and the
+ * letter existed only as rendered PDFs, so "what was reviewed" could not be named, hashed or versioned.
+ *
+ * One row per (attempt, document, version). A re-preparation or an accepted critique revision appends
+ * the next version and marks the previous one `superseded`; rows are never edited in place except to
+ * re-tie an unchanged draft to the PDF that was re-rendered from it. `artifactHash` is the hash the
+ * document acceptance contract passed for the PDF this version produced, so a draft whose artifact has
+ * since changed or gone is known to be out of date without reading any file.
+ *
+ * Never written for a submitted/historical attempt (the store refuses), and cascades with the attempt.
+ */
+export const applicationDocumentDrafts = sqliteTable('application_document_drafts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  attemptId: text('attempt_id')
+    .notNull()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['cv', 'cover_letter', 'motivation_letter'] }).notNull(),
+  version: integer('version').notNull(),
+  origin: text('origin', { enum: ['prepared', 'user_letter', 'critique_revision'] }).notNull(),
+  status: text('status', { enum: ['current', 'superseded'] }).notNull().default('current'),
+  content: text('content', { mode: 'json' }).notNull().$type<DraftContent>(),
+  contentHash: text('content_hash').notNull(),
+  artifactHash: text('artifact_hash').notNull(),
+  /** The posting / source-CV hashes the attempt held when this version was made. */
+  jdHash: text('jd_hash').notNull(),
+  sourceCvHash: text('source_cv_hash').notNull(),
+  /** Which critique run proposed this version (null for prepared/user letters). A plain id, not a key. */
+  critiqueRunId: text('critique_run_id'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  supersededAt: integer('superseded_at', { mode: 'timestamp_ms' }),
+}, (table) => [
+  uniqueIndex('application_document_drafts_version_idx').on(table.attemptId, table.kind, table.version),
+  index('application_document_drafts_attempt_idx').on(table.attemptId),
+]);
+
+/**
+ * #690: the optional independent critique of one attempt's package. ONE row per attempt, replaced only
+ * by an explicit new review. `fence` is exactly which inputs the stored review describes; staleness is
+ * computed against it on every read. A failed, cancelled, timed-out or rate-limited run records only
+ * `lastRun*` and leaves the previous review and every document untouched.
+ */
+export const applicationCritiques = sqliteTable('application_critiques', {
+  attemptId: text('attempt_id')
+    .primaryKey()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  reviewedAt: integer('reviewed_at', { mode: 'timestamp_ms' }),
+  fence: text('fence', { mode: 'json' }).$type<InputFence | null>(),
+  findings: text('findings', { mode: 'json' }).notNull().$type<StoredFinding[]>().default([]),
+  refused: text('refused', { mode: 'json' }).notNull().$type<RefusedFinding[]>().default([]),
+  proposals: text('proposals', { mode: 'json' }).notNull().$type<StoredProposal[]>().default([]),
+  provider: text('provider').notNull().default(''),
+  model: text('model'),
+  /** Model calls this review made (always 1 when reviewed; a failed run is recorded in lastRun). */
+  callCount: integer('call_count').notNull().default(0),
+  /** Token usage exactly as the provider reported it, or null when none was reported. */
+  usage: text('usage', { mode: 'json' }).$type<{ inputTokens?: number; outputTokens?: number } | null>(),
+  lastRunOutcome: text('last_run_outcome', {
+    enum: ['reviewed', 'failed', 'cancelled', 'timed_out', 'provider_limit', 'invalid_output', 'discarded'],
+  }),
+  lastRunDetail: text('last_run_detail').notNull().default(''),
+  lastRunAt: integer('last_run_at', { mode: 'timestamp_ms' }),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });

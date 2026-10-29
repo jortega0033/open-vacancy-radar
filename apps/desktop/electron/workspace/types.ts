@@ -1039,6 +1039,9 @@ export interface ApplicationDataResetResult {
     applicationBriefs: number;
     applicationBriefAliases: number;
     applicationBriefPins: number;
+    /** #690: the independent critiques and the structured document drafts. */
+    applicationCritiques: number;
+    applicationDocumentDrafts: number;
   };
 }
 

@@ -69,18 +69,21 @@ ${cv.profile.skills.join(', ')}
 ${clamp(cv.text, GENERATION_INPUT_BUDGETS.sourceCvChars)}`;
 }
 
-export async function generateApplicationTailoredResume(
-  attempt: ApplicationAttemptRecord,
-  cv: CvDocumentRecord,
-  generate: (prompt: string) => Promise<ApplicationTailoringGenerationResult>,
-): Promise<ApplicationTailoringResult> {
+/**
+ * The evidence validators every model-proposed resume goes through before it can be rendered: the
+ * required sections must be present, then the resume is forced back onto the reviewed source
+ * (employers, dates, qualifications), skills must be in the reviewed profile, bullets and the summary
+ * must be exact reviewed facts. Anything the source does not support is removed and named in
+ * `dropped`; it is never kept.
+ *
+ * Extracted unchanged from `generateApplicationTailoredResume` so the independent critique (#690)
+ * checks a proposed revision with exactly the rules drafting uses, rather than a second copy that
+ * could drift. Throws when a required section is missing.
+ */
+export function validateGeneratedResume(parsed: TailoredResume, cv: CvDocumentRecord): ApplicationTailoringResult {
   if (!cv.source) {
     throw new Error('this CV has no reviewed source record. Review the CV source before automatic tailoring, or use the original CV.');
   }
-  const generated = await generate(buildApplicationTailoringPrompt(attempt, cv));
-  if (!generated.ok) throw new Error(generated.error ?? 'the AI tailoring session failed');
-
-  const parsed = parseTailoredResumeResponse(generated.text);
   const missingSections = [
     parsed.contact.name ? null : 'contact',
     cv.source.summary && !parsed.summary ? 'summary' : null,
@@ -135,4 +138,18 @@ export async function generateApplicationTailoredResume(
     },
     dropped,
   };
+}
+
+export async function generateApplicationTailoredResume(
+  attempt: ApplicationAttemptRecord,
+  cv: CvDocumentRecord,
+  generate: (prompt: string) => Promise<ApplicationTailoringGenerationResult>,
+): Promise<ApplicationTailoringResult> {
+  if (!cv.source) {
+    throw new Error('this CV has no reviewed source record. Review the CV source before automatic tailoring, or use the original CV.');
+  }
+  const generated = await generate(buildApplicationTailoringPrompt(attempt, cv));
+  if (!generated.ok) throw new Error(generated.error ?? 'the AI tailoring session failed');
+
+  return validateGeneratedResume(parseTailoredResumeResponse(generated.text), cv);
 }
