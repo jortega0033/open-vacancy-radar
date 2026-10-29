@@ -135,7 +135,7 @@ durable-store condition:
 
 | Route | Behavior |
 |---|---|
-| `GET /v2/stage-routing` | `{ schemaVersion: 1, stages: [...] }`: for each generation stage (CV field extraction, source-CV capture, gap analysis, CV tailoring, cover letter, application field map) its workload class, required provider capabilities, attempt ceiling, and which registered providers are eligible or rejected, with the reason |
+| `GET /v2/stage-routing` | `{ schemaVersion: 1, stages: [...] }`: for each generation stage (CV field extraction, source-CV capture, gap analysis, CV tailoring, cover letter, application critique, application field map) its workload class, required provider capabilities, attempt ceiling, and which registered providers are eligible or rejected, with the reason |
 
 It answers an eligibility question and does nothing else: no session is started, no model is
 selected, and there is no write path. A client uses it to explain *before* making a request why an

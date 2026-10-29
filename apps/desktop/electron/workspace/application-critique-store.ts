@@ -184,7 +184,8 @@ export function retireDraft(db: WorkspaceDb, attemptId: string, kind: DraftKind,
 
 /* ------------------------------------------------------------------------------ critiques ----- */
 
-export type LastRunOutcome = 'reviewed' | 'failed' | 'cancelled' | 'timed_out' | 'provider_limit' | 'invalid_output' | 'discarded';
+export type { LastRunOutcome } from '../application-critique-types.js';
+import type { LastRunOutcome } from '../application-critique-types.js';
 
 export interface CritiqueRecord {
   attemptId: string;

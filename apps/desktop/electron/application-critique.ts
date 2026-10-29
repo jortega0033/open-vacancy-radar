@@ -37,8 +37,9 @@ import type { ApplicationAttemptRecord, CvDocumentRecord } from './workspace/typ
 
 export const CRITIQUE_VERSION = 1;
 
-export const DRAFT_KINDS = ['cv', 'cover_letter', 'motivation_letter'] as const;
-export type DraftKind = (typeof DRAFT_KINDS)[number];
+import { DRAFT_KINDS, FINDING_KINDS, type DraftKind, type FindingKind } from './application-critique-types.js';
+export { DRAFT_KINDS, FINDING_KINDS };
+export type { DraftKind, FindingKind };
 export type DraftOrigin = 'prepared' | 'user_letter' | 'critique_revision';
 
 export interface CvDraftContent {
@@ -239,15 +240,6 @@ export function buildCritiqueInputs(input: {
 }
 
 /* ------------------------------------------------------------------------------ the prompt ----- */
-
-export const FINDING_KINDS = [
-  'unsupported_claim',
-  'omitted_requirement',
-  'cross_document_inconsistency',
-  'unclear_wording',
-  'unnecessary_detail',
-] as const;
-export type FindingKind = (typeof FINDING_KINDS)[number];
 
 export const FINDING_LABEL: Record<FindingKind, string> = {
   unsupported_claim: 'Claim the reviewed CV does not support',

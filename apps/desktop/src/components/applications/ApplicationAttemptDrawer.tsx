@@ -5,6 +5,7 @@ import { Dialog } from '../shell/Dialog.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
 import { PostingVerificationNotice } from './PostingVerificationNotice.js';
 import { CompanyEvidencePanel } from './CompanyEvidencePanel.js';
+import { ApplicationCritiquePanel } from './ApplicationCritiquePanel.js';
 import { ApplicationBriefPanel } from '../brief/ApplicationBriefPanel.js';
 
 export interface ApplicationAttemptDrawerProps {
@@ -12,7 +13,7 @@ export interface ApplicationAttemptDrawerProps {
   onClose: () => void;
   /** Fired after a recovery action changed the attempt, so the page can refresh its list and move
    * to wherever the attempt now lives (#468). */
-  onChanged?: (kind: 'returned' | 'retried') => void;
+  onChanged?: (kind: 'returned' | 'retried' | 'revised') => void;
 }
 
 const ARTIFACT_KIND_LABEL: Record<ApplicationArtifactSummary['kind'], string> = {
@@ -135,6 +136,14 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
           />
 
           <CompanyEvidencePanel target={{ attemptId: attempt.id }} reloadKey={attempt.updatedAt} />
+
+          {/* #690: the optional independent review of the prepared package. Local read; one explicit action. */}
+          <ApplicationCritiquePanel
+            attemptId={attempt.id}
+            checkpoint={attempt.checkpoint}
+            reloadKey={attempt.updatedAt}
+            onRevised={() => onChanged?.('revised')}
+          />
 
           {attempt.checkpointDetail && (
             <details className="rounded-box border border-base-300 bg-base-200 p-3 text-sm">

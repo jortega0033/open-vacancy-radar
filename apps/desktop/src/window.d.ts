@@ -424,6 +424,9 @@ declare global {
     /** #688. The twelfth namespace: the versioned application brief (read, explicit assessment, preference
      * correction). Takes ids, a version fence and the page's own assessment result; never CV or note text. */
     applicationBrief: import('../electron/application-brief.js').ApplicationBriefBridge;
+    /** #690. The thirteenth namespace: the optional independent critique of a prepared package (read, run, cancel,
+     * reject, accept). Takes ids and the run/document hash the page was looking at; never document text. */
+    applicationCritique: import('../electron/application-critique-types.js').ApplicationCritiqueBridge;
   }
 }
 

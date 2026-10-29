@@ -22,12 +22,16 @@ import {
   type CritiqueDraft,
   type CritiqueInputs,
   type DraftKind,
-  type DraftOrigin,
   type InputKey,
   type RefusedFinding,
   type StoredFinding,
   type StoredProposal,
 } from './application-critique.js';
+export type {
+  CritiqueActionResult,
+  CritiqueView,
+  ProposalTarget,
+} from './application-critique-types.js';
 import {
   DocumentAcceptanceError,
   printHtmlToPdf,
@@ -35,6 +39,18 @@ import {
   stageTailoredResumeArtifact,
   StagingAbandonedError,
 } from './application-artifact-staging.js';
+import type {
+  CritiqueActionCode,
+  CritiqueActionResult,
+  CritiqueDocumentView,
+  CritiqueView,
+  FindingView,
+  LastRunOutcome,
+  ProposalTarget,
+  ProposalView,
+  ReviewView,
+  UnavailableCode,
+} from './application-critique-types.js';
 import { closeApplicationReview } from './application-review-session.js';
 import type { CompanyEvidenceProseFact } from './company-evidence.js';
 import { acceptRenderedDocument } from './document-acceptance.js';
@@ -53,13 +69,18 @@ import {
   saveRunOutcome,
   type CritiqueRecord,
   type DraftRecord,
-  type LastRunOutcome,
 } from './workspace/application-critique-store.js';
 import { syncApplicationForAttempt } from './workspace/attempt-application-sync.js';
 import type { WorkspaceDb } from './workspace/client.js';
-import { getPendingPostingFinding, isHistoricalAttempt } from './workspace/posting-verification-store.js';
+import {
+  getPendingPostingFinding,
+  isHistoricalAttempt,
+} from './workspace/posting-verification-store.js';
 import * as workspace from './workspace/repository.js';
-import { applicationAttempts, applicationCritiques as workspaceCritiqueTable } from './workspace/schema.js';
+import {
+  applicationAttempts,
+  applicationCritiques as workspaceCritiqueTable,
+} from './workspace/schema.js';
 import type { ApplicationAttemptRecord, CvDocumentRecord } from './workspace/types.js';
 
 /**
@@ -91,116 +112,47 @@ export interface CritiqueDeps {
   /** ONE fresh closed-tool, no-network session. The only step that can reach a model. */
   generate(prompt: string, signal: AbortSignal): Promise<CritiqueGenerateResult>;
   /** Only what the support policy already approved for a letter. Local reads; never researches. */
-  loadCompanyEvidence(attempt: ApplicationAttemptRecord): CompanyEvidenceProseFact[] | Promise<CompanyEvidenceProseFact[]>;
+  loadCompanyEvidence(
+    attempt: ApplicationAttemptRecord,
+  ): CompanyEvidenceProseFact[] | Promise<CompanyEvidenceProseFact[]>;
   provider: string;
   log?(message: string, meta?: Record<string, unknown>): void;
 }
-
-/* ----------------------------------------------------------------------------- view types ----- */
-
-export type UnavailableCode =
-  | 'sent'
-  | 'not_prepared'
-  | 'held'
-  | 'source_cv_missing'
-  | 'no_reviewed_source'
-  | 'no_job_description'
-  | 'package_not_recorded';
-
-export interface CritiqueDocumentView {
-  kind: DraftKind;
-  label: string;
-  version: number;
-  origin: DraftOrigin;
-  authored: 'generated' | 'user' | null;
-}
-
-export interface FindingView extends StoredFinding {
-  label: string;
-  current: boolean;
-  outdatedBecause: string[];
-}
-
-export interface RefusedView extends RefusedFinding {
-  reason: string;
-}
-
-export interface ProposalView {
-  document: DraftKind;
-  label: string;
-  status: StoredProposal['status'];
-  reasons: string[];
-  changes: string[];
-  /** The revised text the person is deciding on (null for a refused proposal). */
-  preview: string | null;
-  baseVersion: number;
-  baseContentHash: string;
-  current: boolean;
-  outdatedBecause: string[];
-  acceptable: boolean;
-  acceptedVersion: number | null;
-}
-
-export interface ReviewView {
-  runId: string;
-  reviewedAt: string;
-  provider: string;
-  model: string | null;
-  calls: number;
-  tokens: { inputTokens?: number; outputTokens?: number } | null;
-  state: 'current' | 'partly_outdated' | 'outdated';
-  outdatedBecause: string[];
-  noFindings: boolean;
-  findings: FindingView[];
-  refused: RefusedView[];
-  proposals: ProposalView[];
-}
-
-export interface CritiqueView {
-  attemptId: string;
-  canReview: boolean;
-  unavailable: { code: UnavailableCode; message: string } | null;
-  running: boolean;
-  documents: CritiqueDocumentView[];
-  review: ReviewView | null;
-  lastRun: { outcome: LastRunOutcome; detail: string; at: string } | null;
-}
-
-export type CritiqueActionCode =
-  | 'not_available'
-  | 'already_running'
-  | 'failed'
-  | 'cancelled'
-  | 'timed_out'
-  | 'provider_limit'
-  | 'invalid_output'
-  | 'discarded'
-  | 'outdated'
-  | 'not_found'
-  | 'not_accepted'
-  | 'busy';
-
-export type CritiqueActionResult =
-  | { ok: true; view: CritiqueView }
-  | { ok: false; code: CritiqueActionCode; message: string; view: CritiqueView | null };
 
 const UNAVAILABLE_MESSAGE: Record<UnavailableCode, string> = {
   sent: 'This application was already sent. Its documents stay exactly as they were and cannot be reviewed or changed.',
   not_prepared: 'A review is available once the application is prepared and waiting for you.',
   held: 'The posting changed or closed and this package is on hold. Decide about the posting first.',
   source_cv_missing: 'The CV this application was built from is no longer in your library.',
-  no_reviewed_source: 'This CV has no reviewed source record, so there is nothing to check the documents against.',
+  no_reviewed_source:
+    'This CV has no reviewed source record, so there is nothing to check the documents against.',
   no_job_description: 'This application has no job description to review against.',
-  package_not_recorded: 'This package was prepared before drafts were kept, so it cannot be reviewed. Prepare it again to review it.',
+  package_not_recorded:
+    'This package was prepared before drafts were kept, so it cannot be reviewed. Prepare it again to review it.',
 };
 
-const RUN_MESSAGE: Record<Exclude<CritiqueActionCode, 'not_available' | 'outdated' | 'not_found' | 'not_accepted' | 'busy' | 'already_running'>, string> = {
+const RUN_MESSAGE: Record<
+  Exclude<
+    CritiqueActionCode,
+    | 'not_available'
+    | 'outdated'
+    | 'not_found'
+    | 'not_accepted'
+    | 'busy'
+    | 'already_running'
+    | 'invalid_request'
+  >,
+  string
+> = {
   failed: 'The review did not finish. Your documents were not changed.',
   cancelled: 'The review was cancelled. Your documents were not changed.',
   timed_out: 'The reviewer did not answer in time. Your documents were not changed.',
-  provider_limit: 'The reviewer hit a usage limit. Your documents were not changed. Try again after it resets.',
-  invalid_output: 'The reviewer answered in a form this app could not use, so nothing was kept. Your documents were not changed.',
-  discarded: 'Your documents or the job changed while the review ran, so its result was discarded. Review again to get a current one.',
+  provider_limit:
+    'The reviewer hit a usage limit. Your documents were not changed. Try again after it resets.',
+  invalid_output:
+    'The reviewer answered in a form this app could not use, so nothing was kept. Your documents were not changed.',
+  discarded:
+    'Your documents or the job changed while the review ran, so its result was discarded. Review again to get a current one.',
 };
 
 /** One in-flight run per attempt; and one accept per attempt. Process-local, like the preparation fence. */
@@ -270,26 +222,39 @@ function packageDrafts(db: WorkspaceDb, attemptId: string): CritiqueDraft[] {
 
 async function loadState(deps: CritiqueDeps, attemptId: string): Promise<State> {
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
-  const cv = attempt.sourceCvId ? (workspace.listCvDocuments(deps.db).find((doc) => doc.id === attempt.sourceCvId) ?? null) : null;
+  const cv = attempt.sourceCvId
+    ? (workspace.listCvDocuments(deps.db).find((doc) => doc.id === attempt.sourceCvId) ?? null)
+    : null;
   const drafts = packageDrafts(deps.db, attemptId);
   const base = { attempt, cv, drafts };
 
-  if (isHistoricalAttempt(attempt)) return { ...base, inputs: null, unavailable: unavailable('sent') };
-  if (attempt.checkpoint !== 'ready' && attempt.checkpoint !== 'needs_user') return { ...base, inputs: null, unavailable: unavailable('not_prepared') };
-  if (getPendingPostingFinding(deps.db, attemptId)?.held) return { ...base, inputs: null, unavailable: unavailable('held') };
+  if (isHistoricalAttempt(attempt))
+    return { ...base, inputs: null, unavailable: unavailable('sent') };
+  if (attempt.checkpoint !== 'ready' && attempt.checkpoint !== 'needs_user')
+    return { ...base, inputs: null, unavailable: unavailable('not_prepared') };
+  if (getPendingPostingFinding(deps.db, attemptId)?.held)
+    return { ...base, inputs: null, unavailable: unavailable('held') };
   if (!cv) return { ...base, inputs: null, unavailable: unavailable('source_cv_missing') };
   if (!cv.source) return { ...base, inputs: null, unavailable: unavailable('no_reviewed_source') };
-  if (attempt.jdSnapshot.trim().length === 0) return { ...base, inputs: null, unavailable: unavailable('no_job_description') };
-  if (!drafts.some((draft) => draft.kind === 'cv')) return { ...base, inputs: null, unavailable: unavailable('package_not_recorded') };
+  if (attempt.jdSnapshot.trim().length === 0)
+    return { ...base, inputs: null, unavailable: unavailable('no_job_description') };
+  if (!drafts.some((draft) => draft.kind === 'cv'))
+    return { ...base, inputs: null, unavailable: unavailable('package_not_recorded') };
 
   let companyEvidence: CompanyEvidenceProseFact[] = [];
   try {
     companyEvidence = [...(await deps.loadCompanyEvidence(attempt))];
   } catch (error) {
     // Company facts are optional input: a store problem means the critic gets none, never a guess.
-    deps.log?.('company facts unavailable for the review; continuing without them', { error: describe(error) });
+    deps.log?.('company facts unavailable for the review; continuing without them', {
+      error: describe(error),
+    });
   }
-  return { ...base, inputs: buildCritiqueInputs({ attempt, cv, drafts, companyEvidence }), unavailable: null };
+  return {
+    ...base,
+    inputs: buildCritiqueInputs({ attempt, cv, drafts, companyEvidence }),
+    unavailable: null,
+  };
 }
 
 function describe(error: unknown): string {
@@ -297,13 +262,15 @@ function describe(error: unknown): string {
 }
 
 function documentViews(drafts: readonly CritiqueDraft[]): CritiqueDocumentView[] {
-  return drafts.map((draft) => ({
-    kind: draft.kind,
-    label: DRAFT_LABEL[draft.kind],
-    version: draft.version,
-    origin: draft.origin,
-    authored: draft.content.type === 'letter' ? draft.content.authored : null,
-  }));
+  return [...drafts]
+    .sort((a, b) => DRAFT_KINDS.indexOf(a.kind) - DRAFT_KINDS.indexOf(b.kind))
+    .map((draft) => ({
+      kind: draft.kind,
+      label: DRAFT_LABEL[draft.kind],
+      version: draft.version,
+      origin: draft.origin,
+      authored: draft.content.type === 'letter' ? draft.content.authored : null,
+    }));
 }
 
 function outdatedLabels(keys: Iterable<InputKey>): string[] {
@@ -312,17 +279,29 @@ function outdatedLabels(keys: Iterable<InputKey>): string[] {
 
 function proposalPreview(proposal: StoredProposal): string | null {
   if (!proposal.proposed) return null;
-  return proposal.proposed.type === 'cv' ? renderPlain(proposal.proposed.resume) : proposal.proposed.body;
+  return proposal.proposed.type === 'cv'
+    ? renderPlain(proposal.proposed.resume)
+    : proposal.proposed.body;
 }
 
 function buildReviewView(record: CritiqueRecord, state: State): ReviewView | null {
   if (!record.reviewedAt || !record.fence) return null;
   const changed = state.inputs
     ? changedInputs(record.fence, state.inputs.fence)
-    : new Set<InputKey>(['jd', 'cvSource', 'company', ...DRAFT_KINDS.map((kind) => `draft:${kind}` as const)]);
+    : new Set<InputKey>([
+        'jd',
+        'cvSource',
+        'company',
+        ...DRAFT_KINDS.map((kind) => `draft:${kind}` as const),
+      ]);
   const findings: FindingView[] = record.findings.map((finding) => {
     const hit = finding.dependsOn.filter((key) => changed.has(key));
-    return { ...finding, label: FINDING_LABEL[finding.kind], current: hit.length === 0, outdatedBecause: outdatedLabels(hit) };
+    return {
+      ...finding,
+      label: FINDING_LABEL[finding.kind],
+      current: hit.length === 0,
+      outdatedBecause: outdatedLabels(hit),
+    };
   });
   const proposals: ProposalView[] = record.proposals.map((proposal) => {
     const hit = proposal.dependsOn.filter((key) => changed.has(key));
@@ -342,8 +321,12 @@ function buildReviewView(record: CritiqueRecord, state: State): ReviewView | nul
       acceptedVersion: proposal.acceptedVersion,
     };
   });
-  const anyOutdated = findings.some((finding) => !finding.current) || proposals.some((p) => !p.current);
-  const allOutdated = changed.size > 0 && findings.every((finding) => !finding.current) && proposals.every((p) => !p.current);
+  const anyOutdated =
+    findings.some((finding) => !finding.current) || proposals.some((p) => !p.current);
+  const allOutdated =
+    changed.size > 0 &&
+    findings.every((finding) => !finding.current) &&
+    proposals.every((p) => !p.current);
   return {
     runId: record.runId,
     reviewedAt: record.reviewedAt,
@@ -351,7 +334,14 @@ function buildReviewView(record: CritiqueRecord, state: State): ReviewView | nul
     model: record.model,
     calls: record.callCount,
     tokens: record.usage,
-    state: changed.size === 0 ? 'current' : allOutdated && (findings.length > 0 || proposals.length > 0) ? 'outdated' : anyOutdated ? 'partly_outdated' : 'current',
+    state:
+      changed.size === 0
+        ? 'current'
+        : allOutdated && (findings.length > 0 || proposals.length > 0)
+          ? 'outdated'
+          : anyOutdated
+            ? 'partly_outdated'
+            : 'current',
     outdatedBecause: outdatedLabels(changed),
     noFindings: record.findings.length === 0 && record.refused.length === 0,
     findings,
@@ -361,7 +351,10 @@ function buildReviewView(record: CritiqueRecord, state: State): ReviewView | nul
 }
 
 /** The panel's one read. Never starts a session, a render or a request. */
-export async function getCritiqueView(deps: CritiqueDeps, attemptId: string): Promise<CritiqueView> {
+export async function getCritiqueView(
+  deps: CritiqueDeps,
+  attemptId: string,
+): Promise<CritiqueView> {
   const state = await loadState(deps, attemptId);
   const record = getCritique(deps.db, attemptId);
   return {
@@ -378,7 +371,12 @@ export async function getCritiqueView(deps: CritiqueDeps, attemptId: string): Pr
   };
 }
 
-async function failure(deps: CritiqueDeps, attemptId: string, code: CritiqueActionCode, message: string): Promise<CritiqueActionResult> {
+async function failure(
+  deps: CritiqueDeps,
+  attemptId: string,
+  code: CritiqueActionCode,
+  message: string,
+): Promise<CritiqueActionResult> {
   try {
     return { ok: false, code, message, view: await getCritiqueView(deps, attemptId) };
   } catch {
@@ -388,7 +386,9 @@ async function failure(deps: CritiqueDeps, attemptId: string, code: CritiqueActi
 
 /* ------------------------------------------------------------------------------ run ----- */
 
-function usageOf(result: CritiqueGenerateResult): { inputTokens?: number; outputTokens?: number } | null {
+function usageOf(
+  result: CritiqueGenerateResult,
+): { inputTokens?: number; outputTokens?: number } | null {
   const usage = result.usage;
   if (!usage) return null;
   const out: { inputTokens?: number; outputTokens?: number } = {};
@@ -397,16 +397,31 @@ function usageOf(result: CritiqueGenerateResult): { inputTokens?: number; output
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function classifyFailure(error: string): Exclude<LastRunOutcome, 'reviewed' | 'discarded' | 'invalid_output'> {
+function classifyFailure(
+  error: string,
+): Exclude<LastRunOutcome, 'reviewed' | 'discarded' | 'invalid_output'> {
   if (/\bwas cancelled\b|\bcancelled\b/iu.test(error)) return 'cancelled';
   if (/no response after \d+s/iu.test(error)) return 'timed_out';
   if (classifyProviderError(error).kind === 'usage_limit') return 'provider_limit';
   return 'failed';
 }
 
-function recordOutcome(deps: CritiqueDeps, attemptId: string, runId: string, outcome: Exclude<LastRunOutcome, 'reviewed'>, detail: string): void {
+function recordOutcome(
+  deps: CritiqueDeps,
+  attemptId: string,
+  runId: string,
+  outcome: Exclude<LastRunOutcome, 'reviewed'>,
+  detail: string,
+): void {
   try {
-    saveRunOutcome(deps.db, { attemptId, runId, outcome, detail, provider: deps.provider, now: deps.now() });
+    saveRunOutcome(deps.db, {
+      attemptId,
+      runId,
+      outcome,
+      detail,
+      provider: deps.provider,
+      now: deps.now(),
+    });
   } catch (error) {
     deps.log?.('could not record how the review ended', { attemptId, error: describe(error) });
   }
@@ -423,10 +438,14 @@ async function dryRunAcceptance(input: {
   try {
     const contract =
       'resume' in input.proposed
-        ? resumeAcceptanceContract(input.proposed.resume, { target, verifiedEmployers: (input.cv.source?.experience ?? []).map((entry) => entry.company) })
+        ? resumeAcceptanceContract(input.proposed.resume, {
+            target,
+            verifiedEmployers: (input.cv.source?.experience ?? []).map((entry) => entry.company),
+          })
         : letterAcceptanceContract({
             kind: input.draft.kind as 'cover_letter' | 'motivation_letter',
-            title: input.draft.content.type === 'letter' ? input.draft.content.title : 'Cover Letter',
+            title:
+              input.draft.content.type === 'letter' ? input.draft.content.title : 'Cover Letter',
             body: input.proposed.body,
             candidateName: input.cv.source?.contact.name ?? '',
             target,
@@ -434,9 +453,13 @@ async function dryRunAcceptance(input: {
     const html =
       'resume' in input.proposed
         ? renderResumeHtml(input.proposed.resume)
-        : renderLetterHtml(input.draft.content.type === 'letter' ? input.draft.content.title : 'Cover Letter', input.proposed.body, {
-            candidateName: input.cv.source?.contact.name ?? '',
-          });
+        : renderLetterHtml(
+            input.draft.content.type === 'letter' ? input.draft.content.title : 'Cover Letter',
+            input.proposed.body,
+            {
+              candidateName: input.cv.source?.contact.name ?? '',
+            },
+          );
     const pdf = await printHtmlToPdf(html);
     const acceptance = await acceptRenderedDocument(Uint8Array.from(pdf), contract);
     return acceptance.ok ? [] : acceptance.findings.map((finding) => finding.detail);
@@ -453,25 +476,47 @@ async function buildProposals(
   refused: RefusedFinding[],
 ): Promise<StoredProposal[]> {
   const proposals: StoredProposal[] = [];
-  const concerning = (kind: DraftKind): boolean => accepted.some((finding) => finding.documents.includes(kind));
+  const concerning = (kind: DraftKind): boolean =>
+    accepted.some((finding) => finding.documents.includes(kind));
   const refuseRevision = (detail: string): void => {
-    refused.push({ kind: 'revision', summary: 'Proposed revision', code: 'insufficient_evidence', detail });
+    refused.push({
+      kind: 'revision',
+      summary: 'Proposed revision',
+      code: 'insufficient_evidence',
+      detail,
+    });
   };
 
   if (revisions.cv !== null) {
     const draft = inputs.drafts.find((d) => d.kind === 'cv');
-    if (!draft || draft.content.type !== 'cv') refuseRevision('There is no CV in this package to revise.');
-    else if (!concerning('cv')) refuseRevision('A CV revision was proposed but no accepted finding concerns the CV, so it was not offered.');
+    if (!draft || draft.content.type !== 'cv')
+      refuseRevision('There is no CV in this package to revise.');
+    else if (!concerning('cv'))
+      refuseRevision(
+        'A CV revision was proposed but no accepted finding concerns the CV, so it was not offered.',
+      );
     else {
-      const check = checkResumeRevision({ raw: revisions.cv, current: draft.content.resume, attempt: inputs.attempt, cv: inputs.cv });
+      const check = checkResumeRevision({
+        raw: revisions.cv,
+        current: draft.content.resume,
+        attempt: inputs.attempt,
+        cv: inputs.cv,
+      });
       const base = { version: draft.version, contentHash: draft.contentHash };
       const dependsOn: InputKey[] = ['draft:cv', 'cvSource', 'jd'];
       if (check.ok) {
-        const dry = await dryRunAcceptance({ draft, proposed: { resume: check.value }, cv: inputs.cv, attempt: inputs.attempt });
+        const dry = await dryRunAcceptance({
+          draft,
+          proposed: { resume: check.value },
+          cv: inputs.cv,
+          attempt: inputs.attempt,
+        });
         proposals.push({
           document: 'cv',
           status: dry.length === 0 ? 'pending' : 'refused',
-          reasons: dry.map((reason) => `The revised CV did not pass the document checks: ${reason}`),
+          reasons: dry.map(
+            (reason) => `The revised CV did not pass the document checks: ${reason}`,
+          ),
           changes: check.changes,
           base,
           proposed: dry.length === 0 ? { type: 'cv', resume: check.value } : null,
@@ -480,7 +525,17 @@ async function buildProposals(
           acceptedVersion: null,
         });
       } else if (!check.noChange) {
-        proposals.push({ document: 'cv', status: 'refused', reasons: check.reasons, changes: [], base, proposed: null, dependsOn, decidedAt: null, acceptedVersion: null });
+        proposals.push({
+          document: 'cv',
+          status: 'refused',
+          reasons: check.reasons,
+          changes: [],
+          base,
+          proposed: null,
+          dependsOn,
+          decidedAt: null,
+          acceptedVersion: null,
+        });
       }
     }
   }
@@ -488,18 +543,34 @@ async function buildProposals(
   if (revisions.letter !== null) {
     const kind = letterRevisionKind(revisions.letter);
     const draft = kind ? inputs.drafts.find((d) => d.kind === kind) : undefined;
-    if (!kind || !draft) refuseRevision('The letter revision did not name a letter in this package.');
-    else if (!concerning(kind)) refuseRevision(`A ${DRAFT_LABEL[kind]} revision was proposed but no accepted finding concerns it, so it was not offered.`);
+    if (!kind || !draft)
+      refuseRevision('The letter revision did not name a letter in this package.');
+    else if (!concerning(kind))
+      refuseRevision(
+        `A ${DRAFT_LABEL[kind]} revision was proposed but no accepted finding concerns it, so it was not offered.`,
+      );
     else {
-      const check = await checkLetterRevision({ raw: revisions.letter, current: draft, inputs, now: deps.now });
+      const check = await checkLetterRevision({
+        raw: revisions.letter,
+        current: draft,
+        inputs,
+        now: deps.now,
+      });
       const base = { version: draft.version, contentHash: draft.contentHash };
       const dependsOn: InputKey[] = [`draft:${kind}`, 'cvSource', 'jd', 'company'];
       if (check.ok) {
-        const dry = await dryRunAcceptance({ draft, proposed: { body: check.value.body }, cv: inputs.cv, attempt: inputs.attempt });
+        const dry = await dryRunAcceptance({
+          draft,
+          proposed: { body: check.value.body },
+          cv: inputs.cv,
+          attempt: inputs.attempt,
+        });
         proposals.push({
           document: kind,
           status: dry.length === 0 ? 'pending' : 'refused',
-          reasons: dry.map((reason) => `The revised letter did not pass the document checks: ${reason}`),
+          reasons: dry.map(
+            (reason) => `The revised letter did not pass the document checks: ${reason}`,
+          ),
           changes: check.changes,
           base,
           proposed: dry.length === 0 ? { type: 'letter', ...check.value } : null,
@@ -508,7 +579,17 @@ async function buildProposals(
           acceptedVersion: null,
         });
       } else if (!check.noChange) {
-        proposals.push({ document: kind, status: 'refused', reasons: check.reasons, changes: [], base, proposed: null, dependsOn, decidedAt: null, acceptedVersion: null });
+        proposals.push({
+          document: kind,
+          status: 'refused',
+          reasons: check.reasons,
+          changes: [],
+          base,
+          proposed: null,
+          dependsOn,
+          decidedAt: null,
+          acceptedVersion: null,
+        });
       }
     }
   }
@@ -520,21 +601,44 @@ async function buildProposals(
  * or rate-limited run records WHY and changes nothing else; a result whose inputs moved while it ran
  * is discarded.
  */
-export async function runCritique(deps: CritiqueDeps, attemptId: string): Promise<CritiqueActionResult> {
-  if (runs.has(attemptId)) return failure(deps, attemptId, 'already_running', 'A review of this application is already running.');
+export async function runCritique(
+  deps: CritiqueDeps,
+  attemptId: string,
+): Promise<CritiqueActionResult> {
+  if (runs.has(attemptId))
+    return failure(
+      deps,
+      attemptId,
+      'already_running',
+      'A review of this application is already running.',
+    );
   let state: State;
   try {
     state = await loadState(deps, attemptId);
   } catch {
-    return { ok: false, code: 'not_found', message: 'That application is no longer available.', view: null };
+    return {
+      ok: false,
+      code: 'not_found',
+      message: 'That application is no longer available.',
+      view: null,
+    };
   }
   if (state.unavailable || !state.inputs) {
-    return failure(deps, attemptId, 'not_available', state.unavailable?.message ?? 'This application cannot be reviewed right now.');
+    return failure(
+      deps,
+      attemptId,
+      'not_available',
+      state.unavailable?.message ?? 'This application cannot be reviewed right now.',
+    );
   }
   const inputs = state.inputs;
   const runId = randomUUID();
   const controller = new AbortController();
   runs.set(attemptId, { runId, controller });
+  // The run stops being "running" BEFORE the view that reports its outcome is built.
+  const release = (): void => {
+    if (runs.get(attemptId)?.runId === runId) runs.delete(attemptId);
+  };
 
   let result: CritiqueGenerateResult;
   try {
@@ -546,16 +650,19 @@ export async function runCritique(deps: CritiqueDeps, attemptId: string): Promis
   try {
     if (controller.signal.aborted) {
       recordOutcome(deps, attemptId, runId, 'cancelled', RUN_MESSAGE.cancelled);
+      release();
       return await failure(deps, attemptId, 'cancelled', RUN_MESSAGE.cancelled);
     }
     if (!result.ok) {
       const outcome = classifyFailure(result.error ?? '');
       recordOutcome(deps, attemptId, runId, outcome, RUN_MESSAGE[outcome]);
+      release();
       return await failure(deps, attemptId, outcome, RUN_MESSAGE[outcome]);
     }
     const parsed = parseCritiqueResponse(result.text);
     if (!parsed.ok) {
       recordOutcome(deps, attemptId, runId, 'invalid_output', RUN_MESSAGE.invalid_output);
+      release();
       return await failure(deps, attemptId, 'invalid_output', RUN_MESSAGE.invalid_output);
     }
 
@@ -575,7 +682,8 @@ export async function runCritique(deps: CritiqueDeps, attemptId: string): Promis
                 kind: 'revision',
                 summary: 'Proposed revision',
                 code: 'insufficient_evidence',
-                detail: 'A revision was proposed without any accepted finding, so it was not offered.',
+                detail:
+                  'A revision was proposed without any accepted finding, so it was not offered.',
               });
             }
             return [] as StoredProposal[];
@@ -597,6 +705,7 @@ export async function runCritique(deps: CritiqueDeps, attemptId: string): Promis
       changedInputs(inputs.fence, after.inputs.fence).size > 0
     ) {
       if (after) recordOutcome(deps, attemptId, runId, 'discarded', RUN_MESSAGE.discarded);
+      release();
       return await failure(deps, attemptId, 'discarded', RUN_MESSAGE.discarded);
     }
 
@@ -612,38 +721,43 @@ export async function runCritique(deps: CritiqueDeps, attemptId: string): Promis
       usage: usageOf(result),
       now: deps.now(),
     });
-    if (!saved) return await failure(deps, attemptId, 'not_available', UNAVAILABLE_MESSAGE.sent);
+    if (!saved) {
+      release();
+      return await failure(deps, attemptId, 'not_available', UNAVAILABLE_MESSAGE.sent);
+    }
+    release();
     return { ok: true, view: await getCritiqueView(deps, attemptId) };
   } catch (error) {
     deps.log?.('the review could not be completed', { attemptId, error: describe(error) });
+    release();
     return await failure(deps, attemptId, 'failed', RUN_MESSAGE.failed);
   } finally {
-    if (runs.get(attemptId)?.runId === runId) runs.delete(attemptId);
+    release();
   }
 }
 
 /* ------------------------------------------------------------------- reject / accept ----- */
 
-export interface ProposalTarget {
-  attemptId: string;
-  runId: string;
-  document: DraftKind;
-  baseContentHash: string;
-}
-
 function findPending(record: CritiqueRecord | null, target: ProposalTarget): StoredProposal | null {
   if (!record || record.runId !== target.runId) return null;
   return (
     record.proposals.find(
-      (proposal) => proposal.document === target.document && proposal.base.contentHash === target.baseContentHash && proposal.status === 'pending',
+      (proposal) =>
+        proposal.document === target.document &&
+        proposal.base.contentHash === target.baseContentHash &&
+        proposal.status === 'pending',
     ) ?? null
   );
 }
 
-export async function rejectProposal(deps: CritiqueDeps, target: ProposalTarget): Promise<CritiqueActionResult> {
+export async function rejectProposal(
+  deps: CritiqueDeps,
+  target: ProposalTarget,
+): Promise<CritiqueActionResult> {
   const record = getCritique(deps.db, target.attemptId);
   const proposal = findPending(record, target);
-  if (!record || !proposal) return failure(deps, target.attemptId, 'outdated', 'That suggestion is no longer current.');
+  if (!record || !proposal)
+    return failure(deps, target.attemptId, 'outdated', 'That suggestion is no longer current.');
   const next = record.proposals.map((entry) =>
     entry === proposal || stableStringify(entry) === stableStringify(proposal)
       ? { ...entry, status: 'rejected' as const, decidedAt: deps.now().toISOString() }
@@ -660,38 +774,77 @@ export async function rejectProposal(deps: CritiqueDeps, target: ProposalTarget)
  * existing staging path renders and accepts the new file (a failure there leaves every current
  * document untouched), and only then does the new draft version replace the old one.
  */
-export async function acceptProposal(deps: CritiqueDeps, target: ProposalTarget): Promise<CritiqueActionResult> {
+export async function acceptProposal(
+  deps: CritiqueDeps,
+  target: ProposalTarget,
+): Promise<CritiqueActionResult> {
   const { attemptId } = target;
-  if (accepting.has(attemptId) || runs.has(attemptId)) return failure(deps, attemptId, 'busy', 'Wait for the current action on this application to finish.');
+  if (accepting.has(attemptId) || runs.has(attemptId))
+    return failure(
+      deps,
+      attemptId,
+      'busy',
+      'Wait for the current action on this application to finish.',
+    );
   accepting.add(attemptId);
   try {
     let state: State;
     try {
       state = await loadState(deps, attemptId);
     } catch {
-      return { ok: false, code: 'not_found', message: 'That application is no longer available.', view: null };
+      return {
+        ok: false,
+        code: 'not_found',
+        message: 'That application is no longer available.',
+        view: null,
+      };
     }
     if (state.unavailable || !state.inputs || !state.cv?.source) {
-      return failure(deps, attemptId, 'not_available', state.unavailable?.message ?? 'This application cannot be changed right now.');
+      return failure(
+        deps,
+        attemptId,
+        'not_available',
+        state.unavailable?.message ?? 'This application cannot be changed right now.',
+      );
     }
     const record = getCritique(deps.db, attemptId);
     const proposal = findPending(record, target);
-    if (!record?.fence || !proposal || !proposal.proposed) return failure(deps, attemptId, 'outdated', 'That suggestion is no longer current.');
+    if (!record?.fence || !proposal || !proposal.proposed)
+      return failure(deps, attemptId, 'outdated', 'That suggestion is no longer current.');
     const stale = (s: State): boolean =>
-      !s.inputs || proposal.dependsOn.some((key) => changedInputs(record.fence!, s.inputs!.fence).has(key));
-    if (stale(state)) return failure(deps, attemptId, 'outdated', 'The documents or the job changed after this review, so the suggestion no longer applies. Review again.');
+      !s.inputs ||
+      proposal.dependsOn.some((key) => changedInputs(record.fence!, s.inputs!.fence).has(key));
+    if (stale(state))
+      return failure(
+        deps,
+        attemptId,
+        'outdated',
+        'The documents or the job changed after this review, so the suggestion no longer applies. Review again.',
+      );
 
     const inputs = state.inputs;
     const draft = inputs.drafts.find((d) => d.kind === target.document);
-    if (!draft) return failure(deps, attemptId, 'outdated', 'That document is no longer in the package.');
+    if (!draft)
+      return failure(deps, attemptId, 'outdated', 'That document is no longer in the package.');
 
     // Re-validate the stored proposal from scratch, exactly as when it was offered.
     const proposed = proposal.proposed;
     if (proposed.type === 'cv') {
-      if (draft.content.type !== 'cv') return failure(deps, attemptId, 'outdated', 'That document changed.');
-      const check = checkResumeRevision({ raw: proposed.resume, current: draft.content.resume, attempt: inputs.attempt, cv: inputs.cv });
+      if (draft.content.type !== 'cv')
+        return failure(deps, attemptId, 'outdated', 'That document changed.');
+      const check = checkResumeRevision({
+        raw: proposed.resume,
+        current: draft.content.resume,
+        attempt: inputs.attempt,
+        cv: inputs.cv,
+      });
       if (!check.ok || stableStringify(check.value) !== stableStringify(proposed.resume)) {
-        return failure(deps, attemptId, 'not_accepted', 'The revised CV no longer passes the checks against your reviewed CV, so it was not applied.');
+        return failure(
+          deps,
+          attemptId,
+          'not_accepted',
+          'The revised CV no longer passes the checks against your reviewed CV, so it was not applied.',
+        );
       }
     } else {
       const check = await checkLetterRevision({
@@ -701,20 +854,34 @@ export async function acceptProposal(deps: CritiqueDeps, target: ProposalTarget)
         now: deps.now,
       });
       if (!check.ok || check.value.body !== proposed.body) {
-        return failure(deps, attemptId, 'not_accepted', 'The revised letter no longer passes the checks, so it was not applied.');
+        return failure(
+          deps,
+          attemptId,
+          'not_accepted',
+          'The revised letter no longer passes the checks, so it was not applied.',
+        );
       }
     }
 
     const stillLive = (): boolean => {
       try {
         const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
-        if (isHistoricalAttempt(attempt) || (attempt.checkpoint !== 'ready' && attempt.checkpoint !== 'needs_user')) return false;
+        if (
+          isHistoricalAttempt(attempt) ||
+          (attempt.checkpoint !== 'ready' && attempt.checkpoint !== 'needs_user')
+        )
+          return false;
         if (getPendingPostingFinding(deps.db, attemptId)?.held) return false;
         const current = getCritique(deps.db, attemptId);
-        if (!current || current.runId !== target.runId || !findPending(current, target)) return false;
+        if (!current || current.runId !== target.runId || !findPending(current, target))
+          return false;
         const drafts = packageDrafts(deps.db, attemptId);
         const now = drafts.find((d) => d.kind === target.document);
-        return now?.contentHash === draft.contentHash && now.artifactHash === draft.artifactHash && attempt.jdSnapshotHash === inputs.attempt.jdSnapshotHash;
+        return (
+          now?.contentHash === draft.contentHash &&
+          now.artifactHash === draft.artifactHash &&
+          attempt.jdSnapshotHash === inputs.attempt.jdSnapshotHash
+        );
       } catch {
         return false;
       }
@@ -748,13 +915,28 @@ export async function acceptProposal(deps: CritiqueDeps, target: ProposalTarget)
       artifactHash = staged.contentHash;
     } catch (error) {
       if (error instanceof StagingAbandonedError) {
-        return failure(deps, attemptId, 'outdated', 'The application changed while the revision was being prepared, so nothing was applied.');
+        return failure(
+          deps,
+          attemptId,
+          'outdated',
+          'The application changed while the revision was being prepared, so nothing was applied.',
+        );
       }
       if (error instanceof DocumentAcceptanceError) {
-        return failure(deps, attemptId, 'not_accepted', `The revised ${DRAFT_LABEL[target.document]} did not pass the document checks, so nothing was changed.`);
+        return failure(
+          deps,
+          attemptId,
+          'not_accepted',
+          `The revised ${DRAFT_LABEL[target.document]} did not pass the document checks, so nothing was changed.`,
+        );
       }
       deps.log?.('a revision could not be applied', { attemptId, error: describe(error) });
-      return failure(deps, attemptId, 'failed', 'The revision could not be applied. Your documents were not changed.');
+      return failure(
+        deps,
+        attemptId,
+        'failed',
+        'The revision could not be applied. Your documents were not changed.',
+      );
     }
 
     // One synchronous step: the new version, the decision, and the confirmations it invalidates.
@@ -786,8 +968,15 @@ export async function acceptProposal(deps: CritiqueDeps, target: ProposalTarget)
         now,
       });
       const proposals = record.proposals.map((entry) =>
-        entry.document === target.document && entry.base.contentHash === target.baseContentHash && entry.status === 'pending'
-          ? { ...entry, status: 'accepted' as const, decidedAt: now.toISOString(), acceptedVersion: row.version }
+        entry.document === target.document &&
+        entry.base.contentHash === target.baseContentHash &&
+        entry.status === 'pending'
+          ? {
+              ...entry,
+              status: 'accepted' as const,
+              decidedAt: now.toISOString(),
+              acceptedVersion: row.version,
+            }
           : entry,
       );
       saveProposalsTx(tx, attemptId, proposals, now);
@@ -812,13 +1001,18 @@ export async function acceptProposal(deps: CritiqueDeps, target: ProposalTarget)
         .run();
       syncApplicationForAttempt(tx as WorkspaceDb, attemptId);
       if (target.document === 'cover_letter' && proposed.type === 'letter') {
-        const used = inputs.companyEvidence.filter((fact) => proposed.companyClaims.includes(fact.claim));
+        const used = inputs.companyEvidence.filter((fact) =>
+          proposed.companyClaims.includes(fact.claim),
+        );
         recordEvidenceUses(tx as WorkspaceDb, attemptId, used, now);
       }
     });
     if (wasReady) {
       await closeApplicationReview(attemptId).catch((error: unknown) => {
-        deps.log?.('could not close the earlier review after a revision', { attemptId, error: describe(error) });
+        deps.log?.('could not close the earlier review after a revision', {
+          attemptId,
+          error: describe(error),
+        });
       });
     }
     return { ok: true, view: await getCritiqueView(deps, attemptId) };
@@ -827,7 +1021,15 @@ export async function acceptProposal(deps: CritiqueDeps, target: ProposalTarget)
   }
 }
 
-function saveProposalsTx(tx: Parameters<Parameters<WorkspaceDb['transaction']>[0]>[0], attemptId: string, proposals: StoredProposal[], now: Date): void {
+function saveProposalsTx(
+  tx: Parameters<Parameters<WorkspaceDb['transaction']>[0]>[0],
+  attemptId: string,
+  proposals: StoredProposal[],
+  now: Date,
+): void {
   // Same write as `saveProposals`, inside the caller's transaction.
-  tx.update(workspaceCritiqueTable).set({ proposals, updatedAt: now }).where(eq(workspaceCritiqueTable.attemptId, attemptId)).run();
+  tx.update(workspaceCritiqueTable)
+    .set({ proposals, updatedAt: now })
+    .where(eq(workspaceCritiqueTable.attemptId, attemptId))
+    .run();
 }

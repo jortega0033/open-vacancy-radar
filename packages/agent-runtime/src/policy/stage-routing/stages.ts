@@ -34,6 +34,7 @@ export type GenerationStage =
   | 'gap_analysis'
   | 'cv_tailoring'
   | 'cover_letter'
+  | 'application_critique'
   | 'application_field_map';
 
 export const GENERATION_STAGES: readonly GenerationStage[] = Object.freeze([
@@ -42,6 +43,7 @@ export const GENERATION_STAGES: readonly GenerationStage[] = Object.freeze([
   'gap_analysis',
   'cv_tailoring',
   'cover_letter',
+  'application_critique',
   'application_field_map',
 ]);
 
@@ -150,6 +152,20 @@ export const STAGE_CONTRACTS: Readonly<Record<GenerationStage, StageContract>> =
     maxAttempts: 2,
     // A cover letter's missing fact is a claim about the candidate that their own CV does not
     // support. There is no store to look that up in: only the candidate can supply it.
+    retrievalAvailable: false,
+  }),
+  /**
+   * The optional independent critique of a prepared package (#690). One attempt, by contract: a second
+   * try on the same documents would be a paid re-roll of an opinion, and nothing here loops. It requires
+   * the no-network profile for the same reason the field map does: its prompt embeds a scraped posting.
+   * No fact can be looked up for it -- every claim it makes is checked by the app against the reviewed
+   * source CV and the approved company facts, and refused if it cannot be.
+   */
+  application_critique: Object.freeze({
+    stage: 'application_critique',
+    workload: 'grounded_document',
+    requiredCapabilities: Object.freeze(['hardenedNoNetwork']),
+    maxAttempts: 1,
     retrievalAvailable: false,
   }),
   application_field_map: Object.freeze({

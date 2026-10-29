@@ -24,6 +24,7 @@ import type {
 import type { SearchPlanLoadResult, SearchPlanResetResult } from './search-plan-store.js';
 import type { CompanyEvidenceBridge } from './company-evidence.js';
 import type { ApplicationBriefBridge } from './application-brief.js';
+import { parseCritiqueResult, type ApplicationCritiqueBridge } from './application-critique-types.js';
 import { parseBriefResult, parseCommitAssessment, parseOkResult, parsePrepareAssessment } from './application-brief-parse.js';
 import { parseCancelResult, parseCompanyEvidenceProse, parseCompanyEvidenceResult } from './company-evidence-parse.js';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
@@ -2181,3 +2182,30 @@ const applicationBriefApi: ApplicationBriefBridge = {
 };
 
 contextBridge.exposeInMainWorld('applicationBrief', applicationBriefApi);
+
+/**
+ * #690. The thirteenth namespace: the optional independent critique of a prepared package. Every result
+ * is REBUILT from known fields (`parseCritiqueResult`, fail closed). Arguments are ids and the run /
+ * document hash the page was looking at: never document text, a prompt, a provider or a permission.
+ * Only `run` can start a model session, and only because the person pressed "Review this application".
+ */
+const applicationCritiqueApi: ApplicationCritiqueBridge = {
+  async get(attemptId) {
+    return parseCritiqueResult(await ipcRenderer.invoke('application-critique:get', { attemptId }));
+  },
+  async run(attemptId) {
+    return parseCritiqueResult(await ipcRenderer.invoke('application-critique:run', { attemptId }));
+  },
+  async cancel(attemptId) {
+    const raw: unknown = await ipcRenderer.invoke('application-critique:cancel', { attemptId });
+    return { ok: typeof raw === 'object' && raw !== null && (raw as { ok?: unknown }).ok === true };
+  },
+  async reject(target) {
+    return parseCritiqueResult(await ipcRenderer.invoke('application-critique:reject', { ...target }));
+  },
+  async accept(target) {
+    return parseCritiqueResult(await ipcRenderer.invoke('application-critique:accept', { ...target }));
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationCritique', applicationCritiqueApi);

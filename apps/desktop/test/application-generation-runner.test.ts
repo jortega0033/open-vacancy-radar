@@ -160,4 +160,41 @@ describe('runTextGeneration', () => {
     await runTextGeneration(client as never, { ...INPUT, prompt: 'tailor this CV' });
     expect(client.sessions.createFieldMapGeneration).toHaveBeenCalledWith({ ...INPUT, prompt: 'tailor this CV' });
   });
+
+  it('returns the usage the provider reported, and nothing when it reported none', async () => {
+    const reported = fakeClient([
+      { type: 'assistant.message', text: '{}' },
+      { type: 'usage', inputTokens: 1200, outputTokens: 80 },
+      { type: 'session.completed' },
+    ]);
+    expect((await runTextGeneration(reported as never, INPUT)).usage).toEqual({ inputTokens: 1200, outputTokens: 80 });
+    const silent = fakeClient([{ type: 'assistant.message', text: '{}' }, { type: 'session.completed' }]);
+    expect(await runTextGeneration(silent as never, INPUT)).not.toHaveProperty('usage');
+  });
+
+  it('stops the session and reports a caller abort as a cancellation, not a timeout', async () => {
+    const caller = new AbortController();
+    const client = fakeClient(async function* (signal): AsyncGenerator<AgentEventEnvelope, void, void> {
+      await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+      yield envelope({ type: 'session.completed' });
+    });
+    const pending = runTextGeneration(client as never, INPUT, { signal: caller.signal });
+    await vi.waitFor(() => expect(client.sessions.events).toHaveBeenCalled());
+    caller.abort();
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false, error: 'the document generation session was cancelled' });
+    expect(client.sessions.cancel).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('does not start reading a session for a signal that was already aborted', async () => {
+    const caller = new AbortController();
+    caller.abort();
+    const client = fakeClient(async function* (signal): AsyncGenerator<AgentEventEnvelope, void, void> {
+      if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+      yield envelope({ type: 'session.completed' });
+    });
+    const result = await runTextGeneration(client as never, INPUT, { signal: caller.signal });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/cancelled/);
+  });
 });

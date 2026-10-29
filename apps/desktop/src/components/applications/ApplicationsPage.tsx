@@ -291,10 +291,15 @@ export function ApplicationsPage({
 
   // A skipped attempt returned to review opens in the review dialog; a failed one that was queued
   // again moves to Preparing. Either way the drawer that started it closes.
-  const handleAttemptRecovered = useCallback((kind: 'returned' | 'retried') => {
+  const handleAttemptRecovered = useCallback((kind: 'returned' | 'retried' | 'revised') => {
     const recovered = openAttempt;
     setOpenAttempt(null);
-    if (kind === 'returned' && recovered) {
+    if (kind === 'revised') {
+      // An accepted critique revision changed the package (and may have closed its form): show it
+      // where a package waiting for the person lives, with the fresh checkpoint.
+      setFocusedAttemptId(null);
+      setAttemptView('review');
+    } else if (kind === 'returned' && recovered) {
       dismissedReviewAttempt.current = null;
       setAttemptView('review');
       setFocusedAttemptId(recovered.id);
