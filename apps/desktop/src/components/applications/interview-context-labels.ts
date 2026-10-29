@@ -4,6 +4,7 @@ import type {
   InterviewRoundView,
 } from '../../../electron/interview-context-types.js';
 import type { NextRound, PriorRound, SubmittedBasis, SubmittedDocument } from './interview-prep-prompt.js';
+import { describeRoundsOmissionsBrief, type RoundsPlan } from './interview-rounds-budget.js';
 
 /**
  * #691: how the documents of an application and the recorded rounds read on screen, and how they are
@@ -156,6 +157,7 @@ export function roundsForPrep(
     prior: rounds
       .filter((round) => round.state === 'held')
       .map((round) => ({
+        id: round.id,
         type: ROUND_TYPE_LABEL[round.roundType],
         date: round.scheduledOn,
         feedback: round.feedback,
@@ -173,7 +175,8 @@ export function defaultNextRoundId(rounds: readonly InterviewRoundView[]): strin
 export function basisSummary(
   pkg: InterviewPackageView | null,
   current: { cv: boolean; letter: boolean },
-  priorRounds: number,
+  /** What the prep pack does with the held rounds (the same plan the prompt is built from). */
+  rounds: RoundsPlan,
 ): string {
   const parts: string[] = [];
   const describe = (doc: InterviewDocumentView | undefined, slot: 'cv' | 'letter'): void => {
@@ -196,7 +199,11 @@ export function basisSummary(
   };
   describe(pkg?.documents.find((doc) => doc.slot === 'cv'), 'cv');
   describe(pkg?.documents.find((doc) => doc.slot === 'letter'), 'letter');
-  if (priorRounds > 0) parts.push(`your notes from ${priorRounds} earlier ${priorRounds === 1 ? 'round' : 'rounds'}`);
+  if (rounds.recorded > 0) {
+    const cut = describeRoundsOmissionsBrief(rounds);
+    const count = rounds.omittedRounds > 0 ? `${rounds.rounds.length} of ${rounds.recorded} earlier rounds` : `${rounds.recorded} earlier ${rounds.recorded === 1 ? 'round' : 'rounds'}`;
+    parts.push(`your notes from ${count}${cut ? ` (${cut})` : ''}`);
+  }
   if (parts.length === 0) return 'No CV or letter text is available.';
   return capitalise(parts.join(', '));
 }

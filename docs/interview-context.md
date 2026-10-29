@@ -21,7 +21,7 @@ Each document carries one of four states, and they never merge:
 | --- | --- |
 | Prepared only | This app prepared it. Nobody has said it was the file sent. Every generated, accepted or exported file starts here. |
 | You confirmed | You said this version is what you sent, pasted the text you sent, or said your linked library document as it read then is what you sent. |
-| Sent by this app | This app sent the application itself, its own form-fill record names this file as attached, and it then observed a receipt. The receipt confirms the application landed. It does not contain the file, and the app never says it proves the bytes. |
+| Sent by this app | This app sent the application itself, its own form-fill record names this exact file as attached (the file's staged name, which includes its content fingerprint, so a file with the same name but different content does not count), and it then observed a receipt. The receipt confirms the application landed. It does not contain the file, and the app never says it proves the bytes. If the record cannot name the file, the document stays "Prepared only". |
 | Version unknown | You said you do not know which version you sent. |
 
 A statement adds a new version of the record; earlier versions are kept. A statement cannot change a "Sent by this app"
@@ -53,6 +53,24 @@ marked Done go to the next prep pack in their own block, cited [R1], [R2], descr
 has checked. The prompt tells the model never to treat them as your experience, a CV fact, a fact about the employer,
 or a sign of how the employer judged you. Saving a round never changes the application status, your notes, your CV or
 any record above. Existing free notes are untouched; the migration creates no round from them.
+
+### How much of your rounds one prep pack uses
+
+Everything you record stays as you wrote it (a note can be up to 4,000 characters). A prep pack uses a bounded part,
+and says so, in the prompt and before you generate:
+
+| Limit | Value |
+| --- | --- |
+| Rounds used | The 6 most recent Done rounds; older ones are left out first |
+| Notes per round | The first 2,000 characters |
+| Open topics per round | Up to 12 topics, 200 characters each |
+| Notes and topics of all used rounds together | 12,000 characters; rounds are taken newest first and the first one that no longer fits ends the list |
+
+The "This prep pack uses" line and the rounds panel show how many rounds are used, how many older rounds are left out
+and which notes are cut; a note over the limit shows a warning while you type. The prompt states the same counts, marks
+each cut note ("only the first N of M characters are included") and tells the model to treat anything not shown as
+unknown. Put what matters most at the start of a note. The whole block stays under 16,000 characters even for 30
+rounds of maximal notes and topics, or for adversarial text.
 
 Not included: email, calendar or mailbox access, recording or transcription, mock interviews, outreach, or any
 automatic change to your CV or the application.

@@ -390,3 +390,123 @@ describe('selection, races and ambiguous rows', () => {
     expect(db.select().from(schema.applicationInterviewRounds).all().map((r) => r.applicationId)).toEqual([appOf(a)]);
   });
 });
+
+describe('a long history has a stated envelope that the person sees before generating', () => {
+  async function record(applicationId: string, rounds: ReadonlyArray<{ date: string; feedback: string; topics?: string[]; state?: 'held' | 'planned' }>): Promise<void> {
+    for (const round of rounds) {
+      // Through the real preload bridge, the real IPC handlers and the migrated SQLite store.
+      const result = await window.interviewContext.saveRound({
+        applicationId,
+        roundId: null,
+        expectedUpdatedAt: null,
+        round: { roundType: 'technical', scheduledOn: round.date, state: round.state ?? 'held', feedback: round.feedback, openTopics: round.topics ?? [] },
+      });
+      expect(result.ok).toBe(true);
+    }
+  }
+
+  async function interviewApplication(): Promise<string> {
+    const attemptId = await prepare();
+    review.recordUserReportedSubmission(db, attemptId);
+    const applicationId = appOf(attemptId);
+    workspace.updateApplication(db, applicationId, { status: 'interview', notes: 'Free notes.' });
+    return applicationId;
+  }
+
+  it('bounds the prompt for nine long rounds, and the basis line, the panel and the prompt all say what is left out', async () => {
+    const applicationId = await interviewApplication();
+    await record(
+      applicationId,
+      Array.from({ length: 9 }, (_, index) => ({
+        date: `2026-08-0${index + 1}`,
+        feedback: `NOTE-${index} ${'x'.repeat(3_960)} TAIL-${index}`,
+        topics: Array.from({ length: 12 }, (_, topic) => `TOPIC-${index}-${topic} ${'t'.repeat(280)}`),
+      })),
+    );
+    const before = workspace.listApplications(db).find((row) => row.id === applicationId)!;
+
+    renderDrawer(applicationId);
+    const rounds = await screen.findByRole('region', { name: 'Interview rounds' });
+    await waitFor(() => expect(within(rounds).getAllByTestId('interview-round')).toHaveLength(9));
+
+    // Before generating: the one-line basis and the panel both state the inclusion policy and counts.
+    const basis = screen.getByTestId('prep-basis');
+    await waitFor(() => expect(basis).toHaveTextContent(/your notes from \d of 9 earlier rounds/iu));
+    const used = Number(/your notes from (\d) of 9/iu.exec(basis.textContent ?? '')![1]);
+    expect(used).toBeLessThan(9);
+    expect(basis).toHaveTextContent(`${9 - used} older rounds left out`);
+    expect(basis).toHaveTextContent('notes cut to the first 2,000 characters');
+    const messages = within(rounds).getAllByTestId('round-prep-use').map((node) => node.textContent ?? '');
+    expect(messages.filter((text) => text.startsWith('Not used'))).toHaveLength(9 - used);
+    expect(messages.filter((text) => text.includes('only the first 2,000 characters of these notes are used'))).toHaveLength(used);
+    // The full note is still displayed and stored: nothing was edited.
+    expect(within(rounds).getByText(/TAIL-8$/u)).toBeInTheDocument();
+    const stored = db.select().from(schema.applicationInterviewRounds).all();
+    expect(stored).toHaveLength(9);
+    for (const row of stored) expect(row.feedback).toMatch(/^NOTE-\d x{3960} TAIL-\d$/u);
+
+    const prompt = await generate();
+    const block = section(prompt, /EARLIER ROUNDS/u);
+    expect(block.length).toBeLessThanOrEqual(16_000);
+    expect(block).toContain(`${used} of 9 earlier rounds included`);
+    expect(block).toContain('oldest rounds are left out');
+    expect(block).toContain('NOTE-8 ');
+    expect(block).not.toContain('NOTE-0 ');
+    expect(block).not.toContain('TAIL-8');
+    expect(block).toContain('[Only the first 2,000 of 3,');
+    expect((block.match(/^\[R\d+\] /gmu) ?? []).length).toBe(used);
+    expect(screen.getByTestId('prep-generated-from')).toHaveTextContent(`your notes from ${used} of 9 earlier rounds`);
+    // Rounds never touch the application, and the documents sections do not carry round text.
+    expect(workspace.listApplications(db).find((row) => row.id === applicationId)).toEqual(before);
+    expect(section(prompt, /CV PREPARED FOR THIS APPLICATION/u)).not.toContain('NOTE-');
+  });
+
+  it('shows a note longer than the pack limit in full, tells the person, and the prompt names the cut', async () => {
+    const applicationId = await interviewApplication();
+    const note = `${'a'.repeat(1_500)} MIDDLE ${'b'.repeat(1_500)} END-MARKER`;
+    await record(applicationId, [{ date: '2026-08-10', feedback: note, topics: ['open topic survives'] }]);
+
+    renderDrawer(applicationId);
+    const rounds = await screen.findByRole('region', { name: 'Interview rounds' });
+    const message = await within(rounds).findByTestId('round-prep-use');
+    expect(message).toHaveTextContent('In a prep pack only the first 2,000 characters of these notes are used. What you recorded stays as it is here.');
+    expect(within(rounds).getByText(/END-MARKER$/u)).toBeInTheDocument();
+    expect(screen.getByTestId('prep-basis')).toHaveTextContent('1 note cut to the first 2,000 characters');
+
+    // The editor warns as soon as the text passes the limit, and nothing is saved unless the person saves.
+    fireEvent.click(within(rounds).getByRole('button', { name: 'Edit' }));
+    expect(await within(rounds).findByTestId('round-feedback-limit')).toHaveTextContent('a prep pack uses only the first 2,000');
+    fireEvent.change(within(rounds).getByLabelText('What you were told or noticed'), { target: { value: 'Short now.' } });
+    expect(within(rounds).queryByTestId('round-feedback-limit')).toBeNull();
+    fireEvent.click(within(rounds).getByRole('button', { name: 'Cancel' }));
+    expect(db.select().from(schema.applicationInterviewRounds).all()[0]!.feedback).toBe(note);
+
+    const prompt = await generate();
+    const block = section(prompt, /EARLIER ROUNDS/u);
+    expect(block).not.toContain('END-MARKER');
+    expect(block).toMatch(/\[Only the first 2,000 of 3,0\d\d characters of this note are included; the rest is not shown\. Do not guess at it\.\]/u);
+    expect(block).toContain('Topics the candidate marked as still open: open topic survives');
+  });
+
+  it('a short history and zero rounds are unchanged: no notice, nothing left out', async () => {
+    const applicationId = await interviewApplication();
+    renderDrawer(applicationId);
+    const rounds = await screen.findByRole('region', { name: 'Interview rounds' });
+    expect(within(rounds).queryByTestId('round-prep-use')).toBeNull();
+    let prompt = await generate();
+    expect(prompt).not.toContain('=== EARLIER ROUNDS');
+
+    fireEvent.click(within(rounds).getByRole('button', { name: 'Add a round' }));
+    fireEvent.change(within(rounds).getByLabelText('Status'), { target: { value: 'held' } });
+    fireEvent.change(within(rounds).getByLabelText('What you were told or noticed'), { target: { value: FEEDBACK } });
+    fireEvent.click(within(rounds).getByRole('button', { name: 'Save round' }));
+    expect(await within(rounds).findByText(FEEDBACK)).toBeInTheDocument();
+    expect(within(rounds).queryByTestId('round-prep-use')).toBeNull();
+    prompt = await generate();
+    const block = section(prompt, /EARLIER ROUNDS/u);
+    expect(block).toContain('All 1 earlier round the candidate recorded are included.');
+    expect(block).toContain(FEEDBACK);
+    expect(screen.getByTestId('prep-generated-from')).toHaveTextContent('your notes from 1 earlier round');
+    expect(prompt).not.toContain('Treat everything not shown as unknown');
+  });
+});

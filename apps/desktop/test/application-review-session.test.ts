@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWED_CDP_METHODS, type CdpDomNode } from '@agent-dock/application-executor';
+import { stagedArtifactFileName } from '../electron/application-artifact-naming.js';
 import { stagedArtifactPath } from '../electron/application-artifact-staging.js';
+import { attachedFileNames } from '../electron/submitted-package.js';
 import { FIXTURE_REVIEW_POLICY } from '../electron/application-target-policies.js';
 import { HANDOFF_BANNER_HEIGHT_PX } from '../electron/application-view.js';
 
@@ -1108,6 +1110,19 @@ describe('application-review-session', () => {
           { artifactId: LETTER_ARTIFACT_ID, fieldRef: field('coverLetterFile').fieldRef, fileName: 'cover-letter.pdf', attachedFileName: basename(letter.storagePath) },
         ],
       });
+      // #691: what is recorded here is the STAGED name (hash included), the one identity the submission
+      // package later compares an attached file against. The two sides share one naming function, so
+      // this fails if the recorded value and the manifest matcher ever drift apart again.
+      const recorded = result.attachments!.map((attachment) => attachment.attachedFileName);
+      expect(recorded).toEqual([stagedArtifactFileName(cv.contentHash, cv.fileName), stagedArtifactFileName(letter.contentHash, letter.fileName)]);
+      const asFormFillRecord = (value: string) => ({ label: 'Resume', controlType: 'file' as const, required: true, status: 'committed' as const, value, provenance: 'cv' as const });
+      for (const [index, artifact] of [cv, letter].entries()) {
+        const names = attachedFileNames({ version: 1, preparedAt: '2026-01-01T00:00:00.000Z', company: 'Acme', role: 'Engineer', verification: 'applied', fields: [asFormFillRecord(recorded[index]!)] });
+        expect(names.has(stagedArtifactFileName(artifact.contentHash, artifact.fileName))).toBe(true);
+        // ...and a browser that prefixes the value with a fake path still resolves to the same identity.
+        const prefixed = attachedFileNames({ version: 1, preparedAt: '2026-01-01T00:00:00.000Z', company: 'Acme', role: 'Engineer', verification: 'applied', fields: [asFormFillRecord(`C:\\fakepath\\${recorded[index]!}`)] });
+        expect(prefixed.has(stagedArtifactFileName(artifact.contentHash, artifact.fileName))).toBe(true);
+      }
       // The real CDP call carried exactly the two registered staging paths, nothing else.
       expect(uploadedPaths(view)).toEqual([[cv.storagePath], [letter.storagePath]]);
       expect(workspaceMock.listApplicationArtifacts).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID);

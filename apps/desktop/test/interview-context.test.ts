@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,11 +36,14 @@ const { createWorkspaceDb } = await import('../electron/workspace/client.js');
 const workspace = await import('../electron/workspace/repository.js');
 const pipeline = await import('../electron/application-pipeline.js');
 const review = await import('../electron/application-review-session.js');
+const { summarisePreparedFields } = await import('../electron/application-value-table.js');
+const { stagedArtifactFileName } = await import('../electron/application-artifact-naming.js');
 const packages = await import('../electron/workspace/submission-package-store.js');
 const schema = await import('../electron/workspace/schema.js');
 const { createInterviewContextHandlers } = await import('../electron/interview-context-ipc.js');
 const { ApplicationDataResetGate } = await import('../electron/application-data-reset-gate.js');
 const fx = await import('./application-critique-fixtures.js');
+import type { FieldMap, FormSnapshot } from '@agent-dock/application-executor';
 import type { WorkspaceDb } from '../electron/workspace/client.js';
 import type { InterviewContextResult, InterviewContextView, InterviewPackageView } from '../electron/interview-context-types.js';
 
@@ -137,16 +140,43 @@ const pkgOf = (view: InterviewContextView, attemptId: string): InterviewPackageV
   view.packages.find((pkg) => pkg.attemptId === attemptId)!;
 const docOf = (pkg: InterviewPackageView, slot: 'cv' | 'letter') => pkg.documents.find((doc) => doc.slot === slot)!;
 
-/** Exactly the writes the submit path makes once the page observer reports a receipt. */
-function recordObservedReceipt(attemptId: string, attachedFiles: string[]): void {
-  workspace.recordPreparedApplicationFields(db, attemptId, {
-    version: 1,
-    preparedAt: new Date().toISOString(),
+/**
+ * What the form fill records for the files it attached. Not hand-seeded: the committed file field is
+ * produced by the real `summarisePreparedFields` from attachments shaped exactly as the review session's
+ * `applyApplicationFieldMap` returns them -- `attachedFileName` is what the page reported after the
+ * upload, which the session only accepts when it contains `basename(localFilePath)`, i.e. the STAGED
+ * name `<contentHash>-<fileName>` of the real file the pipeline wrote. `report` decides what the page
+ * said (the bare staged name, or behind `C:\fakepath\` or a directory).
+ */
+type Reported = (stagedName: string) => string;
+const asReported: Reported = (name) => name;
+const behindFakepath: Reported = (name) => `C:\\fakepath\\${name}`;
+const behindPosixDir: Reported = (name) => `/var/tmp/uploads/${name}`;
+
+function recordFormFillAttachments(
+  attemptId: string,
+  files: ReadonlyArray<{ artifact: { id: string; fileName: string; storagePath: string | null }; report?: Reported }>,
+): string[] {
+  const reported = files.map(({ artifact, report }) => (report ?? asReported)(basename(artifact.storagePath!)));
+  const summary = summarisePreparedFields({
+    snapshot: {
+      fields: files.map((_, index) => ({ fieldRef: `file-${index}`, label: 'Resume', controlType: 'file', required: true })),
+    } as unknown as FormSnapshot,
+    fieldMap: { assignments: [] } as unknown as FieldMap,
+    valueTable: [],
+    uploadFieldRefs: files.map((_, index) => `file-${index}`),
+    optionFieldRefs: [],
+    attachments: files.map(({ artifact }, index) => ({ fieldRef: `file-${index}`, fileName: artifact.fileName, attachedFileName: reported[index]! })),
     company: fx.COMPANY,
     role: fx.ROLE,
-    verification: 'applied',
-    fields: attachedFiles.map((value) => ({ label: 'Resume', controlType: 'file', required: true, status: 'committed', value, provenance: 'cv' })),
+    preparedAt: new Date().toISOString(),
   });
+  workspace.recordPreparedApplicationFields(db, attemptId, summary.prepared);
+  return reported;
+}
+
+/** Exactly the writes the submit path makes once the page observer reports a receipt. */
+function recordObservedReceipt(attemptId: string): void {
   workspace.createApplicationSubmissionReceipt(db, {
     attemptId,
     outcome: 'submitted',
@@ -213,7 +243,11 @@ describe('binding a manifest when a submission is recorded', () => {
   it('an observed receipt backs only the file this app recorded attaching, and never overwrites by a statement', async () => {
     const attemptId = await prepare();
     const cvFile = artifactsOf(attemptId).find((file) => file.kind === 'cv_pdf')!;
-    recordObservedReceipt(attemptId, [cvFile.fileName]);
+    // Production shape: the value the form fill committed is the STAGED name, not the logical file name.
+    const [reportedName] = recordFormFillAttachments(attemptId, [{ artifact: cvFile }]);
+    expect(reportedName).toBe(stagedArtifactFileName(cvFile.contentHash, cvFile.fileName));
+    expect(reportedName).not.toBe(cvFile.fileName);
+    recordObservedReceipt(attemptId);
 
     const view = await viewOf(appOf(attemptId));
     const pkg = pkgOf(view, attemptId);
@@ -253,10 +287,98 @@ describe('binding a manifest when a submission is recorded', () => {
 
   it('a receipt with no record of any attachment backs no document', async () => {
     const attemptId = await prepare();
-    recordObservedReceipt(attemptId, []);
+    recordObservedReceipt(attemptId);
     const pkg = pkgOf(await viewOf(appOf(attemptId)), attemptId);
     expect(pkg.submission.evidence).toBe('receipt');
     expect(pkg.documents.map((doc) => doc.provenance)).toEqual(['prepared', 'prepared']);
+  });
+
+  it.each([
+    ['behind a Windows C:\\fakepath\\ prefix', behindFakepath],
+    ['behind a posix directory', behindPosixDir],
+  ])('backs the file when the page reported the staged name %s', async (_label, report) => {
+    const attemptId = await prepare();
+    const cvFile = artifactsOf(attemptId).find((file) => file.kind === 'cv_pdf')!;
+    const [reported] = recordFormFillAttachments(attemptId, [{ artifact: cvFile, report }]);
+    expect(reported).not.toBe(basename(cvFile.storagePath!));
+    recordObservedReceipt(attemptId);
+    const pkg = pkgOf(await viewOf(appOf(attemptId)), attemptId);
+    expect(docOf(pkg, 'cv').provenance).toBe('receipt_backed');
+    expect(docOf(pkg, 'letter').provenance).toBe('prepared');
+  });
+
+  it('backs the CV and the letter independently when both staged files were attached', async () => {
+    const attemptId = await prepare();
+    const files = artifactsOf(attemptId);
+    recordFormFillAttachments(attemptId, [
+      { artifact: files.find((file) => file.kind === 'cv_pdf')! },
+      { artifact: files.find((file) => file.kind === 'cover_letter_pdf')!, report: behindFakepath },
+    ]);
+    recordObservedReceipt(attemptId);
+    const pkg = pkgOf(await viewOf(appOf(attemptId)), attemptId);
+    expect(pkg.documents.map((doc) => doc.provenance)).toEqual(['receipt_backed', 'receipt_backed']);
+  });
+
+  it('does not back a document by the bare logical file name alone', async () => {
+    const attemptId = await prepare();
+    const cvFile = artifactsOf(attemptId).find((file) => file.kind === 'cv_pdf')!;
+    recordFormFillAttachments(attemptId, [{ artifact: cvFile, report: () => cvFile.fileName }]);
+    recordObservedReceipt(attemptId);
+    expect(docOf(pkgOf(await viewOf(appOf(attemptId)), attemptId), 'cv').provenance).toBe('prepared');
+  });
+
+  it("does not back this CV with another artifact's staged name, nor with the right name under a wrong hash", async () => {
+    const attemptId = await prepare();
+    const otherAttemptId = await prepare({ vacancyKey: 'vac-other', url: `${fx.APPLY_URL}-other`, bullets: ROLE_B_BULLETS });
+    const cvFile = artifactsOf(attemptId).find((file) => file.kind === 'cv_pdf')!;
+    const otherCv = artifactsOf(otherAttemptId).find((file) => file.kind === 'cv_pdf')!;
+    expect(otherCv.fileName).toBe(cvFile.fileName);
+    expect(otherCv.contentHash).not.toBe(cvFile.contentHash);
+
+    // The page reported a different attempt's file of the same logical name, behind a fakepath too.
+    recordFormFillAttachments(attemptId, [{ artifact: cvFile, report: () => behindFakepath(basename(otherCv.storagePath!)) }]);
+    recordObservedReceipt(attemptId);
+    expect(docOf(pkgOf(await viewOf(appOf(attemptId)), attemptId), 'cv').provenance).toBe('prepared');
+    // The other attempt, never submitted, gains nothing from this one's receipt.
+    expect(pkgOf(await viewOf(appOf(otherAttemptId)), otherAttemptId).kind).toBe('prepared');
+  });
+
+  it('does not back this CV when the staged name carries a hash that is not its own', async () => {
+    const attemptId = await prepare();
+    const cvFile = artifactsOf(attemptId).find((file) => file.kind === 'cv_pdf')!;
+    recordFormFillAttachments(attemptId, [{ artifact: cvFile, report: () => stagedArtifactFileName('f'.repeat(64), cvFile.fileName) }]);
+    recordObservedReceipt(attemptId);
+    expect(docOf(pkgOf(await viewOf(appOf(attemptId)), attemptId), 'cv').provenance).toBe('prepared');
+  });
+
+  it('never promotes a prepared file from an "I applied" statement, however it was attached', async () => {
+    const attemptId = await prepare();
+    const cvFile = artifactsOf(attemptId).find((file) => file.kind === 'cv_pdf')!;
+    recordFormFillAttachments(attemptId, [{ artifact: cvFile }]);
+    expect(review.recordUserReportedSubmission(db, attemptId)).toEqual({ ok: true });
+    const pkg = pkgOf(await viewOf(appOf(attemptId)), attemptId);
+    expect(pkg.submission.evidence).toBe('user_reported');
+    expect(pkg.documents.map((doc) => doc.provenance)).toEqual(['prepared', 'prepared']);
+  });
+
+  it('a delayed receipt (reconcileSubmissionOutcome) backs the attached staged file, and only then', async () => {
+    const attemptId = await prepare();
+    const cvFile = artifactsOf(attemptId).find((file) => file.kind === 'cv_pdf')!;
+    recordFormFillAttachments(attemptId, [{ artifact: cvFile, report: behindFakepath }]);
+    // The click landed but nothing was observed: no submission is recorded, so no package is bound.
+    workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submission_unknown', submittedAt: '2026-08-01T10:00:00.000Z' });
+    expect(packages.listPackageVersions(db, packages.attemptSubject(attemptId))).toEqual([]);
+
+    const body = JSON.stringify({ confirmationNumber: 'FIXTURE-9001' });
+    expect(review.reconcileSubmissionOutcome(db, attemptId, { status: 202, body }, '2026-08-01T11:00:00.000Z')).toEqual({ ok: true });
+    const [bound] = packages.listPackageVersions(db, packages.attemptSubject(attemptId));
+    expect(bound!.manifest.submission.evidence).toBe('receipt');
+    expect(bound!.manifest.documents.map((doc) => [doc.slot, doc.provenance])).toEqual([
+      ['cv', 'receipt_backed'],
+      ['letter', 'prepared'],
+    ]);
+    const pkg = pkgOf(await viewOf(appOf(attemptId)), attemptId);
+    expect(docOf(pkg, 'cv')).toMatchObject({ provenance: 'receipt_backed', fileState: 'present' });
   });
 });
 

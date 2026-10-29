@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { reportedBaseName, stagedArtifactFileName } from './application-artifact-naming.js';
 import type { DraftKind } from './application-critique-types.js';
 import type { PreparedApplicationFields } from './workspace/types.js';
 
@@ -151,13 +152,25 @@ export interface BindInput {
   previous: PackageManifestContent | null;
 }
 
-/** The file names this app's own form fill recorded as attached (#272/#273). */
+/**
+ * The file names this app's own form fill recorded as attached (#272/#273), reduced to their base name.
+ *
+ * What a committed file field holds is what the page's file input reported after the upload, which is
+ * the STAGED name (`<contentHash>-<fileName>`, see `stagedArtifactFileName`), possibly behind a
+ * `C:\fakepath\` or other directory prefix. Both separators are stripped, so the same file compares
+ * equal on every platform. A name the review session had to truncate simply never matches.
+ */
 export function attachedFileNames(fields: PreparedApplicationFields | null): Set<string> {
   const names = new Set<string>();
   for (const field of fields?.fields ?? []) {
-    if (field.controlType === 'file' && field.status === 'committed' && field.value) names.add(field.value);
+    if (field.controlType === 'file' && field.status === 'committed' && field.value) names.add(reportedBaseName(field.value));
   }
   return names;
+}
+
+/** True when the form-fill record names this exact artifact (its content hash AND file name) as attached. */
+function wasAttached(attached: ReadonlySet<string>, artifact: BindArtifact): boolean {
+  return attached.has(stagedArtifactFileName(artifact.contentHash, artifact.fileName));
 }
 
 function submissionOf(input: BindInput): PackageManifestContent['submission'] {
@@ -191,7 +204,7 @@ export function buildSubmissionManifest(input: BindInput): PackageManifestConten
     const artifact = draft
       ? (input.artifacts.find((candidate) => candidate.contentHash === draft.artifactHash) ?? null)
       : (input.artifacts.find((candidate) => artifactKinds.includes(candidate.kind)) ?? null);
-    const receiptBacked = submission.evidence === 'receipt' && artifact !== null && attached.has(artifact.fileName);
+    const receiptBacked = submission.evidence === 'receipt' && artifact !== null && wasAttached(attached, artifact);
 
     // A person's earlier statement stands unless this app now holds a receipt for its own attached file.
     if (earlier && PERSON_PROVENANCE.includes(earlier.provenance) && !receiptBacked) {

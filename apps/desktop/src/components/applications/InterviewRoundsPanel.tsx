@@ -8,10 +8,13 @@ import {
 } from '../../../electron/interview-context-types.js';
 import { ErrorBanner } from '../shell/index.js';
 import { ROUND_STATE_LABEL, ROUND_TYPE_LABEL } from './interview-context-labels.js';
+import { describeRoundPrepUse, ROUNDS_PROMPT_BUDGET, type RoundPrepUse } from './interview-rounds-budget.js';
 
 export interface InterviewRoundsPanelProps {
   applicationId: string;
   rounds: readonly InterviewRoundView[];
+  /** How a prep pack uses each held round (by id): what is left out or cut before generating. */
+  prepUse: ReadonlyMap<string, RoundPrepUse>;
   /** The planned round the next prep pack is for, or null. */
   nextRoundId: string | null;
   onNextRoundChange(roundId: string | null): void;
@@ -48,6 +51,7 @@ function toDraft(round: InterviewRoundView): Draft {
 export function InterviewRoundsPanel({
   applicationId,
   rounds,
+  prepUse,
   nextRoundId,
   onNextRoundChange,
   onView,
@@ -129,6 +133,15 @@ export function InterviewRoundsPanel({
                   {round.feedback}
                 </p>
               )}
+              {(() => {
+                const use = prepUse.get(round.id);
+                const note = use ? describeRoundPrepUse(use) : null;
+                return note ? (
+                  <p className="mt-1 text-xs text-base-content/70" data-testid="round-prep-use">
+                    {note}
+                  </p>
+                ) : null;
+              })()}
               {round.openTopics.length > 0 && (
                 <p className="mt-1 break-words text-xs">
                   <span className="text-base-content/70">Still open for you: </span>
@@ -258,6 +271,12 @@ export function InterviewRoundsPanel({
               disabled={saving}
               onChange={(event) => set({ feedback: event.target.value })}
             />
+            {draft.feedback.trim().length > ROUNDS_PROMPT_BUDGET.feedbackChars && (
+              <span className="mt-1 block text-base-content/70" data-testid="round-feedback-limit">
+                You have written {draft.feedback.trim().length.toLocaleString('en-US')} characters. All of it is saved, but a prep
+                pack uses only the first {ROUNDS_PROMPT_BUDGET.feedbackChars.toLocaleString('en-US')}: put what matters most first.
+              </span>
+            )}
           </label>
           <label className="block text-xs">
             <span className="font-medium">Topics still open for you (one per line)</span>

@@ -19,6 +19,7 @@ import { CompanyEvidencePanel } from './CompanyEvidencePanel.js';
 import { SubmittedDocumentsPanel } from './SubmittedDocumentsPanel.js';
 import { InterviewRoundsPanel } from './InterviewRoundsPanel.js';
 import { basisSummary, defaultNextRoundId, roundsForPrep, submittedBasis } from './interview-context-labels.js';
+import { planPriorRounds, roundPrepUseById } from './interview-rounds-budget.js';
 import type { InterviewContextView } from '../../../electron/interview-context-types.js';
 import type { CompanyEvidenceProseFact } from '../../../electron/company-evidence.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
@@ -255,8 +256,14 @@ export function InterviewPrepDrawer({
     cv: !!application.cvId && cvDocuments.some((doc) => doc.id === application.cvId),
     letter: !!application.letterId && letters.some((row) => row.id === application.letterId),
   };
-  const priorRoundCount = view ? view.rounds.filter((round) => round.state === 'held').length : 0;
-  const basisLine = basisSummary(basisPackage, linked, priorRoundCount);
+  // The same plan the prompt is built from (the prompt builder plans the identical rounds), so what the
+  // person reads here before generating is what the prompt states and obeys.
+  const roundsPlan = useMemo(() => planPriorRounds(view ? roundsForPrep(view.rounds, null).prior : []), [view]);
+  const roundsPrepUse = useMemo(
+    () => roundPrepUseById(roundsPlan, view ? view.rounds.filter((round) => round.state === 'held').map((round) => round.id) : []),
+    [roundsPlan, view],
+  );
+  const basisLine = basisSummary(basisPackage, linked, roundsPlan);
   const mustChoose = view?.selection === 'choose' && !selectedPackage;
 
   const attemptsLoaded = attempts !== null;
@@ -360,6 +367,7 @@ export function InterviewPrepDrawer({
                 <InterviewRoundsPanel
                   applicationId={application.id}
                   rounds={view.rounds}
+                  prepUse={roundsPrepUse}
                   nextRoundId={nextRoundId}
                   onNextRoundChange={setNextRoundId}
                   onView={applyView}
