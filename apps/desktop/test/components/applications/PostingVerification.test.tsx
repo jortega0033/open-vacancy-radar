@@ -5,6 +5,7 @@ import type { PostingVerificationView } from '../../../electron/application-pipe
 import {
   POSTING_CHANGED_DETAIL as MAIN_CHANGED_DETAIL,
   POSTING_CLOSED_DETAIL as MAIN_CLOSED_DETAIL,
+  POSTING_REOPENED_DETAIL as MAIN_REOPENED_DETAIL,
 } from '../../../electron/application-posting-verification.js';
 import { ApplicationAttemptDrawer } from '../../../src/components/applications/ApplicationAttemptDrawer.js';
 import { ApplicationReviewSession } from '../../../src/components/applications/ApplicationReviewSession.js';
@@ -13,8 +14,10 @@ import {
   describePostingVerification,
   formatCheckedAgo,
   isPostingFindingDetail,
+  isPostingPreparationStopDetail,
   POSTING_CHANGED_DETAIL,
   POSTING_CLOSED_DETAIL,
+  POSTING_REOPENED_DETAIL,
 } from '../../../src/components/applications/posting-verification-text.js';
 import type { ApplicationAttemptRecord } from '../../../src/window.js';
 
@@ -59,6 +62,8 @@ const CHANGED = view({
 const UNABLE = (reason: PostingVerificationView['reason']): PostingVerificationView =>
   view({ status: 'unable_to_verify', reason, httpStatus: null, noDeadlineStated: false, contentVersion: null, actions: ['open_posting', 'check_again'] });
 
+const OPEN_PREPARABLE = view({ actions: ['prepare_now', 'check_again'] });
+
 function installPipeline(initial: PostingVerificationView, extra: Record<string, unknown> = {}) {
   const bridge = {
     postingVerification: vi.fn().mockResolvedValue(initial),
@@ -88,6 +93,12 @@ describe('posting check wording', () => {
     expect(isPostingFindingDetail(MAIN_CLOSED_DETAIL)).toBe(true);
     expect(isPostingFindingDetail(MAIN_CHANGED_DETAIL)).toBe(true);
     expect(isPostingFindingDetail('Your cover letter still needs attention.')).toBe(false);
+    // The sentence a settled preparation stop carries is not a finding, but is still a stop the notice owns.
+    expect(POSTING_REOPENED_DETAIL).toBe(MAIN_REOPENED_DETAIL);
+    expect(isPostingFindingDetail(MAIN_REOPENED_DETAIL)).toBe(false);
+    expect(isPostingPreparationStopDetail(MAIN_REOPENED_DETAIL)).toBe(true);
+    expect(isPostingPreparationStopDetail(MAIN_CLOSED_DETAIL)).toBe(true);
+    expect(isPostingPreparationStopDetail('Your cover letter still needs attention.')).toBe(false);
   });
 
   it('only a positive closure is called closed; every inability says it is not closure', () => {
@@ -182,6 +193,39 @@ describe('PostingVerificationNotice', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh from the updated posting' }));
     await waitFor(() => expect(bridge.refreshFromPosting).toHaveBeenCalledWith(ATTEMPT_ID));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('refreshed'));
+  });
+
+  it('a settled preparation stop offers Prepare now, which is the ordinary resume with no decision attached', async () => {
+    const bridge = installPipeline(OPEN_PREPARABLE);
+    const onDone = vi.fn();
+    render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} onDone={onDone} />);
+
+    const region = await screen.findByRole('region', { name: 'Posting check' });
+    expect(within(region).getByText('The posting is still open.')).toBeInTheDocument();
+    expect(within(region).getByText(/paused earlier/u)).toBeInTheDocument();
+    fireEvent.click(within(region).getByRole('button', { name: 'Prepare now' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('resumed'));
+    expect(bridge.resume.mock.calls).toEqual([[ATTEMPT_ID]]);
+    expect(bridge.verifyPosting).not.toHaveBeenCalled();
+  });
+
+  it('shows a refused Prepare now instead of pretending it worked', async () => {
+    installPipeline(OPEN_PREPARABLE, { resume: vi.fn().mockResolvedValue({ ok: false, attemptId: ATTEMPT_ID, tailoringMode: 'ai', detail: 'not waiting any more' }) });
+    const onDone = vi.fn();
+    render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} onDone={onDone} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare now' }));
+    expect(await screen.findByText('not waiting any more')).toBeInTheDocument();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('offers no Prepare now while a closure or change still waits for the person, or on a plain open posting', async () => {
+    for (const shown of [CLOSED, CHANGED, view()]) {
+      installPipeline(shown);
+      const { unmount } = render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} />);
+      await screen.findByRole('region', { name: 'Posting check' });
+      expect(screen.queryByRole('button', { name: 'Prepare now' })).toBeNull();
+      unmount();
+    }
   });
 
   it('shows why a check could not run and offers a retry without calling it closed', async () => {
@@ -310,6 +354,27 @@ describe('the application drawer', () => {
   });
 });
 
+describe('a preparation that stopped on a finding which a later check settled', () => {
+  const STALE_STOP = { ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: MAIN_CLOSED_DETAIL } as ApplicationAttemptRecord;
+  const REOPENED_STOP = { ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: MAIN_REOPENED_DETAIL } as ApplicationAttemptRecord;
+
+  it.each([
+    ['a stale finding sentence', STALE_STOP],
+    ['the reopened sentence', REOPENED_STOP],
+  ])('the drawer offers Prepare now for %s and it reaches the resume action', async (_label, stopped) => {
+    const bridge = installPipeline(OPEN_PREPARABLE);
+    (window as unknown as { workspace: unknown }).workspace = { listApplicationArtifacts: vi.fn().mockResolvedValue([]) };
+    const onChanged = vi.fn();
+    render(<ApplicationAttemptDrawer attempt={stopped} onClose={vi.fn()} onChanged={onChanged} />);
+
+    const region = await screen.findByRole('region', { name: 'Posting check' });
+    expect(region).toHaveAttribute('data-status', 'confirmed_open');
+    fireEvent.click(within(region).getByRole('button', { name: 'Prepare now' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith('retried'));
+    expect(bridge.resume.mock.calls).toEqual([[ATTEMPT_ID]]);
+  });
+});
+
 describe('the review dialog (resuming a prepared application)', () => {
   const SNAPSHOT: FormSnapshot = {
     generation: 1,
@@ -399,6 +464,38 @@ describe('the review dialog (resuming a prepared application)', () => {
     await waitFor(() => expect(openReview).toHaveBeenCalledTimes(1));
     expect(bridge.resume).toHaveBeenCalledWith(ATTEMPT_ID, { resolution: 'prepare_anyway' });
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the old closed sentence (the check ran before the settled sentence existed)', MAIN_CLOSED_DETAIL],
+    ['the reopened sentence', MAIN_REOPENED_DETAIL],
+  ])('opening the dialog on a settled preparation stop (%s) leaves a real Prepare now that queues preparation once', async (_label, detail) => {
+    const bridge = installPipeline(OPEN_PREPARABLE);
+    const stopped = { ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: detail } as ApplicationAttemptRecord;
+    const { openReview } = installExecutor(stopped);
+    const onClose = vi.fn();
+    render(<ApplicationReviewSession attempt={{ ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: MAIN_CLOSED_DETAIL } as ApplicationAttemptRecord} onClose={onClose} />);
+
+    const prepare = await screen.findByRole('button', { name: 'Prepare now' });
+    // One way to prepare, not two: no generic blocker, Details, Resume or Open vacancy beside the notice.
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open vacancy' })).toBeNull();
+    expect(screen.queryByText('This application needs your attention.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument();
+    expect(openReview).not.toHaveBeenCalled();
+
+    fireEvent.click(prepare);
+    await waitFor(() => expect(onClose).toHaveBeenCalledWith('resolved'));
+    expect(bridge.resume.mock.calls).toEqual([[ATTEMPT_ID]]);
+  });
+
+  it('a closure that still waits for the person gets no Prepare now in the dialog, only the explicit choices', async () => {
+    installPipeline(CLOSED);
+    installExecutor({ ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: MAIN_CLOSED_DETAIL } as ApplicationAttemptRecord);
+    render(<ApplicationReviewSession attempt={{ ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: MAIN_CLOSED_DETAIL } as ApplicationAttemptRecord} onClose={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: 'Get ready anyway' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prepare now' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 
   it('a check that cannot run never blocks the review', async () => {

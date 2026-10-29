@@ -204,6 +204,13 @@ export interface PostingHoldRequest {
   isPreparedPackage: PreparedPackagePredicate;
   /** The sentence the held attempt shows while the person decides (one per finding kind). */
   detailFor: (result: 'confirmed_closed' | 'materially_changed') => string;
+  /**
+   * Whether a `needs_user` detail is a sentence this module wrote because PREPARATION stopped on a
+   * posting finding (nothing was prepared, so there is no package to hold).
+   */
+  isPreparationStop: (detail: string) => boolean;
+  /** What such a stop says once a definitive answer found the posting open again. */
+  reopenedDetail: string;
 }
 
 export interface RecordPostingVerificationInput {
@@ -275,6 +282,39 @@ function restoreFromHold(tx: Tx, attempt: AttemptRow, row: Row): boolean {
     .run();
   syncApplicationForAttempt(tx as WorkspaceDb, attempt.id);
   return true;
+}
+
+/**
+ * Keeps the sentence of a preparation stop truthful after a definitive answer. Only the detail text of
+ * an attempt that is `needs_user` at one of this module's own stop sentences is rewritten: checkpoint,
+ * prepared answers, artifacts, snapshot and queue are never touched, and an attempt waiting for any
+ * other reason (a question, a letter, a failure) or a package held by a finding is left exactly as it
+ * is. An undecided finding keeps the attempt stopped, with the sentence for ITS kind; a posting that is
+ * open again turns the stop into an invitation to prepare, which only the person's own action starts.
+ */
+function retargetPreparationStop(
+  tx: Tx,
+  attemptId: string,
+  hold: PostingHoldRequest,
+  result: PostingVerificationResult,
+  written: Row,
+): void {
+  const current = tx.select().from(applicationAttempts).where(eq(applicationAttempts.id, attemptId)).get();
+  if (!current || isHistoricalAttempt(current) || current.checkpoint !== 'needs_user') return;
+  if (!hold.isPreparationStop(current.checkpointDetail)) return;
+  const pending = pendingRow(tx, attemptId);
+  let next: string | null = null;
+  if (pending) {
+    next = hold.detailFor(pending.result === 'confirmed_closed' ? 'confirmed_closed' : 'materially_changed');
+  } else if (result === 'confirmed_open' && written.resolution === null) {
+    next = hold.reopenedDetail;
+  }
+  if (next === null || next === current.checkpointDetail) return;
+  tx.update(applicationAttempts)
+    .set({ checkpointDetail: next, updatedAt: new Date() })
+    .where(eq(applicationAttempts.id, attemptId))
+    .run();
+  syncApplicationForAttempt(tx as WorkspaceDb, attemptId);
 }
 
 const CLEARED_HOLD = { heldCheckpoint: null, heldCheckpointDetail: null, heldPreparedFields: null } as const;
@@ -467,6 +507,13 @@ export function recordPostingVerification(
         syncApplicationForAttempt(tx as WorkspaceDb, input.attemptId);
         hold = 'held';
       }
+    }
+
+    // An application whose PREPARATION stopped on a finding has no package to hold, so nothing above
+    // touches it. Its sentence must still follow the newest definitive answer, or it keeps saying
+    // "looks closed" for a posting that is open and the person has no way to see they can prepare it.
+    if (input.hold && definitive) {
+      retargetPreparationStop(tx, input.attemptId, input.hold, input.result, row);
     }
     return { written, record: toRecord(row), hold };
   });

@@ -110,6 +110,14 @@ is essentially the notice (its first line is one of a few fixed closure sentence
   its detail and prepared answers stay; the notice shows the finding and a decision only records the decision.
 - When preparation itself stops on a finding (nothing prepared yet), **Keep** / **Get ready anyway** continue that
   preparation.
+- When a **later check finds that posting open and unchanged** (or only trivially different, or back to what was
+  prepared from), the finding is settled and nothing is left to decide. The application's stored sentence becomes
+  "The posting is open again, so this application can be prepared now." and the notice offers **Prepare now** in the
+  application drawer and in the review dialog. It is the ordinary resume (one click, queued once, no package exists
+  that could be lost); nothing prepares by itself, not even when the dialog's own check found it. The same button
+  stays available if a still later check merely cannot reach the posting, because that does not undo the earlier
+  open answer. While a closed or changed finding is still undecided, **Prepare now** is never offered, and a resume
+  that bypasses the buttons stops again at the finding with no AI work.
 
 ## Freshness, validators and observation time
 

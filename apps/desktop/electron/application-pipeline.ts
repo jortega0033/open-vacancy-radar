@@ -22,7 +22,7 @@ import {
 } from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import {
-  isPostingFindingDetail,
+  isPostingPreparationStopDetail,
   POSTING_CHANGED_DETAIL,
   POSTING_CLOSED_DETAIL,
   refreshAttemptFromPosting,
@@ -949,7 +949,7 @@ export async function resumeApplicationAttempt(
     if (decided.restored) {
       return { ok: true, attemptId, tailoringMode: attempt.tailoringMode, continued: 'restored' };
     }
-    if (!(attempt.checkpoint === 'needs_user' && isPostingFindingDetail(attempt.checkpointDetail))) {
+    if (!(attempt.checkpoint === 'needs_user' && isPostingPreparationStopDetail(attempt.checkpointDetail))) {
       return { ok: true, attemptId, tailoringMode: attempt.tailoringMode, continued: 'recorded' };
     }
   }

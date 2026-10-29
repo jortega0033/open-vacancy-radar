@@ -80,8 +80,19 @@ export const POSTING_CLOSED_DETAIL =
 export const POSTING_CHANGED_DETAIL =
   'This posting changed since it was read. Review what changed, then refresh your application from the updated posting or keep what you have.';
 
+/**
+ * What a preparation that stopped on a closed/changed finding says once a later definitive check found
+ * the posting open (or unchanged) again: nothing is left to decide, and the person can prepare now.
+ */
+export const POSTING_REOPENED_DETAIL = 'The posting is open again, so this application can be prepared now.';
+
 export function isPostingFindingDetail(detail: string): boolean {
   return detail === POSTING_CLOSED_DETAIL || detail === POSTING_CHANGED_DETAIL;
+}
+
+/** A sentence this module wrote because PREPARATION stopped on a posting finding (nothing was prepared). */
+export function isPostingPreparationStopDetail(detail: string): boolean {
+  return isPostingFindingDetail(detail) || detail === POSTING_REOPENED_DETAIL;
 }
 
 /**
@@ -107,6 +118,8 @@ export function isPreparedPackage(attempt: { checkpoint: ApplicationAttemptCheck
 const POSTING_HOLD: PostingHoldRequest = {
   isPreparedPackage,
   detailFor: (result) => (result === 'confirmed_closed' ? POSTING_CLOSED_DETAIL : POSTING_CHANGED_DETAIL),
+  isPreparationStop: isPostingPreparationStopDetail,
+  reopenedDetail: POSTING_REOPENED_DETAIL,
 };
 
 const PREPARED_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = ['ready', 'needs_user', 'failed'];
@@ -151,10 +164,14 @@ function actionsFor(
   resolution: PostingVerificationRecord['resolution'],
   attemptCheckpoint: ApplicationAttemptCheckpoint,
   checkable: boolean,
+  preparable: boolean,
 ): PostingVerificationAction[] {
   const waiting = attemptCheckpoint === 'needs_user' || attemptCheckpoint === 'failed';
   // "Check again" only where it can actually ask someone: a link with an authoritative route.
   const checkAgain: PostingVerificationAction[] = checkable ? ['check_again'] : [];
+  // A preparation that stopped on a finding which a definitive answer has since settled: the person
+  // starts it (one click, through the existing resume), nothing prepares by itself.
+  const prepareNow: PostingVerificationAction[] = preparable ? ['prepare_now'] : [];
   switch (status) {
     case 'not_applicable':
       return [];
@@ -167,8 +184,9 @@ function actionsFor(
         ? ['refresh', 'keep_current', 'open_posting', ...checkAgain]
         : ['open_posting', ...checkAgain];
     case 'unable_to_verify':
-      return ['open_posting', ...checkAgain];
+      return [...prepareNow, 'open_posting', ...checkAgain];
     case 'confirmed_open':
+      return [...prepareNow, ...checkAgain];
     case 'not_checked':
       return checkAgain;
   }
@@ -200,6 +218,15 @@ export function buildPostingVerificationView(
       ? { checkedAt: latest.observedAt, reason: latest.reason as PostingVerificationReasonCode }
       : null;
   const freshnessBasis = recheck !== null ? latest : shown;
+  // Preparation stopped on a finding (so there is no package) and no undecided closed/changed finding
+  // is left for this snapshot: an open answer supersedes it, and a later "could not check" does not
+  // bring it back. Nothing is offered while a finding still waits for the person.
+  const preparable =
+    !historical &&
+    attempt.checkpoint === 'needs_user' &&
+    isPostingPreparationStopDetail(attempt.checkpointDetail) &&
+    pendingCurrent === null &&
+    (status === 'confirmed_open' || status === 'unable_to_verify');
   const changeSummary: PostingChangeSummary | null =
     shown?.result === 'materially_changed' && shown.resolution !== 'refreshed' ? shown.changeSummary : null;
   return {
@@ -230,6 +257,7 @@ export function buildPostingVerificationView(
       shown?.resolution ?? null,
       attempt.checkpoint,
       !historical && resolvePostingProbe(attempt.canonicalUrl) !== null,
+      preparable,
     ),
   };
 }

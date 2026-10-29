@@ -14,8 +14,20 @@ export const POSTING_CLOSED_DETAIL =
 export const POSTING_CHANGED_DETAIL =
   'This posting changed since it was read. Review what changed, then refresh your application from the updated posting or keep what you have.';
 
+/** What a preparation that stopped on a finding says once a later check found the posting open again. */
+export const POSTING_REOPENED_DETAIL = 'The posting is open again, so this application can be prepared now.';
+
 export function isPostingFindingDetail(detail: string): boolean {
   return detail === POSTING_CLOSED_DETAIL || detail === POSTING_CHANGED_DETAIL;
+}
+
+/**
+ * A stored sentence that belongs to a preparation which stopped on a posting finding. The notice
+ * above it already says everything and owns the actions, so screens show no generic blocker, Details
+ * or Resume of their own for it.
+ */
+export function isPostingPreparationStopDetail(detail: string): boolean {
+  return isPostingFindingDetail(detail) || detail === POSTING_REOPENED_DETAIL;
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -97,6 +109,9 @@ export function describePostingVerification(view: PostingVerificationView, now: 
         lines.push('The posting states no deadline.');
       }
       if (view.resolution === 'refreshed') lines.push('Your application uses the updated posting.');
+      if (view.actions.includes('prepare_now')) {
+        lines.push('Preparing this application paused earlier. Nothing is left to decide, so you can prepare it now.');
+      }
       return {
         tone: deadlinePassed ? 'warning' : 'quiet',
         headline: deadlinePassed ? 'The posting is still listed, but its deadline has passed.' : 'The posting is still open.',
@@ -141,6 +156,9 @@ export function describePostingVerification(view: PostingVerificationView, now: 
       lines.push(UNABLE_REASON[view.reason ?? ''] ?? 'The check did not finish.');
       lines.push('This does not mean the posting is closed.');
       if (checked) lines.push(checked);
+      if (view.actions.includes('prepare_now')) {
+        lines.push('An earlier check found it open, so you can still prepare this application now.');
+      }
       return { tone: 'info', headline: 'We could not check whether this posting is still open.', lines };
     }
     case 'not_applicable':
@@ -166,6 +184,7 @@ export const POSTING_ACTION_LABEL = {
   refresh: 'Refresh from the updated posting',
   keep_current: 'Keep my application',
   prepare_anyway: 'Get ready anyway',
+  prepare_now: 'Prepare now',
 } as const;
 
 /** What a button says while its request is running. */
@@ -174,4 +193,5 @@ export const POSTING_ACTION_PENDING_LABEL = {
   refresh: 'Refreshing…',
   keep_current: 'Restoring…',
   prepare_anyway: 'Working…',
+  prepare_now: 'Preparing…',
 } as const;

@@ -66,7 +66,14 @@ export type PostingVerificationStatus =
   /** Submitted / reported / skipped attempts keep their package; the live posting is not consulted. */
   | 'not_applicable';
 
-export type PostingVerificationAction = 'check_again' | 'open_posting' | 'refresh' | 'keep_current' | 'prepare_anyway';
+export type PostingVerificationAction =
+  | 'check_again'
+  | 'open_posting'
+  | 'refresh'
+  | 'keep_current'
+  | 'prepare_anyway'
+  /** Preparation stopped on a closed/changed finding that a later definitive check settled: prepare it now. */
+  | 'prepare_now';
 
 export type PostingVerificationReasonCode =
   | 'verified_open' | 'not_modified' | 'not_found' | 'gone' | 'closure_notice' | 'account_not_found'

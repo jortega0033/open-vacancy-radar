@@ -9,7 +9,7 @@ import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
 import { PostingVerificationNotice } from './PostingVerificationNotice.js';
-import { isPostingFindingDetail } from './posting-verification-text.js';
+import { isPostingPreparationStopDetail } from './posting-verification-text.js';
 import { retryLabel, useWaitingForReset } from './provider-reset.js';
 import { WarningBanner } from '../shell/index.js';
 import { classifyProviderError, type ProviderErrorInfo } from '../../provider-error.js';
@@ -672,15 +672,15 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
         {state.phase === 'preparation_blocked' && (
           <div className="space-y-4">
-            {isPostingFindingDetail(state.message) ? null : limit ? (
+            {isPostingPreparationStopDetail(state.message) ? null : limit ? (
               <PipelineLimitNotice info={limit} />
             ) : (
               <WarningBanner>
                 {describePreparationBlocker(state.message)}
               </WarningBanner>
             )}
-            {isPostingFindingDetail(state.message) ? null : <TechnicalDetails text={state.message} label="Details" />}
-            {!limit && !isPostingFindingDetail(state.message) && (
+            {isPostingPreparationStopDetail(state.message) ? null : <TechnicalDetails text={state.message} label="Details" />}
+            {!limit && !isPostingPreparationStopDetail(state.message) && (
               <p className="text-sm text-base-content/70">
                 Resume to try again, or skip this one.
               </p>
@@ -693,12 +693,12 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
                 <button type="button" className="btn btn-outline flex-1" disabled={state.busy} onClick={handleGenerateLetter}>
                   Generate letter
                 </button>
-              ) : isPostingFindingDetail(state.message) ? null : (
+              ) : isPostingPreparationStopDetail(state.message) ? null : (
                 <button type="button" className="btn btn-outline flex-1" disabled={state.busy} onClick={() => window.open(attempt.canonicalUrl, '_blank', 'noopener,noreferrer')}>
                   Open vacancy
                 </button>
               )}
-              {isPostingFindingDetail(state.message) ? null : (
+              {isPostingPreparationStopDetail(state.message) ? null : (
                 <button type="button" className="btn btn-primary flex-1" disabled={state.busy || waitingForReset} onClick={() => void handleResume()}>
                   {state.busy ? 'Resuming…' : retryLabel(limit, waitingForReset, 'Resume')}
                 </button>

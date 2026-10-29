@@ -91,6 +91,13 @@ export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, on
           if (!result.ok) throw new Error(result.detail ?? 'We could not refresh this application.');
           if (!mounted.current) return;
           onDone?.('refreshed');
+        } else if (action === 'prepare_now') {
+          // The finding that stopped preparation was settled by a later check, so there is no decision
+          // to record: this is the ordinary resume, which queues preparation once.
+          const result = await window.applicationPipeline.resume(attemptId);
+          if (!result.ok) throw new Error(result.detail ?? 'We could not prepare this application.');
+          if (!mounted.current) return;
+          onDone?.('resumed');
         } else if (action === 'keep_current' || action === 'prepare_anyway') {
           const result = await window.applicationPipeline.resume(attemptId, { resolution: action });
           if (!result.ok) throw new Error(result.detail ?? 'We could not continue with this application.');
@@ -187,7 +194,7 @@ export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, on
               key={action}
               type="button"
               className={
-                action === 'refresh' || action === 'prepare_anyway'
+                action === 'refresh' || action === 'prepare_anyway' || action === 'prepare_now'
                   ? 'btn btn-primary btn-sm'
                   : action === 'check_again' && !warning
                     ? 'btn btn-ghost btn-xs'
