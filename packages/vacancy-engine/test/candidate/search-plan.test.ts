@@ -161,6 +161,85 @@ describe('search plan (#686)', () => {
     expect(searchPlanVariantId('C++ developer', '')).toBe(searchPlanVariantId('c++  Developer', ''));
   });
 
+  describe('variant id slug without a backtracking regular expression (CodeQL js/polynomial-redos)', () => {
+    /** The round-1 implementation, kept here only as the reference the linear one must reproduce exactly. */
+    function referenceId(title: string, language: string): string {
+      const squash = (value: string) => value.trim().replace(/\s+/gu, ' ');
+      const key = `${squash(title).toLocaleLowerCase()}::${squash(language).toLocaleLowerCase()}`;
+      const slug = key
+        .replace(/[^\p{L}\p{N}]+/gu, '-')
+        .replace(/^-+|-+$/gu, '')
+        .slice(0, 60)
+        .replace(/-+$/gu, '');
+      let hash = 0x811c9dc5;
+      for (let index = 0; index < key.length; index += 1) {
+        hash ^= key.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+      }
+      return `${slug || 'title'}-${hash.toString(16).padStart(8, '0')}`;
+    }
+
+    it('keeps every id byte-identical to the previous implementation', () => {
+      expect(searchPlanVariantId('C++ developer', '')).toBe('c-developer-c3926686');
+      expect(searchPlanVariantId('C# developer', '')).toBe('c-developer-2f4a0181');
+      const titles = [
+        'React developer', 'Frontend engineer', 'Front-end engineer', 'Front end engineer', '--Leading and trailing--', '  ##  ',
+        'Ünïcödé Entwickler', 'Frontend ontwikkelaar', '前端工程师', 'A', '-', '- -', 'a--b__c  d', 'x'.repeat(59) + ' y', 'x'.repeat(60) + ' y',
+        'x'.repeat(58) + ' -- yz', 'x'.repeat(59) + '-- y', 'emoji 😀 engineer', '😀😀😀', `${'ab '.repeat(40)}end`, '𝒜𝒷𝒸 developer'.repeat(8),
+        '\u0000\u0001 control', 'tab\tseparated\nlines',
+      ];
+      for (const language of ['', 'Dutch', 'English ', '--']) {
+        for (const title of titles) expect(searchPlanVariantId(title, language), `${title}|${language}`).toBe(referenceId(title, language));
+      }
+      // Pseudo-random mixtures of letters, digits and separators, including surrogate pairs.
+      let seed = 686;
+      const next = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0);
+      const alphabet = ['a', 'Z', '7', 'é', '-', '-', ' ', '_', '+', '#', '😀', '字'];
+      for (let sample = 0; sample < 400; sample += 1) {
+        let text = '';
+        const length = next() % 140;
+        for (let index = 0; index < length; index += 1) text += alphabet[next() % alphabet.length];
+        expect(searchPlanVariantId(text, ''), JSON.stringify(text)).toBe(referenceId(text, ''));
+      }
+    });
+
+    it('stays linear on adversarial separator runs and gives the same id as the reference', () => {
+      const long = 100_000;
+      const hostile = [
+        '-'.repeat(long),
+        `${'-'.repeat(long)}a`,
+        `a${'-'.repeat(long)}`,
+        `${'-'.repeat(long)}a${'-'.repeat(long)}`,
+        '-a'.repeat(long / 2),
+        `${'!-'.repeat(long / 2)}!`,
+        `${'a-'.repeat(40)}${'-'.repeat(long)}`,
+        '#'.repeat(long),
+        `${' '.repeat(long)}x${' '.repeat(long)}`,
+      ];
+      const started = performance.now();
+      const ids = hostile.map((title) => searchPlanVariantId(title, ''));
+      const elapsedMs = performance.now() - started;
+      // Nine strings of ~100k separators: a linear scan is a few milliseconds; a quadratic one is minutes.
+      expect(elapsedMs).toBeLessThan(2_000);
+      expect(ids[0]!.startsWith('title-')).toBe(true);
+      expect(ids[7]!.startsWith('title-')).toBe(true);
+      expect(ids[1]!.startsWith('a-')).toBe(true);
+      expect(ids[3]!).toMatch(/^a-[0-9a-f]{8}$/u);
+      for (const id of ids) {
+        // At most 60 slug units, a dash and 8 hex digits; only letters, numbers and single inner dashes.
+        expect(id.length).toBeLessThanOrEqual(60 + 2 + 8);
+        expect(id).toMatch(/^[\p{L}\p{N}-]+$/u);
+        expect(id).not.toContain('--');
+        expect(id.startsWith('-') || id.endsWith('-')).toBe(false);
+      }
+      expect(new Set(ids).size).toBe(hostile.length);
+      // Same ids as the reference on the shorter hostile strings the reference can still run quickly.
+      for (const title of hostile.slice(0, 3).map((value) => value.slice(0, 3_000))) {
+        expect(searchPlanVariantId(title, '')).toBe(referenceId(title, ''));
+      }
+    });
+  });
+
   it('refuses a title with no letters or numbers with a readable message, not a schema error', () => {
     const attempt = () => approveSearchPlanDraft(EMPTY_SEARCH_PLAN, draft([{ title: 'React developer' }, { title: '##' }]), NOW);
     expect(attempt).toThrow(SearchPlanValidationError);

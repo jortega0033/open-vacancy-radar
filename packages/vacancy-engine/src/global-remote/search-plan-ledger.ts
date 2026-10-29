@@ -22,14 +22,25 @@ import type { DiscoveryProvider, SearchPlanEnvelope } from './models.js';
 
 export type SearchPlanRefusal = 'request' | 'time';
 
+/**
+ * A call refused BEFORE any network contact was never sent ("Not asked"). A call the allowance cut
+ * AFTER it reached the network -- a retry or redirect hop that was refused, or an attempt aborted in
+ * flight by the deadline -- was asked, so it says "Stopped after asking" and is counted as sent.
+ */
 const REFUSAL_MESSAGES: Record<SearchPlanRefusal, string> = {
   request: 'Not asked: the search plan had used its whole shared request allowance.',
   time: 'Not asked: the search plan had used its whole shared time allowance.',
 };
 
+const CUT_MESSAGES: Record<SearchPlanRefusal, string> = {
+  request: 'Stopped after asking: the search plan used its whole shared request allowance before this source finished.',
+  time: 'Stopped after asking: the search plan used its whole shared time allowance before this source finished.',
+};
+
 export class SearchPlanBudgetError extends Error {
-  public constructor(public readonly kind: SearchPlanRefusal) {
-    super(REFUSAL_MESSAGES[kind]);
+  /** `afterContact`: the call had already made at least one physical network attempt when it was cut. */
+  public constructor(public readonly kind: SearchPlanRefusal, public readonly afterContact = false) {
+    super(afterContact ? CUT_MESSAGES[kind] : REFUSAL_MESSAGES[kind]);
     this.name = 'SearchPlanBudgetError';
   }
 }
@@ -40,7 +51,16 @@ export function isSearchPlanBudgetError(error: unknown): error is SearchPlanBudg
 
 /** A source row whose only error is a plan refusal: coverage the plan did not spend, not a broken source. */
 export function isSearchPlanRefusalMessage(message: string | null | undefined): boolean {
-  return message === REFUSAL_MESSAGES.request || message === REFUSAL_MESSAGES.time;
+  return (
+    message === REFUSAL_MESSAGES.request ||
+    message === REFUSAL_MESSAGES.time ||
+    isSearchPlanCutMessage(message)
+  );
+}
+
+/** The refusal text of a call that had already reached the network (see `CUT_MESSAGES`). */
+export function isSearchPlanCutMessage(message: string | null | undefined): boolean {
+  return message === CUT_MESSAGES.request || message === CUT_MESSAGES.time;
 }
 
 interface ProviderQuota {
@@ -229,14 +249,14 @@ export class SearchPlanLedger {
         scope.record({ kind: 'refused_follow_up', refusal: kind });
       }
     }
-    return new SearchPlanBudgetError(kind);
+    return new SearchPlanBudgetError(kind, call.attempts > 0);
   }
 
   /** The admission decision for one physical attempt. Throws to refuse; charges every counter otherwise. */
   public admit(scope: PlanScope, meta: { retryIndex: number; redirectIndex: number }): AbortSignal {
     const firstContact = meta.retryIndex === 0 && meta.redirectIndex === 0;
     // A call already cut by the deadline race may wake up later; it must not reach the network.
-    if (scope.call.refused !== null) throw new SearchPlanBudgetError(scope.call.refused);
+    if (scope.call.refused !== null) throw new SearchPlanBudgetError(scope.call.refused, scope.call.attempts > 0);
     const refusal = this.#refusalFor(scope.pass, scope.provider, true);
     if (refusal !== null) throw this.#refuse(scope, refusal, firstContact);
     this.attempts += 1;

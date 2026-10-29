@@ -201,4 +201,32 @@ describe('runAtsRosterDiscovery under a search plan allowance (#686)', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('a tenant cut AFTER its request reached the network counts as a request and as stopped, never as failed or not asked', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const { SearchPlanBudgetError } = await import('../../src/global-remote/search-plan-ledger.js');
+    const { loadAtsSourceObservations } = await import('../../src/companies/ats-source-observation-repository.js');
+    const root = await mkdtemp(path.join(tmpdir(), 'ovr-686-roster-cut-'));
+    try {
+      const cut = {
+        get: () => Promise.reject(new SearchPlanBudgetError('time', true)),
+        postJson: () => Promise.reject(new SearchPlanBudgetError('time', true)),
+      };
+      const result = await runAtsRosterDiscovery(cut, config(), [greenhouseEntry], root);
+      const row = result.sources.find((source) => source.provider === 'ats_roster_greenhouse')!;
+      expect(row.requests).toBe(1);
+      expect(row.status).toBe('partial');
+      expect(row.complete).toBe(false);
+      expect(row.error).toBe(
+        "1/1 companies were asked but stopped before they finished, because the search plan's shared allowance ran out.",
+      );
+      expect(row.error).not.toMatch(/not asked/i);
+      const observations = await loadAtsSourceObservations(root);
+      expect(observations.observations.filter((entry) => entry.slug === 'acme')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -22,7 +22,7 @@ import type {
   SearchPlanVariantResult,
 } from './models.js';
 import { discoverPhilJobNet } from './phil-jobnet-discovery.js';
-import { isSearchPlanRefusalMessage, SearchPlanLedger, type SearchPlanPass, type SearchPlanRefusal } from './search-plan-ledger.js';
+import { isSearchPlanCutMessage, isSearchPlanRefusalMessage, SearchPlanLedger, type SearchPlanPass, type SearchPlanRefusal } from './search-plan-ledger.js';
 import { runStructuredDiscovery } from './structured-discovery.js';
 
 /**
@@ -61,7 +61,7 @@ export const SEARCH_PLAN_BUDGET_SCOPE: SearchPlanReport['budgetScope'] = Object.
   includes:
     'Every physical network attempt (first attempts, retries and redirect hops) of the literal pass -- every title-search source, every fixed feed and the ATS roster -- and of every approved-title pass, under one deadline that starts with the literal pass.',
   excludes:
-    'Work that is identical with or without a plan and has its own documented ceilings: the Workable and MPSV bulk snapshots, official employer checks, sponsor-registry lookups and per-lead detail fetches. Their attempts are reported, not charged.',
+    'Work that is identical with or without a plan and has its own documented ceilings. The Workable and MPSV bulk snapshots are reported as outsideEnvelopeAttempts; official employer checks (statistics.officialRequests) and sponsor-registry lookups (sponsor match counts) are reported in the run statistics, not as plan attempts. None of them is charged to the plan allowance, and rows from the bulk snapshots and the AI web search that match an approved title are not counted in matchingRows or limited by the result allowance. The time allowance covers the search stage only.',
 });
 
 export const LITERAL_QUERY_ID = 'literal';
@@ -241,7 +241,15 @@ function truthfulRow(source: DiscoverySourceAudit): DiscoverySourceAudit {
   const admission = source.searchPlanAdmission;
   const sent = admission?.sentCalls ?? 0;
   // Every call of a planned run passes the ledger; a row with no record and no attempt sent nothing.
-  const requests = admission !== undefined || source.networkAttempts === 0 ? Math.min(source.requests, sent) : source.requests;
+  // A call that reached the network and was then cut (a refused retry/redirect, or an attempt aborted
+  // in flight by the deadline) WAS a request, even though it never produced a page: it counts as sent.
+  // Only a call refused before any network contact is not a request.
+  const cutAfterAsking = (admission?.refusedFollowUps ?? 0) > 0;
+  const requests = cutAfterAsking
+    ? sent
+    : admission !== undefined || source.networkAttempts === 0
+      ? Math.min(source.requests, sent)
+      : source.requests;
   const refusedOnly = isSearchPlanRefusalMessage(source.error);
   if (!refusedOnly) return requests === source.requests ? source : { ...source, requests };
   return {
@@ -249,7 +257,8 @@ function truthfulRow(source: DiscoverySourceAudit): DiscoverySourceAudit {
     requests,
     status: 'partial',
     complete: false,
-    completenessReason: sent > 0 ? `Only partly asked: ${source.error}` : source.error,
+    // "Stopped after asking" already says the source was asked; "Not asked" after earlier answers needs the prefix.
+    completenessReason: sent > 0 && !isSearchPlanCutMessage(source.error) ? `Only partly asked: ${source.error}` : source.error,
   };
 }
 
@@ -344,7 +353,7 @@ export function searchPlanCriteria(snapshot: Pick<SearchPlanSnapshot, 'markets' 
       value: language,
       treatment: 'title_text_only' as const,
       reason:
-        'Titles in this language are searched as written. No source filters by language, and the language an advert is written in is never treated as a requirement.',
+        'The title text is searched as written. The language is only a label kept for provenance: no source filters by language, and the language an advert is written in is never treated as a requirement.',
     })),
   ];
 }

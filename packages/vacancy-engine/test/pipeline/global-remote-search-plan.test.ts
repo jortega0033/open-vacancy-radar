@@ -146,6 +146,13 @@ describe('runGlobalRemoteScan with a reviewed search plan (#686)', () => {
     // An approved title is in scope for classification: no role_mismatch for "React Developer".
     const react = planned.report.discoveryAudit.find((lead) => lead.company === 'Acme Labs')!;
     expect(react.decision).not.toBe('role_mismatch');
+    // ...but an approval never lifts the product's role exclusions: a manager title that merely embeds an
+    // approved title is retained by the OR filter and still classified role_mismatch, as without a plan.
+    for (const title of ['Frontend Engineering Manager', 'Engineering Manager, Frontend Engineering']) {
+      const manager = planned.report.discoveryAudit.find((lead) => lead.title === title)!;
+      expect(manager.decision, title).toBe('role_mismatch');
+      expect(manager.reasons, title).toEqual(['Title is not explicitly frontend-only.']);
+    }
     // Markets are reported as not applied, on the report and on the source rows.
     expect(plan.criteria.some((entry) => entry.criterion === 'markets' && entry.treatment === 'not_applied')).toBe(true);
     expect(planned.report.discoverySources.every((source) => source.focusedScan?.searchPlanCriteria !== undefined)).toBe(true);
@@ -159,6 +166,9 @@ describe('runGlobalRemoteScan with a reviewed search plan (#686)', () => {
     const html = await readFile(planned.files.latestHtml, 'utf8');
     expect(html).toContain('Frontend ontwikkelaar');
     expect(html).toContain('Acme Labs');
+    // The excluded manager rows are not presented as in-scope listings.
+    expect(html).not.toContain('Neg Six Nordic');
+    expect(html).not.toContain('Neg Two Labs');
   });
 
   it('enforces the envelope inside the real scan and reports refused sources truthfully', async () => {

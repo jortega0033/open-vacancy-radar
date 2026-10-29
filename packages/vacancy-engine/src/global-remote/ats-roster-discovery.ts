@@ -98,11 +98,13 @@ type ProviderTally = {
   companiesBlocked: number;
   /** Issue #686: companies a search plan's shared allowance did not let this run ask. Not failures. */
   companiesDeferred: number;
+  /** Issue #686: companies that WERE asked (a request reached the network) and then cut by the shared allowance. Not failures. */
+  companiesInterrupted: number;
   lastError: string | null;
 };
 
 function emptyTally(): ProviderTally {
-  return { requests: 0, listings: 0, companiesFailed: 0, companiesBlocked: 0, companiesDeferred: 0, lastError: null };
+  return { requests: 0, listings: 0, companiesFailed: 0, companiesBlocked: 0, companiesDeferred: 0, companiesInterrupted: 0, lastError: null };
 }
 
 function sourceAuditFor(
@@ -136,10 +138,15 @@ function sourceAuditFor(
       ...(rosterScan === undefined ? {} : { rosterScan }),
     };
   }
-  const deferred =
+  const deferredParts = [
     tally.companiesDeferred > 0
       ? `${tally.companiesDeferred}/${companiesAttempted} companies were not asked within the search plan's shared allowance.`
-      : null;
+      : null,
+    tally.companiesInterrupted > 0
+      ? `${tally.companiesInterrupted}/${companiesAttempted} companies were asked but stopped before they finished, because the search plan's shared allowance ran out.`
+      : null,
+  ].filter((part): part is string => part !== null);
+  const deferred = deferredParts.length === 0 ? null : deferredParts.join(' ');
   const status: DiscoverySourceAudit['status'] =
     tally.companiesFailed === 0
       ? deferred === null
@@ -278,8 +285,14 @@ export async function runAtsRosterDiscovery(
       } catch (error) {
         if (isSearchPlanBudgetError(error)) {
           // The plan's shared allowance, not the tenant, stopped this one (#686): no request is
-          // counted and no health observation is written, so the tenant stays due for the next scan.
-          tally.companiesDeferred += 1;
+          // counted and no health observation is written, so the tenant stays due for the next scan. A call
+          // that had already reached the network before it was cut is a request that was made, though.
+          if (error.afterContact) {
+            tally.requests += 1;
+            tally.companiesInterrupted += 1;
+          } else {
+            tally.companiesDeferred += 1;
+          }
           tallyByProvider.set(entry.provider, tally);
           continue;
         }

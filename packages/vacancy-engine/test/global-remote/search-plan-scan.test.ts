@@ -301,6 +301,77 @@ describe('search plan scan on the real transport (#686)', () => {
     expect(report.usage.variantAttempts).toBe(0);
   });
 
+  it('counts a call the allowance cut AFTER it reached the network as sent, and only a never-sent call as zero', async () => {
+    // Pre-request refusals and refused retries together: every URL answers 503 once, the allowance ends mid-pass.
+    const admissionOf = (row: DiscoverySourceAudit) => row.searchPlanAdmission ?? { sentCalls: 0, refusedCalls: 0, refusedFollowUps: 0, refusal: null };
+    let neverSentSeen = 0;
+    let cutSeen = 0;
+    for (const maxRequests of [30, 58, 62, 66, 70, 80]) {
+      const planned = await runPlanned(FRONTEND_PLAN, { transport: FLAKY, envelope: { maxRequests } });
+      const { usage } = planned.plan.report;
+      const neverSent = planned.sources.filter((row) => admissionOf(row).sentCalls === 0 && admissionOf(row).refusedCalls > 0);
+      const cutAfterAsking = planned.sources.filter((row) => admissionOf(row).sentCalls > 0 && admissionOf(row).refusedFollowUps > 0);
+      neverSentSeen += neverSent.length;
+      cutSeen += cutAfterAsking.length;
+      for (const row of neverSent) {
+        expect(row.requests, `${maxRequests} ${row.id}`).toBe(0);
+        expect(row.networkAttempts, row.id).toBe(0);
+        expect(row.status, row.id).toBe('partial');
+        expect(row.error, row.id).toMatch(/^Not asked:/);
+        if (row.id.includes('::plan:')) expect(row.focusedScan!.searchPlan![0]!.handling, row.id).toBe('deferred_request_budget');
+      }
+      for (const row of cutAfterAsking) {
+        // It went out (and its retry was refused): a request, a partial row, truthful text -- not "Not asked".
+        expect(row.requests, `${maxRequests} ${row.id}`).toBe(admissionOf(row).sentCalls);
+        expect(row.requests, row.id).toBeGreaterThan(0);
+        expect(row.status, row.id).toBe('partial');
+        expect(row.complete, row.id).toBe(false);
+        expect(row.error, row.id).toMatch(/^Stopped after asking:/);
+        expect(row.error, row.id).not.toMatch(/Not asked/);
+        expect(row.completenessReason, row.id).toBe(row.error);
+        // A source without an upstream role filter reports its one feed as matched locally; every other cut row is partial.
+        if (row.id.includes('::plan:') || SERVED_HOST_PARAM[row.provider]) {
+          expect(row.focusedScan!.searchPlan![0]!.handling, row.id).toBe('partial');
+        }
+        // The upstream's own log agrees for the literal rows of the sources this fixture serves.
+        const served = SERVED_HOST_PARAM[row.provider];
+        if (served && !row.id.includes('::plan:')) {
+          const queried = planned.transport.fetchesTo(served[0]).filter((entry) => new URL(entry.url).searchParams.get(served[1]) === LITERAL);
+          expect(queried.length, row.id).toBe(row.networkAttempts);
+        }
+      }
+      // Ledger, upstream log, per-row telemetry and the report's totals tell one story.
+      expect(planned.transport.fetchLog.length).toBe(usage.attempts);
+      expect(planned.sources.reduce((sum, row) => sum + row.networkAttempts, 0)).toBe(usage.attempts);
+      expect(planned.sources.reduce((sum, row) => sum + admissionOf(row).refusedCalls, 0)).toBe(usage.refusedCalls);
+      expect(planned.sources.reduce((sum, row) => sum + admissionOf(row).refusedFollowUps, 0)).toBe(usage.refusedFollowUps);
+      // No row claims more requests than calls that reached the network.
+      for (const row of planned.sources) expect(row.requests, row.id).toBeLessThanOrEqual(admissionOf(row).sentCalls);
+    }
+    expect(neverSentSeen).toBeGreaterThan(0);
+    expect(cutSeen).toBeGreaterThan(0);
+
+    // In-flight interruption: Jobicy hangs, the shared deadline aborts the attempt that was already sent.
+    const hung = await runPlanned(FRONTEND_PLAN, { transport: { hangingHosts: ['jobicy.com'] }, envelope: { maxDurationMs: 400 } });
+    const jobicy = hung.sources.find((row) => row.id === `jobicy:${LITERAL}`) ?? hung.sources.find((row) => row.provider === 'jobicy')!;
+    expect(admissionOf(jobicy).sentCalls).toBe(1);
+    expect(admissionOf(jobicy).refusedFollowUps).toBe(1);
+    expect(jobicy.networkAttempts).toBe(1);
+    expect(hung.transport.fetchesTo('jobicy.com')).toHaveLength(1);
+    expect(jobicy.requests).toBe(1);
+    expect(jobicy.status).toBe('partial');
+    expect(jobicy.error).toBe('Stopped after asking: the search plan used its whole shared time allowance before this source finished.');
+    expect(jobicy.focusedScan!.searchPlan![0]!.handling).toBe('partial');
+    expect(hung.plan.report.usage.attempts).toBe(hung.transport.fetchLog.length);
+    expect(hung.plan.report.usage.refusedFollowUps).toBeGreaterThanOrEqual(1);
+    // A source the deadline passed before it was ever asked still says "Not asked" with zero requests.
+    const unasked = hung.sources.filter((row) => admissionOf(row).sentCalls === 0 && admissionOf(row).refusedCalls > 0);
+    for (const row of unasked) {
+      expect(row.requests, row.id).toBe(0);
+      expect(row.error, row.id).toMatch(/^Not asked:/);
+    }
+  });
+
   it('bounds matching rows across the literal pass and every title with one result allowance', async () => {
     const planned = await runPlanned(FRONTEND_PLAN, { envelope: { maxResults: 3 } });
     const report = planned.plan.report;
@@ -367,6 +438,48 @@ describe('search plan scan on the real transport (#686)', () => {
     expect(plain.decision).toBe('role_mismatch');
   });
 
+  it('never lifts a role exclusion: manager, full-stack and mobile titles that embed an approved title stay role_mismatch', async () => {
+    const job = (id: string, title: string): SyntheticJob => ({
+      id, source: 'himalayas', equivalent: false, title, company: `Excl ${id}`, url: `https://job-boards.greenhouse.io/excl${id}/jobs/${id}`, description: 'Remote role.',
+    });
+    const excluded = [
+      'Frontend Engineering Manager',
+      'Engineering Manager, Frontend Engineering',
+      'Full Stack Frontend Engineer',
+      'Frontend Engineer (Mobile)',
+      'Full-Stack React Developer',
+      'Head of Frontend Engineering',
+    ];
+    const allowed = [
+      job('ok1', 'React Developer'),
+      job('ok2', 'Frontend ontwikkelaar'),
+      job('ok3', 'Senior Frontend Engineer'),
+      job('ok4', 'UI Engineer'),
+    ].map((entry) => ({ ...entry, equivalent: true }));
+    const corpus = [...allowed, ...excluded.map((title, index) => job(`x${index}`, title))];
+    const planned = await runPlanned(FRONTEND_PLAN, { corpus });
+    for (const title of excluded) {
+      const lead = planned.leads.find((entry) => entry.title === title);
+      expect(lead, title).toBeDefined();
+      expect(lead!.decision, title).toBe('role_mismatch');
+      expect(lead!.reasons, title).toEqual(['Title is not explicitly frontend-only.']);
+    }
+    for (const entry of allowed) {
+      const lead = planned.leads.find((candidate) => candidate.title === entry.title)!;
+      expect(lead.decision, entry.title).not.toBe('role_mismatch');
+      // Only titles the built-in English check rejects need the approval; the rest keep their own reason.
+      if (['React Developer', 'Frontend ontwikkelaar'].includes(entry.title)) {
+        expect(lead.reasons[0], entry.title).toMatch(/approved in the search plan/);
+      }
+    }
+    // Same decisions without a plan for the excluded titles (the unchanged built-in classifier).
+    const literal = await runPlanned(NO_TITLES, { corpus, literal: 'Frontend' });
+    for (const title of excluded) {
+      const lead = literal.leads.find((entry) => entry.title === title);
+      if (lead) expect(lead.decision, title).toBe('role_mismatch');
+    }
+  });
+
   it('matches approved titles on the listing title only, and marks description-only matches of the typed query', async () => {
     const planned = await runPlanned(FRONTEND_PLAN);
     const titles = planned.leads.map((lead) => lead.title);
@@ -378,8 +491,12 @@ describe('search plan scan on the real transport (#686)', () => {
     expect(recruiter.queryProvenance!.matchedLocally).toEqual([
       { variantId: LITERAL_QUERY_ID, query: LITERAL, language: null, field: 'description' },
     ]);
-    // Known, measured false positives: a manager title that embeds an approved title.
+    // The filter still RETAINS a manager title that embeds an approved title (retention is the OR text match)...
     expect(titles).toContain('Frontend Engineering Manager');
+    // ...but it is classified role_mismatch, exactly as without a plan: an approval never lifts a role exclusion.
+    for (const title of ['Frontend Engineering Manager', 'Engineering Manager, Frontend Engineering']) {
+      expect(planned.leads.find((lead) => lead.title === title)!.decision, title).toBe('role_mismatch');
+    }
 
     const rows = [
       { title: 'Frontend Engineer', description: '' },
@@ -486,20 +603,63 @@ describe('search plan measurement on the synthetic corpus (#686)', () => {
   const equivalentUrls = new Set(SYNTHETIC_CORPUS.filter((job) => job.equivalent).map((job) => job.url));
   const negativeUrls = new Set(SYNTHETIC_CORPUS.filter((job) => !job.equivalent).map((job) => job.url));
 
+  /**
+   * Where each suitable unique job came from, from the leads' own provenance: found by the typed query's
+   * own filter, or added by the plan -- and, of those added, fetched by a request that carried an approved
+   * title versus matched locally in rows the typed-query pass had already fetched (an unfiltered feed).
+   */
+  function attribution(run: PlannedRun) {
+    const byUrl = new Map<string, DiscoveryVacancyAudit[]>();
+    for (const lead of run.leads) {
+      if (labelOf(lead)?.equivalent !== true) continue;
+      byUrl.set(lead.url, [...(byUrl.get(lead.url) ?? []), lead]);
+    }
+    let foundByTypedQuery = 0;
+    let addedByPlan = 0;
+    let addedAndFetchedByATitleRequest = 0;
+    let addedAndMatchedOnlyLocally = 0;
+    for (const leads of byUrl.values()) {
+      const matched = leads.flatMap((lead) => lead.queryProvenance?.matchedLocally ?? []);
+      if (matched.some((entry) => entry.variantId === LITERAL_QUERY_ID)) {
+        foundByTypedQuery += 1;
+        continue;
+      }
+      addedByPlan += 1;
+      const fetchedByTitle = leads.some((lead) => (lead.queryProvenance?.fetchedBy ?? []).some((origin) => origin.variantId !== LITERAL_QUERY_ID));
+      if (fetchedByTitle) addedAndFetchedByATitleRequest += 1;
+      else addedAndMatchedOnlyLocally += 1;
+    }
+    return {
+      suitableFoundByTheTypedQuery: foundByTypedQuery,
+      suitableAddedByThePlan: addedByPlan,
+      addedAndFetchedByATitleRequest,
+      addedAndMatchedOnlyLocallyInRowsTheTypedPassFetched: addedAndMatchedOnlyLocally,
+      titleRequestAttempts: run.plan.report.usage.variantAttempts,
+    };
+  }
+
   function metrics(run: PlannedRun) {
     const suitable = run.leads.filter((lead) => labelOf(lead)?.equivalent === true);
     const wrong = run.leads.filter((lead) => labelOf(lead)?.equivalent === false);
     const suitableUnique = new Set(suitable.map((lead) => lead.url)).size;
+    // What the report presents as candidates: a retained lead the role classifier did not reject.
+    const inScope = run.leads.filter((lead) => lead.decision !== 'role_mismatch');
+    const inScopeSuitable = inScope.filter((lead) => labelOf(lead)?.equivalent === true);
     const attempts = run.transport.fetchLog.length;
     return {
       retainedLeads: run.leads.length,
       suitableUniqueJobs: suitableUnique,
       wronglyRetained: wrong.map((lead) => lead.title),
       precision: run.leads.length === 0 ? null : Number((suitable.length / run.leads.length).toFixed(3)),
+      inScopeLeads: inScope.length,
+      wronglyInScope: inScope.filter((lead) => labelOf(lead)?.equivalent === false).map((lead) => lead.title),
+      inScopePrecision: inScope.length === 0 ? null : Number((inScopeSuitable.length / inScope.length).toFixed(3)),
+      rejectedByRoleClassifier: wrong.filter((lead) => lead.decision === 'role_mismatch').map((lead) => lead.title),
       fixtureRecall: Number((suitableUnique / equivalentUrls.size).toFixed(3)),
       physicalAttempts: attempts,
       attemptsCountedByPlan: run.plan.report.usage.attempts,
       attemptsPerRetainedSuitableJob: suitableUnique === 0 ? null : Number((attempts / suitableUnique).toFixed(2)),
+      attribution: attribution(run),
       coverage: run.plan.report.coverage,
       literalHandling: run.plan.report.literal.handling,
     };
@@ -523,6 +683,13 @@ describe('search plan measurement on the synthetic corpus (#686)', () => {
         expect(arm.physicalAttempts).toBe(arm.attemptsCountedByPlan);
       }
       expect(plannedMetrics.suitableUniqueJobs).toBeGreaterThan(literalMetrics.suitableUniqueJobs);
+      // The attribution accounts for every suitable job exactly once, and the typed-query arm adds nothing by a plan.
+      expect(plannedMetrics.attribution.suitableFoundByTheTypedQuery + plannedMetrics.attribution.suitableAddedByThePlan).toBe(plannedMetrics.suitableUniqueJobs);
+      expect(plannedMetrics.attribution.addedAndFetchedByATitleRequest + plannedMetrics.attribution.addedAndMatchedOnlyLocallyInRowsTheTypedPassFetched).toBe(plannedMetrics.attribution.suitableAddedByThePlan);
+      expect(literalMetrics.attribution.suitableAddedByThePlan).toBe(0);
+      // No approved title may promote a role the product excludes: nothing labelled negative by title is in scope for a manager/etc.
+      expect(plannedMetrics.wronglyInScope).not.toContain('Frontend Engineering Manager');
+      expect(plannedMetrics.wronglyInScope).not.toContain('Engineering Manager, Frontend Engineering');
       output.push({
         scenario: scenario.name,
         envelope: scenario.envelope,
@@ -548,7 +715,7 @@ describe('search plan measurement on the synthetic corpus (#686)', () => {
         `${JSON.stringify(
           {
             issue: 686,
-            kind: 'SYNTHETIC labelled fixture measurement (fix round 1)',
+            kind: 'SYNTHETIC labelled fixture measurement (fix round 2)',
             corpus: `${SYNTHETIC_CORPUS.length} made-up postings (${equivalentUrls.size} distinct labelled-equivalent URLs, ${negativeUrls.size} labelled negatives including ${7} hard negatives) served through a REAL SafeHttpClient with a scripted fetch: every URL answers 503 once (retried) and Himalayas redirects once`,
             labels: 'The equivalent flag is the fixture author construction, not a human relevance judgement. Hard negatives were added from the independent review, not tuned to the matcher.',
             literalQuery: LITERAL,
@@ -559,7 +726,9 @@ describe('search plan measurement on the synthetic corpus (#686)', () => {
               'Synthetic data and synthetic labels only; no live provider, no real job site, no human judgement.',
               'The fake upstream filters by simple substring match over title and description; real sources rank and tokenize differently.',
               'Most of the 26 literal-pass sources are not served by the fixture and answer 404; they still cost real attempts in both arms.',
-              'Precision counts retained leads after identity merge; recall is relative to the fixture only.',
+              'Precision counts retained leads after identity merge, including leads the role classifier then marks role_mismatch; inScopePrecision counts only the leads it did not reject. Recall is relative to the fixture only.',
+              'attribution splits the suitable jobs of each arm by origin. A job "added by the plan" and "matched only locally" was already in a row the typed-query pass fetched (an unfiltered feed) and was matched against an approved title on this machine; no title request fetched it. attemptsPerRetainedSuitableJob divides ALL physical attempts, so it mixes that local gain with the cost of title requests that may have fetched nothing extra.',
+              'inScopeLeads/inScopePrecision measure the role classifier, not retrieval: the literal arm shows few or no in-scope leads because the built-in English-only role check rejects "React Developer" and Dutch titles, which only an approved plan title stands in for. Compare suitableUniqueJobs and attribution for retrieval. The classifier still rejects every labelled negative whose title is a manager, full-stack, mobile or other excluded family, with or without an approved title.',
               'Says nothing about real-world recall, cost, latency or hiring outcomes.',
             ],
           },

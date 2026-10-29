@@ -113,12 +113,33 @@ function contentHash(value: string): string {
  */
 export function searchPlanVariantId(title: string, language: string): string {
   const key = searchPlanVariantKey(title, language);
-  const slug = key
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-    .slice(0, 60)
-    .replace(/-+$/gu, '');
-  return `${slug || 'title'}-${contentHash(key)}`;
+  return `${readableSlug(key) || 'title'}-${contentHash(key)}`;
+}
+
+const SLUG_MAX_UNITS = 60;
+const LETTER_OR_NUMBER = /^[\p{L}\p{N}]$/u;
+
+/**
+ * Lower-case letters and numbers joined by single dashes, at most 60 UTF-16 units, with no leading or
+ * trailing dash. One linear pass over the characters and no backtracking regular expression, so a
+ * long run of separators costs time proportional to its length (CodeQL js/polynomial-redos) and the
+ * scan stops as soon as the readable part is full.
+ */
+function readableSlug(key: string): string {
+  let slug = '';
+  let pendingDash = false;
+  for (const character of key) {
+    if (!LETTER_OR_NUMBER.test(character)) {
+      pendingDash = slug.length > 0;
+      continue;
+    }
+    if (pendingDash) slug += '-';
+    pendingDash = false;
+    slug += character;
+    if (slug.length >= SLUG_MAX_UNITS) break;
+  }
+  slug = slug.slice(0, SLUG_MAX_UNITS);
+  return slug.endsWith('-') ? slug.slice(0, -1) : slug;
 }
 
 /** A plan edit the person can fix, with a message written for them (never a raw schema error). */

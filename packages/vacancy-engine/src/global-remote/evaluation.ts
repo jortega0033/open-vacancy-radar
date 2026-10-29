@@ -16,8 +16,17 @@ const ROLE_EXCLUSIONS = /\b(?:full[\s-]?stack|back[\s-]?end|manager|director|hea
 const ELIGIBLE_LOCATION = /\b(?:worldwide|anywhere|global|europe|emea|netherlands|european union|eu(?: residents?)?|all countries)\b/iu;
 const NON_VACANCY = /\b(?:talent (?:network|community|pool)|general application|future opportunities|expression of interest)\b|not an application for (?:a|this) specific job/iu;
 
+/**
+ * True when the title names a role family this product never treats as frontend-only (full-stack,
+ * back-end, people-manager and director titles, mobile, QA and so on). One list, used by the built-in
+ * title check and by a person's approved search-plan titles alike (#686).
+ */
+export function hasExcludedRoleFamily(title: string): boolean {
+  return ROLE_EXCLUSIONS.test(title);
+}
+
 export function isFrontendOnlyTitle(title: string): boolean {
-  if (ROLE_EXCLUSIONS.test(title)) return false;
+  if (hasExcludedRoleFamily(title)) return false;
   return FRONTEND_ROLE.test(title) || UI_ROLE.test(title);
 }
 
@@ -88,26 +97,39 @@ export function classifyDiscoveryVacancy(input: {
   candidateLanguages?: readonly string[];
   /**
    * Issue #686: the approved search-plan title this listing's title matches, if any. The built-in
-   * title check is an English-only frontend pre-classification ("front-end/angular engineer|developer",
-   * "ui engineer"); a title the person approved in their plan ("React developer", "Frontend
-   * ontwikkelaar") counts as in scope instead, so the same language/location/salary gates follow.
+   * positive title check is English-only ("front-end/angular engineer|developer", "ui engineer"); a title
+   * the person approved in their plan ("React developer", "Frontend ontwikkelaar") stands in for that
+   * POSITIVE check only. The product's role-family exclusions (full-stack, back-end, manager, director,
+   * mobile, QA, ...) still run on the listing's real title, so "Frontend Engineering Manager" or "Full
+   * Stack Frontend Engineer" stay `role_mismatch` even though they contain an approved title. The same
+   * language, location and salary gates then follow.
    */
   approvedTitle?: string;
 }): { decision: DiscoveryDecision; reasons: string[] } {
   if (NON_VACANCY.test(`${input.title}\n${input.description ?? ''}`)) {
     return { decision: 'non_vacancy', reasons: ['Listing is a talent pool, general application, or other non-specific vacancy.'] };
   }
-  if (input.approvedTitle !== undefined) {
-    const { approvedTitle, ...rest } = input;
-    const inScope = classifyDiscoveryVacancy({ ...rest, title: 'Frontend engineer' });
-    return {
-      decision: inScope.decision,
-      reasons: [`The title matches "${approvedTitle}", a title approved in the search plan.`, ...inScope.reasons],
-    };
-  }
-  if (!isFrontendOnlyTitle(input.title)) {
+  const approvedTitle = input.approvedTitle;
+  if (approvedTitle !== undefined ? hasExcludedRoleFamily(input.title) : !isFrontendOnlyTitle(input.title)) {
     return { decision: 'role_mismatch', reasons: ['Title is not explicitly frontend-only.'] };
   }
+  const inScope = classifyInScopeVacancy(input);
+  return approvedTitle === undefined
+    ? inScope
+    : {
+        decision: inScope.decision,
+        reasons: [`The title matches "${approvedTitle}", a title approved in the search plan.`, ...inScope.reasons],
+      };
+}
+
+/** The gates after the role check -- mandatory language, location, salary -- shared by every role path. */
+function classifyInScopeVacancy(input: {
+  location: string;
+  annualizedMinimumUsd: number | null;
+  minimumAnnualBaseUsd: number | null;
+  description?: string | null;
+  candidateLanguages?: readonly string[];
+}): { decision: DiscoveryDecision; reasons: string[] } {
   const languageMismatch = mandatoryLanguageGate({
     description: input.description,
     candidateLanguages: input.candidateLanguages ?? [],

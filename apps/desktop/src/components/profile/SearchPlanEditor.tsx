@@ -20,7 +20,7 @@ export function unreadablePlanHeading(reason: UnreadablePlan['reason']): string 
 /** What the person is told plan fields other than titles do, so nothing looks applied when it is not. */
 export const SEARCH_PLAN_FIELDS_NOTE =
   'Markets and the primary function are kept with your plan but do not filter searches: use Country on the Search page to narrow one. ' +
-  "A title's language is searched as written; the language an advert is written in is never treated as a requirement.";
+  "A title is searched as you wrote it; the language you pick for it is only a label, no source is filtered by language, and the language an advert is written in is never treated as a requirement.";
 
 /** How the person is told where an approved title came from. Never guessed: no record, no label. */
 export function originLabel(origin: SearchPlanVariantOrigin): string {
