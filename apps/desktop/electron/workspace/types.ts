@@ -1042,6 +1042,9 @@ export interface ApplicationDataResetResult {
     /** #690: the independent critiques and the structured document drafts. */
     applicationCritiques: number;
     applicationDocumentDrafts: number;
+    /** #691: the submitted-document manifests and the recorded interview rounds. */
+    submissionPackages: number;
+    interviewRounds: number;
   };
 }
 

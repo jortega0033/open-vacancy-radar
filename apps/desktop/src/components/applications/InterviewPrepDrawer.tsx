@@ -16,6 +16,10 @@ import { INTERVIEW_PREPARABLE_STATUSES } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
 import { buildInterviewPrepPrompt, type InterviewPrepContext, type InterviewPrepStage } from './interview-prep-prompt.js';
 import { CompanyEvidencePanel } from './CompanyEvidencePanel.js';
+import { SubmittedDocumentsPanel } from './SubmittedDocumentsPanel.js';
+import { InterviewRoundsPanel } from './InterviewRoundsPanel.js';
+import { basisSummary, defaultNextRoundId, roundsForPrep, submittedBasis } from './interview-context-labels.js';
+import type { InterviewContextView } from '../../../electron/interview-context-types.js';
 import type { CompanyEvidenceProseFact } from '../../../electron/company-evidence.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
@@ -28,6 +32,16 @@ export interface InterviewPrepDrawerProps {
 }
 
 type CopyState = 'idle' | 'copied' | 'failed';
+
+/**
+ * #691: the documents and rounds recorded for this application. `unavailable` = a build with no such
+ * bridge (the drawer behaves exactly as #358 shipped it: current documents, labelled as current).
+ */
+type ContextState =
+  | { status: 'loading' }
+  | { status: 'ready'; view: InterviewContextView }
+  | { status: 'unavailable' }
+  | { status: 'failed'; message: string };
 const COPY_FEEDBACK_MS = 2_000;
 
 /**
@@ -53,9 +67,14 @@ const COPY_FEEDBACK_MS = 2_000;
  *   AI turn -- and, on `ApplicationAttemptDrawer`'s example, a read-only drawer is exactly the
  *   place a person expects nothing to happen just from opening it.
  * - **No auto-write-back of any kind.** This drawer never calls `updateApplication`,
- *   `updateCvDocument`, `updateLetter`, or creates anything. It only reads already-fetched
- *   records and renders AI output; the sole "keep this" affordance is copy-to-clipboard, matching
- *   the ticket's own non-goals for this slice.
+ *   `updateCvDocument`, `updateLetter`, or creates anything from the AI output; the sole "keep this"
+ *   affordance for a prep pack is copy-to-clipboard.
+ * - **#691: the recorded documents come first.** `window.interviewContext` returns the packages of
+ *   THIS application only (by its own attempts, never by company name or the latest attempt at the
+ *   employer). The selected package's document text, version, fingerprint and how it is known go to
+ *   the prompt; the current linked CV/letter are used only as a labelled fallback. The two panels
+ *   below write only when the person presses Save (their statement about what they sent, or a round
+ *   they record), and never touch the application status, the CV, the letter or the notes.
  */
 export function InterviewPrepDrawer({
   application,
@@ -76,6 +95,14 @@ export function InterviewPrepDrawer({
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [copyError, setCopyError] = useState<string>();
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const [recorded, setRecorded] = useState<ContextState>({ status: 'loading' });
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+  const [nextRoundId, setNextRoundId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [generatedFrom, setGeneratedFrom] = useState<string>();
+  // Only the newest load may land: switching application (or a save) while a read is in flight must
+  // never show the older answer for the newer state.
+  const loadSeq = useRef(0);
 
   useEffect(
     () => () => {
@@ -109,6 +136,45 @@ export function InterviewPrepDrawer({
     };
   }, [application.id]);
 
+  // #691: one read, and every later view comes back from the save that changed it.
+  const applyView = useCallback((view: InterviewContextView) => {
+    loadSeq.current += 1;
+    setRecorded({ status: 'ready', view });
+    setSelectedPackageId((current) =>
+      current && view.packages.some((pkg) => pkg.id === current) ? current : view.defaultPackageId,
+    );
+    setNextRoundId((current) =>
+      current && view.rounds.some((round) => round.id === current && round.state === 'planned')
+        ? current
+        : defaultNextRoundId(view.rounds),
+    );
+  }, []);
+
+  useEffect(() => {
+    const seq = ++loadSeq.current;
+    setRecorded({ status: 'loading' });
+    setSelectedPackageId(null);
+    setNextRoundId(null);
+    setGeneratedFrom(undefined);
+    if (typeof window.interviewContext?.get !== 'function') {
+      setRecorded({ status: 'unavailable' });
+      return undefined;
+    }
+    void window.interviewContext
+      .get(application.id)
+      .then((result) => {
+        if (seq !== loadSeq.current) return;
+        if (result.ok) applyView(result.view);
+        else setRecorded({ status: 'failed', message: result.message });
+      })
+      .catch(() => {
+        if (seq === loadSeq.current) setRecorded({ status: 'failed', message: 'The documents you sent could not be read.' });
+      });
+    return () => {
+      loadSeq.current += 1;
+    };
+  }, [application.id, applyView]);
+
   useEffect(() => {
     let cancelled = false;
     setCompanyEvidence(undefined);
@@ -126,6 +192,9 @@ export function InterviewPrepDrawer({
       cancelled = true;
     };
   }, [application.id, evidenceVersion]);
+
+  const view = recorded.status === 'ready' ? recorded.view : null;
+  const selectedPackage = view?.packages.find((pkg) => pkg.id === selectedPackageId) ?? null;
 
   const context = useMemo<InterviewPrepContext | null>(() => {
     const status = application.status;
@@ -145,6 +214,13 @@ export function InterviewPrepDrawer({
     // "Generate" button stays disabled until the fetch above settles, so a run never actually goes
     // out built from this transient state.
     const attempt = sortAttempts((attempts ?? []).filter((row) => row.applicationId === application.id))[0] ?? null;
+    // #691: a selected package brings its own posting text, verified against the hash it recorded.
+    const packagePosting =
+      selectedPackage && selectedPackage.posting.text && selectedPackage.posting.matches !== false
+        ? { text: selectedPackage.posting.text, complete: selectedPackage.posting.complete ?? false }
+        : null;
+    const fallbackPosting =
+      attempt && attempt.jdSnapshot.trim().length > 0 ? { text: attempt.jdSnapshot, complete: attempt.jdComplete } : null;
 
     return {
       role: application.role,
@@ -157,20 +233,29 @@ export function InterviewPrepDrawer({
       savedJob: savedJob
         ? { salary: savedJob.salary, arrangement: savedJob.arrangement, verification: savedJob.verification }
         : null,
-      jdSnapshot:
-        attempt && attempt.jdSnapshot.trim().length > 0
-          ? { text: attempt.jdSnapshot, complete: attempt.jdComplete }
-          : null,
+      jdSnapshot: selectedPackage ? (selectedPackage.posting.matches === false ? null : (packagePosting ?? fallbackPosting)) : fallbackPosting,
       cv: cv ? { name: cv.name, text: cv.text } : null,
       letter: letter ? { type: letter.type, body: letter.body } : null,
       ...(companyEvidence === undefined ? {} : { companyEvidence }),
+      staleLinks: { cv: !!application.cvId && !cv, letter: !!application.letterId && !letter },
+      ...(selectedPackage ? { submitted: submittedBasis(selectedPackage) } : {}),
+      ...(view ? { rounds: roundsForPrep(view.rounds, nextRoundId) } : {}),
     };
-  }, [application, savedJobs, cvDocuments, letters, attempts, companyEvidence]);
+  }, [application, savedJobs, cvDocuments, letters, attempts, companyEvidence, selectedPackage, view, nextRoundId]);
+
+  const linked = {
+    cv: !!application.cvId && cvDocuments.some((doc) => doc.id === application.cvId),
+    letter: !!application.letterId && letters.some((row) => row.id === application.letterId),
+  };
+  const priorRoundCount = view ? view.rounds.filter((round) => round.state === 'held').length : 0;
+  const basisLine = basisSummary(selectedPackage, linked, priorRoundCount);
+  const mustChoose = view?.selection === 'choose' && !selectedPackage;
 
   const attemptsLoaded = attempts !== null;
   const providerUnavailable = providerStatus && !providerStatus.installed;
   const providerLabel = PROVIDER_LABEL[provider];
-  const canRun = !!context && attemptsLoaded && !providerUnavailable && !run.isBusy;
+  const canRun =
+    !!context && attemptsLoaded && recorded.status !== 'loading' && !saving && !mustChoose && !providerUnavailable && !run.isBusy;
   const hasResult = run.text.trim().length > 0;
 
   const handleRun = useCallback(() => {
@@ -178,10 +263,13 @@ export function InterviewPrepDrawer({
     setCopyState('idle');
     setCopyError(undefined);
     const prompt = buildInterviewPrepPrompt(context);
+    // The label of a result is the basis it was built from, captured now: a later change of selection
+    // or a new round never relabels a pack that was already generated.
+    setGeneratedFrom(basisLine);
     void run.start(prompt, {
       provider,
     });
-  }, [context, provider, run]);
+  }, [context, provider, run, basisLine]);
 
   const handleCopy = useCallback(async () => {
     if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);
@@ -240,11 +328,47 @@ export function InterviewPrepDrawer({
                 </ErrorBanner>
               )}
 
+              {recorded.status === 'failed' && (
+                <ErrorBanner>
+                  {recorded.message} The prep pack uses your current CV and letter and says they may differ from
+                  what you sent.
+                </ErrorBanner>
+              )}
+
+              {view && (
+                <SubmittedDocumentsPanel
+                  applicationId={application.id}
+                  view={view}
+                  selectedId={selectedPackageId}
+                  onSelect={setSelectedPackageId}
+                  onView={applyView}
+                  linked={linked}
+                  disabled={run.isBusy || saving}
+                  onBusyChange={setSaving}
+                />
+              )}
+
+              {view && (
+                <InterviewRoundsPanel
+                  applicationId={application.id}
+                  rounds={view.rounds}
+                  nextRoundId={nextRoundId}
+                  onNextRoundChange={setNextRoundId}
+                  onView={applyView}
+                  disabled={run.isBusy || saving}
+                  onBusyChange={setSaving}
+                />
+              )}
+
               <CompanyEvidencePanel
                 target={{ applicationId: application.id }}
                 reloadKey={application.id}
                 onChanged={() => setEvidenceVersion((version) => version + 1)}
               />
+
+              <p className="text-xs text-base-content/70" data-testid="prep-basis">
+                {recorded.status === 'loading' ? 'Reading the documents you sent…' : `This prep pack uses: ${basisLine}`}
+              </p>
 
               <div className="flex flex-wrap items-center gap-2">
                 <button className="btn btn-primary" type="button" onClick={handleRun} disabled={!canRun}>
@@ -279,6 +403,12 @@ export function InterviewPrepDrawer({
                 <span className="text-sm font-medium" role="status">
                   Copied
                 </span>
+              )}
+
+              {generatedFrom && hasResult && (
+                <p className="text-xs text-base-content/70" data-testid="prep-generated-from">
+                  Built from: {generatedFrom}
+                </p>
               )}
 
               <AiOutput
