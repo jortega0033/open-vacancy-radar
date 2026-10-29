@@ -2260,6 +2260,41 @@ describe('SearchPage', () => {
       const prepareButton = screen.getByRole('button', { name: /get ready to apply|finishing scan/i });
       expect(prepareButton).toBeDisabled();
     });
+
+    it('shows job-site rows while the AI web search is still running, says what the run waits for, and keeps them unpreparable (#685)', async () => {
+      const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // the AI step never finishes in this test
+      const { emit } = installProgressCapturingBridge({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Existing Role' })])),
+        runScan: vi.fn().mockReturnValue(scanPromise),
+        getScanProgress: vi.fn().mockResolvedValue({
+          scanning: true,
+          scanId: 'scan-685',
+          startedAt: Date.now(),
+          sourcesDone: 13,
+          sourcesTotal: 13,
+          vacanciesSoFar: 1,
+          aiWebSearch: 'running',
+        }),
+      });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
+
+      emit({
+        scanId: 'scan-685',
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'while-ai-1', title: 'Role Streamed While AI Runs' })],
+      } as ScanProgressEvent);
+      await waitFor(() => expect(screen.getAllByText('Role Streamed While AI Runs').length).toBeGreaterThan(0));
+      expect(screen.getByText(/live · not yet scored/i)).toBeInTheDocument();
+      expect(await screen.findByText('All 13 source groups checked. Waiting for the AI web search to finish…')).toBeInTheDocument();
+      expect(screen.getByTestId('ai-web-search-step')).toHaveTextContent('AI web search: running');
+      expect(screen.getByRole('button', { name: /get ready to apply|finishing scan/i })).toBeDisabled();
+    });
   });
 
   describe('live rows, ordering and duplicate keys (issue #464)', () => {

@@ -3,6 +3,8 @@ import type { AgentEvent, AgentEventEnvelope } from '@agent-dock/shared';
 import {
   EMPTY_CANDIDATE_PROFILE,
   applyFocusedScanCriteria,
+  awaitAiWebDiscoveryJoin,
+  isScanCancelledError,
   type CandidateProfile,
   type DiscoveryVacancyAudit,
   type GlobalRemoteScanOptions,
@@ -135,8 +137,19 @@ function harness(options: HarnessOptions) {
     logged.push({ level, object, message });
   };
   const signal = options.signal ?? new AbortController().signal;
+  // Stands in for the engine: it joins the AI branch the way `runGlobalRemoteScan` does, with the
+  // engine's own `awaitAiWebDiscoveryJoin` (#685), and records the options with what it merged.
   const runScan = vi.fn(async (scanOptions: GlobalRemoteScanOptions): Promise<GlobalRemoteScanResult> => {
-    scanCalls.push(scanOptions);
+    const joined = await awaitAiWebDiscoveryJoin(scanOptions, scanOptions.signal);
+    scanCalls.push({
+      ...scanOptions,
+      ...(joined
+        ? {
+            aiWebDiscoveryVacancies: joined.vacancies,
+            ...(joined.sourceAudit ? { aiWebDiscoverySourceAudit: joined.sourceAudit } : {}),
+          }
+        : {}),
+    });
     return { report: { discoverySources: [] } } as unknown as GlobalRemoteScanResult;
   });
   const intent = captureVacancyRunIntent('scan-684-run', parseVacancyScanRequest(options.request));
@@ -345,18 +358,32 @@ describe('runVacancyScanBranches: one submitted snapshot feeds both branches (#6
     expect(h.session.create).not.toHaveBeenCalled();
     expect(h.aiStates).toEqual(['failed']);
     expect(h.logged.find((entry) => entry.level === 'warn')?.message).toContain('AI web discovery setup failed');
-    expect(Object.keys(h.scanCalls[0]!).sort()).toEqual(['country', 'onProgress', 'query', 'signal']);
+    // The scan was offered the AI branch (#685), and the branch had nothing to merge.
+    expect(Object.keys(h.scanCalls[0]!).sort()).toEqual(['country', 'joinAiWebDiscovery', 'onProgress', 'query', 'signal']);
   });
 
-  it('a stop requested during the AI step cancels the run before the scan starts', async () => {
+  it('a stop requested during the AI step cancels the run and the AI session (#685: the scan was already running)', async () => {
     const controller = new AbortController();
     const h = harness({
       request: { mode: 'query', query: 'UI engineer', aiWebDiscovery: true },
       signal: controller.signal,
       client: sessionClient({ duringSession: () => controller.abort() }),
     });
+    await expect(h.run()).rejects.toSatisfy(isScanCancelledError);
+    expect(h.runScan).toHaveBeenCalledTimes(1);
+    // The engine stand-in never got past the join, so nothing was merged or built.
+    expect(h.scanCalls).toHaveLength(0);
+    // This fake session ignores the stop and completes; its result is still not used.
+    expect(h.aiStates).toEqual(['running', 'failed']);
+  });
+
+  it('a stop before the run starts touches neither branch', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const h = harness({ request: { mode: 'query', query: 'UI engineer', aiWebDiscovery: true }, signal: controller.signal });
     await expect(h.run()).rejects.toThrow('scan cancelled');
     expect(h.runScan).not.toHaveBeenCalled();
+    expect(h.loadProfile).not.toHaveBeenCalled();
   });
 
   it('logs the intent provenance (search terms and counts) and never CV text, skill names or the prompt', async () => {

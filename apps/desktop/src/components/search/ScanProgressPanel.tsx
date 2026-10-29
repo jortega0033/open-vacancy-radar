@@ -47,7 +47,8 @@ export function useScanStatus(active: boolean): { status: VacancyScanStatus | un
   return { status, now };
 }
 
-/** The AI web search step runs before the job sites are checked, so it gets its own line (#559). */
+/** The AI web search step runs alongside the job-site checks (#685) and is not one of the counted
+ * source groups, so it gets its own line (#559). */
 const AI_WEB_SEARCH_STEP: Record<NonNullable<VacancyScanStatus['aiWebSearch']>, string> = {
   waiting: 'AI web search: waiting',
   running: 'AI web search: running',

@@ -750,6 +750,16 @@ export type GlobalRemoteScanOptions = {
    */
   aiWebDiscoverySourceAudit?: DiscoverySourceAudit;
   /**
+   * Issue #685: the same AI-web-discovery input as the two fields above, but still being produced
+   * while this scan runs. The caller starts its AI branch alongside this call and passes a function
+   * returning that branch's (never-rejecting) promise; it is awaited only at the point where the AI
+   * rows are spliced in, after every deterministic source has finished, so deterministic progress
+   * events never wait for it. Aborting `signal` while it is pending rejects the scan with
+   * `ScanCancelledError` at once and its late value is never read. Resolving `undefined` means the
+   * AI step produced nothing to add. Mutually exclusive with the two fields above.
+   */
+  joinAiWebDiscovery?: () => Promise<AiWebDiscoveryJoinResult | undefined>;
+  /**
    * Cancels the run (#459). Aborting stops every new request at once (in-flight ones finish within
    * their own timeouts) and makes the scan reject with `ScanCancelledError` at the next stage
    * boundary, before any report is built or persisted by the caller. A cancelled run therefore
@@ -771,6 +781,51 @@ export function isScanCancelledError(error: unknown): error is ScanCancelledErro
 
 function throwIfScanCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new ScanCancelledError();
+}
+
+/** What an AI-web-discovery branch hands the scan to merge (#398, #685). */
+export interface AiWebDiscoveryJoinResult {
+  vacancies: DiscoveryVacancyAudit[];
+  sourceAudit: DiscoverySourceAudit;
+}
+
+/**
+ * The AI-web-discovery input for this scan, from whichever of the two forms the caller used (#685).
+ *
+ * With `joinAiWebDiscovery` the pending branch is raced against `signal`: a stop rejects with
+ * `ScanCancelledError` immediately instead of waiting out the AI step's own time budget, and a value
+ * that arrives after the stop is dropped. Returns `undefined` when this run has no AI input.
+ */
+export async function awaitAiWebDiscoveryJoin(
+  options: Pick<GlobalRemoteScanOptions, 'aiWebDiscoveryVacancies' | 'aiWebDiscoverySourceAudit' | 'joinAiWebDiscovery'>,
+  signal: AbortSignal | undefined,
+): Promise<{ vacancies: DiscoveryVacancyAudit[]; sourceAudit?: DiscoverySourceAudit } | undefined> {
+  const join = options.joinAiWebDiscovery;
+  if (join === undefined) {
+    if (options.aiWebDiscoveryVacancies === undefined && options.aiWebDiscoverySourceAudit === undefined) return undefined;
+    return {
+      vacancies: options.aiWebDiscoveryVacancies ?? [],
+      ...(options.aiWebDiscoverySourceAudit === undefined ? {} : { sourceAudit: options.aiWebDiscoverySourceAudit }),
+    };
+  }
+  if (options.aiWebDiscoveryVacancies !== undefined || options.aiWebDiscoverySourceAudit !== undefined) {
+    throw new Error('joinAiWebDiscovery cannot be combined with aiWebDiscoveryVacancies/aiWebDiscoverySourceAudit');
+  }
+  throwIfScanCancelled(signal);
+  const pending = join();
+  if (!signal) return pending;
+  let onAbort: (() => void) | undefined;
+  const stopped = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new ScanCancelledError());
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    const joined = await Promise.race([pending, stopped]);
+    throwIfScanCancelled(signal);
+    return joined;
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
 }
 
 /** Refuses any request started after the run was cancelled, so the sources still running wind down
@@ -1077,16 +1132,18 @@ export async function runGlobalRemoteScan(
   // layer before this function ever sees them (see `GlobalRemoteScanOptions.aiWebDiscoveryVacancies`
   // above) -- spliced in exactly like `workableGlobal` above, so they go through the same
   // `uniqueDiscovery` dedup/scoring/sponsor-match pipeline as every other source below, never
-  // special-cased past this point.
+  // special-cased past this point. Issue #685: when the AI branch is still running it is awaited
+  // here and only here, after every deterministic source has already reported its progress.
+  const aiWebDiscovery = await awaitAiWebDiscoveryJoin(options, signal);
   const discovery =
-    options.aiWebDiscoveryVacancies === undefined && options.aiWebDiscoverySourceAudit === undefined
+    aiWebDiscovery === undefined
       ? withWorkableGlobal
       : {
           sources: [
             ...withWorkableGlobal.sources,
-            ...(options.aiWebDiscoverySourceAudit === undefined ? [] : [options.aiWebDiscoverySourceAudit]),
+            ...(aiWebDiscovery.sourceAudit === undefined ? [] : [aiWebDiscovery.sourceAudit]),
           ],
-          vacancies: [...withWorkableGlobal.vacancies, ...(options.aiWebDiscoveryVacancies ?? [])],
+          vacancies: [...withWorkableGlobal.vacancies, ...aiWebDiscovery.vacancies],
         };
   const auditedDiscovery = {
     ...discovery,
@@ -1266,6 +1323,9 @@ export async function runGlobalRemoteScan(
       .filter((source) => source.state === 'active')
       .map((source) => ({ name: source.name, url: source.url })),
   };
+  // The last stage boundary (#459, #685): a stop that arrived during enrichment leaves the previous
+  // report on disk untouched rather than persisting a run nobody is waiting for any more.
+  throwIfScanCancelled(signal);
   const files = await writeGlobalRemoteReport(report, projectRoot, {
     ...(options.preserveNonEmptyLatest ? { preserveNonEmptyLatest: true } : {}),
   });

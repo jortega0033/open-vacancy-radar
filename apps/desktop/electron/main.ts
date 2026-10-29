@@ -49,7 +49,6 @@ import {
   type Database,
   type GlobalRemoteReport,
   type ScanLock,
-  type ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
 import {
   AGENT_WORKSPACE_ACTIVITY_CHANNEL,
@@ -115,13 +114,8 @@ import {
 import { sendToRenderer } from './send-to-renderer.js';
 import { chooseInitialBounds, loadWindowState, saveWindowState, type WindowState } from './window-state.js';
 import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
-import {
-  captureVacancyRunIntent,
-  describeVacancyRunIntent,
-  type VacancyRunIntent,
-} from './vacancy-run-intent.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
-import { runVacancyScanBranches } from './vacancy-scan-orchestration.js';
+import { createVacancyScanRunner } from './vacancy-scan-run.js';
 import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
 import {
   cleanupStagedPath,
@@ -133,7 +127,7 @@ import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createSourceScout, createSourceScoutStateStore, sourceScoutLimitsFromEnv } from './source-scout.js';
 import { createTick } from './tick.js';
-import type { VacancyScanAiWebSearchState, VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
+import type { VacancyScanCancelResult, VacancyScanStatus } from './vacancy-scan-progress-types.js';
 import {
   describeVacancyEngineFailure,
   rebuildVacancyEngineDatabase,
@@ -2619,51 +2613,19 @@ guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt
  * process and is never tied to any renderer window's lifetime, so this is the only way the
  * renderer can tell "idle" and "already running, just not the one I started" apart.
  */
-/** The vacancy scan this process is running right now, with the progress its engine events have
- * reported so far (#459). Held here, not in the renderer, so a page that remounts mid-scan still
- * shows the true source count, start time and run id. */
-interface ActiveVacancyScan {
-  id: string;
-  startedAt: number;
-  controller: AbortController;
-  doneSources: Set<string>;
-  total: number;
-  vacancies: number;
-  /** What this run was asked to look for, fixed when it started (#684). */
-  intent: VacancyRunIntent;
-  /** Only set when this run was asked to also search the web with AI (#559). */
-  aiWebSearch?: VacancyScanAiWebSearchState;
-}
-let activeVacancyScan: ActiveVacancyScan | undefined;
-
 guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
 
-/** The same question as `vacancy:get-scan-status`, with the run's id, start time and source counts.
- * A separate channel so the plain status keeps its one-field shape for every existing caller. */
-guardedIpc.handle('vacancy:get-scan-progress', (): VacancyScanStatus => {
-  const scan = activeVacancyScan;
-  if (!scan) return { scanning: isScanInFlight() };
-  return {
-    scanning: true,
-    scanId: scan.id,
-    startedAt: scan.startedAt,
-    sourcesDone: scan.doneSources.size,
-    sourcesTotal: scan.total,
-    vacanciesSoFar: scan.vacancies,
-    intent: describeVacancyRunIntent(scan.intent),
-    ...(scan.aiWebSearch ? { aiWebSearch: scan.aiWebSearch } : {}),
-    ...(scan.controller.signal.aborted ? { stopping: true } : {}),
-  };
-});
+/** The same question as `vacancy:get-scan-status`, with the run's id, start time and source counts
+ * (#459). A separate channel so the plain status keeps its one-field shape for every existing caller. */
+guardedIpc.handle('vacancy:get-scan-progress', (): VacancyScanStatus =>
+  vacancyScanRunner.status() ?? { scanning: isScanInFlight() },
+);
 
 /** Stops the run named by `scanId`. Idempotent, and a stale id (the run already finished, or a newer
  * one started) cancels nothing rather than the wrong scan. */
-guardedIpc.handle('vacancy:cancel-scan', (_event, scanId: unknown): VacancyScanCancelResult => {
-  const scan = activeVacancyScan;
-  if (!scan || typeof scanId !== 'string' || scan.id !== scanId) return { cancelled: false };
-  scan.controller.abort();
-  return { cancelled: true };
-});
+guardedIpc.handle('vacancy:cancel-scan', (_event, scanId: unknown): VacancyScanCancelResult =>
+  vacancyScanRunner.cancel(scanId),
+);
 
 /**
  * Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
@@ -2713,101 +2675,65 @@ function notifyScanOutcome(show: () => void): void {
  * notification either.
  */
 async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<GlobalRemoteReport> {
+  return vacancyScanRunner.run(request);
+}
+
+/**
+ * The run lifecycle itself lives in `vacancy-scan-run.ts` (#685) so tests can drive it; this is
+ * where it gets the Electron window, the engine and the AI client. The optional AI web search
+ * (#398) and the deterministic sources run side by side inside the one `runExclusiveScan` guard,
+ * under one scan id and one intent snapshot (#684); `runAiWebDiscovery` never acquires `ScanGuard`
+ * (see its own doc comment), and a run that did not ask for AI search never touches the AI
+ * dependencies, so its `GlobalRemoteScanOptions` stay byte-identical to before that feature.
+ */
+const vacancyScanRunner = createVacancyScanRunner({
   // A background source scout holds the scan guard for up to its whole run; a person asking for a
   // scan wins, so stop the scout first. It records itself as cancelled and retries later.
-  await sourceScout.cancel();
-  const db = await ensureVacancyEngine();
-  try {
-    const report = await runExclusiveScan(
-      async () => {
-        const config = vacancyEngineConfig();
-        const logger = createLogger(config);
-        const scanId = randomUUID();
-        // Fixed here, from the validated request, before any saved profile is read: the AI branch and
-        // the deterministic branch below both take their criteria from this snapshot (#684).
-        const intent = captureVacancyRunIntent(scanId, request);
-        const scan: ActiveVacancyScan = {
-          id: scanId,
-          startedAt: Date.now(),
-          controller: new AbortController(),
-          doneSources: new Set(),
-          total: SCAN_PROGRESS_SOURCE_IDS.length,
-          vacancies: 0,
-          intent,
-          ...(intent.aiWebDiscovery ? { aiWebSearch: 'waiting' as const } : {}),
-        };
-        activeVacancyScan = scan;
-        try {
-        // Issue #398 Phase 1: an additional, on-demand AI-web-search discovery pass, then the
-        // deterministic scan, both inline here inside the `runExclusiveScan` guard this closure already
-        // runs under. `runAiWebDiscovery` never acquires `ScanGuard` (see its own doc comment) -- it is
-        // just more work done under the one exclusive scan this handler already holds. The two branches
-        // and their hand-off live in `runVacancyScanBranches` so that both take their criteria from the
-        // one `intent` snapshot above (#684); a run that did not ask for AI search never touches the AI
-        // dependencies, so its `GlobalRemoteScanOptions` stay byte-identical to before that feature.
-        const result = await runVacancyScanBranches(
-          {
-            loadProfile: async () => loadCandidateProfile(await candidateProfilePath()),
-            ensureAiWorkspace: ensureAiWorkspaceDir,
-            runAiWebDiscovery: (options) => runAiWebDiscovery(client, options),
-            runGlobalRemoteScan: async (options) =>
-              runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), options),
-            logger,
-            signal: scan.controller.signal,
-            throwCancelled: () => {
-              throw new ScanCancelledError();
-            },
-            onAiState: (state) => {
-              scan.aiWebSearch = state;
-            },
-            onProgress: (event: ScanProgressEvent) => {
-              // A stopped run's late events must not reach the page: it has already gone back to the
-              // previous report.
-              if (scan.controller.signal.aborted) return;
-              scan.doneSources.add(event.sourceId);
-              scan.vacancies += event.vacancies.length;
-              sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, {
-                ...event,
-                scanId: scan.id,
-                sourcesDone: scan.doneSources.size,
-                sourcesTotal: scan.total,
-              });
-            },
-            browseAllResultCap: BROWSE_ALL_RESULT_CAP,
-          },
-          intent,
-        );
-        // A scan with no matches must not displace the last report that had some (#561): saved jobs
-        // and prepare still resolve rows against it, and the renderer keeps showing it.
-        lastVacancyScanAt = result.report.generatedAt;
-        hydratedZeroMatch = undefined;
-        if (result.report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
-          latestVacancyReport = result.report;
-        }
-        return result.report;
-        } finally {
-          if (activeVacancyScan === scan) activeVacancyScan = undefined;
-        }
-      },
-      { takeAdvisoryLock: true },
-    );
+  beforeScan: async () => {
+    await sourceScout.cancel();
+    await ensureVacancyEngine();
+  },
+  runExclusiveScan: (run) => runExclusiveScan(run, { takeAdvisoryLock: true }),
+  prepareRun: async () => {
+    const db = await ensureVacancyEngine();
+    const config = vacancyEngineConfig();
+    const logger = createLogger(config);
+    return {
+      loadProfile: async () => loadCandidateProfile(await candidateProfilePath()),
+      ensureAiWorkspace: ensureAiWorkspaceDir,
+      runAiWebDiscovery: (options) => runAiWebDiscovery(client, options),
+      runGlobalRemoteScan: async (options) =>
+        runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), options),
+      logger,
+      browseAllResultCap: BROWSE_ALL_RESULT_CAP,
+    };
+  },
+  newScanId: () => randomUUID(),
+  now: () => Date.now(),
+  progressSourceTotal: SCAN_PROGRESS_SOURCE_IDS.length,
+  sendProgress: (event) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
+  adoptReport: (report) => {
+    // A scan with no matches must not displace the last report that had some (#561): saved jobs
+    // and prepare still resolve rows against it, and the renderer keeps showing it.
+    lastVacancyScanAt = report.generatedAt;
+    hydratedZeroMatch = undefined;
+    if (report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
+      latestVacancyReport = report;
+    }
+  },
+  notifyCompleted: (report) =>
     notifyScanOutcome(() =>
       notifyVacancyScanCompleted({
         kept: report.discoveryAudit.length,
         complete: report.scanBounds?.complete ?? true,
       }),
-    );
-    return report;
-  } catch (error) {
-    // A stop the person asked for is neither a failure nor worth a notification.
-    if (!isExpectedScanBusyError(error) && !isScanCancelledError(error)) {
-      notifyScanOutcome(() =>
-        notifyVacancyScanFailed({ detail: error instanceof Error ? error.message : 'unknown error' }),
-      );
-    }
-    throw error;
-  }
-}
+    ),
+  notifyFailed: (detail) => notifyScanOutcome(() => notifyVacancyScanFailed({ detail })),
+  isQuietError: (error) => isExpectedScanBusyError(error) || isScanCancelledError(error),
+  throwCancelled: () => {
+    throw new ScanCancelledError();
+  },
+});
 
 guardedIpc.handle('vacancy:run-scan', (_event, request: unknown): Promise<GlobalRemoteReport> =>
   runVacancyScan(parseVacancyScanRequest(request)),

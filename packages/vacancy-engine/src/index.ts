@@ -13,6 +13,8 @@ export {
   runGlobalRemoteScan,
   ScanCancelledError,
   isScanCancelledError,
+  awaitAiWebDiscoveryJoin,
+  type AiWebDiscoveryJoinResult,
   type GlobalRemoteScanOptions,
   type GlobalRemoteScanResult,
 } from './pipeline/global-remote.js';

@@ -43,7 +43,9 @@ vendored from the standalone `ind-job-radar` CLI project and ported from Postgre
 On top of that deterministic pipeline, an opt-in "Include AI web search" checkbox on the Search page
 can add one budget-capped session of your configured Claude CLI (its `WebSearch`/`WebFetch` tools
 only, no filesystem access) to look for further candidate vacancies. It only runs once a search
-profile is configured, never blocks the rest of a scan if it fails or times out, and every candidate
+profile is configured, runs alongside the job-site sources rather than before them (their results
+appear while it is still searching, and its own results are merged in before the scan is scored and
+saved), never blocks the rest of a scan if it fails or times out, and every candidate
 it returns is schema-validated and checked against the same blocked/prohibited source list as the
 deterministic sources before being accepted.
 

@@ -39,7 +39,17 @@ export function describeScanProgress(status: VacancyScanStatus | undefined, now:
     return { fraction: null, headline: 'Starting the scan…', elapsed, vacancies };
   }
   if (done >= total) {
-    return { fraction: null, headline: `All ${total} source groups checked. Matching sponsors and scoring results…`, elapsed, vacancies };
+    // The AI web search runs alongside the source groups (#685) and the run only scores results once
+    // it has finished, so while it is still going that is what the run is waiting for.
+    const waitingForAi = status?.aiWebSearch === 'waiting' || status?.aiWebSearch === 'running';
+    return {
+      fraction: null,
+      headline: waitingForAi
+        ? `All ${total} source groups checked. Waiting for the AI web search to finish…`
+        : `All ${total} source groups checked. Matching sponsors and scoring results…`,
+      elapsed,
+      vacancies,
+    };
   }
   return {
     fraction: done / total,
