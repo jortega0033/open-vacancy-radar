@@ -10,6 +10,7 @@ export { createDatabaseClient, migrateDatabase, type Database, type DatabaseClie
 export { createScanLock, withScanAdvisoryTryLock, type ScanLock } from './db/advisory-lock.js';
 
 export {
+  resolveFocusedLeads,
   runGlobalRemoteScan,
   ScanCancelledError,
   isScanCancelledError,
@@ -41,7 +42,41 @@ export {
   type WorkableJobDetail,
   type WorkableJobReference,
 } from './global-remote/structured-discovery.js';
-export { applyFocusedScanCriteria, isUnspecifiedCountry, SOURCE_FILTER_CAPABILITIES, type FocusedScanCriteria } from './global-remote/focused-scan.js';
+export { applyFocusedScanCriteria, isUnspecifiedCountry, SOURCE_FILTER_CAPABILITIES, vacancyMatchesRole, type FocusedScanCriteria } from './global-remote/focused-scan.js';
+export {
+  addSearchPlanSuggestions,
+  approveSearchPlanDraft,
+  captureSearchPlanSnapshot,
+  dismissSearchPlanSuggestion,
+  EMPTY_SEARCH_PLAN,
+  isSearchPlanUsable,
+  loadSearchPlan,
+  normalizeSearchPlanDraft,
+  SEARCH_PLAN_MAX_MARKETS,
+  SEARCH_PLAN_MAX_VARIANTS,
+  searchPlanDraftSchema,
+  searchPlanSchema,
+  searchPlanVariantKey,
+  writeSearchPlan,
+  type SearchPlan,
+  type SearchPlanDraft,
+  type SearchPlanSnapshot,
+  type SearchPlanSuggestion,
+  type SearchPlanVariant,
+  type SearchPlanVariantOrigin,
+} from './candidate/search-plan.js';
+export {
+  compileSearchPlanQueries,
+  DEFAULT_SEARCH_PLAN_ENVELOPE,
+  finalizeLeadProvenance,
+  LITERAL_QUERY_ID,
+  roleFilteredProviders,
+  runSearchPlanVariantPasses,
+  SEARCH_PLAN_PASS_PROVIDERS,
+  searchPlanHandlingForSource,
+  type SearchPlanRunInput,
+  type SearchPlanRunResult,
+} from './global-remote/search-plan.js';
 export {
   AiWebDiscoveryCandidateSchema,
   AiWebDiscoveryResponseSchema,
@@ -129,8 +164,14 @@ export type {
   DiscoveryProvider,
   DiscoverySourceAudit,
   DiscoveryVacancyAudit,
+  LeadQueryProvenance,
   OfficialVacancyAudit,
   ProfileMatchBreakdown,
+  SearchPlanEnvelope,
+  SearchPlanHandling,
+  SearchPlanQueryRef,
+  SearchPlanReport,
+  SearchPlanSourceHandling,
   ScanProgressEvent,
   ScanProgressCallback,
   SourceRegistryEntry,

@@ -1,7 +1,9 @@
 import {
+  isSearchPlanUsable,
   parseMinimumAnnualSalary,
   type CandidateProfile,
   type SalaryFilterCriteria,
+  type SearchPlan,
 } from '@open-vacancy-radar/vacancy-engine';
 
 export type VacancyScanRequest =
@@ -15,6 +17,9 @@ export type VacancyScanRequest =
        * this run only. Omitted/false is a true no-op -- see `runVacancyScan` in `main.ts`, which
        * never even looks at this field's absence differently from `false`. */
       aiWebDiscovery?: boolean;
+      /** Issue #686: also search the person's approved search-plan titles in this run. The plan itself
+       * is never sent from the page: the main process reads the saved one when the run starts. */
+      useSearchPlan?: boolean;
     }
   | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
@@ -26,6 +31,7 @@ export type ParsedVacancyScanRequest =
       employment?: string;
       salary?: SalaryFilterCriteria;
       aiWebDiscovery?: boolean;
+      useSearchPlan?: boolean;
     }
   | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
@@ -84,12 +90,14 @@ export function parseVacancyScanRequest(value: unknown): ParsedVacancyScanReques
       employment?: unknown;
       salary?: unknown;
       aiWebDiscovery?: unknown;
+      useSearchPlan?: unknown;
     };
     if (request.mode === 'query') {
       const country = optionalFocusedCriterion(request.country, 'Country');
       const employment = optionalFocusedCriterion(request.employment, 'Employment type');
       const salary = parseSalaryFilter(request.salary);
       const aiWebDiscovery = optionalBoolean(request.aiWebDiscovery, 'AI web discovery');
+      const useSearchPlan = optionalBoolean(request.useSearchPlan, 'Search plan');
       return {
         mode: 'query',
         query: requiredScanQuery(request.query),
@@ -97,6 +105,8 @@ export function parseVacancyScanRequest(value: unknown): ParsedVacancyScanReques
         ...(employment ? { employment } : {}),
         ...(salary ? { salary } : {}),
         ...(aiWebDiscovery !== undefined ? { aiWebDiscovery } : {}),
+        // Only an explicit true is kept, so a literal request stays byte-identical to before #686.
+        ...(useSearchPlan === true ? { useSearchPlan } : {}),
       };
     }
     if (request.mode === 'browse_all') {
@@ -117,4 +127,24 @@ function firstNonBlank(values: readonly string[]): string | null {
 
 export function scheduledScanQueryFromProfile(profile: CandidateProfile): string | null {
   return firstNonBlank(profile.targetRoles) ?? firstNonBlank(profile.strongestSkills);
+}
+
+/**
+ * What the unattended scan and the background source scout search for (#686).
+ *
+ * With an approved search plan the answer is ONE scan: the plan's first approved title as the query,
+ * carrying the plan itself, so the run uses the person's reviewed titles under one shared allowance
+ * instead of scanning each saved role on its own. Without one it is the first saved role or skill, as
+ * before. Suggestions that were never approved are not part of a plan and never reach a search.
+ */
+export function selectBackgroundScan(
+  profile: CandidateProfile,
+  plan: Pick<SearchPlan, 'variants'> | null,
+): { query: string; useSearchPlan: boolean } | null {
+  if (plan !== null && isSearchPlanUsable(plan)) {
+    const first = plan.variants.map((variant) => variant.title.trim()).find((title) => title.length > 0);
+    if (first) return { query: first, useSearchPlan: true };
+  }
+  const query = scheduledScanQueryFromProfile(profile);
+  return query === null ? null : { query, useSearchPlan: false };
 }

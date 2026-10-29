@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { ArrowLeft, Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
-import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfile, GlobalRemoteReport, SearchPlan } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput, VacancyEngineStatus } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
@@ -23,6 +23,7 @@ import { publishEngineHealth } from '../../engine-health.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
 import { describeAiIntentProvenance } from './ai-intent-provenance.js';
+import { describeSearchPlanDiagnostics, searchPlanCoverageNotice } from './search-plan-view.js';
 import { describeAiWebSearchFailure } from './ai-web-search-notice.js';
 import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
 import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
@@ -41,6 +42,7 @@ import {
   filterSearchResultIndex,
   isWebUrl,
   reportSearchContext,
+  withReportQueryAlternatives,
   salaryCounts,
   sortSearchResultIndex,
   sourceOptions,
@@ -301,6 +303,30 @@ export function SearchPage({
   // own doc comment on this prop): it is a one-off request option for the next scan, not a
   // client-side result refinement or something worth restoring across a remount.
   const [aiWebDiscovery, setAiWebDiscovery] = useState(false);
+  // Issue #686: the person's approved search plan, read from the saved file. It is only a hint for the
+  // next scan: the main process takes the authoritative copy when the run starts. `usePlanChoice` is
+  // null until they decide, and then follows the plan (on whenever there is an approved title).
+  const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
+  const [usePlanChoice, setUsePlanChoice] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!('vacancyRadar' in window) || typeof window.vacancyRadar.getSearchPlan !== 'function') return;
+    void window.vacancyRadar
+      .getSearchPlan()
+      .then((plan) => {
+        if (!cancelled) setSearchPlan(plan);
+      })
+      .catch(() => {
+        // An unreadable plan simply offers no plan switch; a plan run reports its own error.
+        if (!cancelled) setSearchPlan(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileRevision]);
+  const planTitles = useMemo(() => searchPlan?.variants.map((variant) => variant.title) ?? [], [searchPlan]);
+  const planActive = planTitles.length > 0 && (usePlanChoice ?? true);
 
   // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
   // used only while no final report is loaded yet (see `results` below). Reset whenever this page
@@ -770,9 +796,20 @@ export function SearchPage({
   // just-submitted role/location. Every read site that describes the current view (the list itself,
   // and the salary note/count below) must derive from this single value, not `appliedFilters`
   // directly, so they never disagree about which filters are in effect.
-  const effectiveFilters = showLiveResults && pendingScanFilters ? pendingScanFilters : appliedFilters;
+  const effectiveFilters = useMemo(
+    () =>
+      showLiveResults && pendingScanFilters
+        ? pendingScanFilters
+        : withReportQueryAlternatives(appliedFilters, session.report),
+    [appliedFilters, pendingScanFilters, session.report, showLiveResults],
+  );
   const visible = useMemo(
-    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, effectiveFilters), effectiveFilters.query),
+    () =>
+      sortSearchResultIndex(
+        filterSearchResultIndex(resultIndex, effectiveFilters),
+        effectiveFilters.query,
+        effectiveFilters.queryAlternatives,
+      ),
     [resultIndex, effectiveFilters],
   );
 
@@ -892,6 +929,9 @@ export function SearchPage({
       ...worldwideReport.discoverySources.flatMap((source) =>
         source.aiSearchIntent ? [describeAiIntentProvenance(source.aiSearchIntent, redactDiagnosticsText)] : [],
       ),
+      // The reviewed search plan, if the run used one (#686): its allowance, what was used, and how each
+      // approved title and each source handled it. Typed titles go through the same redaction.
+      ...describeSearchPlanDiagnostics(worldwideReport, redactDiagnosticsText),
       // Both the summary and the underlying reason: the summary alone ("the session failed to
       // start") hid why AI web search failed (#559).
       ...sourceWarnings.map((source) => {
@@ -907,6 +947,7 @@ export function SearchPage({
       setCopiedScanLogRunId(undefined);
     }
   }, [worldwideReport, sourceWarnings]);
+  const planCoverageNotice = searchPlanCoverageNotice(worldwideReport);
   const scanBounds = worldwideReport?.scanBounds;
   const scanIncomplete = scanBounds?.complete === false;
   // Whether the rows currently on screen are provisional/live rather than the saved report -- drives
@@ -970,7 +1011,16 @@ export function SearchPage({
     setScanError(undefined);
     setScanGuard(undefined);
     setLoadError(undefined);
-    setPendingScanFilters(scanFilters);
+    // The live view applies the same OR set the scan will, so a row found under another approved title
+    // is not hidden by the typed query while it streams in (#686).
+    setPendingScanFilters(
+      planActive
+        ? {
+            ...scanFilters,
+            queryAlternatives: planTitles.filter((title) => title.trim().toLowerCase() !== query.toLowerCase()),
+          }
+        : scanFilters,
+    );
     // A fresh scan this page itself starts has no partial rows yet -- clear whatever an earlier
     // run (or an earlier mount's now-gone accumulation) left behind, so a rescan's own progress
     // events build a clean list rather than mixing in a previous run's provisional rows.
@@ -996,6 +1046,8 @@ export function SearchPage({
         // Omitted entirely when off, exactly like `country`/`employment`/`salary` above, so a scan
         // that never opts in produces byte-identical requests to before this feature existed.
         ...(aiWebDiscovery ? { aiWebDiscovery: true } : {}),
+        // Only a switched-on plan with approved titles; omitted otherwise so a literal search is unchanged.
+        ...(planActive ? { useSearchPlan: true } : {}),
       });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       acceptScanReport(report);
@@ -1034,7 +1086,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [acceptScanReport, aiWebDiscovery, engineState, filters, noteStoppedScan, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [acceptScanReport, aiWebDiscovery, engineState, filters, noteStoppedScan, planActive, planTitles, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const runBrowseAllScan = useCallback(async () => {
     const requestGeneration = ++reportRequestGenerationRef.current;
@@ -1328,6 +1380,9 @@ export function SearchPage({
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
+          searchPlanTitleCount={planTitles.length}
+          useSearchPlan={planActive}
+          onUseSearchPlanChange={setUsePlanChoice}
           onOpenSearchProfile={() => setProfileEditorOpen(true)}
           scanUnavailable={engineState === 'unavailable'}
         />
@@ -1422,6 +1477,11 @@ export function SearchPage({
               </button>
             )}
           </div>
+        )}
+        {planCoverageNotice && !scanning && (
+          <WarningBanner className="mt-3" role="status">
+            {planCoverageNotice}
+          </WarningBanner>
         )}
         {zeroMatchNotice && !scanning && zeroMatchNotice.keptPrevious && (
           <div className="alert alert-info alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">

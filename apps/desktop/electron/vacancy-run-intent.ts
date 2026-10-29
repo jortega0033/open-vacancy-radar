@@ -2,6 +2,7 @@ import {
   isUnspecifiedCountry,
   type AiSearchIntentProvenance,
   type SalaryFilterCriteria,
+  type SearchPlanSnapshot,
 } from '@open-vacancy-radar/vacancy-engine';
 import type { ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 
@@ -30,12 +31,19 @@ export interface VacancyRunIntent {
   readonly employment: string | null;
   readonly salary: Readonly<SalaryFilterCriteria> | null;
   readonly aiWebDiscovery: boolean;
+  /**
+   * Issue #686: the reviewed search plan this run searches besides the typed query, as the frozen copy
+   * taken when the run started; null for a literal single-query run. Editing or removing a title in the
+   * saved plan afterwards changes the next run, never this one.
+   */
+  readonly searchPlan: SearchPlanSnapshot | null;
 }
 
 export function captureVacancyRunIntent(
   scanId: string,
   request: ParsedVacancyScanRequest,
   capturedAt: Date = new Date(),
+  searchPlan: SearchPlanSnapshot | null = null,
 ): VacancyRunIntent {
   const base = {
     version: VACANCY_RUN_INTENT_VERSION,
@@ -51,6 +59,7 @@ export function captureVacancyRunIntent(
       country: null,
       employment: null,
       salary: null,
+      searchPlan: null,
     });
   }
   return Object.freeze({
@@ -60,6 +69,8 @@ export function captureVacancyRunIntent(
     country: request.country ?? null,
     employment: request.employment ?? null,
     salary: request.salary ? Object.freeze({ ...request.salary }) : null,
+    // Only a run that asked for the plan carries one, and only the already-frozen snapshot is kept.
+    searchPlan: request.useSearchPlan === true ? searchPlan : null,
   });
 }
 
@@ -68,11 +79,12 @@ export function deterministicScanCriteria(
   intent: VacancyRunIntent,
   browseAllResultCap: number,
 ):
-  | { query: string; country?: string; employment?: string; salary?: SalaryFilterCriteria }
+  | { query: string; country?: string; employment?: string; salary?: SalaryFilterCriteria; searchPlan?: SearchPlanSnapshot }
   | { query: ''; browseAll: true; browseAllResultCap: number } {
   if (intent.mode === 'browse_all') return { query: '', browseAll: true, browseAllResultCap };
   return {
     query: intent.query ?? '',
+    ...(intent.searchPlan ? { searchPlan: intent.searchPlan } : {}),
     ...(intent.country ? { country: intent.country } : {}),
     ...(intent.employment ? { employment: intent.employment } : {}),
     ...(intent.salary ? { salary: { ...intent.salary } } : {}),
@@ -93,6 +105,9 @@ export function describeVacancyRunIntentParts(intent: VacancyRunIntent): string[
     ...(intent.employment ? [`Employment: ${intent.employment}`] : []),
     ...(intent.salary
       ? [`Minimum salary: ${formatSalary(intent.salary)} a year${intent.salary.includeUnknown ? '' : ', unknown salaries hidden'}`]
+      : []),
+    ...(intent.searchPlan
+      ? [`Search plan: ${intent.searchPlan.variants.length} approved ${intent.searchPlan.variants.length === 1 ? 'title' : 'titles'} (revision ${intent.searchPlan.revision})`]
       : []),
   ];
 }

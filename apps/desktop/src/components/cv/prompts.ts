@@ -409,9 +409,15 @@ Optional adjacent roles that need a named gap closed. Write "None supported by t
 ## Search focus
 A concise set of role keywords and constraints the candidate can use to start a search. Do not invent location, mobility, language or work-authorization preferences.
 
+${SUGGESTED_TITLES_HEADING}
+Up to eight job titles that mean the same kind of work as the best-fit directions, one per line, each line starting with "- ". Write only the title, optionally followed by " | " and the language that title is written in (for example "- Frontend ontwikkelaar | Dutch"). Add a language only for a title that is actually written in it. These are suggestions for the candidate to review, not a decision.
+
 === CANDIDATE CV (${field(cv.fileName)}) ===
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }
+
+/** The heading the best-fit answer ends with; `parseSuggestedSearchTitles` reads the list under it (#686). */
+export const SUGGESTED_TITLES_HEADING = '## Suggested search titles';
 
 /** `{"title": string, ..., "skills": string[], ...}`, generated from the shared schema, once at
  * module load since `CV_PROFILE_FIELD_ORDER` is static, so this can never describe a field the

@@ -361,6 +361,81 @@ export type DiscoveryVacancyAudit = {
    * `identity`.
    */
   sources?: VacancySourceReference[];
+  /**
+   * Issue #686: which query produced this lead. Present only on a run that used a search plan.
+   * Holds copies of the query text and language, never references into the saved plan, so editing
+   * or removing a variant later cannot rewrite what an old report says.
+   */
+  queryProvenance?: LeadQueryProvenance;
+};
+
+/** One query (the literal one or an approved plan title) as it was used in a run. */
+export type SearchPlanQueryRef = {
+  /** `literal` for the query the person typed; otherwise the approved variant's id. */
+  variantId: string;
+  query: string;
+  /** The working language the person selected for this title, or null when none was stated. */
+  language: string | null;
+};
+
+export type LeadQueryProvenance = {
+  planRevision: number;
+  /**
+   * The queries a source actually received upstream and returned this lead for. When identical
+   * requisitions found by several queries merge into one lead, every query is kept. Empty for a
+   * lead from a source that takes no role filter: its single feed was matched locally.
+   */
+  fetchedBy: (SearchPlanQueryRef & { provider: DiscoveryProvider })[];
+  /** Every query (literal and approved titles) the final shared filter found in this lead's text. */
+  matchedLocally: SearchPlanQueryRef[];
+};
+
+/** How one query was handled by one source or by the run (#686). */
+export type SearchPlanHandling =
+  | 'sent_upstream'
+  | 'local_only'
+  | 'partial'
+  | 'covered_by_earlier_query'
+  | 'deferred_request_budget'
+  | 'deferred_time_budget'
+  | 'deferred_result_cap';
+
+export type SearchPlanSourceHandling = SearchPlanQueryRef & {
+  handling: SearchPlanHandling;
+  /** Always set unless the query was sent upstream and fully completed. */
+  reason: string | null;
+};
+
+export type SearchPlanEnvelope = {
+  /** Query-dependent requests (sources that declare a role filter) across the literal pass and every variant. */
+  maxRequests: number;
+  maxDurationMs: number;
+  /** Rows the variant passes may add before merge. */
+  maxResults: number;
+};
+
+export type SearchPlanReport = {
+  planRevision: number;
+  primaryFunction: string;
+  markets: string[];
+  workingLanguages: string[];
+  /** The OR set the final filter applied: the literal query first, then the approved titles. */
+  queries: SearchPlanQueryRef[];
+  variants: (SearchPlanQueryRef & {
+    handling: SearchPlanHandling;
+    reason: string | null;
+    requests: number;
+    providersQueried: DiscoveryProvider[];
+  })[];
+  envelope: SearchPlanEnvelope;
+  usage: {
+    literalRequests: number;
+    variantRequests: number;
+    elapsedMs: number;
+    variantRows: number;
+  };
+  coverage: 'complete' | 'partial';
+  coverageReason: string | null;
 };
 
 export type AiSearchIntentCriterion = 'role' | 'country' | 'employment' | 'salary';
@@ -470,6 +545,12 @@ export type DiscoverySourceAudit = {
     applied: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; parameter: string; valueFormat: 'free_text' | 'exact' | 'enumerated'; pagination: 'filtered_pages' | 'not_applicable'; limitations: string }[];
     deferred: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; normalizedValue: string; reason: string }[];
     unsupported: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; normalizedValue: string; reason: string }[];
+    /**
+     * Issue #686: what this source did with each query of the run's search plan -- sent upstream,
+     * matched locally only because the source declares no role filter, or deferred by the shared
+     * budget. Absent on a run without a plan.
+     */
+    searchPlan?: SearchPlanSourceHandling[];
   };
   /** Aggregate telemetry for the incremental ATS tenant planner. Present on the first roster
    * provider audit only, so report consumers can sum source rows without double-counting it. */
@@ -628,6 +709,8 @@ export type GlobalRemoteReport = {
   blockedOrErrored: OfficialVacancyAudit[];
   officialAudit: OfficialVacancyAudit[];
   discoveryAudit: DiscoveryVacancyAudit[];
+  /** Issue #686: the search plan this run used, as a copy, with its budget and coverage. Absent on a literal run. */
+  searchPlan?: SearchPlanReport;
   methodology: string[];
   attribution: { name: string; url: string }[];
 };

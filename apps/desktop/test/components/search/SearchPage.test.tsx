@@ -2850,3 +2850,112 @@ describe('SearchPage live announcements (issue #456)', () => {
     expect(await screen.findByText(/Checked 500 listings, none matched/)).toBeInTheDocument();
   });
 });
+
+describe('SearchPage search plan (#686)', () => {
+  const PLAN = {
+    schemaVersion: 1 as const,
+    revision: 2,
+    updatedAt: '2026-10-29T10:00:00.000Z',
+    primaryFunction: 'Frontend engineering',
+    variants: [
+      { id: 'react-developer', title: 'React developer', language: '', origin: 'user' as const },
+      { id: 'ui-engineer', title: 'UI engineer', language: '', origin: 'user' as const },
+    ],
+    markets: [],
+    suggestions: [],
+  };
+
+  it('shows no plan switch and sends the unchanged request when no title is approved', async () => {
+    const bridge = installAllBridges({ runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])) });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    expect(screen.queryByRole('checkbox', { name: /approved title/i })).not.toBeInTheDocument();
+    enterSearchQuery('react developer');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'react developer' }));
+  });
+
+  it('searches the approved titles by default, lets the person turn that off, and then sends the literal request', async () => {
+    const bridge = installAllBridges({
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
+      getSearchPlan: vi.fn().mockResolvedValue(PLAN),
+    });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    const toggle = await screen.findByRole('checkbox', { name: 'Also search my 2 approved titles' });
+    expect(toggle).toBeChecked();
+    enterSearchQuery('react developer');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+    await waitFor(() =>
+      expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'react developer', useSearchPlan: true }),
+    );
+
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Search' })[0]).toBeEnabled());
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(2));
+    expect(bridge.runScan).toHaveBeenLastCalledWith({ mode: 'query', query: 'react developer' });
+  });
+
+  it('shows a result found under another approved title, with what found it, and warns about partial coverage', async () => {
+    const report: GlobalRemoteReport = {
+      ...makeFocusedReport(
+        [
+          makeWorldwideVacancy({ key: 'a', title: 'React Developer', url: 'https://example.invalid/a' }),
+          makeWorldwideVacancy({
+            key: 'b',
+            title: 'Senior UI Engineer',
+            url: 'https://example.invalid/b',
+            queryProvenance: {
+              planRevision: 2,
+              matchedLocally: [{ variantId: 'ui-engineer', query: 'UI engineer', language: null }],
+              fetchedBy: [{ variantId: 'ui-engineer', query: 'UI engineer', language: null, provider: 'jobicy' }],
+            },
+          }),
+        ],
+        { role: 'React developer' },
+      ),
+      searchPlan: {
+        planRevision: 2,
+        primaryFunction: 'Frontend engineering',
+        markets: [],
+        workingLanguages: [],
+        queries: [
+          { variantId: 'literal', query: 'React developer', language: null },
+          { variantId: 'ui-engineer', query: 'UI engineer', language: null },
+        ],
+        variants: [
+          {
+            variantId: 'ui-engineer',
+            query: 'UI engineer',
+            language: null,
+            handling: 'partial',
+            reason: 'Some sources were not asked.',
+            requests: 2,
+            providersQueried: ['jobicy'],
+          },
+        ],
+        envelope: { maxRequests: 120, maxDurationMs: 120_000, maxResults: 1_500 },
+        usage: { literalRequests: 10, variantRequests: 2, elapsedMs: 100, variantRows: 1 },
+        coverage: 'partial',
+        coverageReason: '1 of 1 approved title was not fully searched.',
+      },
+    };
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(report),
+      getSearchPlan: vi.fn().mockResolvedValue(PLAN),
+    });
+    render(<SearchPage />);
+
+    // The typed query is "React developer", yet the row found under "UI engineer" is not hidden.
+    expect((await screen.findAllByText('Senior UI Engineer')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('React Developer').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Your search plan was only partly searched at the sources/)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByText('Senior UI Engineer')[0]!);
+    expect(await screen.findByText('Found with')).toBeInTheDocument();
+    expect(screen.getByText(/UI engineer\. Returned by the source for: UI engineer at/)).toBeInTheDocument();
+  });
+});

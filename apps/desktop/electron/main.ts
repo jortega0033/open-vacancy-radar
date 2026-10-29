@@ -49,6 +49,7 @@ import {
   type Database,
   type GlobalRemoteReport,
   type ScanLock,
+  type SearchPlan,
 } from '@open-vacancy-radar/vacancy-engine';
 import {
   AGENT_WORKSPACE_ACTIVITY_CHANNEL,
@@ -113,7 +114,8 @@ import {
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
 import { chooseInitialBounds, loadWindowState, saveWindowState, type WindowState } from './window-state.js';
-import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
+import { createSearchPlanStore } from './search-plan-store.js';
+import { parseVacancyScanRequest, selectBackgroundScan, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
 import { createVacancyScanRunner } from './vacancy-scan-run.js';
 import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
@@ -2694,6 +2696,13 @@ const vacancyScanRunner = createVacancyScanRunner({
     await ensureVacancyEngine();
   },
   runExclusiveScan: (run) => runExclusiveScan(run, { takeAdvisoryLock: true }),
+  loadSearchPlanSnapshot: async () => {
+    try {
+      return await searchPlanStore.snapshot();
+    } catch {
+      throw new Error('Your search plan could not be read. Fix or clear it in "What you are looking for", or turn the plan off for this search.');
+    }
+  },
   prepareRun: async () => {
     const db = await ensureVacancyEngine();
     const config = vacancyEngineConfig();
@@ -2798,15 +2807,19 @@ function scheduleBackgroundScanTick(): void {
   setInterval(() => {
     if (!autoScanEnabled) return;
     if (!shouldRunScheduledScan(lastVacancyScanAt ?? latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
-    void candidateProfilePath()
-      .then((path) => loadCandidateProfile(path))
-      .then((profile) => {
-        const query = scheduledScanQueryFromProfile(profile);
-        if (query === null) {
+    void backgroundScanSelection()
+      .then((selection) => {
+        if (selection === null) {
           console.info('[background-scan] skipped: no saved role or keyword is configured for upstream discovery');
           return null;
         }
-        return runVacancyScan({ mode: 'query', query });
+        // One run with one shared allowance: the approved search plan when there is one, else the
+        // first saved role or skill as before (#686). Never one scan per saved role.
+        return runVacancyScan({
+          mode: 'query',
+          query: selection.query,
+          ...(selection.useSearchPlan ? { useSearchPlan: true } : {}),
+        });
       })
       .catch((error: unknown) => {
         if (isExpectedScanBusyError(error)) return;
@@ -2823,10 +2836,7 @@ function scheduleBackgroundScanTick(): void {
  */
 const sourceScout = createSourceScout({
   isEnabled: () => autoSourceScoutEnabled,
-  loadQuery: async () => {
-    const profile = await loadCandidateProfile(await candidateProfilePath());
-    return scheduledScanQueryFromProfile(profile);
-  },
+  loadQuery: async () => (await backgroundScanSelection())?.query ?? null,
   runExclusiveScan: async (run, options) => {
     // The guard reads the advisory lock lazily, so the engine must be up before it is entered.
     await ensureVacancyEngine();
@@ -3079,6 +3089,44 @@ guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknow
     });
   });
 });
+
+async function searchPlanPath(): Promise<string> {
+  return join(await vacancyEngineDataRoot(), 'config', 'search-plan-v1.json');
+}
+
+const searchPlanStore = createSearchPlanStore({
+  filePath: searchPlanPath,
+  mutate: (change) => applicationDataResetGate.runMutation(change),
+});
+
+/** What the unattended scan and the source scout search for: the approved plan, else the first role/skill (#686). */
+async function backgroundScanSelection() {
+  const profile = await loadCandidateProfile(await candidateProfilePath());
+  let plan: SearchPlan | null = null;
+  try {
+    plan = await searchPlanStore.get();
+  } catch (error) {
+    // An unreadable plan must not stop the unattended scan; it falls back to the saved role and says so.
+    console.warn('[background-scan] search plan unreadable; using the saved role instead', error);
+  }
+  return selectBackgroundScan(profile, plan);
+}
+
+guardedIpc.handle('vacancy:get-search-plan', (): Promise<SearchPlan> => searchPlanStore.get());
+
+/** The person's approved plan. Only this channel can change `variants`; the page cannot set ids or the revision. */
+guardedIpc.handle('vacancy:save-search-plan', (_event, rawDraft: unknown): Promise<SearchPlan> =>
+  searchPlanStore.save(rawDraft),
+);
+
+/** Toolkit or AI titles to review. They are stored apart and never reach a search until the person approves them. */
+guardedIpc.handle('vacancy:add-search-plan-suggestions', (_event, rawTitles: unknown): Promise<SearchPlan> =>
+  searchPlanStore.addSuggestions(rawTitles),
+);
+
+guardedIpc.handle('vacancy:dismiss-search-plan-suggestion', (_event, id: unknown): Promise<SearchPlan> =>
+  searchPlanStore.dismissSuggestion(id),
+);
 
 /*
  * ---------------------------------------------------------------------------------------------

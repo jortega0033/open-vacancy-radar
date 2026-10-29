@@ -1,4 +1,4 @@
-import type { GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
+import type { GlobalRemoteReport, ScanProgressEvent, SearchPlanSnapshot } from '@open-vacancy-radar/vacancy-engine';
 import { describeVacancyRunIntent, captureVacancyRunIntent, type VacancyRunIntent } from './vacancy-run-intent.js';
 import { runVacancyScanBranches, type VacancyScanBranchesDeps } from './vacancy-scan-orchestration.js';
 import type { ParsedVacancyScanRequest } from './vacancy-scan-query.js';
@@ -44,6 +44,12 @@ export interface VacancyScanRunnerDeps {
   runExclusiveScan<T>(run: () => Promise<T>): Promise<T>;
   /** Called once per run, inside the exclusive scan. */
   prepareRun(): Promise<VacancyScanRunBranchDeps>;
+  /**
+   * The saved search plan as a frozen copy, or null when there is no usable plan (#686). Read only for a
+   * run that asked for the plan, at the moment the run's intent is captured, so what the run searches is
+   * fixed here and a later save of the plan cannot reach it. A plan file that cannot be read rejects.
+   */
+  loadSearchPlanSnapshot(): Promise<SearchPlanSnapshot | null>;
   newScanId(): string;
   now(): number;
   /** How many progress groups a run reports (`SCAN_PROGRESS_SOURCE_IDS.length`). */
@@ -78,7 +84,9 @@ export function createVacancyScanRunner(deps: VacancyScanRunnerDeps): VacancySca
         const scanId = deps.newScanId();
         // Fixed here, from the validated request, before any saved profile is read: the AI branch and
         // the deterministic branch both take their criteria from this snapshot (#684).
-        const intent = captureVacancyRunIntent(scanId, request);
+        const searchPlan =
+          request.mode === 'query' && request.useSearchPlan === true ? await deps.loadSearchPlanSnapshot() : null;
+        const intent = captureVacancyRunIntent(scanId, request, new Date(), searchPlan);
         const scan: ActiveVacancyScan = {
           id: scanId,
           startedAt: deps.now(),

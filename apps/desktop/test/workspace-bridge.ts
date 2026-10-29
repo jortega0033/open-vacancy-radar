@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
+import { EMPTY_SEARCH_PLAN, type CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type {
   AppSettingsRecord,
   SystemBridge,
@@ -195,6 +195,11 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
     onScanProgress: vi.fn(() => () => {}),
     getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     saveSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+    // Default: no search plan yet (#686); a test that cares about one overrides these.
+    getSearchPlan: vi.fn().mockResolvedValue(EMPTY_SEARCH_PLAN),
+    saveSearchPlan: vi.fn().mockResolvedValue(EMPTY_SEARCH_PLAN),
+    addSearchPlanSuggestions: vi.fn().mockResolvedValue(EMPTY_SEARCH_PLAN),
+    dismissSearchPlanSuggestion: vi.fn().mockResolvedValue(EMPTY_SEARCH_PLAN),
     // Default: not imported yet, mirroring a fresh checkout/userData directory. A test that cares
     // about a populated roster overrides this with its own resolved status.
     getAtsRosterStatus: vi.fn().mockResolvedValue(null),

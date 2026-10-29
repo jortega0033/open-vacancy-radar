@@ -64,6 +64,26 @@ panel shows what the run is searching for, and "Copy diagnostics" lists how each
 the AI step, using search terms and counts only, never CV text or the prompt. The local filter
 still decides what is kept.
 
+**Search plan.** Under "What you are looking for" you can approve a search plan: a primary function,
+an ordered list of equivalent titles (for example React developer, Frontend engineer, UI engineer),
+the working language each title is written in, and the markets you care about. It describes the work
+you want, not facts about you, and it works by hand with no AI. Titles suggested by the
+CV tools ("Best-fit roles") or an AI answer wait in a separate list and are searched only after you add
+them. When a plan has titles, the Search page offers "Also search my N approved titles". The title
+you type is searched first, exactly as before; then each approved title is asked only of the job
+sources that can filter by title (the others return one feed whatever the title, so they are not
+asked again and the title is matched locally). All titles share ONE declared allowance of requests,
+time and extra rows, however many there are; titles the allowance did not reach are listed as
+deferred, with the reason, in the results notice and in "Copy diagnostics", together with what each
+source did with each title. A row is kept when it matches ANY approved title, and it says which title
+found it. The language you pick for a title is used for the search and for that note; it never makes
+a job count as requiring that language, which only an explicit statement in the advert does. A run
+takes a frozen copy of the plan when it starts, so editing or removing a title changes the next search
+only, and finished reports keep their own copy. The unattended background scan uses the same plan and
+allowance in one run instead of scanning each saved role. Without approved titles, or with the switch
+off, a search is the single typed query it always was. Same-requisition duplicates are merged by the
+existing identity rules; different requisitions with the same company and title stay separate.
+
 Vacancy coverage is a product requirement: a lawful public source is integrated by default in the
 broadest mode its evidence supports. Sources that take longer to implement remain planned.
 Unclear republication rights use a factual linked index; explicit prohibitions, authentication or

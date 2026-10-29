@@ -9,6 +9,7 @@ import {
   MAX_AUDIT_FOCUS_CODE_POINTS,
   validateAuditFocus,
 } from './prompts.js';
+import { parseSuggestedSearchTitles } from './search-title-suggestions.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import type { CvDocument } from './types.js';
 import { ErrorBanner } from '../shell/index.js';
@@ -162,6 +163,27 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
 
   const hasResult = run.text.trim().length > 0;
 
+  // Best-fit answers can end with search-title suggestions (#686). They are offered for review only:
+  // sending them stores suggestions, it never approves one, edits the profile or starts a search.
+  const [suggestionState, setSuggestionState] = useState<{ status: 'idle' | 'sent' | 'failed'; message?: string }>({
+    status: 'idle',
+  });
+  const suggestedTitles = useMemo(
+    () => (mode === 'roles' && run.status === 'completed' ? parseSuggestedSearchTitles(run.text) : []),
+    [mode, run.status, run.text],
+  );
+  useEffect(() => {
+    setSuggestionState({ status: 'idle' });
+  }, [cvKey, mode, run.text]);
+  const sendSuggestions = useCallback(async () => {
+    try {
+      await window.vacancyRadar.addSearchPlanSuggestions(suggestedTitles);
+      setSuggestionState({ status: 'sent' });
+    } catch (err) {
+      setSuggestionState({ status: 'failed', message: describeError(err, 'could not save the suggestions') });
+    }
+  }, [suggestedTitles]);
+
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
@@ -259,6 +281,35 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
           <p className="text-xs font-medium text-base-content/70">
             Review focus: {appliedFocus || 'General review'}
           </p>
+        )}
+
+        {suggestedTitles.length > 0 && (
+          <div className="rounded-box border border-base-300 p-3 text-sm" data-testid="title-suggestions">
+            <p className="font-medium">Suggested search titles</p>
+            <p className="mt-1 text-xs text-base-content/60">
+              {suggestedTitles.map((entry) => (entry.language ? `${entry.title} (${entry.language})` : entry.title)).join(', ')}
+            </p>
+            <p className="mt-1 text-xs text-base-content/60">
+              Sending them only adds them to a list to review under &quot;What you are looking for&quot;. Nothing is searched,
+              and nothing there changes, until you add a title yourself.
+            </p>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm mt-2"
+              onClick={() => void sendSuggestions()}
+              disabled={suggestionState.status === 'sent'}
+            >
+              Send to my search plan for review
+            </button>
+            {suggestionState.status === 'sent' && (
+              <span className="ml-2 text-sm font-medium" role="status">
+                Sent for review
+              </span>
+            )}
+            {suggestionState.status === 'failed' && suggestionState.message && (
+              <ErrorBanner className="mt-2">{suggestionState.message}</ErrorBanner>
+            )}
+          </div>
         )}
 
         <AiOutput

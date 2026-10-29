@@ -33,6 +33,7 @@ import {
   type GlobalRemoteReport,
   type OfficialVacancyAudit,
   type ScanProgressCallback,
+  type SearchPlanEnvelope,
   type VacancySourceReference,
 } from '../global-remote/models.js';
 import { runOfficialGlobalRemoteSources } from '../global-remote/official.js';
@@ -53,6 +54,14 @@ import {
   WORKABLE_GLOBAL_TIMEOUT_MS,
 } from '../global-remote/workable-global-discovery.js';
 import { runMpsvCzDiscovery } from '../global-remote/mpsv-cz-discovery.js';
+import {
+  finalizeLeadProvenance,
+  mergeQueryProvenance,
+  runSearchPlanVariantPasses,
+  searchPlanHandlingForSource,
+  type SearchPlanRunResult,
+} from '../global-remote/search-plan.js';
+import type { SearchPlanSnapshot } from '../candidate/search-plan.js';
 import { pruneGlobalRemoteReports, readGlobalRemoteReportWithFallback, writeGlobalRemoteReport, type GlobalRemoteReportFiles } from '../global-remote/report.js';
 import { recordDiscoveryRun } from '../global-remote/discovery-runs-repository.js';
 import { createDatabaseBackedHttpClients } from './ats-http-client.js';
@@ -195,7 +204,15 @@ function mergeIdentityGroup(
     identity,
     applyUrl,
     sources,
+    // Every query that found any member of the group is kept (#686), not only the survivor's.
+    ...optionalProvenance(mergeQueryProvenance(ordered.map(({ vacancy }) => vacancy.queryProvenance))),
   };
+}
+
+function optionalProvenance(
+  provenance: DiscoveryVacancyAudit['queryProvenance'],
+): Pick<DiscoveryVacancyAudit, 'queryProvenance'> | Record<string, never> {
+  return provenance === undefined ? {} : { queryProvenance: provenance };
 }
 
 /**
@@ -721,6 +738,15 @@ export type GlobalRemoteScanOptions = {
   /** Optional salary floor. It is compared locally after all source rows are merged. */
   salary?: SalaryFilterCriteria;
   /**
+   * Issue #686: the reviewed search plan this run was started with, as the frozen copy the run
+   * captured. The literal `query` still runs first and unchanged; the approved titles then run only
+   * on sources with a declared role filter, inside `searchPlanEnvelope`, and every approved title is
+   * an equally good match in the final shared filter. Omitted = the single-query scan, unchanged.
+   */
+  searchPlan?: SearchPlanSnapshot;
+  /** The ONE request/time/result envelope for the whole plan. Defaults to `DEFAULT_SEARCH_PLAN_ENVELOPE`. */
+  searchPlanEnvelope?: Partial<SearchPlanEnvelope>;
+  /**
    * Fired once per discovery sub-source (and the Workable global source) as it resolves, well
    * before the whole scan's own promise settles -- see `ScanProgressEvent`'s doc comment for the
    * exact contract. Purely an observability hook layered on top of the existing parallel `await`s
@@ -1016,6 +1042,41 @@ export function resolveRoleQuery(staticRoleQuery: string, queryOverride: string 
   return trimmed ? trimmed.slice(0, 200) : staticRoleQuery;
 }
 
+/**
+ * Everything between "every source answered" and "the leads this run keeps": the per-source plan audit,
+ * identity merge, the one shared filter and, for a planned run, each lead's query provenance (#686).
+ * Exported so the same code path can be exercised without a database or a network.
+ */
+export function resolveFocusedLeads(
+  discovery: { sources: DiscoverySourceAudit[]; vacancies: DiscoveryVacancyAudit[] },
+  focusedCriteria: FocusedScanCriteria,
+  plan: SearchPlanRunResult | null,
+): {
+  discoverySources: DiscoverySourceAudit[];
+  discoveryAudit: DiscoveryVacancyAudit[];
+  focused: ReturnType<typeof applyFocusedScanCriteria>;
+} {
+  const discoverySources = discovery.sources.map((source) => {
+    const planned = withFocusedScanPlan(source, focusedCriteria);
+    if (!plan || !planned.focusedScan) return planned;
+    return {
+      ...planned,
+      focusedScan: {
+        ...planned.focusedScan,
+        searchPlan: searchPlanHandlingForSource(source, plan.report, plan.variantRows),
+      },
+    };
+  });
+  const discoveryAudit = uniqueDiscovery(discovery.vacancies);
+  const unstamped = applyFocusedScanCriteria(discoveryAudit, focusedCriteria);
+  // What each lead says about the query that found it is stamped after the filter, from the same rule
+  // the filter used, so a lead's provenance can never disagree with why it was kept.
+  const focused = plan
+    ? { ...unstamped, vacancies: finalizeLeadProvenance(unstamped.vacancies, plan.report) }
+    : unstamped;
+  return { discoverySources, discoveryAudit, focused };
+}
+
 export async function runGlobalRemoteScan(
   database: Database,
   appConfig: AppConfig,
@@ -1094,10 +1155,29 @@ export async function runGlobalRemoteScan(
   const candidateLanguages = candidateWorkLanguages(candidateProfile);
   const progressiveRowTracker = trackProgressiveRows(options.onProgress);
   const trackedOnProgress = progressiveRowTracker.onProgress;
+  const usePlan = options.searchPlan !== undefined && options.browseAll !== true && !reuseDiscovery;
+  let planResult: SearchPlanRunResult | null = null;
   const [baseDiscovery, official, workableGlobal, mpsvCz] = await Promise.all([
     reuseDiscovery
       ? loadPreviousDiscovery(projectRoot)
-      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, trackedOnProgress, signal),
+      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, trackedOnProgress, signal).then(
+          async (literalRun) => {
+            if (!usePlan || options.searchPlan === undefined) return literalRun;
+            // The literal pass is complete and untouched; the approved titles share what is left of
+            // the one envelope and repeat only the sources that take a role query (#686).
+            throwIfScanCancelled(signal);
+            planResult = await runSearchPlanVariantPasses({
+              http,
+              config: profile,
+              literal: profile.discovery.roleQuery,
+              snapshot: options.searchPlan,
+              literalRun,
+              ...(options.searchPlanEnvelope ? { envelope: options.searchPlanEnvelope } : {}),
+              ...(signal ? { signal } : {}),
+            });
+            return planResult.run;
+          },
+        ),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile, candidateLanguages)
       : runOfficialGlobalRemoteSources(http, profile, candidateLanguages),
@@ -1157,15 +1237,19 @@ export async function runGlobalRemoteScan(
       ),
     })),
   };
+  const planReport = (planResult as SearchPlanRunResult | null)?.report;
   const focusedCriteria: FocusedScanCriteria = {
     role: options.browseAll ? '' : profile.discovery.roleQuery,
+    ...(planReport ? { roleAlternatives: planReport.queries.slice(1).map((query) => query.query) } : {}),
     country: options.country?.trim() || null,
     employment: options.employment?.trim() || null,
     salary: options.browseAll ? null : options.salary ?? null,
   };
-  const discoverySources = discovery.sources.map((source) => withFocusedScanPlan(source, focusedCriteria));
-  const discoveryAudit = uniqueDiscovery(auditedDiscovery.vacancies);
-  const focused = applyFocusedScanCriteria(discoveryAudit, focusedCriteria);
+  const { discoverySources, discoveryAudit, focused } = resolveFocusedLeads(
+    auditedDiscovery,
+    focusedCriteria,
+    planResult as SearchPlanRunResult | null,
+  );
   // Browse-all's result cap decides which rows survive before they reach any per-row enrichment
   // below, not after (issue #365) -- see `capBrowseAllDiscovery`'s own doc comment.
   const browseAllCap =
@@ -1282,6 +1366,7 @@ export async function runGlobalRemoteScan(
     ...groups,
     officialAudit,
     discoveryAudit: assessedDiscoveryAudit,
+    ...(planReport ? { searchPlan: planReport } : {}),
     methodology: [
       'Free remote-job APIs are discovery inputs only; their geography and salary labels never create a strict match.',
       'Current official ATS APIs or normal employer HTML are fetched with bounded concurrency, timeouts, retries, conditional caching, and a descriptive User-Agent.',
@@ -1301,6 +1386,11 @@ export async function runGlobalRemoteScan(
       ...(sponsorMatched.statistics.unverifiedCompanies > 0
         ? [
             `${sponsorMatched.statistics.unverifiedCompanies} of ${sponsorMatched.statistics.eligibleCompanies} Netherlands-located employers are not yet sponsor-checked${sponsorMatched.statistics.budgetExhausted ? ' (this run reached the Wikidata rate limit)' : ` (this run reached the per-scan cap of ${WORLDWIDE_SPONSOR_MATCH_MAX_COMPANIES} employers)`}; their listings carry no sponsor claim either way, and the next scan continues where this one stopped.`,
+          ]
+        : []),
+      ...(planReport
+        ? [
+            `Search plan revision ${planReport.planRevision}: the typed query and ${planReport.queries.length - 1} approved ${planReport.queries.length === 2 ? 'title' : 'titles'} were treated as equally good matches (OR). Titles were sent upstream only to sources with a declared role filter, inside one shared allowance of ${planReport.envelope.maxRequests} query-dependent requests, ${Math.round(planReport.envelope.maxDurationMs / 1000)} s and ${planReport.envelope.maxResults} extra rows${planReport.coverage === 'partial' ? `. Coverage is partial: ${planReport.coverageReason ?? ''}` : '. Every approved title was searched within that allowance.'}`,
           ]
         : []),
       ...(reuseDiscovery

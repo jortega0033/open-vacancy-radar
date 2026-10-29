@@ -4,6 +4,8 @@ import type {
   AtsRosterStatus,
   CandidateProfile,
   GlobalRemoteReport,
+  SearchPlan,
+  SearchPlanDraft,
 } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 
@@ -60,6 +62,8 @@ export type VacancyScanRequest =
       salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean };
       /** Issue #398 Phase 1: opt in to an on-demand AI-web-search discovery pass for this run only. */
       aiWebDiscovery?: boolean;
+      /** Issue #686: also search the approved titles of the saved search plan in this run (read by the main process). */
+      useSearchPlan?: boolean;
     }
   | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
@@ -90,6 +94,13 @@ export interface VacancyRadarBridge {
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
+  /** The saved search plan (#686): approved titles plus suggestions still waiting for review. */
+  getSearchPlan(): Promise<SearchPlan>;
+  /** Approves the plan as written; only this call changes which titles a search uses. */
+  saveSearchPlan(draft: SearchPlanDraft): Promise<SearchPlan>;
+  /** Stores titles to review. They are never searched until approved with `saveSearchPlan`. */
+  addSearchPlanSuggestions(titles: { title: string; language?: string }[]): Promise<SearchPlan>;
+  dismissSearchPlanSuggestion(id: string): Promise<SearchPlan>;
   /** Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
    * `null` when the import has never run yet against this data directory. */
   getAtsRosterStatus(): Promise<AtsRosterStatus>;

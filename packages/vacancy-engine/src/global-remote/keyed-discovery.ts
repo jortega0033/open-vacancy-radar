@@ -352,21 +352,28 @@ async function discoverJobsPipe(
   }
 }
 
+/**
+ * @param only When given, runs just these providers (#686 variant passes); omitted = all, as before.
+ *   The credential and enablement checks are the same either way: a variant pass never switches a
+ *   source on.
+ */
 export async function runKeyedDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
+  only?: ReadonlySet<string>,
 ): Promise<DiscoveryRun> {
+  const wants = (provider: string) => only === undefined || only.has(provider);
   const runs = await Promise.all([
-    ...(config.discovery.adzunaAppId.trim().length > 0 && config.discovery.adzunaAppKey.trim().length > 0
+    ...(wants('adzuna') && config.discovery.adzunaAppId.trim().length > 0 && config.discovery.adzunaAppKey.trim().length > 0
       ? [discoverAdzuna(http, config)]
       : []),
-    ...(config.discovery.joobleApiKey.trim().length > 0 ? [discoverJooble(http, config)] : []),
-    ...(config.discovery.reedApiKey.trim().length > 0 ? [discoverReed(http, config)] : []),
-    ...(config.discovery.jobspipeApiKey.trim().length > 0 ? [discoverJobsPipe(http, config)] : []),
-    ...(config.discovery.navArbeidsplassenApiKey.trim().length > 0
+    ...(wants('jooble') && config.discovery.joobleApiKey.trim().length > 0 ? [discoverJooble(http, config)] : []),
+    ...(wants('reed') && config.discovery.reedApiKey.trim().length > 0 ? [discoverReed(http, config)] : []),
+    ...(wants('jobspipe') && config.discovery.jobspipeApiKey.trim().length > 0 ? [discoverJobsPipe(http, config)] : []),
+    ...(wants('nav_arbeidsplassen') && config.discovery.navArbeidsplassenApiKey.trim().length > 0
       ? [runNavArbeidsplassenDiscovery(http, config)]
       : []),
-    ...(theirstackConfigured(config) ? [discoverTheirStack(http, config)] : []),
+    ...(wants('theirstack') && theirstackConfigured(config) ? [discoverTheirStack(http, config)] : []),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

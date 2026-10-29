@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
-import { parseVacancyScanRequest, requiredScanQuery, scheduledScanQueryFromProfile } from '../electron/vacancy-scan-query.js';
+import { parseVacancyScanRequest, requiredScanQuery, scheduledScanQueryFromProfile, selectBackgroundScan } from '../electron/vacancy-scan-query.js';
 
 const ELECTRON_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'electron');
 
@@ -136,7 +136,35 @@ describe('scheduledScanQueryFromProfile', () => {
 
   it('keeps scheduled scans wired when a saved role or keyword exists', () => {
     expect(source('main.ts')).toMatch(
-      /scheduledScanQueryFromProfile\(profile\)[\s\S]*runVacancyScan\(\{ mode: 'query', query \}\)[\s\S]*isExpectedScanBusyError\(error\)/,
+      /backgroundScanSelection\(\)[\s\S]*runVacancyScan\(\{[\s\S]*query: selection\.query,[\s\S]*useSearchPlan: true[\s\S]*isExpectedScanBusyError\(error\)/,
     );
+  });
+});
+
+describe('search plan request and background selection (#686)', () => {
+  it('keeps useSearchPlan only when it is explicitly true, so a literal request is unchanged', () => {
+    expect(parseVacancyScanRequest({ mode: 'query', query: 'UI engineer', useSearchPlan: true })).toEqual({
+      mode: 'query',
+      query: 'UI engineer',
+      useSearchPlan: true,
+    });
+    expect(parseVacancyScanRequest({ mode: 'query', query: 'UI engineer', useSearchPlan: false })).toEqual({
+      mode: 'query',
+      query: 'UI engineer',
+    });
+    expect(() => parseVacancyScanRequest({ mode: 'query', query: 'UI engineer', useSearchPlan: 'yes' })).toThrow('Search plan must be a boolean.');
+    expect(parseVacancyScanRequest({ mode: 'browse_all', ...({ useSearchPlan: true } as object) })).toEqual({ mode: 'browse_all' });
+  });
+
+  it('selects the first approved plan title for the one background scan, else the first saved role', () => {
+    const profile = { ...EMPTY_PROFILE, targetRoles: ['Backend Engineer', 'Data Engineer'] };
+    const variant = (title: string) => ({ id: title, title, language: '', origin: 'user' as const });
+    expect(selectBackgroundScan(profile, { variants: [variant('  React developer '), variant('UI engineer')] })).toEqual({
+      query: 'React developer',
+      useSearchPlan: true,
+    });
+    expect(selectBackgroundScan(profile, { variants: [] })).toEqual({ query: 'Backend Engineer', useSearchPlan: false });
+    expect(selectBackgroundScan(profile, null)).toEqual({ query: 'Backend Engineer', useSearchPlan: false });
+    expect(selectBackgroundScan(EMPTY_PROFILE, null)).toBeNull();
   });
 });

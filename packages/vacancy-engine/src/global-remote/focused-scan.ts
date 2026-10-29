@@ -6,6 +6,12 @@ export type FocusedCriterion = 'role' | 'country' | 'employment' | 'salary';
 
 export type FocusedScanCriteria = {
   role: string;
+  /**
+   * Issue #686: further approved titles that are equally acceptable. A vacancy passes the role check
+   * when ANY of `role` and these appears in its text, so the literal query cannot discard a valid
+   * result found under another approved title. Absent = the single-query behaviour, unchanged.
+   */
+  roleAlternatives?: readonly string[];
   country: string | null;
   employment: string | null;
   salary?: SalaryFilterCriteria | null;
@@ -268,6 +274,14 @@ function countryMatches(locations: readonly string[], requested: string): boolea
   return canonical !== null && locations.some((location) => normalizeCountry(location) === canonical);
 }
 
+/** The role rule the shared filter applies: the normalized query is a substring of any searchable text. */
+export function vacancyMatchesRole(vacancy: DiscoveryVacancyAudit, query: string): boolean {
+  const wanted = normalized(query);
+  if (!wanted) return false;
+  const searchableText = vacancy.searchableText ?? [`${vacancy.title} ${vacancy.description ?? ''}`];
+  return searchableText.some((text) => normalized(text).includes(wanted));
+}
+
 /** The final filter is shared by every adapter, so upstream support can only reduce fetching. */
 export function applyFocusedScanCriteria(
   vacancies: readonly DiscoveryVacancyAudit[],
@@ -286,11 +300,18 @@ export function applyFocusedScanCriteria(
   let salaryUnknown = 0;
   let salaryBelowMinimum = 0;
   const role = normalized(criteria.role);
+  const roles = [role, ...(criteria.roleAlternatives ?? []).map(normalized)].filter((entry) => entry.length > 0);
   const employment = criteria.employment ? canonicalEmployment(criteria.employment) : null;
   return {
     vacancies: vacancies.filter((vacancy) => {
       const searchableText = vacancy.searchableText ?? [`${vacancy.title} ${vacancy.description ?? ''}`];
-      if (role && !searchableText.some((text) => normalized(text).includes(role)))
+      if (
+        roles.length > 0 &&
+        !searchableText.some((text) => {
+          const haystack = normalized(text);
+          return roles.some((wanted) => haystack.includes(wanted));
+        })
+      )
         return false;
       if (
         criteria.country &&
