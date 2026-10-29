@@ -39,7 +39,7 @@ export {
   type WorkableJobDetail,
   type WorkableJobReference,
 } from './global-remote/structured-discovery.js';
-export { applyFocusedScanCriteria, SOURCE_FILTER_CAPABILITIES, type FocusedScanCriteria } from './global-remote/focused-scan.js';
+export { applyFocusedScanCriteria, isUnspecifiedCountry, SOURCE_FILTER_CAPABILITIES, type FocusedScanCriteria } from './global-remote/focused-scan.js';
 export {
   AiWebDiscoveryCandidateSchema,
   AiWebDiscoveryResponseSchema,
@@ -120,6 +120,9 @@ export {
 } from './pipeline/ats-source-observation-import.js';
 
 export type {
+  AiSearchIntentCriterion,
+  AiSearchIntentProvenance,
+  AiSearchIntentPushdown,
   GlobalRemoteReport,
   DiscoveryProvider,
   DiscoverySourceAudit,

@@ -363,6 +363,40 @@ export type DiscoveryVacancyAudit = {
   sources?: VacancySourceReference[];
 };
 
+export type AiSearchIntentCriterion = 'role' | 'country' | 'employment' | 'salary';
+
+/**
+ * `prompt_guidance`: the criterion was stated to the model as search guidance (best effort, not a
+ * structured upstream parameter). `unsupported`: requested for the run, but web search cannot express
+ * it, so only the shared local filter enforces it. `not_requested`: the run did not ask for it.
+ */
+export type AiSearchIntentPushdown = 'prompt_guidance' | 'unsupported' | 'not_requested';
+
+export type AiSearchIntentProvenance = {
+  intentVersion: number;
+  scanId: string;
+  mode: 'query' | 'browse_all';
+  criteria: Record<
+    AiSearchIntentCriterion,
+    {
+      requested: boolean;
+      /** The submitted value, or null when not requested. Search terms only; never profile text. */
+      value: string | null;
+      pushdown: AiSearchIntentPushdown;
+      /** The shared local filter still decides the final result for every requested criterion. */
+      enforcedLocally: boolean;
+    }
+  >;
+  candidateContext: {
+    skillCount: number;
+    experienceYearsIncluded: boolean;
+    /** The saved home country was given as background because the run named no country. */
+    homeCountryIncluded: boolean;
+    /** Always false: saved target roles never become search terms for a run. */
+    savedTargetRolesSearched: false;
+  };
+};
+
 export type DiscoverySourceAudit = {
   id: string;
   provider: DiscoveryVacancyAudit['provider'];
@@ -423,6 +457,13 @@ export type DiscoverySourceAudit = {
   /** Paid-API spend for this run (TheirStack): credits actually consumed and the configured ceiling. */
   creditsUsed?: number;
   creditCeiling?: number;
+  /**
+   * Issue #684: which parts of the run's submitted search intent the AI web-search branch was given,
+   * recorded without CV text, skill names or the prompt itself. Present only on the `ai_web_search`
+   * source and only when the desktop layer built it; `focusedScan` below keeps describing structured
+   * upstream parameters, which the AI branch has none of.
+   */
+  aiSearchIntent?: AiSearchIntentProvenance;
   /** Per-source evidence of which focused criteria were actually sent upstream. */
   focusedScan?: {
     requested: Partial<Record<'role' | 'country' | 'employment' | 'salary', string>>;

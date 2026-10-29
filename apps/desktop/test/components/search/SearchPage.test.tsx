@@ -1,5 +1,5 @@
 import { StrictMode, useState } from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
 import { getEngineHealth } from '../../../src/engine-health.js';
@@ -542,6 +542,30 @@ describe('SearchPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
       expect(await screen.findByTestId('ai-web-search-step')).toHaveTextContent('AI web search: running');
+      resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
+    });
+
+    it('shows a compact description of what the active run was asked to look for (#684)', async () => {
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+        runScan: vi.fn().mockReturnValue(new Promise((resolve) => { resolveScan = resolve; })),
+        getScanProgress: vi.fn().mockResolvedValue({
+          scanning: true,
+          scanId: 'scan-intent',
+          startedAt: Date.now(),
+          intent: 'Role: UI engineer · Country: Germany · Minimum salary: EUR 65,000 a year',
+        }),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      enterSearchQuery('UI engineer');
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+      expect(await screen.findByTestId('scan-intent')).toHaveTextContent(
+        'Searching for: Role: UI engineer · Country: Germany · Minimum salary: EUR 65,000 a year',
+      );
       resolveScan(makeWorldwideReport([makeWorldwideVacancy()]));
     });
 
@@ -1638,6 +1662,130 @@ describe('SearchPage', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText.mock.calls[0]![0]).toContain(`Workable (workable_global:all-customers, partial): ${warning}`);
     expect(writeText.mock.calls[0]![0]).toContain('Run ww-run-1');
+  });
+
+  it('copies the AI search intent provenance with the diagnostics, without profile text (#684)', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([makeWorldwideVacancy()], [
+          {
+            id: 'ai_web_search',
+            provider: 'ai_web_search',
+            url: 'https://github.com/jortega0033/open-vacancy-radar/issues/398',
+            requests: 1,
+            listings: 0,
+            status: 'partial',
+            error: 'Dropped 1 candidate(s) failed schema validation.',
+            networkAttempts: 2,
+            retries: 0,
+            complete: true,
+            completenessReason: null,
+            continuationCursor: null,
+            aiSearchIntent: {
+              intentVersion: 1,
+              scanId: 'scan-684',
+              mode: 'query',
+              criteria: {
+                role: { requested: true, value: 'UI engineer', pushdown: 'prompt_guidance', enforcedLocally: true },
+                country: { requested: true, value: 'Germany', pushdown: 'prompt_guidance', enforcedLocally: true },
+                employment: { requested: false, value: null, pushdown: 'not_requested', enforcedLocally: false },
+                salary: { requested: true, value: 'EUR 65,000; unknown salaries kept', pushdown: 'unsupported', enforcedLocally: true },
+              },
+              candidateContext: { skillCount: 2, experienceYearsIncluded: true, homeCountryIncluded: false, savedTargetRolesSearched: false },
+            },
+          },
+        ]),
+      ),
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getByText(/some sources could not be checked/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /some sources could not be checked/i }));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const copied = writeText.mock.calls[0]![0] as string;
+    expect(copied).toContain(
+      'AI search intent v1, run scan-684: role "UI engineer" (sent to AI as guidance), country "Germany" (sent to AI as guidance), salary "EUR 65,000; unknown salaries kept" (not searchable, applied locally); 2 saved skill(s) as background, saved target roles not searched',
+    );
+  });
+
+  describe('copied AI search intent line is robust to what a saved report holds (#684)', () => {
+    const aiSource = (aiSearchIntent?: unknown) => ({
+      id: 'ai_web_search',
+      provider: 'ai_web_search',
+      url: 'https://github.com/jortega0033/open-vacancy-radar/issues/398',
+      requests: 1,
+      listings: 0,
+      status: 'partial',
+      error: 'Dropped 1 candidate(s) failed schema validation.',
+      networkAttempts: 2,
+      retries: 0,
+      complete: true,
+      completenessReason: null,
+      continuationCursor: null,
+      ...(aiSearchIntent === undefined ? {} : { aiSearchIntent }),
+    });
+
+    const intentV1 = (role: string) => ({
+      intentVersion: 1,
+      scanId: 'scan-684',
+      mode: 'query',
+      criteria: {
+        role: { requested: true, value: role, pushdown: 'prompt_guidance', enforcedLocally: true },
+        country: { requested: false, value: null, pushdown: 'not_requested', enforcedLocally: false },
+        employment: { requested: false, value: null, pushdown: 'not_requested', enforcedLocally: false },
+        salary: { requested: false, value: null, pushdown: 'not_requested', enforcedLocally: false },
+      },
+      candidateContext: { skillCount: 1, experienceYearsIncluded: false, homeCountryIncluded: false, savedTargetRolesSearched: false },
+    });
+
+    async function copiedDiagnosticsFor(source: unknown): Promise<string> {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()], [source as never])),
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/some sources could not be checked/i)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /some sources could not be checked/i }));
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+      fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      return writeText.mock.calls[0]![0] as string;
+    }
+
+    it('redacts what the person typed into the role, like the source warnings next to it', async () => {
+      const copied = await copiedDiagnosticsFor(aiSource(intentV1('engineer jane.doe@example.com at C:/Users/Jane/cv.pdf')));
+      expect(copied).toContain('AI search intent v1, run scan-684: role "engineer [redacted-email] at [redacted-path]" (sent to AI as guidance)');
+      expect(copied).not.toContain('jane.doe@example.com');
+      expect(copied).not.toContain('Jane');
+    });
+
+    it('copies the other diagnostics and says the line is not shown when the saved version is unknown', async () => {
+      const copied = await copiedDiagnosticsFor(aiSource({ ...intentV1('UI engineer'), intentVersion: 2, criteria: 'something new' }));
+      expect(copied).toContain('AI search intent v2 not shown (this version of the app reads v1)');
+      expect(copied).not.toContain('UI engineer');
+      expect(copied).toContain('Run ww-run-1');
+      expect(copied).toContain('failed schema validation');
+    });
+
+    it('copies the other diagnostics when the saved record is malformed', async () => {
+      for (const malformed of ['text', 42, [], { intentVersion: 1 }, { ...intentV1('x'), criteria: { role: 'x' } }]) {
+        const copied = await copiedDiagnosticsFor(aiSource(malformed));
+        expect(copied).toMatch(/AI search intent( v1)? not shown \((unrecognised format|incomplete record)\)/u);
+        expect(copied).toContain('Run ww-run-1');
+        expect(copied).toContain('failed schema validation');
+        cleanup();
+      }
+    });
+
+    it('an older report without the record copies exactly as before, with no intent line', async () => {
+      const copied = await copiedDiagnosticsFor(aiSource());
+      expect(copied).not.toContain('AI search intent');
+      expect(copied).toContain('failed schema validation');
+    });
   });
 
   describe('AI web search failure notice (#559)', () => {

@@ -122,7 +122,8 @@ function normalized(value: string): string {
   return value.trim().toLocaleLowerCase();
 }
 
-function isUnspecifiedCountry(value: string): boolean {
+/** The country filter's "no identifiable country" sentinel, compared with the same trim/case rule the filter uses. */
+export function isUnspecifiedCountry(value: string): boolean {
   return normalized(value) === normalized(UNSPECIFIED_LOCATION);
 }
 

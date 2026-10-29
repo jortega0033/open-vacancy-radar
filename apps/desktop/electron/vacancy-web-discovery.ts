@@ -7,12 +7,19 @@ import {
   isCandidateProfileConfigured,
   normalizeAiWebDiscoveryCandidates,
   prohibitedOrBlockedSourceRegistryEntries,
+  type AiSearchIntentProvenance,
   type AiWebDiscoveryCandidate,
   type CandidateProfile,
   type DiscoverySourceAudit,
   type DiscoveryVacancyAudit,
   type SourceRegistryEntry,
 } from '@open-vacancy-radar/vacancy-engine';
+import {
+  buildAiIntentProvenance,
+  isUnspecifiedCountryIntent,
+  type AiIntentContextUsed,
+  type VacancyRunIntent,
+} from './vacancy-run-intent.js';
 
 /**
  * Issue #398 (Phase 1) -- on-demand AI-web-search vacancy discovery, orchestrated entirely from the
@@ -105,6 +112,10 @@ function sessionStartFailure(error: unknown): string {
  * `experienceYears` is included as a coarse, non-identifying seniority signal, not because the issue
  * requires it, but because it reads naturally in a search query ("5 years of experience") without
  * disclosing anything identifying.
+ *
+ * Since #684 this is background context only. What a run searches for comes from its
+ * `VacancyRunIntent`: `targetRoles` is kept on the projection but never becomes a search term, and
+ * `primaryCountry` is shown only when the run named no country of its own.
  */
 export interface AiWebDiscoveryProfileProjection {
   targetRoles: string[];
@@ -124,30 +135,149 @@ export function projectCandidateProfile(profile: CandidateProfile): AiWebDiscove
   };
 }
 
+/** What of the saved profile a run's prompt actually carries. Also feeds the diagnostic provenance. */
+export function aiIntentContextUsed(
+  projection: AiWebDiscoveryProfileProjection,
+  intent: VacancyRunIntent,
+): AiIntentContextUsed {
+  return {
+    skillCount: projection.strongestSkills.length,
+    experienceYearsIncluded: projection.experienceYears > 0,
+    homeCountryIncluded: intent.country === null && projection.primaryCountry.trim().length > 0,
+  };
+}
+
+/** A submitted value, quoted so it reads as one value whatever characters it holds. */
+function quoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+/**
+ * The submitted employment value as the model should read it. The token is what the person's filter
+ * and the local match use (e.g. `full_time`), so it stays quoted; a human wording is added beside it
+ * when that reads differently, because `full_time` is not how a job page or a search query says it.
+ */
+export function employmentGuidance(value: string): string {
+  const words = value.trim().toLocaleLowerCase().split(/[\s_-]+/u).filter(Boolean);
+  const human = words.length === 2 && (words[0] === 'full' || words[0] === 'part') && words[1] === 'time'
+    ? `${words[0]}-time`
+    : words.join(' ');
+  return human === value.trim().toLocaleLowerCase() ? quoted(value) : `${quoted(value)} (read as: ${human})`;
+}
+
+function runRequestLines(intent: VacancyRunIntent): string {
+  if (intent.mode === 'browse_all') {
+    return `- Mode: browse all. The person asked for vacancies without a role, country, employment type or salary restriction.
+- Role: none requested. Do not narrow to one job title, and do not use the background below as a role to search for.
+- Country: none requested.
+- Employment type: none requested.
+- Minimum salary: none requested.`;
+  }
+  const salary = intent.salary
+    ? `${intent.salary.currency} ${intent.salary.minimumAnnual.toLocaleString('en-US')} a year (${
+        intent.salary.includeUnknown ? 'vacancies that state no salary are kept' : 'vacancies that state no salary are hidden'
+      })`
+    : 'none requested';
+  return `- Mode: targeted search.
+- Role: ${quoted(intent.query ?? '')}
+- Country: ${countryRequestText(intent)}
+- Employment type: ${intent.employment ? employmentGuidance(intent.employment) : 'none requested'}
+- Minimum salary: ${salary}`;
+}
+
+function countryRequestText(intent: VacancyRunIntent): string {
+  if (intent.country === null) return 'none requested; do not restrict by country';
+  if (isUnspecifiedCountryIntent(intent)) {
+    return 'no identifiable country. The person wants vacancies whose posting names no country at all (this is not the name of a place).';
+  }
+  return quoted(intent.country);
+}
+
+/** Mirrors what the shared local filter (`applyFocusedScanCriteria`) does with each criterion. */
+function criteriaUseLines(intent: VacancyRunIntent): string {
+  if (intent.mode === 'browse_all') {
+    return '- No criterion was requested, so none is applied to your results beyond the checks that apply to every vacancy.';
+  }
+  const lines = [
+    `- Role: put the role wording in your WebSearch queries. A reported vacancy is later kept only if its title or description contains ${quoted(intent.query ?? '')} (case-insensitive), so one that does not use that wording is discarded.`,
+  ];
+  if (isUnspecifiedCountryIntent(intent)) {
+    lines.push(
+      '- Country: do not put a country name or a placeholder such as "unspecified" in your WebSearch queries; there is no place to search for. A vacancy is later kept only if its stated location names no identifiable country (for example "Remote" or "Worldwide" with no country), and one whose location names a country is discarded. Report the location exactly as the page states it, or "Not stated" if it never says.',
+    );
+  } else if (intent.country) {
+    lines.push(
+      `- Country: put ${quoted(intent.country)} in your WebSearch queries. A vacancy is later kept only if its stated location names that country; a worldwide-remote vacancy that does not name it is discarded. Report the location exactly as the page states it.`,
+    );
+  }
+  if (intent.employment) {
+    lines.push(
+      `- Employment type: put ${employmentGuidance(intent.employment)} in your WebSearch queries, using the readable wording. A vacancy is later kept only if its page states a matching employment type, so report evidence.employmentType exactly; one that states none is discarded.`,
+    );
+  }
+  if (intent.salary) {
+    lines.push(
+      '- Minimum salary: web search cannot filter by salary, so do not search for it or rank by it. It is applied locally after your results. Report a salary only when the page states one, exactly as written; never estimate one.',
+    );
+  }
+  return lines.join('\n');
+}
+
+function backgroundLines(projection: AiWebDiscoveryProfileProjection, context: AiIntentContextUsed): string {
+  const skills = projection.strongestSkills.length > 0 ? projection.strongestSkills.join(', ') : '(none specified)';
+  const lines = [`- Strongest skills: ${skills}`];
+  if (context.experienceYearsIncluded) {
+    lines.push(`- The candidate has about ${projection.experienceYears} years of experience.`);
+  }
+  if (context.homeCountryIncluded) {
+    lines.push(
+      `- Home country: ${projection.primaryCountry.trim()}. No country was requested for this run, so this is not a restriction.`,
+      projection.allowRemoteEuSupportingNetherlands
+        ? '- The candidate also accepts an EU-based remote role that supports working from the Netherlands.'
+        : '- The candidate is not looking for an EU-remote-only role beyond their home country.',
+    );
+  }
+  return lines.join('\n');
+}
+
 /**
  * The real prompt sent to the hardened `'web-only'` Claude session. Every numbered requirement here
  * maps directly to an issue #398 acceptance criterion; see the inline comments below for which.
+ *
+ * Since #684 the search criteria are the run's own `VacancyRunIntent`, stated first and as the
+ * authority; the saved profile only supplies labelled background. The wording about what happens to
+ * each criterion afterwards mirrors the shared local filter, which stays authoritative whatever the
+ * model returns.
  */
-export function buildAiWebDiscoveryPrompt(projection: AiWebDiscoveryProfileProjection): string {
-  const roles = projection.targetRoles.length > 0 ? projection.targetRoles.join(', ') : '(none specified)';
-  const skills = projection.strongestSkills.length > 0 ? projection.strongestSkills.join(', ') : '(none specified)';
-  const country = projection.primaryCountry.trim() || '(not specified)';
-  const remoteNote = projection.allowRemoteEuSupportingNetherlands
-    ? 'The candidate also accepts an EU-based remote role that supports working from the Netherlands.'
-    : 'The candidate is not looking for an EU-remote-only role beyond their stated country.';
-  const experienceNote =
-    projection.experienceYears > 0 ? `The candidate has about ${projection.experienceYears} years of experience.` : '';
+export function buildAiWebDiscoveryPrompt(
+  projection: AiWebDiscoveryProfileProjection,
+  intent: VacancyRunIntent,
+): string {
+  const context = aiIntentContextUsed(projection, intent);
+  const target =
+    intent.mode === 'browse_all'
+      ? 'a broad range of current job vacancies'
+      : `current job vacancies for the requested role${
+          isUnspecifiedCountryIntent(intent)
+            ? ' whose posting names no country'
+            : intent.country
+              ? ' in the requested country'
+              : ''
+        }`;
 
   return `You are searching the live web for current, real job vacancies on behalf of a job-seeking candidate. Use only your WebSearch and WebFetch tools -- you have no other tools in this session.
 
-CANDIDATE SEARCH CRITERIA (this is all the profile information you are given; do not assume anything beyond it)
-- Target roles: ${roles}
-- Strongest skills: ${skills}
-- Primary country: ${country}
-- ${remoteNote}
-${experienceNote ? `- ${experienceNote}\n` : ''}
+THIS RUN'S SEARCH REQUEST (submitted by the person for this search; these criteria decide what you search for)
+${runRequestLines(intent)}
+
+HOW THESE CRITERIA ARE USED
+${criteriaUseLines(intent)}
+
+CANDIDATE BACKGROUND (context only, never a search criterion: do not search for roles, countries or salaries taken from it, and do not assume anything beyond it)
+${backgroundLines(projection, context)}
+
 YOUR TASK
-Search the web for current job vacancies that plausibly match these target roles/skills, for this candidate's country (or a role that is genuinely open to remote work compatible with it). Prefer roles posted recently and still open. Do not invent, assume, or fabricate a vacancy that you did not actually find via WebSearch/WebFetch.
+Search the web for ${target}. Prefer roles posted recently and still open. Do not invent, assume, or fabricate a vacancy that you did not actually find via WebSearch/WebFetch.
 
 BUDGETS (hard limits -- stop searching/fetching once you reach them, and finish your answer with whatever you have found so far)
 - At most ${AI_WEB_DISCOVERY_MAX_QUERIES} WebSearch queries in total.
@@ -236,7 +366,12 @@ export function domainBlockRegistry(): SourceRegistryEntry[] {
 }
 
 export interface RunAiWebDiscoveryOptions {
+  /** Background context only (#684): never the source of a search criterion and never re-read from
+   * disk mid-run. Gating on a configured profile is unchanged. */
   profile: CandidateProfile;
+  /** The immutable snapshot of what this run was asked to look for. Required: there is no way to run
+   * the AI branch without stating the run's intent, so it cannot fall back to the saved profile. */
+  intent: VacancyRunIntent;
   /** An app-owned, empty scratch directory -- never a real workspace path. Callers should pass the
    * same `ensureAiWorkspaceDir()`-style directory `main.ts` already uses for other one-shot AI
    * sessions (see that function's own doc comment), not invent a second one. */
@@ -251,6 +386,9 @@ export interface AiWebDiscoveryOutcome {
    * this list alongside the scan's report; an in-memory field here is Stage B's whole contribution to
    * that requirement, per the issue's own "a log line ... is sufficient for Phase 1" allowance. */
   queriesUsed: string[];
+  /** What the model was told about this run, set once a prompt was built and a session start was
+   * attempted. Also on `sourceAudit.aiSearchIntent`. Absent when the step was skipped before that. */
+  intentProvenance?: AiSearchIntentProvenance;
 }
 
 /**
@@ -302,6 +440,23 @@ function failureOutcome(
 export async function runAiWebDiscovery(
   client: AgentDockClient | undefined,
   options: RunAiWebDiscoveryOptions,
+): Promise<AiWebDiscoveryOutcome> {
+  let intentProvenance: AiSearchIntentProvenance | undefined;
+  const outcome = await runAiWebDiscoverySession(client, options, (built) => {
+    intentProvenance = built;
+  });
+  if (!intentProvenance) return outcome;
+  return {
+    ...outcome,
+    sourceAudit: { ...outcome.sourceAudit, aiSearchIntent: intentProvenance },
+    intentProvenance,
+  };
+}
+
+async function runAiWebDiscoverySession(
+  client: AgentDockClient | undefined,
+  options: RunAiWebDiscoveryOptions,
+  onPromptBuilt: (provenance: AiSearchIntentProvenance) => void,
 ): Promise<AiWebDiscoveryOutcome> {
   // (b) Never runs without a usable target-role/profile projection.
   if (!isCandidateProfileConfigured(options.profile)) {
@@ -358,7 +513,8 @@ export async function runAiWebDiscovery(
   const activeClient = client;
 
   const projection = projectCandidateProfile(options.profile);
-  const prompt = buildAiWebDiscoveryPrompt(projection);
+  const prompt = buildAiWebDiscoveryPrompt(projection, options.intent);
+  onPromptBuilt(buildAiIntentProvenance(options.intent, aiIntentContextUsed(projection, options.intent)));
 
   let session: AgentSession;
   try {

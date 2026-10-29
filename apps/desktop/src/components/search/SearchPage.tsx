@@ -22,6 +22,7 @@ import { useElementWidth } from './useElementWidth.js';
 import { publishEngineHealth } from '../../engine-health.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
+import { describeAiIntentProvenance } from './ai-intent-provenance.js';
 import { describeAiWebSearchFailure } from './ai-web-search-notice.js';
 import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
 import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
@@ -885,6 +886,12 @@ export function SearchPage({
     const lines = [
       `Run ${worldwideReport.runId}, generated ${new Date(worldwideReport.generatedAt).toLocaleString()}`,
       `${(stats.rawRowsFetched ?? stats.discoveryListings).toLocaleString()} listings fetched, ${stats.discoveryUniqueListings.toLocaleString()} unique vacancies`,
+      // What the AI step was told about this run (#684): submitted search terms and counts only. The
+      // terms are free text the person typed, so they go through the same redaction as the warnings below, and a
+      // saved report from another build is described defensively rather than trusted.
+      ...worldwideReport.discoverySources.flatMap((source) =>
+        source.aiSearchIntent ? [describeAiIntentProvenance(source.aiSearchIntent, redactDiagnosticsText)] : [],
+      ),
       // Both the summary and the underlying reason: the summary alone ("the session failed to
       // start") hid why AI web search failed (#559).
       ...sourceWarnings.map((source) => {

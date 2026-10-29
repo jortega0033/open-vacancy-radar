@@ -85,6 +85,11 @@ export function ScanProgressPanel({ status, now, stopping, onStop }: ScanProgres
         aria-label="Scan progress"
         aria-valuetext={valueText}
       />
+      {status?.intent && (
+        <span className="text-xs text-base-content/70" data-testid="scan-intent">
+          Searching for: {status.intent}
+        </span>
+      )}
       {status?.aiWebSearch && (
         <span className="text-xs text-base-content/70" data-testid="ai-web-search-step">
           {AI_WEB_SEARCH_STEP[status.aiWebSearch]}
