@@ -311,3 +311,44 @@ describe('a package that was already sent', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 });
+
+describe('a reviewer reply larger than the drawer can list', () => {
+  it('still shows the review, says how many reasons are not listed, and offers Review again', async () => {
+    const revision = fx.validCvRevision() as Record<string, any>;
+    for (let i = 0; i < 30; i += 1) revision.skills.push(`Invented skill ${String.fromCharCode(65 + i)} ${'z'.repeat(900)}`);
+    generate.mockImplementation(async () => ok({ findings: [fx.OMISSION_FINDING], revisions: { cv: revision } }));
+    renderDrawer();
+    fireEvent.click(within(await panel()).getByRole('button', { name: 'Review this application' }));
+    const region = await panel();
+    expect(await within(region).findByText('Requirement the draft leaves out')).toBeInTheDocument();
+    expect(within(region).getByText(/was not offered because it did not pass the checks/u)).toBeInTheDocument();
+    expect(within(region).getByText('10 more reasons not listed here.')).toBeInTheDocument();
+    expect(within(region).queryByRole('button', { name: /^Use this/u })).toBeNull();
+    expect(screen.queryByText(/Something went wrong/u)).toBeNull();
+
+    // Opening the drawer again reads the same stored review, and a new review is one explicit click.
+    generate.mockImplementation(async () => ok({ findings: [] }));
+    fireEvent.click(within(region).getByRole('button', { name: 'Review again' }));
+    expect(await within(await panel()).findByText(/No problems found\./u)).toBeInTheDocument();
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('when only the reviewed CV source changes', () => {
+  it('marks what depended on it as an earlier version and withdraws Use this', async () => {
+    generate.mockImplementation(async () => ok({ findings: [fx.OMISSION_FINDING], revisions: { cv: fx.validCvRevision() } }));
+    const view = renderDrawer();
+    fireEvent.click(within(await panel()).getByRole('button', { name: 'Review this application' }));
+    await within(await panel()).findByRole('button', { name: 'Use this CV' });
+    const cv = workspace.listCvDocuments(db)[0]!;
+    const [first, second] = fx.SOURCE.experience;
+    workspace.updateCvDocument(db, cv.id, { source: { ...fx.SOURCE, experience: [first!, { ...second!, bullets: ['Ran internal tooling on virtual machines.'] }] } });
+    expect(workspace.listCvDocuments(db)[0]!.text).toBe(cv.text);
+    view.rerender(<ApplicationAttemptDrawer attempt={{ ...attemptRecord(), updatedAt: new Date(Date.now() + 5000).toISOString() }} onClose={vi.fn()} />);
+    const region = await panel();
+    expect(await within(region).findByText('Earlier version')).toBeInTheDocument();
+    expect(within(region).getAllByText(/your reviewed CV/u).length).toBeGreaterThan(0);
+    expect(within(region).queryByRole('button', { name: 'Use this CV' })).toBeNull();
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+});

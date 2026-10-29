@@ -835,3 +835,342 @@ describe('boundaries the critique must not cross', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 });
+
+/* ---------------------------------------------------------------- review round 1 regressions ----- */
+
+const PROFILE = { title: 'Senior Engineer', location: 'Amsterdam', skills: fx.PROFILE_SKILLS, summary: fx.SOURCE.summary, years: '8', languages: 'English' };
+const { parseCritiqueResult, VIEW_LIMITS } = await import('../electron/application-critique-types.js');
+const core = await import('../electron/application-critique.js');
+
+/** The view exactly as the preload rebuilds it: a result the schema refuses comes back as `failed`. */
+const throughPreload = (result: unknown) => parseCritiqueResult(JSON.parse(JSON.stringify(result)));
+const cvDraftOf = (attemptId: string) => store.currentDrafts(db, attemptId).find((d) => d.kind === 'cv')!;
+const accept = (attemptId: string, view: { review: { runId: string; proposals: Array<{ baseContentHash: string }> } | null }) =>
+  service.acceptProposal(critiqueDeps(scripted({})), { attemptId, runId: view.review!.runId, document: 'cv', baseContentHash: view.review!.proposals[0]!.baseContentHash });
+
+describe('a reviewer reply larger than one view can show', () => {
+  it('refuses a revision with 30 invented skills and 30 rewritten bullets, keeps the review readable, and allows a new review', async () => {
+    const attemptId = await prepare();
+    const revision = fx.validCvRevision() as Record<string, any>;
+    for (let i = 0; i < 30; i += 1) revision.skills.push(`Invented skill ${String.fromCharCode(65 + i)} ${'z'.repeat(900)}`);
+    revision.experience[0].bullets = Array.from({ length: 30 }, (_, i) => `Rewrote bullet ${String.fromCharCode(65 + i)}: ${'y'.repeat(1500)}`);
+    const generate = scripted({ findings: [fx.OMISSION_FINDING], revisions: { cv: revision } });
+
+    const result = await service.runCritique(critiqueDeps(generate), attemptId);
+    const parsed = throughPreload(result);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const [proposal] = parsed.view.review!.proposals;
+    // The whole reply's reasons, from the same checker, so the shown count is the true count.
+    const direct = core.checkResumeRevision({
+      raw: revision,
+      current: (cvDraftOf(attemptId).content as { resume: any }).resume,
+      attempt: workspace.getApplicationAttempt(db, attemptId),
+      cv: workspace.listCvDocuments(db)[0]!,
+    });
+    if (direct.ok || direct.noChange) throw new Error('the revision should be refused');
+    expect(direct.reasons.length).toBeGreaterThan(VIEW_LIMITS.reasons);
+    expect(proposal).toMatchObject({ status: 'refused', acceptable: false, preview: null, changes: [], changesOmitted: 0 });
+    expect(proposal!.reasons).toHaveLength(VIEW_LIMITS.reasons);
+    expect(proposal!.reasons.length + proposal!.reasonsOmitted).toBe(direct.reasons.length);
+    expect(proposal!.reasons.every((reason) => reason.length <= VIEW_LIMITS.reasonChars)).toBe(true);
+    // The finding, which is backed by evidence, is still shown as current, and nothing was revised.
+    expect(parsed.view.review!.findings[0]).toMatchObject({ kind: 'omitted_requirement', current: true });
+    expect(cvDraftOf(attemptId).version).toBe(1);
+
+    // Re-opening reads the same stored review through the preload, and a new explicit review is allowed.
+    const reopened = throughPreload({ ok: true, view: await service.getCritiqueView(critiqueDeps(generate), attemptId) });
+    expect(reopened).toMatchObject({ ok: true, view: { canReview: true, review: { proposals: [{ status: 'refused' }] } } });
+    const again = throughPreload(await service.runCritique(critiqueDeps(scripted({ findings: [] })), attemptId));
+    expect(again).toMatchObject({ ok: true, view: { review: { noFindings: true, proposals: [] } } });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a valid revision with more than 60 changes with the list capped, the count kept, and the full document readable', async () => {
+    const many = Array.from({ length: 70 }, (_, i) => `Toolkit${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + (i % 26))}`);
+    workspace.updateCvDocument(db, cvId, { profile: { ...PROFILE, skills: [...fx.PROFILE_SKILLS, ...many] } });
+    const attemptId = await prepare();
+    const revision = fx.validCvRevision() as Record<string, any>;
+    revision.skills = [...revision.skills, ...many];
+    const result = await service.runCritique(critiqueDeps(scripted({ findings: [fx.OMISSION_FINDING], revisions: { cv: revision } })), attemptId);
+    const parsed = throughPreload(result);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const [proposal] = parsed.view.review!.proposals;
+    const direct = core.checkResumeRevision({
+      raw: revision,
+      current: (cvDraftOf(attemptId).content as { resume: any }).resume,
+      attempt: workspace.getApplicationAttempt(db, attemptId),
+      cv: workspace.listCvDocuments(db)[0]!,
+    });
+    if (!direct.ok) throw new Error('the revision should pass');
+    expect(direct.changes.length).toBeGreaterThan(VIEW_LIMITS.changes);
+    expect(proposal).toMatchObject({ status: 'pending', acceptable: true, current: true, reasons: [], reasonsOmitted: 0 });
+    expect(proposal!.changes).toHaveLength(VIEW_LIMITS.changes);
+    expect(proposal!.changes.length + proposal!.changesOmitted).toBe(direct.changes.length);
+    expect(proposal!.preview).toContain('ToolkitCR');
+    // Capping the description never changes the document: accepting applies the whole revision.
+    const accepted = throughPreload(await accept(attemptId, parsed.view));
+    expect(accepted.ok).toBe(true);
+    expect(cvDraftOf(attemptId)).toMatchObject({ version: 2, origin: 'critique_revision' });
+    expect((cvDraftOf(attemptId).content as { resume: { skills: string[] } }).resume.skills).toEqual(expect.arrayContaining(many));
+  });
+
+  it('still reads a review stored before the limits existed, with honest counts', async () => {
+    const attemptId = await prepare();
+    const first = await service.runCritique(critiqueDeps(scripted({ findings: [fx.OMISSION_FINDING], revisions: { cv: fx.validCvRevision() } })), attemptId);
+    if (!first.ok) throw new Error('review failed');
+    const record = store.getCritique(db, attemptId)!;
+    const overlong = {
+      ...record.proposals[0]!,
+      status: 'refused' as const,
+      proposed: null,
+      reasons: Array.from({ length: 35 }, (_, i) => `Not accepted: reason ${i} ${'r'.repeat(1000)}`),
+      changes: Array.from({ length: 75 }, (_, i) => `Change ${i} ${'c'.repeat(2000)}`),
+    };
+    db.update(applicationCritiques)
+      .set({
+        findings: record.findings.map((f) => ({ ...f, summary: 's'.repeat(900) })),
+        refused: Array.from({ length: 70 }, () => ({ kind: 'k'.repeat(90), summary: 'u'.repeat(400), code: 'malformed' as const, detail: 'd'.repeat(800) })),
+        proposals: [overlong],
+        lastRunDetail: 'l'.repeat(900),
+      })
+      .where(eq(applicationCritiques.attemptId, attemptId))
+      .run();
+    const parsed = throughPreload({ ok: true, view: await service.getCritiqueView(critiqueDeps(scripted({})), attemptId) });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const review = parsed.view.review!;
+    expect(review.proposals[0]).toMatchObject({ reasonsOmitted: 15, changesOmitted: 15, acceptable: false });
+    expect(review.refused).toHaveLength(VIEW_LIMITS.refused);
+    expect(review.refusedOmitted).toBe(10);
+    expect(review.findings[0]!.summary.length).toBeLessThanOrEqual(VIEW_LIMITS.findingSummaryChars);
+    expect(parsed.view.canReview).toBe(true);
+    // A read never rewrites what is stored.
+    expect(store.getCritique(db, attemptId)!.proposals[0]!.reasons).toHaveLength(35);
+  });
+
+  it('withholds a stored review it cannot represent, says so, and still offers a new review', async () => {
+    const attemptId = await prepare();
+    const first = await service.runCritique(critiqueDeps(scripted({ findings: [fx.OMISSION_FINDING] })), attemptId);
+    if (!first.ok) throw new Error('review failed');
+    const record = store.getCritique(db, attemptId)!;
+    db.update(applicationCritiques)
+      .set({ findings: record.findings.map((f) => ({ ...f, kind: 'made_up_kind' as never })) })
+      .where(eq(applicationCritiques.attemptId, attemptId))
+      .run();
+    const parsed = throughPreload({ ok: true, view: await service.getCritiqueView(critiqueDeps(scripted({})), attemptId) });
+    expect(parsed).toMatchObject({ ok: true, view: { canReview: true, review: null, lastRun: { outcome: 'failed', detail: expect.stringContaining('could not be shown') } } });
+  });
+});
+
+describe('the reviewed CV evidence a review is bound to', () => {
+  async function reviewed() {
+    const attemptId = await prepare();
+    const run = await service.runCritique(
+      critiqueDeps(scripted({
+        findings: [
+          fx.OMISSION_FINDING,
+          fx.finding({ kind: 'unclear_wording', summary: 'The letter opening is vague.', documents: ['cover_letter'], evidence: [{ source: 'cover_letter_draft', quote: 'Platform engineer focused on reliable TypeScript services' }] }),
+        ],
+        revisions: { cv: fx.validCvRevision() },
+      })),
+      attemptId,
+    );
+    if (!run.ok) throw new Error('review failed');
+    expect(run.view.review!.findings).toHaveLength(2);
+    return { attemptId, view: run.view };
+  }
+  const view = async (attemptId: string) => (await service.getCritiqueView(critiqueDeps(scripted({})), attemptId)).review!;
+  const textBefore = () => workspace.listCvDocuments(db)[0]!.text;
+
+  it('an edit to the reviewed source alone (same CV text) outdates what was checked against it and withdraws the suggestion', async () => {
+    const { attemptId, view: before } = await reviewed();
+    const text = textBefore();
+    const [first, second] = fx.SOURCE.experience;
+    workspace.updateCvDocument(db, cvId, { source: { ...fx.SOURCE, experience: [first!, { ...second!, bullets: ['Ran internal tooling on virtual machines.', second!.bullets[1]!] }] } });
+    expect(textBefore()).toBe(text);
+    const review = await view(attemptId);
+    expect(review.findings.find((f) => f.kind === 'omitted_requirement')).toMatchObject({ current: false, outdatedBecause: ['your reviewed CV'] });
+    expect(review.findings.find((f) => f.kind === 'unclear_wording')!.current).toBe(true);
+    expect(review.proposals[0]).toMatchObject({ current: false, acceptable: false });
+    expect(review.state).toBe('partly_outdated');
+    expect(await accept(attemptId, before)).toMatchObject({ ok: false, code: 'outdated' });
+    expect(cvDraftOf(attemptId).version).toBe(1);
+  });
+
+  it('a change to the reviewed skills alone outdates the same things', async () => {
+    const { attemptId, view: before } = await reviewed();
+    workspace.updateCvDocument(db, cvId, { profile: { ...PROFILE, skills: ['TypeScript', 'GitHub Actions'] } });
+    const review = await view(attemptId);
+    expect(review.findings.find((f) => f.kind === 'omitted_requirement')!.current).toBe(false);
+    expect(review.proposals[0]!.acceptable).toBe(false);
+    expect(review.outdatedBecause).toEqual(['your reviewed CV']);
+    expect(await accept(attemptId, before)).toMatchObject({ ok: false, code: 'outdated' });
+  });
+
+  it('saving the same reviewed source again (only the review time changes) keeps the review current', async () => {
+    const { attemptId, view: before } = await reviewed();
+    workspace.updateCvDocument(db, cvId, { source: fx.SOURCE, profile: PROFILE });
+    const review = await view(attemptId);
+    expect(review).toMatchObject({ state: 'current', outdatedBecause: [] });
+    expect(review.proposals[0]!.acceptable).toBe(true);
+    expect((await accept(attemptId, before)).ok).toBe(true);
+  });
+
+  it('a review stored under the previous contract version is entirely out of date, never renewed', async () => {
+    const { attemptId, view: before } = await reviewed();
+    const record = store.getCritique(db, attemptId)!;
+    const { reviewedCvHash: _dropped, ...v1 } = record.fence!;
+    db.update(applicationCritiques).set({ fence: { ...v1, v: 1 } as never }).where(eq(applicationCritiques.attemptId, attemptId)).run();
+    const review = await view(attemptId);
+    expect(review.state).toBe('outdated');
+    expect(review.findings.every((f) => !f.current)).toBe(true);
+    expect(review.proposals[0]!.acceptable).toBe(false);
+    expect(await accept(attemptId, before)).toMatchObject({ ok: false, code: 'outdated' });
+  });
+});
+
+describe('one run per application, even when calls overlap', () => {
+  const yielding = () => async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return companyFacts;
+  };
+
+  it('two overlapping runs make exactly one model call and the second is refused', async () => {
+    const attemptId = await prepare();
+    const generate = scripted({ findings: [] });
+    const deps = { ...critiqueDeps(generate), loadCompanyEvidence: yielding() };
+    const results = await Promise.all([service.runCritique(deps, attemptId), service.runCritique(deps, attemptId)]);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => (r.ok ? 'ok' : r.code)).sort()).toEqual(['already_running', 'ok']);
+    expect(service.isCritiqueRunning(attemptId)).toBe(false);
+  });
+
+  it('Cancel while the inputs are still being read stops the run before any model call', async () => {
+    const attemptId = await prepare();
+    let loaded: (() => void) | undefined;
+    const generate = scripted({ findings: [] });
+    // The run's own read waits; later reads (the view it returns) answer at once.
+    const deps = {
+      ...critiqueDeps(generate),
+      loadCompanyEvidence: () => (loaded ? [] : new Promise<CompanyEvidenceProseFact[]>((resolve) => (loaded = () => resolve([])))),
+    };
+    const running = service.runCritique(deps, attemptId);
+    expect(service.isCritiqueRunning(attemptId)).toBe(true);
+    expect(service.cancelCritique(attemptId)).toBe(true);
+    await vi.waitFor(() => expect(loaded).toBeDefined());
+    loaded!();
+    expect(await running).toMatchObject({ ok: false, code: 'cancelled', view: { running: false, canReview: true, lastRun: { outcome: 'cancelled' } } });
+    expect(generate).not.toHaveBeenCalled();
+    expect(service.isCritiqueRunning(attemptId)).toBe(false);
+  });
+
+  it('Cancel reaches the only running session; a later explicit review then runs', async () => {
+    const attemptId = await prepare();
+    const waiting = vi.fn(
+      (_prompt: string, signal: AbortSignal) =>
+        new Promise<CritiqueGenerateResult>((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, text: '', error: 'the document generation session was cancelled' }))),
+    );
+    const deps = { ...critiqueDeps(waiting), loadCompanyEvidence: yielding() };
+    const first = service.runCritique(deps, attemptId);
+    const second = service.runCritique(deps, attemptId);
+    expect(await second).toMatchObject({ ok: false, code: 'already_running' });
+    await vi.waitFor(() => expect(waiting).toHaveBeenCalledTimes(1));
+    expect(service.cancelCritique(attemptId)).toBe(true);
+    expect(await first).toMatchObject({ ok: false, code: 'cancelled' });
+    expect(waiting).toHaveBeenCalledTimes(1);
+    expect(waiting.mock.calls[0]![1].aborted).toBe(true);
+    const retry = scripted({ findings: [] });
+    expect((await service.runCritique(critiqueDeps(retry), attemptId)).ok).toBe(true);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('different applications can still be reviewed at the same time', async () => {
+    const one = await prepare();
+    const two = await prepare({ other: true });
+    const generate = scripted({ findings: [] });
+    const deps = { ...critiqueDeps(generate), loadCompanyEvidence: yielding() };
+    const results = await Promise.all([service.runCritique(deps, one), service.runCritique(deps, two)]);
+    expect(results.map((r) => r.ok)).toEqual([true, true]);
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('an accepted CV revision on re-preparation', () => {
+  /** An original-mode package (the reviewed CV as is), reviewed with a finding that names one bullet. */
+  async function originalModeRevision() {
+    const attemptId = await prepare();
+    workspace.restartApplicationTailoring(db, attemptId, 'original');
+    expect((await pipeline.runApplicationAttempt(pipelineDeps(), attemptId)).outcome).toBe('needs_user');
+    const draft = cvDraftOf(attemptId);
+    expect(draft.content).toMatchObject({ type: 'cv', basis: 'original' });
+    const resume = structuredClone((draft.content as { resume: any }).resume);
+    const dropped = 'Reduced build times by 35 percent.';
+    for (const entry of resume.experience) entry.bullets = entry.bullets.filter((bullet: string) => bullet !== dropped);
+    const run = await service.runCritique(
+      critiqueDeps(scripted({
+        findings: [fx.finding({ kind: 'unnecessary_detail', summary: 'The build-time detail does not help this application.', documents: ['cv'], evidence: [{ source: 'cv_draft', quote: dropped }] })],
+        revisions: { cv: resume },
+      })),
+      attemptId,
+    );
+    if (!run.ok) throw new Error('review failed');
+    expect(run.view.review!.proposals[0]).toMatchObject({ status: 'pending', acceptable: true });
+    const accepted = await accept(attemptId, run.view);
+    expect(accepted.ok ? 'ok' : accepted.message).toBe('ok');
+    const revision = cvDraftOf(attemptId);
+    expect(revision).toMatchObject({ origin: 'critique_revision' });
+    return { attemptId, revision, dropped };
+  }
+
+  it('is kept in original mode: preparing again attaches the accepted revision instead of the original CV', async () => {
+    const { attemptId, revision, dropped } = await originalModeRevision();
+    const tailorCalls = tailor.mock.calls.length;
+    workspace.restartApplicationTailoring(db, attemptId, 'original');
+    html.length = 0;
+    expect((await pipeline.runApplicationAttempt(pipelineDeps(), attemptId)).outcome).toBe('needs_user');
+    expect(tailor.mock.calls.length).toBe(tailorCalls);
+    expect(cvDraftOf(attemptId)).toMatchObject({ id: revision.id, version: revision.version, origin: 'critique_revision', contentHash: revision.contentHash });
+    expect(artifacts(attemptId).find((f) => f.kind === 'cv_pdf')!.hash).toBe(cvDraftOf(attemptId).artifactHash);
+    const printedCv = html.find((page) => page.includes('Blue Harbor Systems'))!;
+    expect(printedCv).not.toContain(dropped);
+  });
+
+  it('is not reused once the reviewed skills it relies on changed (original mode): the original CV is prepared again', async () => {
+    const { attemptId, revision } = await originalModeRevision();
+    workspace.updateCvDocument(db, cvId, { profile: { ...PROFILE, skills: ['TypeScript', 'GitHub Actions'] } });
+    workspace.restartApplicationTailoring(db, attemptId, 'original');
+    expect((await pipeline.runApplicationAttempt(pipelineDeps(), attemptId)).outcome).toBe('needs_user');
+    expect(cvDraftOf(attemptId)).toMatchObject({ origin: 'prepared', version: revision.version + 1, content: { basis: 'original' } });
+    expect(store.listDrafts(db, attemptId).find((d) => d.id === revision.id)).toMatchObject({ status: 'superseded', contentHash: revision.contentHash });
+  });
+
+  it('is not reused once the reviewed source it relies on changed (AI mode): the CV is tailored again', async () => {
+    const attemptId = await prepare();
+    const run = await service.runCritique(critiqueDeps(scripted({ findings: [fx.OMISSION_FINDING], revisions: { cv: fx.validCvRevision() } })), attemptId);
+    if (!run.ok) throw new Error('review failed');
+    expect((await accept(attemptId, run.view)).ok).toBe(true);
+    const revision = cvDraftOf(attemptId);
+    const [first, second] = fx.SOURCE.experience;
+    workspace.updateCvDocument(db, cvId, { source: { ...fx.SOURCE, experience: [first!, { ...second!, dates: '2016 - 2021' }] } });
+    const tailorCalls = tailor.mock.calls.length;
+    workspace.restartApplicationTailoring(db, attemptId, 'ai');
+    expect((await pipeline.runApplicationAttempt(pipelineDeps(), attemptId)).outcome).toBe('needs_user');
+    expect(tailor.mock.calls.length).toBe(tailorCalls + 1);
+    expect(cvDraftOf(attemptId)).toMatchObject({ origin: 'prepared', version: revision.version + 1 });
+  });
+
+  it('leaves a sent package exactly as it was after a reused revision was sent', async () => {
+    const { attemptId } = await originalModeRevision();
+    workspace.restartApplicationTailoring(db, attemptId, 'original');
+    await pipeline.runApplicationAttempt(pipelineDeps(), attemptId);
+    workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submitted', submittedAt: new Date().toISOString(), submissionMode: 'manual' });
+    const snapshot = { files: artifacts(attemptId), drafts: store.listDrafts(db, attemptId), critique: store.getCritique(db, attemptId) };
+    expect(() => workspace.restartApplicationTailoring(db, attemptId, 'original')).toThrow();
+    workspace.updateCvDocument(db, cvId, { profile: { ...PROFILE, skills: ['TypeScript'] } });
+    expect(store.recordPreparedDraft(db, { attemptId, kind: 'cv', origin: 'prepared', content: snapshot.drafts[0]!.content, artifactHash: 'x', jdHash: 'x', sourceCvHash: 'x', now: new Date() })).toBeNull();
+    expect(await service.getCritiqueView(critiqueDeps(scripted({})), attemptId)).toMatchObject({ canReview: false, unavailable: { code: 'sent' } });
+    expect({ files: artifacts(attemptId), drafts: store.listDrafts(db, attemptId), critique: store.getCritique(db, attemptId) }).toEqual(snapshot);
+  });
+});

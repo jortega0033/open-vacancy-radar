@@ -35,7 +35,11 @@ import type { ApplicationAttemptRecord, CvDocumentRecord } from './workspace/typ
  * No Electron imports: the service and the evaluation harness drive exactly these functions.
  */
 
-export const CRITIQUE_VERSION = 1;
+/**
+ * 2: the fence also binds the reviewed CV evidence (source record and profile), not only the CV text.
+ * A review stored under version 1 is shown as entirely out of date and offers nothing to accept.
+ */
+export const CRITIQUE_VERSION = 2;
 
 import { DRAFT_KINDS, FINDING_KINDS, type DraftKind, type FindingKind } from './application-critique-types.js';
 export { DRAFT_KINDS, FINDING_KINDS };
@@ -116,7 +120,13 @@ export interface DraftFence {
 export interface InputFence {
   v: number;
   jdHash: string;
+  /** sha256 of the CV text (the attempt's own source-CV hash). */
   sourceCvHash: string;
+  /**
+   * The reviewed evidence the critic is shown and every validator checks against: the reviewed source
+   * record and the profile (skills, summary). Edited independently of the text, so bound separately.
+   */
+  reviewedCvHash: string;
   cvId: string;
   companyHash: string;
   drafts: DraftFence[];
@@ -141,6 +151,15 @@ export function companyInputHash(facts: readonly CompanyEvidenceProseFact[]): st
   );
 }
 
+/**
+ * The reviewed CV evidence a critique reads: the source record (minus the review timestamp, which a
+ * re-save of identical content restamps) and the profile. Any change to either changes the hash.
+ */
+export function reviewedCvEvidenceHash(cv: Pick<CvDocumentRecord, 'source' | 'profile'>): string {
+  const source = cv.source ? { ...cv.source, reviewedAt: '' } : null;
+  return sha256(stableStringify({ source, profile: cv.profile }));
+}
+
 export function changedInputs(stored: InputFence, current: InputFence): Set<InputKey> {
   const changed = new Set<InputKey>();
   if (stored.v !== current.v) {
@@ -150,7 +169,13 @@ export function changedInputs(stored: InputFence, current: InputFence): Set<Inpu
     return changed;
   }
   if (stored.jdHash !== current.jdHash) changed.add('jd');
-  if (stored.sourceCvHash !== current.sourceCvHash || stored.cvId !== current.cvId) changed.add('cvSource');
+  if (
+    stored.sourceCvHash !== current.sourceCvHash ||
+    stored.reviewedCvHash !== current.reviewedCvHash ||
+    stored.cvId !== current.cvId
+  ) {
+    changed.add('cvSource');
+  }
   if (stored.companyHash !== current.companyHash) changed.add('company');
   for (const kind of DRAFT_KINDS) {
     const before = stored.drafts.find((draft) => draft.kind === kind);
@@ -202,6 +227,16 @@ export interface CritiqueInputs {
   fence: InputFence;
 }
 
+/** Shortens text to at most `max` characters, marking the cut with an ellipsis. */
+export function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/** At most `max` entries of at most `chars` characters each, and how many entries were left out. */
+export function boundList(items: readonly string[], max: number, chars: number): { items: string[]; omitted: number } {
+  return { items: items.slice(0, max).map((item) => clip(item, chars)), omitted: Math.max(0, items.length - max) };
+}
+
 export function clampText(text: string, limit: number): string {
   const trimmed = text.trim();
   return trimmed.length <= limit ? trimmed : trimmed.slice(0, limit);
@@ -227,6 +262,7 @@ export function buildCritiqueInputs(input: {
       v: CRITIQUE_VERSION,
       jdHash: sha256(attempt.jdSnapshot),
       sourceCvHash: sha256(cv.text),
+      reviewedCvHash: reviewedCvEvidenceHash(cv),
       cvId: cv.id,
       companyHash: companyInputHash(companyEvidence),
       drafts: input.drafts.map((draft) => ({
@@ -677,8 +713,11 @@ export interface StoredProposal {
   status: ProposalStatus;
   /** Why a proposal was refused (empty otherwise). Each is a validator's own message. */
   reasons: string[];
+  /** How many reasons were not kept (a reply can list more than one view can show). */
+  reasonsOmitted?: number;
   /** The edit in words, for the person deciding. */
   changes: string[];
+  changesOmitted?: number;
   base: { version: number; contentHash: string };
   proposed: ProposedContent | null;
   dependsOn: InputKey[];

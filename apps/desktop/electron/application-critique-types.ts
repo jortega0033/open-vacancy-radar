@@ -54,44 +54,73 @@ export const ACTION_CODES = [
 ] as const;
 export type CritiqueActionCode = (typeof ACTION_CODES)[number];
 
+/**
+ * What one view may carry. The service bounds everything it stores and everything it returns to these
+ * numbers (with an explicit count of what it left out), so a large or malformed reviewer reply can never
+ * produce a stored review its own reader refuses.
+ */
+export const VIEW_LIMITS = {
+  findings: 40,
+  evidence: 8,
+  refused: 60,
+  proposals: 4,
+  reasons: 20,
+  reasonChars: 600,
+  changes: 60,
+  changeChars: 1200,
+  previewChars: 60_000,
+  findingSummaryChars: 500,
+  quoteChars: 700,
+  factChars: 2000,
+  gapChars: 400,
+  suggestionChars: 500,
+  refusedKindChars: 60,
+  refusedSummaryChars: 300,
+  refusedDetailChars: 500,
+  lastRunDetailChars: 600,
+} as const;
+
 const text = (max: number) => z.string().max(max);
 const id = z.string().min(1).max(200);
 const draftKind = z.enum(DRAFT_KINDS);
 
 const EvidenceSchema = z.union([
-  z.object({ source: z.enum(['jd', 'cv_draft', 'cover_letter_draft', 'motivation_letter_draft']), quote: text(700) }),
-  z.object({ source: z.literal('cv_fact'), id, text: text(2000) }),
-  z.object({ source: z.literal('company_fact'), id, text: text(2000) }),
-  z.object({ source: z.literal('gap'), note: text(400) }),
+  z.object({ source: z.enum(['jd', 'cv_draft', 'cover_letter_draft', 'motivation_letter_draft']), quote: text(VIEW_LIMITS.quoteChars) }),
+  z.object({ source: z.literal('cv_fact'), id, text: text(VIEW_LIMITS.factChars) }),
+  z.object({ source: z.literal('company_fact'), id, text: text(VIEW_LIMITS.factChars) }),
+  z.object({ source: z.literal('gap'), note: text(VIEW_LIMITS.gapChars) }),
 ]);
 
 const FindingViewSchema = z.object({
   id,
   kind: z.enum(FINDING_KINDS),
   label: text(120),
-  summary: text(500),
+  summary: text(VIEW_LIMITS.findingSummaryChars),
   documents: z.array(draftKind).max(3),
-  evidence: z.array(EvidenceSchema).max(8),
-  suggestion: text(500).nullable(),
+  evidence: z.array(EvidenceSchema).max(VIEW_LIMITS.evidence),
+  suggestion: text(VIEW_LIMITS.suggestionChars).nullable(),
   current: z.boolean(),
   outdatedBecause: z.array(text(80)).max(8),
 });
 
 const RefusedViewSchema = z.object({
-  kind: text(60).nullable(),
-  summary: text(300),
+  kind: text(VIEW_LIMITS.refusedKindChars).nullable(),
+  summary: text(VIEW_LIMITS.refusedSummaryChars),
   code: text(60),
   reason: text(200),
-  detail: text(500),
+  detail: text(VIEW_LIMITS.refusedDetailChars),
 });
 
 const ProposalViewSchema = z.object({
   document: draftKind,
   label: text(60),
   status: z.enum(['pending', 'accepted', 'rejected', 'refused']),
-  reasons: z.array(text(600)).max(20),
-  changes: z.array(text(1200)).max(60),
-  preview: text(60_000).nullable(),
+  reasons: z.array(text(VIEW_LIMITS.reasonChars)).max(VIEW_LIMITS.reasons),
+  /** How many further reasons exist but are not listed (the list is capped, the count is not). */
+  reasonsOmitted: z.number().int().min(0),
+  changes: z.array(text(VIEW_LIMITS.changeChars)).max(VIEW_LIMITS.changes),
+  changesOmitted: z.number().int().min(0),
+  preview: text(VIEW_LIMITS.previewChars).nullable(),
   baseVersion: z.number().int().min(0),
   baseContentHash: text(100),
   current: z.boolean(),
@@ -110,9 +139,11 @@ const ReviewViewSchema = z.object({
   state: z.enum(['current', 'partly_outdated', 'outdated']),
   outdatedBecause: z.array(text(80)).max(8),
   noFindings: z.boolean(),
-  findings: z.array(FindingViewSchema).max(40),
-  refused: z.array(RefusedViewSchema).max(60),
-  proposals: z.array(ProposalViewSchema).max(4),
+  findings: z.array(FindingViewSchema).max(VIEW_LIMITS.findings),
+  refused: z.array(RefusedViewSchema).max(VIEW_LIMITS.refused),
+  /** Refused entries kept on record but not listed. */
+  refusedOmitted: z.number().int().min(0),
+  proposals: z.array(ProposalViewSchema).max(VIEW_LIMITS.proposals),
 });
 
 export const CritiqueViewSchema = z.object({
@@ -132,7 +163,7 @@ export const CritiqueViewSchema = z.object({
     )
     .max(4),
   review: ReviewViewSchema.nullable(),
-  lastRun: z.object({ outcome: z.enum(RUN_OUTCOMES), detail: text(600), at: text(40) }).nullable(),
+  lastRun: z.object({ outcome: z.enum(RUN_OUTCOMES), detail: text(VIEW_LIMITS.lastRunDetailChars), at: text(40) }).nullable(),
 });
 
 export type CritiqueView = z.infer<typeof CritiqueViewSchema>;

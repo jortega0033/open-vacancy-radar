@@ -48,11 +48,20 @@ submission, or grant itself a tool or network.
 
 You read the change list and the full revised text, then choose **Use this** or **Not now**. Nothing is applied without that click.
 
+A long reply is shortened in the list, never in the document: at most 20 reasons and 60 changes are listed per suggestion, with the
+number not listed ("10 more reasons not listed here."), and each line is cut at a fixed length. The revised text itself is shown in
+full; a document too long to show in full is not offered. A stored review that still could not be shown is withheld with a note,
+and "Review again" stays available.
+
 ## What accepting does
 
 - Creates a **new version** of that one document and replaces only its current file. The earlier version stays on record.
 - Closes only what described the old file: a scheduled automatic send is cancelled, and a prepared form that already holds the old
-  PDF is closed (the application returns to "needs you", and you prepare it again; the accepted revision is reused, not regenerated).
+  PDF is closed (the application returns to "needs you", and you prepare it again).
+- Preparing again, in either tailoring mode (tailored or original CV), reuses the accepted CV revision instead of regenerating it,
+  but only while the posting is unchanged and the revision still passes the drafting validator against your **current** reviewed
+  CV exactly as stored (nothing dropped, no date or other fact reconciled differently). If your reviewed CV changed in a way the
+  revision relies on, the CV is prepared afresh the ordinary way and the revision stays on record as an earlier version.
 - Leaves your reviewed CV, the brief, company facts, other applications, receipts and everything already sent exactly as they were.
 
 A package that was **already sent** can be read but never reviewed again or changed, and a revised package is never shown as the
@@ -60,7 +69,10 @@ one that was sent.
 
 ## Versions and stale results
 
-A review is bound to the posting text, your reviewed CV, each document version, and the company facts it saw. Opening the panel
+A review is bound to the posting text, your reviewed CV (its text, and separately the reviewed source record and profile skills and
+summary the reviewer and the validators actually use, so an edit to either counts even when the CV text is unchanged), each document
+version, and the company facts it saw. Saving the same reviewed source again changes nothing. A review stored by an earlier version of
+this feature is shown as entirely out of date and offers nothing to apply. Opening the panel
 re-checks that, without a model call. If an input changed, the findings and suggestions that depended on it are marked "Earlier
 version" and their buttons are withdrawn; the rest stay. A result that arrives after its inputs changed, or after Cancel or a data
 reset, is discarded.
@@ -68,7 +80,9 @@ reset, is discarded.
 ## When it does not finish
 
 Cancel, a timeout (4 minutes), a usage limit, an unusable answer or an error record what happened and change nothing: your documents
-and any previous review stay. There is no automatic retry and no revision loop. One review is one AI request; the panel shows the
+and any previous review stay. There is no automatic retry and no revision loop. Only one review of an application can be starting or
+running at a time: a second request (another window, a repeated click) is refused at once, and Cancel reaches the one that runs, also
+while it is still reading its inputs. One review is one AI request; the panel shows the
 request count and the token counts only if the provider reported them.
 
 ## Limits

@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { classifyProviderError } from '../src/provider-error.js';
 import {
+  boundList,
   buildCritiqueInputs,
   buildCritiquePrompt,
   changedInputs,
+  clip,
   checkLetterRevision,
   checkResumeRevision,
   DRAFT_KINDS,
@@ -16,6 +18,7 @@ import {
   letterRevisionKind,
   parseCritiqueResponse,
   REFUSAL_LABEL,
+  reviewedCvEvidenceHash,
   sourceCvPlainText,
   stableStringify,
   verifyFindings,
@@ -39,6 +42,7 @@ import {
   stageTailoredResumeArtifact,
   StagingAbandonedError,
 } from './application-artifact-staging.js';
+import { CritiqueViewSchema, VIEW_LIMITS } from './application-critique-types.js';
 import type {
   CritiqueActionCode,
   CritiqueActionResult,
@@ -284,6 +288,38 @@ function proposalPreview(proposal: StoredProposal): string | null {
     : proposal.proposed.body;
 }
 
+/** A stored proposal held to what one view may carry, with the counts of what was left out. */
+function boundProposal(proposal: StoredProposal): StoredProposal {
+  const reasons = boundList(proposal.reasons, VIEW_LIMITS.reasons, VIEW_LIMITS.reasonChars);
+  const changes = boundList(proposal.changes, VIEW_LIMITS.changes, VIEW_LIMITS.changeChars);
+  return {
+    ...proposal,
+    reasons: reasons.items,
+    reasonsOmitted: (proposal.reasonsOmitted ?? 0) + reasons.omitted,
+    changes: changes.items,
+    changesOmitted: (proposal.changesOmitted ?? 0) + changes.omitted,
+  };
+}
+
+const PREVIEW_TOO_LONG =
+  'The revised document is too long to show here in full, so it cannot be applied from this review.';
+
+const UNREADABLE_REVIEW =
+  'The stored review could not be shown. Your documents were not changed. Review again to get a current one.';
+
+function evidenceView(item: StoredFinding['evidence'][number]): FindingView['evidence'][number] {
+  if (item.source === 'cv_fact' || item.source === 'company_fact') {
+    return { source: item.source, id: item.id, text: clip(item.text, VIEW_LIMITS.factChars) };
+  }
+  if (item.source === 'gap') return { source: 'gap', note: clip(item.note, VIEW_LIMITS.gapChars) };
+  return { source: item.source, quote: clip(item.quote, VIEW_LIMITS.quoteChars) };
+}
+
+/**
+ * The stored review as the person sees it. Everything is held to the view's limits HERE as well as
+ * when it was stored, so a review saved before those limits existed (or from a larger reply) still
+ * reads, and every count the panel shows is the stored total, not the shortened list.
+ */
 function buildReviewView(record: CritiqueRecord, state: State): ReviewView | null {
   if (!record.reviewedAt || !record.fence) return null;
   const changed = state.inputs
@@ -294,39 +330,65 @@ function buildReviewView(record: CritiqueRecord, state: State): ReviewView | nul
         'company',
         ...DRAFT_KINDS.map((kind) => `draft:${kind}` as const),
       ]);
-  const findings: FindingView[] = record.findings.map((finding) => {
+  const findings: FindingView[] = record.findings.slice(0, VIEW_LIMITS.findings).map((finding) => {
     const hit = finding.dependsOn.filter((key) => changed.has(key));
     return {
-      ...finding,
+      id: finding.id,
+      kind: finding.kind,
       label: FINDING_LABEL[finding.kind],
+      summary: clip(finding.summary, VIEW_LIMITS.findingSummaryChars),
+      documents: finding.documents,
+      evidence: finding.evidence.slice(0, VIEW_LIMITS.evidence).map(evidenceView),
+      suggestion:
+        finding.suggestion === null ? null : clip(finding.suggestion, VIEW_LIMITS.suggestionChars),
       current: hit.length === 0,
       outdatedBecause: outdatedLabels(hit),
     };
   });
-  const proposals: ProposalView[] = record.proposals.map((proposal) => {
-    const hit = proposal.dependsOn.filter((key) => changed.has(key));
-    const current = hit.length === 0;
-    return {
-      document: proposal.document,
-      label: DRAFT_LABEL[proposal.document],
-      status: proposal.status,
-      reasons: proposal.reasons,
-      changes: proposal.changes,
-      preview: proposalPreview(proposal),
-      baseVersion: proposal.base.version,
-      baseContentHash: proposal.base.contentHash,
-      current,
-      outdatedBecause: outdatedLabels(hit),
-      acceptable: proposal.status === 'pending' && current && state.unavailable === null,
-      acceptedVersion: proposal.acceptedVersion,
-    };
-  });
+  const proposals: ProposalView[] = record.proposals
+    .slice(0, VIEW_LIMITS.proposals)
+    .map((stored) => {
+      const proposal = boundProposal(stored);
+      const hit = proposal.dependsOn.filter((key) => changed.has(key));
+      const current = hit.length === 0;
+      const fullPreview = proposalPreview(proposal);
+      const previewFits = fullPreview === null || fullPreview.length <= VIEW_LIMITS.previewChars;
+      const reasons =
+        previewFits || proposal.status !== 'pending' || proposal.reasons.length >= VIEW_LIMITS.reasons
+          ? proposal.reasons
+          : [...proposal.reasons, PREVIEW_TOO_LONG];
+      return {
+        document: proposal.document,
+        label: DRAFT_LABEL[proposal.document],
+        status: proposal.status,
+        reasons,
+        reasonsOmitted: proposal.reasonsOmitted ?? 0,
+        changes: proposal.changes,
+        changesOmitted: proposal.changesOmitted ?? 0,
+        preview: fullPreview === null ? null : clip(fullPreview, VIEW_LIMITS.previewChars),
+        baseVersion: proposal.base.version,
+        baseContentHash: proposal.base.contentHash,
+        current,
+        outdatedBecause: outdatedLabels(hit),
+        // Nobody is asked to apply a document they cannot read in full.
+        acceptable:
+          proposal.status === 'pending' && current && previewFits && state.unavailable === null,
+        acceptedVersion: proposal.acceptedVersion,
+      };
+    });
   const anyOutdated =
     findings.some((finding) => !finding.current) || proposals.some((p) => !p.current);
   const allOutdated =
     changed.size > 0 &&
     findings.every((finding) => !finding.current) &&
     proposals.every((p) => !p.current);
+  const refused = record.refused.slice(0, VIEW_LIMITS.refused).map((entry) => ({
+    kind: entry.kind === null ? null : clip(entry.kind, VIEW_LIMITS.refusedKindChars),
+    summary: clip(entry.summary, VIEW_LIMITS.refusedSummaryChars),
+    code: entry.code,
+    reason: REFUSAL_LABEL[entry.code] ?? 'it could not be checked',
+    detail: clip(entry.detail, VIEW_LIMITS.refusedDetailChars),
+  }));
   return {
     runId: record.runId,
     reviewedAt: record.reviewedAt,
@@ -345,7 +407,8 @@ function buildReviewView(record: CritiqueRecord, state: State): ReviewView | nul
     outdatedBecause: outdatedLabels(changed),
     noFindings: record.findings.length === 0 && record.refused.length === 0,
     findings,
-    refused: record.refused.map((entry) => ({ ...entry, reason: REFUSAL_LABEL[entry.code] })),
+    refused,
+    refusedOmitted: Math.max(0, record.refused.length - refused.length),
     proposals,
   };
 }
@@ -357,7 +420,7 @@ export async function getCritiqueView(
 ): Promise<CritiqueView> {
   const state = await loadState(deps, attemptId);
   const record = getCritique(deps.db, attemptId);
-  return {
+  const view: CritiqueView = {
     attemptId,
     canReview: state.unavailable === null && !runs.has(attemptId),
     unavailable: state.unavailable,
@@ -366,9 +429,28 @@ export async function getCritiqueView(
     review: record ? buildReviewView(record, state) : null,
     lastRun:
       record?.lastRunOutcome && record.lastRunAt
-        ? { outcome: record.lastRunOutcome, detail: record.lastRunDetail, at: record.lastRunAt }
+        ? {
+            outcome: record.lastRunOutcome,
+            detail: clip(record.lastRunDetail, VIEW_LIMITS.lastRunDetailChars),
+            at: record.lastRunAt,
+          }
         : null,
   };
+  // The last line of defence: a stored review the reader would refuse is withheld and SAID to be, so
+  // the panel still offers "Review again" instead of a dead end. A read never alters what is stored.
+  if (view.review && !CritiqueViewSchema.safeParse(view).success) {
+    deps.log?.('a stored review could not be represented in the view', { attemptId });
+    return {
+      ...view,
+      review: null,
+      lastRun: {
+        outcome: 'failed',
+        detail: UNREADABLE_REVIEW,
+        at: record?.reviewedAt ?? deps.now().toISOString(),
+      },
+    };
+  }
+  return view;
 }
 
 async function failure(
@@ -593,7 +675,8 @@ async function buildProposals(
       }
     }
   }
-  return proposals;
+  // Stored already held to what a view can carry, with honest counts of what was left out.
+  return proposals.map(boundProposal);
 }
 
 /**
@@ -612,10 +695,35 @@ export async function runCritique(
       'already_running',
       'A review of this application is already running.',
     );
+  // The slot is reserved synchronously, before the first await: a second call that arrives while this
+  // one is still reading its inputs is refused, and Cancel reaches this run's controller from now on.
+  const runId = randomUUID();
+  const controller = new AbortController();
+  runs.set(attemptId, { runId, controller });
+  // The run stops being "running" BEFORE the view that reports its outcome is built, and only ever
+  // releases its OWN slot.
+  const release = (): void => {
+    if (runs.get(attemptId)?.runId === runId) runs.delete(attemptId);
+  };
+  try {
+    return await reservedRun(deps, attemptId, runId, controller, release);
+  } finally {
+    release();
+  }
+}
+
+async function reservedRun(
+  deps: CritiqueDeps,
+  attemptId: string,
+  runId: string,
+  controller: AbortController,
+  release: () => void,
+): Promise<CritiqueActionResult> {
   let state: State;
   try {
     state = await loadState(deps, attemptId);
   } catch {
+    release();
     return {
       ok: false,
       code: 'not_found',
@@ -623,7 +731,14 @@ export async function runCritique(
       view: null,
     };
   }
+  if (controller.signal.aborted) {
+    // Cancelled (or a data reset) while the inputs were being read: no model call is made.
+    if (!state.unavailable) recordOutcome(deps, attemptId, runId, 'cancelled', RUN_MESSAGE.cancelled);
+    release();
+    return await failure(deps, attemptId, 'cancelled', RUN_MESSAGE.cancelled);
+  }
   if (state.unavailable || !state.inputs) {
+    release();
     return failure(
       deps,
       attemptId,
@@ -632,13 +747,6 @@ export async function runCritique(
     );
   }
   const inputs = state.inputs;
-  const runId = randomUUID();
-  const controller = new AbortController();
-  runs.set(attemptId, { runId, controller });
-  // The run stops being "running" BEFORE the view that reports its outcome is built.
-  const release = (): void => {
-    if (runs.get(attemptId)?.runId === runId) runs.delete(attemptId);
-  };
 
   let result: CritiqueGenerateResult;
   try {
@@ -875,6 +983,9 @@ export async function acceptProposal(
         const current = getCritique(deps.db, attemptId);
         if (!current || current.runId !== target.runId || !findPending(current, target))
           return false;
+        // The reviewed CV the proposal was just re-checked against must still be the one on record.
+        const cv = workspace.listCvDocuments(deps.db).find((doc) => doc.id === inputs.cv.id);
+        if (!cv || reviewedCvEvidenceHash(cv) !== inputs.fence.reviewedCvHash) return false;
         const drafts = packageDrafts(deps.db, attemptId);
         const now = drafts.find((d) => d.kind === target.document);
         return (

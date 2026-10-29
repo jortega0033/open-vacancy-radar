@@ -18,7 +18,7 @@ import {
 import type { CompanyEvidenceProseFact } from './company-evidence.js';
 import { recordEvidenceUses } from './workspace/company-evidence-store.js';
 import { currentDrafts, recordPreparedDraft } from './workspace/application-critique-store.js';
-import { draftContentHash, type DraftKind, type LetterDraftContent } from './application-critique.js';
+import { draftContentHash, stableStringify, type DraftKind, type LetterDraftContent } from './application-critique.js';
 import {
   applyApplicationFieldMap,
   closeApplicationReview,
@@ -781,15 +781,19 @@ export async function runApplicationAttempt(
   let tailoringSummary: string;
   let skillsMissing = false;
   // #690: a CV revision the person accepted from the independent critique outlives a re-preparation
-  // while the posting and the reviewed CV are unchanged, so preparing the form again never silently
-  // regenerates it away. Re-validated against the reviewed CV first; anything that no longer holds
-  // falls back to ordinary drafting.
+  // in EITHER tailoring mode while the posting and the reviewed CV are unchanged, so preparing the form
+  // again never silently regenerates it away. It is re-checked against the CURRENT reviewed CV with the
+  // validator drafting uses: nothing may be dropped and nothing may be reconciled to different facts
+  // (an edited date or bullet is a stale input, not a reuse). Anything that no longer holds falls back
+  // to ordinary preparation for the attempt's mode.
   const revisedCv = reusableRevisionDraft(deps.db, attempt, cv, 'cv');
   let reusedCvVersion: { critiqueRunId: string | null; resume: TailoredResume; summary: string } | null = null;
-  if (revisedCv && revisedCv.content.type === 'cv' && attempt.tailoringMode === 'ai' && cv.source) {
+  if (revisedCv && revisedCv.content.type === 'cv' && cv.source) {
+    const stored = revisedCv.content.resume;
     let valid: boolean;
     try {
-      valid = validateGeneratedResume(revisedCv.content.resume, cv).dropped.length === 0;
+      const checked = validateGeneratedResume(stored, cv);
+      valid = checked.dropped.length === 0 && stableStringify(checked.resume) === stableStringify(stored);
     } catch {
       valid = false;
     }

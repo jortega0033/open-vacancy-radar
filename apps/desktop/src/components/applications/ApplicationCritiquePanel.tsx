@@ -85,6 +85,11 @@ function FindingItem({ finding }: { finding: FindingView }) {
   );
 }
 
+/** The honest tail of a shortened list: the stored total, not the length of what is shown. */
+function moreNotListed(count: number, noun: 'reason' | 'change' | 'item'): string {
+  return `${count} more ${noun}${count === 1 ? '' : 's'} not listed here.`;
+}
+
 function ProposalCard({
   proposal,
   busy,
@@ -106,18 +111,24 @@ function ProposalCard({
         <div className="mt-1 text-xs text-base-content/70">
           <p>This suggestion was not offered because it did not pass the checks against your reviewed CV:</p>
           <ul className="list-disc pl-4">
-            {proposal.reasons.map((reason) => (
-              <li key={reason}>{reason}</li>
+            {proposal.reasons.map((reason, index) => (
+              <li key={index}>{reason}</li>
             ))}
+            {proposal.reasonsOmitted > 0 && <li>{moreNotListed(proposal.reasonsOmitted, 'reason')}</li>}
           </ul>
         </div>
       )}
       {proposal.status !== 'refused' && (
         <>
           <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-base-content/80">
-            {proposal.changes.map((change) => (
-              <li key={change}>{change}</li>
+            {proposal.changes.map((change, index) => (
+              <li key={index}>{change}</li>
             ))}
+            {proposal.changesOmitted > 0 && (
+              <li>
+                {moreNotListed(proposal.changesOmitted, 'change')} Read the revised {label} for all of them.
+              </li>
+            )}
           </ul>
           {proposal.preview && (
             <details className="mt-1.5">
@@ -356,7 +367,9 @@ export function ApplicationCritiquePanel({ attemptId, checkpoint, reloadKey, onR
           )}
           {review.refused.length > 0 && (
             <details>
-              <summary className="cursor-pointer text-xs font-medium">Left out because it could not be checked ({review.refused.length})</summary>
+              <summary className="cursor-pointer text-xs font-medium">
+                Left out because it could not be checked ({review.refused.length + review.refusedOmitted})
+              </summary>
               <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-base-content/70">
                 {review.refused.map((entry, index) => (
                   <li key={index}>
@@ -364,6 +377,7 @@ export function ApplicationCritiquePanel({ attemptId, checkpoint, reloadKey, onR
                     {entry.reason}.
                   </li>
                 ))}
+                {review.refusedOmitted > 0 && <li>{moreNotListed(review.refusedOmitted, 'item')}</li>}
               </ul>
             </details>
           )}

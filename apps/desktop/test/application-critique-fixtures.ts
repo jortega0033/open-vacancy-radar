@@ -1,3 +1,4 @@
+import { load, type Cheerio, type CheerioAPI, type contains } from 'cheerio';
 import { jsPDF } from 'jspdf';
 import type { CompanyEvidenceProseFact } from '../electron/company-evidence.js';
 import type { CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
@@ -107,32 +108,49 @@ export function companyFact(over: Partial<CompanyEvidenceProseFact> = {}): Compa
   };
 }
 
-function decode(text: string): string {
-  return text
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&');
+/** Elements whose end starts a new printed line (the same block tags the earlier stand-in broke lines on). */
+const BLOCK_TAGS = new Set(['div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'li', 'p', 'section', 'tr', 'ul']);
+/** Never printed as text. */
+const SKIPPED_TAGS = new Set(['head', 'noscript', 'script', 'style', 'template', 'title']);
+
+/** A parsed node (cheerio's `AnyNode`, named through a public signature). */
+type ParsedNode = Parameters<typeof contains>[0];
+type ParsedNodes = Cheerio<ParsedNode>;
+const TEXT_NODE = 3;
+const ELEMENT_NODE = 1;
+
+/** The printed text of a parsed document: text nodes in order, a new line after each block element. */
+function printedText($: CheerioAPI, nodes: ParsedNodes, out: string[]): void {
+  for (const child of nodes.toArray()) {
+    if (child.nodeType === TEXT_NODE) {
+      out.push($(child).text());
+      continue;
+    }
+    if (child.nodeType !== ELEMENT_NODE) continue;
+    const tag = ($(child).prop('tagName') ?? '').toLowerCase();
+    if (SKIPPED_TAGS.has(tag)) continue;
+    if (tag === 'br') {
+      out.push('\n');
+      continue;
+    }
+    out.push(' ');
+    printedText($, $(child).contents(), out);
+    out.push(BLOCK_TAGS.has(tag) ? '\n' : ' ');
+  }
 }
 
 /**
  * Stands in for Chromium's `printToPDF`: a real, text-bearing PDF built from the text of the HTML the
  * app asked to print, so the real document acceptance contract judges bytes that genuinely carry the
- * document. Only the renderer is replaced.
+ * document. Only the renderer is replaced. The HTML goes through a real HTML parser (cheerio, parse5),
+ * never pattern stripping, so entities, comments and script/style content are handled as a browser would.
  */
 export function htmlToPdf(html: string): Uint8Array {
-  const title = decode(/<title>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '');
-  const text = decode(
-    html
-      .replace(/<title>[\s\S]*?<\/title>/i, '')
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<\/(p|div|li|h\d|section|tr|ul|header)>/gi, '\n')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, ' '),
-  );
+  const $ = load(html);
+  const title = $('title').first().text();
+  const parts: string[] = [];
+  printedText($, $('body').contents(), parts);
+  const text = parts.join('');
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   doc.setProperties({ title });
   doc.setFontSize(10);
