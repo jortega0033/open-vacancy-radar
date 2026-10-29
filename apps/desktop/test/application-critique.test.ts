@@ -42,7 +42,7 @@ const workspace = await import('../electron/workspace/repository.js');
 const pipeline = await import('../electron/application-pipeline.js');
 const service = await import('../electron/application-critique-service.js');
 const store = await import('../electron/workspace/application-critique-store.js');
-const { applicationAttempts, applicationCritiques } = await import('../electron/workspace/schema.js');
+const { applicationAttempts, applicationCritiques, applicationPostingVerifications } = await import('../electron/workspace/schema.js');
 const fx = await import('./application-critique-fixtures.js');
 import type { WorkspaceDb } from '../electron/workspace/client.js';
 import type { CompanyEvidenceProseFact } from '../electron/company-evidence.js';
@@ -783,5 +783,55 @@ describe('local data lifecycle', () => {
     db.run(sql`delete from application_document_drafts`);
     const view = await service.getCritiqueView(critiqueDeps(scripted({})), attemptId);
     expect(view).toMatchObject({ canReview: false, unavailable: { code: 'package_not_recorded' } });
+  });
+});
+
+describe('boundaries the critique must not cross', () => {
+  it('a full review and an accepted revision change no CV, letter, saved job or reviewed profile fact', async () => {
+    const attemptId = await prepare();
+    const snapshot = () => JSON.stringify({ cvs: workspace.listCvDocuments(db), letters: workspace.listLetters(db), jobs: workspace.listSavedJobs(db) });
+    const before = snapshot();
+    const run = await service.runCritique(critiqueDeps(scripted({ findings: [fx.OMISSION_FINDING], revisions: { cv: fx.validCvRevision() } })), attemptId);
+    if (!run.ok) throw new Error('review failed');
+    await service.acceptProposal(critiqueDeps(scripted({})), { attemptId, runId: run.view.review!.runId, document: 'cv', baseContentHash: run.view.review!.proposals[0]!.baseContentHash });
+    expect(snapshot()).toBe(before);
+    // The revision lives in the draft history of this attempt only.
+    expect(store.listDrafts(db, attemptId).filter((d) => d.kind === 'cv')).toHaveLength(2);
+  });
+
+  it('the model is called exactly once per explicit review and never by reading, rejecting or accepting', async () => {
+    const attemptId = await prepare();
+    const generate = scripted({ findings: [fx.OMISSION_FINDING], revisions: { cv: fx.validCvRevision() } });
+    const deps = critiqueDeps(generate);
+    const run = await service.runCritique(deps, attemptId);
+    if (!run.ok) throw new Error('review failed');
+    await service.getCritiqueView(deps, attemptId);
+    const target = { attemptId, runId: run.view.review!.runId, document: 'cv' as const, baseContentHash: run.view.review!.proposals[0]!.baseContentHash };
+    await service.acceptProposal(deps, target);
+    await service.rejectProposal(deps, target);
+    await service.getCritiqueView(deps, attemptId);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to review or change a package that a posting finding is holding out of review', async () => {
+    const attemptId = await prepare();
+    db.insert(applicationPostingVerifications)
+      .values({
+        attemptId,
+        observedAt: new Date(),
+        source: 'greenhouse',
+        outcome: 'closed',
+        result: 'confirmed_closed',
+        reason: 'not_found',
+        baselineHash: 'x',
+        heldCheckpoint: 'needs_user',
+        heldCheckpointDetail: 'held',
+      })
+      .run();
+    const generate = scripted({ findings: [] });
+    const view = await service.getCritiqueView(critiqueDeps(generate), attemptId);
+    expect(view).toMatchObject({ canReview: false, unavailable: { code: 'held' } });
+    expect(await service.runCritique(critiqueDeps(generate), attemptId)).toMatchObject({ ok: false, code: 'not_available' });
+    expect(generate).not.toHaveBeenCalled();
   });
 });
