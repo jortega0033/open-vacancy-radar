@@ -114,7 +114,7 @@ import {
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
 import { chooseInitialBounds, loadWindowState, saveWindowState, type WindowState } from './window-state.js';
-import { createSearchPlanStore } from './search-plan-store.js';
+import { createSearchPlanStore, type SearchPlanLoadResult, type SearchPlanResetResult } from './search-plan-store.js';
 import { parseVacancyScanRequest, selectBackgroundScan, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
 import { createVacancyScanRunner } from './vacancy-scan-run.js';
@@ -2699,8 +2699,13 @@ const vacancyScanRunner = createVacancyScanRunner({
   loadSearchPlanSnapshot: async () => {
     try {
       return await searchPlanStore.snapshot();
-    } catch {
-      throw new Error('Your search plan could not be read. Fix or clear it in "What you are looking for", or turn the plan off for this search.');
+    } catch (error) {
+      // Says which case it is (damaged, newer version, unopenable) and the way out, never a raw parse error.
+      const reason = error instanceof Error && error.name === 'SearchPlanReadError' ? error.message : 'Your search plan could not be read.';
+      throw new Error(
+        `${reason} Open "What you are looking for" to start a new plan (the old file is kept as a backup), or turn the plan off for this search.`,
+        { cause: error },
+      );
     }
   },
   prepareRun: async () => {
@@ -2814,12 +2819,14 @@ function scheduleBackgroundScanTick(): void {
           return null;
         }
         // One run with one shared allowance: the approved search plan when there is one, else the
-        // first saved role or skill as before (#686). Never one scan per saved role.
-        return runVacancyScan({
-          mode: 'query',
-          query: selection.query,
-          ...(selection.useSearchPlan ? { useSearchPlan: true } : {}),
-        });
+        // first saved role or skill as before (#686). Never one scan per saved role. With a plan the
+        // run takes its query from the snapshot it captures itself, so the plan is read once per run;
+        // an unreadable plan falls back to the saved role and the report says why.
+        return runVacancyScan(
+          selection.useSearchPlan
+            ? { mode: 'query', query: selection.fallbackQuery, useSearchPlan: true, queryFromSearchPlan: true }
+            : { mode: 'query', query: selection.query },
+        );
       })
       .catch((error: unknown) => {
         if (isExpectedScanBusyError(error)) return;
@@ -2836,6 +2843,8 @@ function scheduleBackgroundScanTick(): void {
  */
 const sourceScout = createSourceScout({
   isEnabled: () => autoSourceScoutEnabled,
+  // The scout checks ATS boards for one title: the first approved plan title, else the saved role. It has
+  // no plan budget of its own and never searches the other titles (README, "Search plan").
   loadQuery: async () => (await backgroundScanSelection())?.query ?? null,
   runExclusiveScan: async (run, options) => {
     // The guard reads the advisory lock lazily, so the engine must be up before it is entered.
@@ -3102,17 +3111,17 @@ const searchPlanStore = createSearchPlanStore({
 /** What the unattended scan and the source scout search for: the approved plan, else the first role/skill (#686). */
 async function backgroundScanSelection() {
   const profile = await loadCandidateProfile(await candidateProfilePath());
-  let plan: SearchPlan | null = null;
-  try {
-    plan = await searchPlanStore.get();
-  } catch (error) {
-    // An unreadable plan must not stop the unattended scan; it falls back to the saved role and says so.
-    console.warn('[background-scan] search plan unreadable; using the saved role instead', error);
+  const loaded = await searchPlanStore.load();
+  if (loaded.status === 'unreadable') {
+    // Not silent: the background run still asks for the plan, records why it could not use it, and the
+    // report it produces shows that notice on the Search page.
+    console.warn(`[background-scan] search plan unreadable (${loaded.reason}); the run will report it and use the saved role`);
   }
-  return selectBackgroundScan(profile, plan);
+  return selectBackgroundScan(profile, loaded.status === 'ok' ? loaded.plan : 'unreadable');
 }
 
-guardedIpc.handle('vacancy:get-search-plan', (): Promise<SearchPlan> => searchPlanStore.get());
+/** The saved plan, or why the file cannot be used (damaged / newer version / unopenable). Never a raw error. */
+guardedIpc.handle('vacancy:get-search-plan', (): Promise<SearchPlanLoadResult> => searchPlanStore.load());
 
 /** The person's approved plan. Only this channel can change `variants`; the page cannot set ids or the revision. */
 guardedIpc.handle('vacancy:save-search-plan', (_event, rawDraft: unknown): Promise<SearchPlan> =>
@@ -3126,6 +3135,14 @@ guardedIpc.handle('vacancy:add-search-plan-suggestions', (_event, rawTitles: unk
 
 guardedIpc.handle('vacancy:dismiss-search-plan-suggestion', (_event, id: unknown): Promise<SearchPlan> =>
   searchPlanStore.dismissSuggestion(id),
+);
+
+/**
+ * Starts a new plan after the saved one could not be read. Needs `{ confirm: true }` from the page's
+ * confirmation step; the unreadable file's exact bytes are kept next to it as a timestamped backup first.
+ */
+guardedIpc.handle('vacancy:reset-search-plan', (_event, confirmation: unknown): Promise<SearchPlanResetResult> =>
+  searchPlanStore.resetUnreadable(confirmation),
 );
 
 /*

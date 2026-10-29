@@ -1244,3 +1244,90 @@ describe('SafeHttpClient streaming GET', () => {
     }
   });
 });
+
+describe('SafeHttpClient admitNetworkRequest (#686)', () => {
+  it('refuses an attempt before any fetch: the error is unchanged, never retried, never reported as a request', async () => {
+    const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('ok'))));
+    const onNetworkRequest = vi.fn();
+    const refusal = new Error('plan allowance used up');
+    const client = createClient({ fetchFn, onNetworkRequest, admitNetworkRequest: () => { throw refusal; } });
+    await expect(client.get('https://example.com/jobs')).rejects.toBe(refusal);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(onNetworkRequest).not.toHaveBeenCalled();
+  });
+
+  it('is asked before every physical attempt, with the retry and redirect position of each', async () => {
+    const responses = [
+      () => new Response('busy', { status: 503 }),
+      () => new Response(null, { status: 302, headers: { location: 'https://example.com/moved' } }),
+      () => new Response('ok', { status: 200 }),
+    ];
+    const fetchFn = vi.fn(asFetch(() => Promise.resolve(responses.shift()!())));
+    const admitted: { retryIndex: number; redirectIndex: number }[] = [];
+    const client = createClient({
+      fetchFn,
+      timeoutMs: 5_000,
+      baseRetryDelayMs: 1,
+      sleep: () => Promise.resolve(),
+      admitNetworkRequest: (_url, meta) => {
+        admitted.push(meta);
+        return undefined;
+      },
+    });
+    const response = await client.get('https://example.com/jobs');
+    expect(response.status).toBe(200);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(admitted).toEqual([
+      { retryIndex: 0, redirectIndex: 0 },
+      { retryIndex: 1, redirectIndex: 0 },
+      { retryIndex: 1, redirectIndex: 1 },
+    ]);
+  });
+
+  it('refusing a retry stops the ladder at once with the refusal, after the attempts already made', async () => {
+    const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('busy', { status: 503 }))));
+    const refusal = new Error('no retries left in the plan');
+    let calls = 0;
+    const client = createClient({
+      fetchFn,
+      timeoutMs: 5_000,
+      baseRetryDelayMs: 1,
+      sleep: () => Promise.resolve(),
+      admitNetworkRequest: () => {
+        calls += 1;
+        if (calls > 1) throw refusal;
+        return undefined;
+      },
+    });
+    await expect(client.get('https://example.com/jobs')).rejects.toBe(refusal);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts an attempt in flight when the returned signal fires, with the signal reason', async () => {
+    let fetchSignal: AbortSignal | undefined;
+    const fetchFn = vi.fn(
+      asFetch((_input, init) => {
+        fetchSignal = init?.signal ?? undefined;
+        return new Promise<Response>(() => undefined);
+      }),
+    );
+    const deadline = new AbortController();
+    const reason = new Error('plan deadline');
+    const client = createClient({ fetchFn, timeoutMs: 5_000, admitNetworkRequest: () => deadline.signal });
+    const pending = client.get('https://example.com/jobs');
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    deadline.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
+  it('an already-aborted signal refuses the attempt before the fetch', async () => {
+    const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('ok'))));
+    const deadline = new AbortController();
+    const reason = new Error('plan deadline passed');
+    deadline.abort(reason);
+    const client = createClient({ fetchFn, admitNetworkRequest: () => deadline.signal });
+    await expect(client.get('https://example.com/jobs')).rejects.toBe(reason);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+});

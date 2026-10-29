@@ -32,6 +32,13 @@ export type ParsedVacancyScanRequest =
       salary?: SalaryFilterCriteria;
       aiWebDiscovery?: boolean;
       useSearchPlan?: boolean;
+      /**
+       * Issue #686, main process only (the IPC parser below never sets it): a background run takes its
+       * query from the plan snapshot the run itself captures -- the first approved title -- so the plan
+       * is read once per run. `query` is then only the fallback (the saved role or skill) used when the
+       * plan turns out empty or unreadable at start, which the run reports.
+       */
+      queryFromSearchPlan?: boolean;
     }
   | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
@@ -132,19 +139,27 @@ export function scheduledScanQueryFromProfile(profile: CandidateProfile): string
 /**
  * What the unattended scan and the background source scout search for (#686).
  *
- * With an approved search plan the answer is ONE scan: the plan's first approved title as the query,
- * carrying the plan itself, so the run uses the person's reviewed titles under one shared allowance
- * instead of scanning each saved role on its own. Without one it is the first saved role or skill, as
- * before. Suggestions that were never approved are not part of a plan and never reach a search.
+ * With an approved search plan the answer is ONE scan carrying the plan, so the run uses the person's
+ * reviewed titles under one shared allowance instead of scanning each saved role on its own. The run
+ * itself takes its query from the plan snapshot it captures (`queryFromSearchPlan`); `fallbackQuery` is
+ * what it searches if the plan is empty or unreadable by then. An unreadable plan still asks for the
+ * plan, so the run records and reports why it fell back instead of silently searching the role.
+ * Without a plan it is the first saved role or skill, as before. Suggestions are never part of a plan.
+ *
+ * `query` is the first approved title when there is one (the source scout, which has no plan budget,
+ * searches that one title literally), else the saved role or skill.
  */
 export function selectBackgroundScan(
   profile: CandidateProfile,
-  plan: Pick<SearchPlan, 'variants'> | null,
-): { query: string; useSearchPlan: boolean } | null {
+  plan: Pick<SearchPlan, 'variants'> | 'unreadable' | null,
+): { query: string; fallbackQuery: string; useSearchPlan: boolean } | null {
+  const legacy = scheduledScanQueryFromProfile(profile);
+  if (plan === 'unreadable') {
+    return legacy === null ? null : { query: legacy, fallbackQuery: legacy, useSearchPlan: true };
+  }
   if (plan !== null && isSearchPlanUsable(plan)) {
     const first = plan.variants.map((variant) => variant.title.trim()).find((title) => title.length > 0);
-    if (first) return { query: first, useSearchPlan: true };
+    if (first) return { query: first, fallbackQuery: legacy ?? first, useSearchPlan: true };
   }
-  const query = scheduledScanQueryFromProfile(profile);
-  return query === null ? null : { query, useSearchPlan: false };
+  return legacy === null ? null : { query: legacy, fallbackQuery: legacy, useSearchPlan: false };
 }

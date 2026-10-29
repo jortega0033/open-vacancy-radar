@@ -94,6 +94,8 @@ export interface SearchFilterBarProps {
    * shown only when there is at least one, so a person with no plan sees the page exactly as before.
    */
   searchPlanTitleCount?: number;
+  /** The approved titles the switch would add, shown next to it so the person sees what widens the search. */
+  searchPlanTitles?: readonly string[];
   useSearchPlan?: boolean;
   onUseSearchPlanChange?: (value: boolean) => void;
 }
@@ -125,6 +127,7 @@ export function SearchFilterBar({
   onOpenSearchProfile,
   scanUnavailable = false,
   searchPlanTitleCount = 0,
+  searchPlanTitles = [],
   useSearchPlan = false,
   onUseSearchPlanChange,
 }: SearchFilterBarProps) {
@@ -384,6 +387,11 @@ export function SearchFilterBar({
               disabled={busy}
             />
             Also search my {searchPlanTitleCount} approved {searchPlanTitleCount === 1 ? 'title' : 'titles'}
+            {useSearchPlan && searchPlanTitles.length > 0 && (
+              <span className="text-xs text-base-content/60" data-testid="search-plan-titles">
+                ({searchPlanTitles.join(', ')})
+              </span>
+            )}
           </label>
         )}
 

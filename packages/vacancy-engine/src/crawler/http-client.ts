@@ -54,6 +54,22 @@ export type SafeHttpClientDependencies = {
    * can ignore the second parameter entirely.
    */
   onNetworkRequest?: (safeUrl: string, meta: { retryIndex: number }) => void;
+  /**
+   * Optional admission check at the real request boundary (issue #686): fired immediately before every
+   * real network fetch -- once per redirect hop and once per bounded retry, exactly where
+   * `onNetworkRequest` fires, and before it. `redirectIndex` is this hop's position inside its attempt
+   * (0 = the first hop of that attempt), so `retryIndex === 0 && redirectIndex === 0` is the first
+   * network contact of a logical request.
+   *
+   * Throwing refuses that attempt: no fetch is made, `onNetworkRequest` does not fire, the thrown error
+   * reaches the caller unchanged and is never retried. A returned `AbortSignal` aborts that attempt
+   * while it is in flight (the caller then sees the signal's reason). It can only refuse or abort:
+   * it never widens the URL, redirect, origin, DNS, size or retry policy of this client.
+   */
+  admitNetworkRequest?: (
+    safeUrl: string,
+    meta: { retryIndex: number; redirectIndex: number },
+  ) => AbortSignal | undefined;
 };
 
 export type SafeHttpClientOptions = SafeHttpClientDependencies & {
@@ -392,6 +408,15 @@ function normalizeAllowedOrigins(
   return origins;
 }
 
+/** Carries an admission signal's reason through the hop's race without it being re-wrapped. */
+class AdmissionAbort {
+  public constructor(public readonly reason: unknown) {}
+}
+
+function admissionAbortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error('The request was cancelled by its admission policy.');
+}
+
 export class SafeHttpClient {
   readonly #scheduler: RequestScheduler;
   readonly #cache: HttpCache | undefined;
@@ -402,6 +427,7 @@ export class SafeHttpClient {
   readonly #now: () => number;
   readonly #onCacheError: SafeHttpClientDependencies['onCacheError'];
   readonly #onNetworkRequest: SafeHttpClientDependencies['onNetworkRequest'];
+  readonly #admitNetworkRequest: SafeHttpClientDependencies['admitNetworkRequest'];
   readonly #timeoutMs: number;
   readonly #queueTimeoutMs: number;
   readonly #cacheTimeoutMs: number;
@@ -430,6 +456,7 @@ export class SafeHttpClient {
     this.#now = options.now ?? Date.now;
     this.#onCacheError = options.onCacheError;
     this.#onNetworkRequest = options.onNetworkRequest;
+    this.#admitNetworkRequest = options.admitNetworkRequest;
     this.#timeoutMs = positiveInteger(options.timeoutMs, 'timeoutMs');
     this.#queueTimeoutMs = positiveInteger(
       options.queueTimeoutMs ?? options.timeoutMs,
@@ -775,6 +802,7 @@ export class SafeHttpClient {
         requestBody,
         readBody,
         requestTimeoutMs,
+        redirectCount,
       );
       if (result.kind !== 'redirect') return result;
 
@@ -844,6 +872,7 @@ export class SafeHttpClient {
     requestBody: string | undefined,
     readBody: ResponseBodyReader<TBody>,
     requestTimeoutMs: number,
+    redirectIndex = 0,
   ): Promise<HopResult<TBody>> {
     const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
     for (;;) {
@@ -861,6 +890,24 @@ export class SafeHttpClient {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const remainingMs = Math.min(deadline - this.#now(), requestTimeoutMs);
         if (remainingMs <= 0) throw this.#timeoutError(url, requestTimeoutMs);
+        // Admission happens here, at the last moment before a fetch, so a refusal costs no request.
+        // Its error is deliberately thrown outside the conversion below: the caller must see why.
+        const admission = this.#admitNetworkRequest?.(redactUrl(url), { retryIndex, redirectIndex });
+        if (admission?.aborted) throw admissionAbortReason(admission);
+        let detachAdmission: (() => void) | undefined;
+        const admissionAborted =
+          admission === undefined
+            ? undefined
+            : new Promise<never>((_resolve, reject) => {
+                const onAbort = () => {
+                  reject(new AdmissionAbort(admissionAbortReason(admission)));
+                  controller.abort();
+                };
+                admission.addEventListener('abort', onAbort, { once: true });
+                detachAdmission = () => admission.removeEventListener('abort', onAbort);
+              });
+        // A losing race must not surface as an unhandled rejection.
+        admissionAborted?.catch(() => undefined);
         const timeout = new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
             reject(TIMEOUT_ERROR);
@@ -951,8 +998,12 @@ export class SafeHttpClient {
         })();
 
         try {
-          return await Promise.race([operation, timeout]);
+          return await Promise.race(
+            admissionAborted === undefined ? [operation, timeout] : [operation, timeout, admissionAborted],
+          );
         } catch (error) {
+          if (error instanceof AdmissionAbort) throw error.reason;
+          if (admission?.aborted) throw admissionAbortReason(admission);
           if (error === TIMEOUT_ERROR) {
             throw this.#timeoutError(url, requestTimeoutMs);
           }
@@ -966,6 +1017,7 @@ export class SafeHttpClient {
           });
         } finally {
           if (timer !== undefined) clearTimeout(timer);
+          detachAdmission?.();
         }
       });
       const result = await this.#awaitBeforeDeadline(scheduled, deadline, url, requestTimeoutMs);

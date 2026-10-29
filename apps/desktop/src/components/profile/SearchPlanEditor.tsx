@@ -1,7 +1,26 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import type { SearchPlan, SearchPlanDraft, SearchPlanVariantOrigin } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  SearchPlan,
+  SearchPlanDraft,
+  SearchPlanVariantOrigin,
+} from '@open-vacancy-radar/vacancy-engine';
+import type { SearchPlanLoadResult } from '../../../electron/search-plan-store.js';
 import { describeError } from '../cv/useAgentRun.js';
-import { ErrorBanner } from '../shell/index.js';
+import { ErrorBanner, WarningBanner } from '../shell/index.js';
+
+type UnreadablePlan = Extract<SearchPlanLoadResult, { status: 'unreadable' }>;
+
+/** A short heading per failure, so a damaged file and a newer-version file never read the same. */
+export function unreadablePlanHeading(reason: UnreadablePlan['reason']): string {
+  if (reason === 'newer_version') return 'Your search plan was saved by a newer version of the app';
+  if (reason === 'damaged') return 'Your search plan file is damaged';
+  return 'Your search plan file could not be opened';
+}
+
+/** What the person is told plan fields other than titles do, so nothing looks applied when it is not. */
+export const SEARCH_PLAN_FIELDS_NOTE =
+  'Markets and the primary function are kept with your plan but do not filter searches: use Country on the Search page to narrow one. ' +
+  "A title's language is searched as written; the language an advert is written in is never treated as a requirement.";
 
 /** How the person is told where an approved title came from. Never guessed: no record, no label. */
 export function originLabel(origin: SearchPlanVariantOrigin): string {
@@ -42,7 +61,10 @@ function toSaveInput(draft: Draft): SearchPlanDraft {
   return {
     primaryFunction: draft.primaryFunction,
     variants: draft.variants.map(({ title, language, origin }) => ({ title, language, origin })),
-    markets: draft.markets.split(',').map((market) => market.trim()).filter(Boolean),
+    markets: draft.markets
+      .split(',')
+      .map((market) => market.trim())
+      .filter(Boolean),
   };
 }
 
@@ -58,7 +80,11 @@ function toSaveInput(draft: Draft): SearchPlanDraft {
 export function SearchPlanEditor() {
   const headingId = useId();
   const [plan, setPlan] = useState<SearchPlan | null>(null);
+  const [unreadable, setUnreadable] = useState<UnreadablePlan | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [notice, setNotice] = useState<string>();
   const [failed, setFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -69,10 +95,18 @@ export function SearchPlanEditor() {
       setFailed(true);
       return;
     }
+    setFailed(false);
     void window.vacancyRadar
       .getSearchPlan()
       .then((loaded) => {
-        if (!cancelled) setPlan(loaded);
+        if (cancelled) return;
+        if (loaded.status === 'ok') {
+          setPlan(loaded.plan);
+          setUnreadable(null);
+        } else {
+          setPlan(null);
+          setUnreadable(loaded);
+        }
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -80,6 +114,24 @@ export function SearchPlanEditor() {
     return () => {
       cancelled = true;
     };
+  }, [loadAttempt]);
+
+  const resetUnreadable = useCallback(async () => {
+    setSaving(true);
+    setError(undefined);
+    try {
+      const result = await window.vacancyRadar.resetSearchPlan({ confirm: true });
+      setPlan(result.plan);
+      setUnreadable(null);
+      setConfirmingReset(false);
+      setNotice(
+        `Started a new search plan. The old file was kept unchanged as ${result.backupFileName}.`,
+      );
+    } catch (caught) {
+      setError(describeError(caught, 'could not start a new search plan'));
+    } finally {
+      setSaving(false);
+    }
   }, []);
 
   const approve = useCallback(async (input: SearchPlanDraft) => {
@@ -106,7 +158,74 @@ export function SearchPlanEditor() {
   }, []);
 
   if (failed) {
-    return <p className="mt-3 text-sm text-base-content/60">The search plan could not be loaded.</p>;
+    return (
+      <div
+        className="mt-3 flex items-center gap-2 text-sm text-base-content/60"
+        data-testid="search-plan"
+      >
+        <span>The search plan could not be loaded.</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs"
+          onClick={() => setLoadAttempt((value) => value + 1)}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (unreadable) {
+    return (
+      <div className="mt-4 border-t border-base-300 pt-3" data-testid="search-plan">
+        <h3 id={headingId} className="text-sm font-semibold">
+          Search plan
+        </h3>
+        <WarningBanner className="mt-2" stacked>
+          <div className="flex flex-col items-start gap-2">
+            <strong>{unreadablePlanHeading(unreadable.reason)}</strong>
+            <span>{unreadable.message}</span>
+            <span>
+              Searches use only what you type until this is resolved.
+              {unreadable.reason === 'newer_version'
+                ? ' Updating Open Vacancy Radar lets you use it again.'
+                : ''}{' '}
+              Starting a new plan keeps the current file ({unreadable.fileName}), unchanged, as a
+              backup next to it.
+            </span>
+            {error && <ErrorBanner className="mt-1">{error}</ErrorBanner>}
+            {!confirmingReset ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => setConfirmingReset(true)}
+              >
+                Start a new plan
+              </button>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Keep the current file as a backup and start an empty plan?</span>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={saving}
+                  onClick={() => void resetUnreadable()}
+                >
+                  Keep a backup and start a new plan
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={saving}
+                  onClick={() => setConfirmingReset(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        </WarningBanner>
+      </div>
+    );
   }
   if (!plan) return null;
 
@@ -123,7 +242,8 @@ export function SearchPlanEditor() {
     });
   };
 
-  const update = (change: (current: Draft) => Draft) => setDraft((current) => (current ? change(current) : current));
+  const update = (change: (current: Draft) => Draft) =>
+    setDraft((current) => (current ? change(current) : current));
 
   return (
     <div className="mt-4 border-t border-base-300 pt-3" data-testid="search-plan">
@@ -135,7 +255,9 @@ export function SearchPlanEditor() {
           <button
             type="button"
             className="btn btn-outline btn-sm"
-            aria-label={plan.variants.length > 0 ? 'Change search plan titles' : 'Add search plan titles'}
+            aria-label={
+              plan.variants.length > 0 ? 'Change search plan titles' : 'Add search plan titles'
+            }
             onClick={() => setDraft(draftOf(plan))}
           >
             {plan.variants.length > 0 ? 'Change titles' : 'Add titles'}
@@ -143,16 +265,25 @@ export function SearchPlanEditor() {
         )}
       </div>
       <p className="mt-1 text-xs text-base-content/60">
-        Titles you approve here are searched as well as what you type, and any one of them is a good match.
-        A change applies to your next search only. Nothing is added without your approval.
+        Titles you approve here are searched as well as what you type, and a listing whose title
+        contains any one of them is a good match. A change applies to your next search only. Nothing
+        is added without your approval.
       </p>
+      <p className="mt-1 text-xs text-base-content/60">{SEARCH_PLAN_FIELDS_NOTE}</p>
 
+      {notice && (
+        <p className="mt-2 text-xs" role="status">
+          {notice}
+        </p>
+      )}
       {error && <ErrorBanner className="mt-2">{error}</ErrorBanner>}
 
       {!draft ? (
         <div className="mt-2 text-sm" aria-labelledby={headingId}>
           {plan.variants.length === 0 ? (
-            <p className="text-base-content/60">No titles approved yet. Searches use only what you type.</p>
+            <p className="text-base-content/60">
+              No titles approved yet. Searches use only what you type.
+            </p>
           ) : (
             <>
               {plan.primaryFunction && (
@@ -165,14 +296,18 @@ export function SearchPlanEditor() {
                 {plan.variants.map((variant) => (
                   <li key={variant.id}>
                     {variant.title}
-                    {variant.language && <span className="ml-2 badge badge-outline badge-sm">{variant.language}</span>}
-                    <span className="ml-2 text-xs text-base-content/60">{originLabel(variant.origin)}</span>
+                    {variant.language && (
+                      <span className="ml-2 badge badge-outline badge-sm">{variant.language}</span>
+                    )}
+                    <span className="ml-2 text-xs text-base-content/60">
+                      {originLabel(variant.origin)}
+                    </span>
                   </li>
                 ))}
               </ol>
               {plan.markets.length > 0 && (
                 <p className="mt-1">
-                  <span className="text-base-content/60">Markets </span>
+                  <span className="text-base-content/60">Markets (kept with the plan only) </span>
                   {plan.markets.join(', ')}
                 </p>
               )}
@@ -194,7 +329,9 @@ export function SearchPlanEditor() {
               aria-label="Primary function"
               value={draft.primaryFunction}
               placeholder="e.g. Frontend engineering"
-              onChange={(event) => update((current) => ({ ...current, primaryFunction: event.target.value }))}
+              onChange={(event) =>
+                update((current) => ({ ...current, primaryFunction: event.target.value }))
+              }
             />
           </label>
           <ul className="flex flex-col gap-2" aria-label="Titles">
@@ -222,7 +359,9 @@ export function SearchPlanEditor() {
                     update((current) => ({
                       ...current,
                       variants: current.variants.map((entry) =>
-                        entry.key === variant.key ? { ...entry, language: event.target.value } : entry,
+                        entry.key === variant.key
+                          ? { ...entry, language: event.target.value }
+                          : entry,
                       ),
                     }))
                   }
@@ -235,7 +374,10 @@ export function SearchPlanEditor() {
                   onClick={() =>
                     update((current) => {
                       const variants = [...current.variants];
-                      [variants[index - 1], variants[index]] = [variants[index]!, variants[index - 1]!];
+                      [variants[index - 1], variants[index]] = [
+                        variants[index]!,
+                        variants[index - 1]!,
+                      ];
                       return { ...current, variants };
                     })
                   }
@@ -247,7 +389,10 @@ export function SearchPlanEditor() {
                   className="btn btn-ghost btn-xs"
                   aria-label={`Remove title ${index + 1}`}
                   onClick={() =>
-                    update((current) => ({ ...current, variants: current.variants.filter((entry) => entry.key !== variant.key) }))
+                    update((current) => ({
+                      ...current,
+                      variants: current.variants.filter((entry) => entry.key !== variant.key),
+                    }))
                   }
                 >
                   Remove
@@ -261,26 +406,38 @@ export function SearchPlanEditor() {
             onClick={() =>
               update((current) => ({
                 ...current,
-                variants: [...current.variants, { key: nextKey++, title: '', language: '', origin: 'user' }],
+                variants: [
+                  ...current.variants,
+                  { key: nextKey++, title: '', language: '', origin: 'user' },
+                ],
               }))
             }
           >
             Add a title
           </button>
           <label className="form-control">
-            <span className="label-text text-xs">Markets (countries, separated by commas)</span>
+            <span className="label-text text-xs">
+              Markets (countries, separated by commas; kept with the plan only)
+            </span>
             <input
               className="input input-bordered input-sm"
               aria-label="Markets (countries, separated by commas)"
               value={draft.markets}
-              onChange={(event) => update((current) => ({ ...current, markets: event.target.value }))}
+              onChange={(event) =>
+                update((current) => ({ ...current, markets: event.target.value }))
+              }
             />
           </label>
           <div className="flex gap-2">
             <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
               Approve search plan
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setDraft(null)}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={saving}
+              onClick={() => setDraft(null)}
+            >
               Cancel
             </button>
           </div>
@@ -290,13 +447,17 @@ export function SearchPlanEditor() {
       {plan.suggestions.length > 0 && (
         <div className="mt-3">
           <h4 className="text-xs font-semibold">Suggested titles to review</h4>
-          <p className="text-xs text-base-content/60">These are not part of your searches until you add them.</p>
+          <p className="text-xs text-base-content/60">
+            These are not part of your searches until you add them.
+          </p>
           <ul className="mt-1 flex flex-col gap-1 text-sm" aria-label="Suggested titles">
             {plan.suggestions.map((suggestion) => (
               <li key={suggestion.id} className="flex flex-wrap items-center gap-2">
                 <span>
                   {suggestion.title}
-                  {suggestion.language && <span className="ml-2 badge badge-outline badge-sm">{suggestion.language}</span>}
+                  {suggestion.language && (
+                    <span className="ml-2 badge badge-outline badge-sm">{suggestion.language}</span>
+                  )}
                 </span>
                 <button
                   type="button"
@@ -311,7 +472,11 @@ export function SearchPlanEditor() {
                   type="button"
                   className="btn btn-ghost btn-xs"
                   aria-label={`Dismiss suggested title ${suggestion.title}`}
-                  onClick={() => void runSuggestionAction(() => window.vacancyRadar.dismissSearchPlanSuggestion(suggestion.id))}
+                  onClick={() =>
+                    void runSuggestionAction(() =>
+                      window.vacancyRadar.dismissSearchPlanSuggestion(suggestion.id),
+                    )
+                  }
                 >
                   Dismiss
                 </button>

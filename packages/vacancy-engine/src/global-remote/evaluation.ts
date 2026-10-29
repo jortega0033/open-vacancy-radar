@@ -86,9 +86,24 @@ export function classifyDiscoveryVacancy(input: {
   description?: string | null;
   /** Empty (the default) leaves the language gate inert; see `mandatoryLanguageGate`. */
   candidateLanguages?: readonly string[];
+  /**
+   * Issue #686: the approved search-plan title this listing's title matches, if any. The built-in
+   * title check is an English-only frontend pre-classification ("front-end/angular engineer|developer",
+   * "ui engineer"); a title the person approved in their plan ("React developer", "Frontend
+   * ontwikkelaar") counts as in scope instead, so the same language/location/salary gates follow.
+   */
+  approvedTitle?: string;
 }): { decision: DiscoveryDecision; reasons: string[] } {
   if (NON_VACANCY.test(`${input.title}\n${input.description ?? ''}`)) {
     return { decision: 'non_vacancy', reasons: ['Listing is a talent pool, general application, or other non-specific vacancy.'] };
+  }
+  if (input.approvedTitle !== undefined) {
+    const { approvedTitle, ...rest } = input;
+    const inScope = classifyDiscoveryVacancy({ ...rest, title: 'Frontend engineer' });
+    return {
+      decision: inScope.decision,
+      reasons: [`The title matches "${approvedTitle}", a title approved in the search plan.`, ...inScope.reasons],
+    };
   }
   if (!isFrontendOnlyTitle(input.title)) {
     return { decision: 'role_mismatch', reasons: ['Title is not explicitly frontend-only.'] };

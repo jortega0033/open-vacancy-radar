@@ -415,9 +415,10 @@ export interface SearchFilters {
   /** Role or keyword, matched against title and company. */
   query: string;
   /**
-   * Issue #686: further approved titles that are equally good matches. A row passes when ANY of `query`
-   * and these matches it, so the typed query cannot hide a result found under another approved title.
-   * Absent = the single-query behaviour, unchanged.
+   * Issue #686: further approved titles that are equally good matches. A row passes when `query` matches
+   * it as before OR one of these appears in its TITLE (the engine's rule: an approved title merely
+   * mentioned in a description does not make a match), so the typed query cannot hide a result found
+   * under another approved title. Absent = the single-query behaviour, unchanged.
    */
   queryAlternatives?: readonly string[];
   /** City or region, matched against the row's location. */
@@ -493,8 +494,20 @@ export function reportSearchContext(report: GlobalRemoteReport): ReportSearchCon
   return { mode: 'unknown', role: null, country: null, alternatives: [] };
 }
 
-function normalizedQueries(query: string, alternatives: readonly string[] | undefined): string[] {
-  return [query, ...(alternatives ?? [])].map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0);
+interface NormalizedQueries {
+  literal: string;
+  alternatives: string[];
+}
+
+function normalizedQueries(query: string, alternatives: readonly string[] | undefined): NormalizedQueries {
+  return {
+    literal: query.trim().toLowerCase(),
+    alternatives: (alternatives ?? []).map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
+  };
+}
+
+function hasAnyQuery(queries: NormalizedQueries): boolean {
+  return queries.literal.length > 0 || queries.alternatives.length > 0;
 }
 
 /**
@@ -628,7 +641,7 @@ export function filterSearchResultIndex(
   const salary = salaryCriteriaFromFilters(filters);
 
   return index.filter((entry) => {
-    if (queries.length > 0 && bestQueryMatchTier(entry, queries) === 0) return false;
+    if (hasAnyQuery(queries) && bestQueryMatchTier(entry, queries) === 0) return false;
 
     if (location && !entry.locationLower.includes(location)) return false;
 
@@ -675,8 +688,13 @@ function postedAtTimestamp(value: string | null): number | null {
  * theory that a query landing on the role or employer itself is a much stronger relevance signal
  * than one that only happens to appear somewhere in free-text copy.
  */
-function bestQueryMatchTier(entry: SearchResultIndexEntry, normalizedQueries: readonly string[]): number {
-  return Math.max(0, ...normalizedQueries.map((query) => queryMatchTier(entry, query)));
+function bestQueryMatchTier(entry: SearchResultIndexEntry, queries: NormalizedQueries): number {
+  return Math.max(
+    queries.literal ? queryMatchTier(entry, queries.literal) : 0,
+    ...queries.alternatives.map((alternative) =>
+      entry.titleLower === alternative ? 4 : entry.titleLower.includes(alternative) ? 3 : 0,
+    ),
+  );
 }
 
 function queryMatchTier(entry: SearchResultIndexEntry, normalizedQuery: string): number {
@@ -708,7 +726,7 @@ export function sortSearchResultIndex(
   alternatives?: readonly string[],
 ): SearchResult[] {
   const queries = normalizedQueries(query, alternatives);
-  const hasQuery = queries.length > 0;
+  const hasQuery = hasAnyQuery(queries);
   return [...index].sort((left, right) => {
     const leftResult = left.result;
     const rightResult = right.result;

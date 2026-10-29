@@ -20,6 +20,13 @@ import type { DiscoverySourceAudit } from './models.js';
 export type NetworkAttemptCounters = {
   attempts: number;
   retries: number;
+  /**
+   * Issue #686: what a search plan's shared allowance did with this row's logical calls. Absent on a
+   * scan without a plan. `sentCalls` reached the network at least once; `refusedCalls` were refused
+   * before any network contact (so they are not requests); `refusedFollowUps` were retries/redirects
+   * (or an in-flight attempt) cut after the call had already reached the network.
+   */
+  plan?: { sentCalls: number; refusedCalls: number; refusedFollowUps: number; refusal: 'request' | 'time' | null };
 };
 
 type AttributionStore = { counters: NetworkAttemptCounters };
@@ -61,6 +68,44 @@ export function recordAttributedNetworkAttempt(retryIndex: number): void {
   if (store === undefined) return;
   store.counters.attempts += 1;
   if (retryIndex > 0) store.counters.retries += 1;
+}
+
+/**
+ * Records a search-plan admission decision (#686) on the row whose wrapped client made the call --
+ * called by `SearchPlanLedger` from the transport's admission hook. Outside any row context it does
+ * nothing, like `recordAttributedNetworkAttempt`.
+ */
+export type PlanAdmissionEvent =
+  | { kind: 'sent_call' }
+  | { kind: 'unsent_call' | 'refused_follow_up'; refusal: 'request' | 'time' };
+
+export function recordAttributedPlanAdmission(event: PlanAdmissionEvent): void {
+  const store = attributionContext.getStore();
+  if (store === undefined) return;
+  recordPlanAdmission(store.counters, event);
+}
+
+/**
+ * The plan-admission recorder of the row whose context is active right now, bound to that row's
+ * counters, so a later event that fires outside the context (a deadline timer aborting an in-flight
+ * call) still lands on the right row. A no-op outside any row context.
+ */
+export function currentPlanAdmissionRecorder(): (event: PlanAdmissionEvent) => void {
+  const store = attributionContext.getStore();
+  if (store === undefined) return () => undefined;
+  const { counters } = store;
+  return (event) => recordPlanAdmission(counters, event);
+}
+
+function recordPlanAdmission(counters: NetworkAttemptCounters, event: PlanAdmissionEvent): void {
+  const plan = (counters.plan ??= { sentCalls: 0, refusedCalls: 0, refusedFollowUps: 0, refusal: null });
+  if (event.kind === 'sent_call') {
+    plan.sentCalls += 1;
+    return;
+  }
+  if (event.kind === 'unsent_call') plan.refusedCalls += 1;
+  else plan.refusedFollowUps += 1;
+  plan.refusal ??= event.refusal;
 }
 
 /**
@@ -121,6 +166,11 @@ export function attributeStreamNetworkRequests(
 /** Spreads a counters snapshot onto a `DiscoverySourceAudit` literal. */
 export function networkAttemptFields(
   counters: NetworkAttemptCounters,
-): Pick<DiscoverySourceAudit, 'networkAttempts' | 'retries'> {
-  return { networkAttempts: counters.attempts, retries: counters.retries };
+): Pick<DiscoverySourceAudit, 'networkAttempts' | 'retries' | 'searchPlanAdmission'> {
+  return {
+    networkAttempts: counters.attempts,
+    retries: counters.retries,
+    // Only a planned run ever sets this, so a scan without a plan keeps its exact row shape.
+    ...(counters.plan === undefined ? {} : { searchPlanAdmission: { ...counters.plan } }),
+  };
 }

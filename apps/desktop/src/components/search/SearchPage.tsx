@@ -23,7 +23,8 @@ import { publishEngineHealth } from '../../engine-health.js';
 import { SearchResultList } from './SearchResultList.js';
 import { summarizeSourceCoverage } from './source-coverage.js';
 import { describeAiIntentProvenance } from './ai-intent-provenance.js';
-import { describeSearchPlanDiagnostics, searchPlanCoverageNotice } from './search-plan-view.js';
+import { describeSearchPlanDiagnostics, searchPlanCoverageNotice, searchPlanStatusNotice } from './search-plan-view.js';
+import { unreadablePlanHeading } from '../profile/SearchPlanEditor.js';
 import { describeAiWebSearchFailure } from './ai-web-search-notice.js';
 import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
 import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
@@ -200,6 +201,25 @@ export interface SearchPageProps {
  * window with the rail still splits and a 1000px window with the full sidebar does not. */
 const SINGLE_PANE_BELOW_PX = 900;
 
+/** Remembered per app install: whether searches also use the approved plan titles (#686). Default off. */
+const USE_SEARCH_PLAN_KEY = 'ovr.search.useSearchPlan';
+
+function readUsePlanChoice(): boolean {
+  try {
+    return window.localStorage.getItem(USE_SEARCH_PLAN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeUsePlanChoice(value: boolean): void {
+  try {
+    window.localStorage.setItem(USE_SEARCH_PLAN_KEY, value ? '1' : '0');
+  } catch {
+    // A storage failure only means the choice is not remembered; the switch still works for this session.
+  }
+}
+
 export function SearchPage({
   onOpenSearchProfile,
   onSavedJobsChanged,
@@ -304,29 +324,43 @@ export function SearchPage({
   // client-side result refinement or something worth restoring across a remount.
   const [aiWebDiscovery, setAiWebDiscovery] = useState(false);
   // Issue #686: the person's approved search plan, read from the saved file. It is only a hint for the
-  // next scan: the main process takes the authoritative copy when the run starts. `usePlanChoice` is
-  // null until they decide, and then follows the plan (on whenever there is an approved title).
+  // next scan: the main process takes the authoritative copy when the run starts. The switch is OFF until
+  // the person turns it on, and their choice is remembered, so approving titles never silently widens an
+  // unrelated search. An unreadable plan is said out loud instead of quietly offering no switch.
   const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
-  const [usePlanChoice, setUsePlanChoice] = useState<boolean | null>(null);
+  const [planUnreadable, setPlanUnreadable] = useState<string | null>(null);
+  const [usePlanChoice, setUsePlanChoice] = useState<boolean>(() => readUsePlanChoice());
 
   useEffect(() => {
     let cancelled = false;
     if (!('vacancyRadar' in window) || typeof window.vacancyRadar.getSearchPlan !== 'function') return;
     void window.vacancyRadar
       .getSearchPlan()
-      .then((plan) => {
-        if (!cancelled) setSearchPlan(plan);
+      .then((loaded) => {
+        if (cancelled) return;
+        if (loaded.status === 'ok') {
+          setSearchPlan(loaded.plan);
+          setPlanUnreadable(null);
+        } else {
+          setSearchPlan(null);
+          setPlanUnreadable(`${unreadablePlanHeading(loaded.reason)}. ${loaded.message}`);
+        }
       })
       .catch(() => {
-        // An unreadable plan simply offers no plan switch; a plan run reports its own error.
-        if (!cancelled) setSearchPlan(null);
+        if (cancelled) return;
+        setSearchPlan(null);
+        setPlanUnreadable('Your search plan could not be loaded.');
       });
     return () => {
       cancelled = true;
     };
   }, [profileRevision]);
   const planTitles = useMemo(() => searchPlan?.variants.map((variant) => variant.title) ?? [], [searchPlan]);
-  const planActive = planTitles.length > 0 && (usePlanChoice ?? true);
+  const planActive = planTitles.length > 0 && usePlanChoice;
+  const changeUsePlan = useCallback((value: boolean) => {
+    setUsePlanChoice(value);
+    writeUsePlanChoice(value);
+  }, []);
 
   // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
   // used only while no final report is loaded yet (see `results` below). Reset whenever this page
@@ -948,6 +982,7 @@ export function SearchPage({
     }
   }, [worldwideReport, sourceWarnings]);
   const planCoverageNotice = searchPlanCoverageNotice(worldwideReport);
+  const planStatusNotice = searchPlanStatusNotice(worldwideReport);
   const scanBounds = worldwideReport?.scanBounds;
   const scanIncomplete = scanBounds?.complete === false;
   // Whether the rows currently on screen are provisional/live rather than the saved report -- drives
@@ -1381,8 +1416,9 @@ export function SearchPage({
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
           searchPlanTitleCount={planTitles.length}
+          searchPlanTitles={planTitles}
           useSearchPlan={planActive}
-          onUseSearchPlanChange={setUsePlanChoice}
+          onUseSearchPlanChange={changeUsePlan}
           onOpenSearchProfile={() => setProfileEditorOpen(true)}
           scanUnavailable={engineState === 'unavailable'}
         />
@@ -1477,6 +1513,17 @@ export function SearchPage({
               </button>
             )}
           </div>
+        )}
+        {planUnreadable && (
+          <WarningBanner className="mt-3" role="status">
+            {planUnreadable} Searches use only what you type. Open "What you are looking for" to start a new plan; the old
+            file is kept as a backup.
+          </WarningBanner>
+        )}
+        {planStatusNotice && !scanning && (
+          <WarningBanner className="mt-3" role="status">
+            {planStatusNotice}
+          </WarningBanner>
         )}
         {planCoverageNotice && !scanning && (
           <WarningBanner className="mt-3" role="status">

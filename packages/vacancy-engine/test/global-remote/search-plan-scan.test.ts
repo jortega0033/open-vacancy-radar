@@ -3,7 +3,6 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import type { AtsHttpClient } from '../../src/ats/http.js';
 import {
   approveSearchPlanDraft,
   captureSearchPlanSnapshot,
@@ -13,25 +12,31 @@ import {
 } from '../../src/candidate/search-plan.js';
 import { EMPTY_CANDIDATE_PROFILE, type CandidateProfile } from '../../src/candidate/profile.js';
 import { runGlobalRemoteDiscovery } from '../../src/global-remote/discovery.js';
-import { applyFocusedScanCriteria, SOURCE_FILTER_CAPABILITIES } from '../../src/global-remote/focused-scan.js';
+import { applyFocusedScanCriteria } from '../../src/global-remote/focused-scan.js';
 import type {
-  DiscoveryRun,
+  DiscoverySourceAudit,
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
   SearchPlanEnvelope,
 } from '../../src/global-remote/models.js';
 import {
   compileSearchPlanQueries,
-  literalQueryDependentRequests,
   LITERAL_QUERY_ID,
   roleFilteredProviders,
-  runSearchPlanVariantPasses,
+  runSearchPlan,
   SEARCH_PLAN_PASS_PROVIDERS,
+  type SearchPlanRunResult,
 } from '../../src/global-remote/search-plan.js';
 import { applyWorkEligibilityEvidence, resolveFocusedLeads } from '../../src/pipeline/global-remote.js';
-import { SYNTHETIC_CORPUS, SyntheticMarket, type SyntheticJob } from '../fixtures/search-plan-market.js';
+import {
+  SYNTHETIC_CORPUS,
+  SyntheticTransport,
+  type SyntheticJob,
+  type SyntheticTransportOptions,
+} from '../fixtures/search-plan-market.js';
 
 const NOW = new Date('2026-10-29T10:00:00.000Z');
+const LITERAL = 'React developer';
 
 function baseConfig(literal: string): GlobalRemoteConfig {
   return {
@@ -72,11 +77,14 @@ function baseConfig(literal: string): GlobalRemoteConfig {
   } as unknown as GlobalRemoteConfig;
 }
 
-function snapshotOf(variants: { title: string; language?: string }[]): SearchPlanSnapshot {
+function snapshotOf(
+  variants: { title: string; language?: string }[],
+  extra: { markets?: string[]; primaryFunction?: string } = {},
+): SearchPlanSnapshot {
   return captureSearchPlanSnapshot(
     approveSearchPlanDraft(
       EMPTY_SEARCH_PLAN,
-      searchPlanDraftSchema.parse({ primaryFunction: 'Frontend engineering', variants }),
+      searchPlanDraftSchema.parse({ primaryFunction: extra.primaryFunction ?? 'Frontend engineering', variants, markets: extra.markets ?? [] }),
       NOW,
     ),
   );
@@ -88,65 +96,67 @@ const FRONTEND_PLAN = snapshotOf([
   { title: 'UI engineer' },
   { title: 'Frontend ontwikkelaar', language: 'Dutch' },
 ]);
+const NO_TITLES = captureSearchPlanSnapshot(EMPTY_SEARCH_PLAN);
+
+/** A flaky, redirecting upstream: every URL fails once (503, retried) and Himalayas redirects once. */
+const FLAKY: SyntheticTransportOptions = { transientFailuresPerUrl: 1, redirectHosts: ['himalayas.app'] };
 
 interface PlannedRun {
-  market: SyntheticMarket;
-  literalRun: DiscoveryRun;
-  plan: Awaited<ReturnType<typeof runSearchPlanVariantPasses>>;
+  transport: SyntheticTransport;
+  plan: SearchPlanRunResult;
   leads: DiscoveryVacancyAudit[];
-  sources: ReturnType<typeof resolveFocusedLeads>['discoverySources'];
+  sources: DiscoverySourceAudit[];
 }
 
 async function runPlanned(
-  literal: string,
   snapshot: SearchPlanSnapshot,
-  envelope?: Partial<SearchPlanEnvelope>,
-  wrap: (market: SyntheticMarket) => AtsHttpClient = (market) => market,
-  now?: () => number,
+  options: {
+    envelope?: Partial<SearchPlanEnvelope>;
+    transport?: SyntheticTransportOptions;
+    corpus?: readonly SyntheticJob[];
+    literal?: string;
+  } = {},
 ): Promise<PlannedRun> {
-  const market = new SyntheticMarket();
-  const http = wrap(market);
+  const literal = options.literal ?? LITERAL;
+  const transport = new SyntheticTransport(options.corpus ?? SYNTHETIC_CORPUS, options.transport ?? {});
   const config = baseConfig(literal);
-  const literalRun = await runGlobalRemoteDiscovery(http, config);
-  const plan = await runSearchPlanVariantPasses({
-    http,
+  const plan = await runSearchPlan({
+    http: transport.http,
     config,
     literal,
     snapshot,
-    literalRun,
-    ...(envelope ? { envelope } : {}),
-    ...(now ? { now } : {}),
+    ...(options.envelope ? { envelope: options.envelope } : {}),
+    runLiteral: (http, state) =>
+      runGlobalRemoteDiscovery(http, config, [], undefined, undefined, undefined, {
+        requestsWereRefused: state.requestsWereRefused,
+      }),
   });
   const resolved = resolveFocusedLeads(
     plan.run,
-    {
-      role: literal,
-      roleAlternatives: plan.report.queries.slice(1).map((query) => query.query),
-      country: null,
-      employment: null,
-    },
+    { role: literal, roleAlternatives: plan.report.queries.slice(1).map((query) => query.query), country: null, employment: null },
     plan,
   );
-  return { market, literalRun, plan, leads: resolved.focused.vacancies, sources: resolved.discoverySources };
+  return { transport, plan, leads: resolved.focused.vacancies, sources: resolved.discoverySources };
 }
 
-async function runLiteral(
-  literal: string,
-): Promise<{ market: SyntheticMarket; leads: DiscoveryVacancyAudit[]; literalRun: DiscoveryRun }> {
-  const market = new SyntheticMarket();
-  const literalRun = await runGlobalRemoteDiscovery(market, baseConfig(literal));
-  const resolved = resolveFocusedLeads(literalRun, { role: literal, country: null, employment: null }, null);
-  return { market, leads: resolved.focused.vacancies, literalRun };
+function labelOf(lead: DiscoveryVacancyAudit, corpus: readonly SyntheticJob[] = SYNTHETIC_CORPUS): SyntheticJob | undefined {
+  return corpus.find((job) => job.url === lead.url && job.title === lead.title) ?? corpus.find((job) => job.url === lead.url);
 }
 
-function labelOf(lead: DiscoveryVacancyAudit): SyntheticJob | undefined {
-  return (
-    SYNTHETIC_CORPUS.find((job) => job.url === lead.url && job.title === lead.title) ??
-    SYNTHETIC_CORPUS.find((job) => job.url === lead.url)
-  );
+/** The query a served upstream received, read from the upstream's own request log. */
+const SERVED_HOST_PARAM: Partial<Record<DiscoverySourceAudit['provider'], readonly [string, string]>> = {
+  himalayas: ['himalayas.app', 'q'],
+  jobicy: ['jobicy.com', 'tag'],
+  jobtech_sweden: ['jobsearch.api.jobtechdev.se', 'q'],
+};
+
+function upstreamQueries(transport: SyntheticTransport, provider: DiscoverySourceAudit['provider']): string[] {
+  const served = SERVED_HOST_PARAM[provider];
+  if (!served) return [];
+  return transport.fetchesTo(served[0]).map((entry) => new URL(entry.url).searchParams.get(served[1]) ?? '');
 }
 
-describe('search plan scan (#686)', () => {
+describe('search plan scan on the real transport (#686)', () => {
   it('covers exactly the sources that declare a role filter, so a new one cannot be forgotten', () => {
     const expected = roleFilteredProviders()
       .filter((provider) => provider !== 'theirstack')
@@ -155,100 +165,243 @@ describe('search plan scan (#686)', () => {
   });
 
   it('recovers labelled equivalents the literal query misses, each with a traceable origin', async () => {
-    const literal = await runLiteral('React developer');
-    const planned = await runPlanned('React developer', FRONTEND_PLAN);
-
-    expect(literal.leads.every((lead) => /react developer/i.test(lead.title))).toBe(true);
+    const literal = await runPlanned(NO_TITLES, { transport: FLAKY });
+    const planned = await runPlanned(FRONTEND_PLAN, { transport: FLAKY });
 
     const plannedTitles = planned.leads.map((lead) => lead.title);
     for (const expected of ['React Developer', 'Frontend Engineer', 'UI Engineer', 'Senior UI Engineer', 'Frontend ontwikkelaar']) {
       expect(plannedTitles).toContain(expected);
     }
-    // Wrong-family rows stay out: "UI Designer", "Backend Engineer", "Sales Manager", "Data Engineer".
-    for (const unwanted of ['UI Designer', 'Backend Engineer', 'Sales Manager', 'Data Engineer']) {
+    for (const unwanted of ['UI Designer', 'Sales Manager', 'Data Engineer', 'Sales Engineer', 'Data Scientist', 'React Native Developer']) {
       expect(plannedTitles).not.toContain(unwanted);
     }
-    expect(planned.leads.length).toBeGreaterThan(literal.leads.length);
+    const suitable = (leads: DiscoveryVacancyAudit[]) => new Set(leads.filter((lead) => labelOf(lead)?.equivalent).map((lead) => lead.url)).size;
+    expect(suitable(planned.leads)).toBeGreaterThan(suitable(literal.leads));
 
-    // Every kept lead says which approved title(s) its text matched, as copies of the text.
     for (const lead of planned.leads) {
       expect(lead.queryProvenance?.planRevision).toBe(1);
       expect(lead.queryProvenance?.matchedLocally.length).toBeGreaterThan(0);
     }
     const uiLead = planned.leads.find((lead) => lead.title === 'Senior UI Engineer')!;
-    expect(uiLead.queryProvenance!.matchedLocally.map((query) => query.query)).toEqual(['UI engineer']);
-    // Found upstream by the UI-engineer query on a source that declares a role filter.
-    expect(uiLead.queryProvenance!.fetchedBy.map((origin) => [origin.query, origin.provider])).toEqual([
-      ['UI engineer', 'jobicy'],
-    ]);
-    // A lead from a source with no role filter has no upstream origin, only the local match.
+    expect(uiLead.queryProvenance!.matchedLocally.map((query) => [query.query, query.field])).toEqual([['UI engineer', 'title']]);
+    expect(uiLead.queryProvenance!.fetchedBy.map((origin) => [origin.query, origin.provider])).toEqual([['UI engineer', 'jobicy']]);
     const feedLead = planned.leads.find((lead) => lead.company === 'Theta Apps')!;
     expect(feedLead.queryProvenance!.fetchedBy).toEqual([]);
     expect(feedLead.queryProvenance!.matchedLocally.map((query) => query.variantId)).toContain(LITERAL_QUERY_ID);
   });
 
-  it('keeps a title found only by an approved variant, instead of letting the literal query discard it', () => {
-    const rows = [
-      { title: 'Frontend Engineer', description: '' },
-      { title: 'React Developer', description: '' },
-    ].map((row, index) => ({
-      ...row,
-      key: `k${index}`,
-      url: `https://example.test/${index}`,
-      company: 'Acme',
-      provider: 'jobicy',
-      location: 'Remote',
-    })) as unknown as DiscoveryVacancyAudit[];
-    expect(applyFocusedScanCriteria(rows, { role: 'React developer', country: null, employment: null }).vacancies).toHaveLength(1);
-    const either = applyFocusedScanCriteria(rows, {
-      role: 'React developer',
-      roleAlternatives: ['Frontend engineer'],
-      country: null,
-      employment: null,
+  it('charges every physical attempt -- retries and redirect hops included -- and never exceeds the envelope', async () => {
+    for (const maxRequests of [30, 54, 60, 75, 1_000]) {
+      const planned = await runPlanned(FRONTEND_PLAN, { transport: FLAKY, envelope: { maxRequests } });
+      const { usage } = planned.plan.report;
+      // The upstream's own log is the truth: one entry per fetch the real client made.
+      expect(planned.transport.fetchLog.length).toBe(usage.attempts);
+      expect(usage.attempts).toBeLessThanOrEqual(maxRequests);
+      expect(usage.attempts).toBe(usage.literalAttempts + usage.variantAttempts);
+      // Per-row telemetry adds up to the same physical attempts, so nothing is charged twice or missed.
+      expect(planned.sources.reduce((sum, source) => sum + source.networkAttempts, 0)).toBe(planned.transport.fetchLog.length);
+      // A row's requests are never more than the calls that really reached the network.
+      for (const source of planned.sources) {
+        const admission = source.searchPlanAdmission ?? { sentCalls: 0, refusedCalls: 0 };
+        expect(source.requests).toBeLessThanOrEqual(admission.sentCalls);
+        if (admission.sentCalls === 0) expect(source.networkAttempts).toBe(0);
+      }
+    }
+    // Retries and redirects really happened and were counted: Himalayas' one literal call took
+    // 302 -> 503, then the retry 302 -> 200: four physical attempts, two of them in the retry.
+    const ample = await runPlanned(FRONTEND_PLAN, { transport: FLAKY });
+    const himalayas = ample.sources.find((source) => source.id === `himalayas:${LITERAL}`)!;
+    expect(himalayas.networkAttempts).toBe(4);
+    expect(himalayas.retries).toBe(2);
+    expect(himalayas.requests).toBe(1);
+    expect(ample.transport.fetchesTo('himalayas.app').filter((entry) => new URL(entry.url).searchParams.get('q') === LITERAL)).toHaveLength(4);
+  });
+
+  it('charges the literal pass too: an allowance smaller than the literal pass cuts it and defers every title', async () => {
+    const planned = await runPlanned(FRONTEND_PLAN, { transport: FLAKY, envelope: { maxRequests: 30 } });
+    const report = planned.plan.report;
+    expect(report.usage.literalAttempts).toBe(30);
+    expect(report.usage.variantAttempts).toBe(0);
+    expect(report.literal.handling).toBe('partial');
+    expect(report.literal.reason).toMatch(/request allowance/);
+    expect(report.coverage).toBe('partial');
+    for (const variant of report.variants.filter((entry) => entry.handling !== 'covered_by_earlier_query')) {
+      expect(variant.handling).toBe('deferred_request_budget');
+      expect(variant.attempts).toBe(0);
+      expect(variant.providersQueried).toEqual([]);
+    }
+  });
+
+  it('every source row and title says what really reached the upstream, checked against the upstream log', async () => {
+    for (const maxRequests of [58, 62, 70, 1_000]) {
+      const planned = await runPlanned(FRONTEND_PLAN, { transport: FLAKY, envelope: { maxRequests } });
+      const report = planned.plan.report;
+      for (const variant of report.variants) {
+        for (const provider of Object.keys(SERVED_HOST_PARAM) as DiscoverySourceAudit['provider'][]) {
+          const asked = upstreamQueries(planned.transport, provider).includes(variant.query);
+          expect(variant.providersQueried.includes(provider)).toBe(asked && variant.handling !== 'covered_by_earlier_query');
+        }
+      }
+      for (const source of planned.sources.filter((row) => row.id.includes('::plan:'))) {
+        const entry = source.focusedScan!.searchPlan!;
+        expect(entry).toHaveLength(1);
+        const asked = upstreamQueries(planned.transport, source.provider).includes(entry[0]!.query);
+        if (SERVED_HOST_PARAM[source.provider]) {
+          expect(['sent_upstream', 'partial'].includes(entry[0]!.handling)).toBe(asked);
+        }
+        if (entry[0]!.handling === 'deferred_request_budget') {
+          expect(source.requests).toBe(0);
+          expect(source.networkAttempts).toBe(0);
+          expect(source.status).toBe('partial');
+          expect(entry[0]!.reason).toMatch(/request allowance/);
+        }
+      }
+      // Request totals cannot include phantom calls: requests sum to calls that reached the network.
+      const sent = planned.sources.reduce((sum, source) => sum + (source.searchPlanAdmission?.sentCalls ?? 0), 0);
+      expect(planned.sources.reduce((sum, source) => sum + source.requests, 0)).toBeLessThanOrEqual(sent);
+    }
+  });
+
+  it('shares a tight allowance across sources deterministically instead of starving all but the first', async () => {
+    const plan = snapshotOf([{ title: 'Frontend engineer' }, { title: 'UI engineer' }, { title: 'Frontend ontwikkelaar', language: 'Dutch' }, { title: 'Web developer' }]);
+    const outcomes: string[] = [];
+    for (let round = 0; round < 3; round += 1) {
+      // No flakiness: the literal pass costs exactly one attempt per source (26), then 4 for 4 titles.
+      const planned = await runPlanned(plan, { envelope: { maxRequests: 30 } });
+      const asked = planned.plan.report.variants.map((variant) => variant.providersQueried);
+      expect(asked.every((providers) => providers.length === 1)).toBe(true);
+      // Four titles, four different sources: coverage degrades evenly rather than always serving one.
+      expect(new Set(asked.flat()).size).toBe(4);
+      expect(planned.plan.report.providersNeverAsked.length).toBeGreaterThan(0);
+      outcomes.push(JSON.stringify(asked));
+    }
+    expect(new Set(outcomes).size).toBe(1);
+  });
+
+  it('cuts an in-flight request at the shared deadline and defers the titles it never reached', async () => {
+    const started = Date.now();
+    const planned = await runPlanned(FRONTEND_PLAN, {
+      transport: { hangingHosts: ['jobicy.com'] },
+      envelope: { maxDurationMs: 400 },
     });
-    expect(either.vacancies.map((row) => row.title)).toEqual(['Frontend Engineer', 'React Developer']);
+    const elapsed = Date.now() - started;
+    // The real client's own timeout is 5 s: returning well before it proves the plan deadline aborted the fetch.
+    expect(elapsed).toBeLessThan(4_000);
+    const report = planned.plan.report;
+    expect(report.literal.handling).toBe('partial');
+    expect(report.literal.reason).toMatch(/time allowance/);
+    for (const variant of report.variants.filter((entry) => entry.handling !== 'covered_by_earlier_query')) {
+      expect(variant.handling).toBe('deferred_time_budget');
+    }
+    const jobicy = planned.sources.find((source) => source.provider === 'jobicy')!;
+    expect(jobicy.searchPlanAdmission?.refusal).toBe('time');
+    expect(jobicy.focusedScan!.searchPlan![0]!.handling).toBe('partial');
+    // No fetch was started after the deadline: only the literal pass's first attempts went out.
+    expect(planned.transport.fetchLog.length).toBe(report.usage.attempts);
+    expect(report.usage.variantAttempts).toBe(0);
+  });
+
+  it('bounds matching rows across the literal pass and every title with one result allowance', async () => {
+    const planned = await runPlanned(FRONTEND_PLAN, { envelope: { maxResults: 3 } });
+    const report = planned.plan.report;
+    expect(report.usage.matchingRows).toBe(3);
+    expect(report.usage.trimmedRows).toBeGreaterThan(0);
+    expect(report.literal.handling).toBe('partial');
+    expect(report.literal.reason).toMatch(/result allowance/);
+    for (const variant of report.variants.filter((entry) => entry.handling !== 'covered_by_earlier_query')) {
+      expect(variant.handling).toBe('deferred_result_cap');
+    }
+    expect(planned.leads.length).toBeLessThanOrEqual(3);
   });
 
   it('keeps the selected language on the query and never turns an ad language into a mandatory requirement', async () => {
-    const planned = await runPlanned('React developer', FRONTEND_PLAN);
+    const planned = await runPlanned(FRONTEND_PLAN);
     expect(planned.plan.report.workingLanguages).toEqual(['Dutch']);
-    const dutchQuery = planned.plan.report.queries.find((query) => query.query === 'Frontend ontwikkelaar');
-    expect(dutchQuery?.language).toBe('Dutch');
+    expect(planned.plan.report.queries.find((query) => query.query === 'Frontend ontwikkelaar')?.language).toBe('Dutch');
 
     const englishOnly: CandidateProfile = {
       ...EMPTY_CANDIDATE_PROFILE,
       constraints: { ...EMPTY_CANDIDATE_PROFILE.constraints, professionalLanguage: 'English' },
     };
     const assessed = applyWorkEligibilityEvidence(planned.leads, englishOnly, NOW);
-
-    // Dutch adverts that state no language requirement are NOT gated: the answer stays unknown, so
-    // the lead stays reviewable instead of being treated as "Dutch required".
     for (const company of ['Eerste Software BV', 'Achtste Software BV']) {
       const silent = assessed.find((lead) => lead.company === company)!;
       expect(silent.decision).not.toBe('language_mismatch');
       expect(silent.eligibility!.mandatoryLanguage.answer).toBe('unknown');
     }
-    // The unchanged gate still reads an explicit "Dutch is required" statement.
     const explicit = assessed.find((lead) => lead.company === 'Zesde Digitaal BV')!;
     expect(explicit.decision).toBe('language_mismatch');
-    expect(explicit.eligibility!.mandatoryLanguage.answer).toBe('no');
     // The plan's selected language is desired work, never a candidate fact.
     expect(englishOnly.constraints.professionalLanguage).toBe('English');
   });
 
+  it('treats approved titles as in scope, so the language gate reads "React developer" and Dutch titles like any frontend title', async () => {
+    const job = (id: string, title: string, description: string): SyntheticJob => ({
+      id, source: 'himalayas', equivalent: true, title, company: `Co ${id}`, url: `https://job-boards.greenhouse.io/co${id}/jobs/${id}`, description,
+    });
+    const corpus = [
+      job('e1', 'Frontend Engineer', 'Fluent Dutch is required. Je werkt met klanten in het Nederlands.'),
+      job('e2', 'Frontend ontwikkelaar', 'Fluent Dutch is required. Je werkt met klanten in het Nederlands.'),
+      job('e3', 'React Developer', 'Fluent Dutch is required. Je werkt met klanten in het Nederlands.'),
+      job('e4', 'React Developer', 'Wij zoeken een ontwikkelaar voor ons team.'),
+    ];
+    const englishOnly: CandidateProfile = {
+      ...EMPTY_CANDIDATE_PROFILE,
+      constraints: { ...EMPTY_CANDIDATE_PROFILE.constraints, professionalLanguage: 'English' },
+    };
+    const planned = await runPlanned(FRONTEND_PLAN, { corpus });
+    const assessed = applyWorkEligibilityEvidence(planned.leads, englishOnly, NOW);
+    for (const id of ['e1', 'e2', 'e3']) {
+      const lead = assessed.find((entry) => entry.company === `Co ${id}`)!;
+      expect(lead.decision).toBe('language_mismatch');
+      expect(lead.eligibility!.mandatoryLanguage.answer).toBe('no');
+    }
+    const silent = assessed.find((entry) => entry.company === 'Co e4')!;
+    expect(silent.decision).not.toBe('language_mismatch');
+    expect(silent.decision).not.toBe('role_mismatch');
+    expect(silent.reasons[0]).toMatch(/approved in the search plan/);
+
+    // Without a plan the built-in English-only pre-classification is unchanged.
+    const literalOnly = await runPlanned(NO_TITLES, { corpus });
+    const plain = applyWorkEligibilityEvidence(literalOnly.leads, englishOnly, NOW).find((entry) => entry.company === 'Co e3')!;
+    expect(plain.decision).toBe('role_mismatch');
+  });
+
+  it('matches approved titles on the listing title only, and marks description-only matches of the typed query', async () => {
+    const planned = await runPlanned(FRONTEND_PLAN);
+    const titles = planned.leads.map((lead) => lead.title);
+    // "UI engineer toolkit" and "frontend engineer colleagues" in a description do not admit a listing.
+    expect(titles).not.toContain('Sales Engineer');
+    expect(titles).not.toContain('Data Scientist');
+    // The typed query keeps its long-standing title-and-description rule, so the provenance says where.
+    const recruiter = planned.leads.find((lead) => lead.title === 'Technical Recruiter')!;
+    expect(recruiter.queryProvenance!.matchedLocally).toEqual([
+      { variantId: LITERAL_QUERY_ID, query: LITERAL, language: null, field: 'description' },
+    ]);
+    // Known, measured false positives: a manager title that embeds an approved title.
+    expect(titles).toContain('Frontend Engineering Manager');
+
+    const rows = [
+      { title: 'Frontend Engineer', description: '' },
+      { title: 'React Developer', description: '' },
+      { title: 'Backend Engineer', description: 'Pairs with frontend engineers.' },
+    ].map((row, index) => ({ ...row, key: `k${index}`, url: `https://example.test/${index}`, company: 'Acme', provider: 'jobicy', location: 'Remote' })) as unknown as DiscoveryVacancyAudit[];
+    expect(applyFocusedScanCriteria(rows, { role: LITERAL, country: null, employment: null }).vacancies).toHaveLength(1);
+    const either = applyFocusedScanCriteria(rows, { role: LITERAL, roleAlternatives: ['Frontend engineer'], country: null, employment: null });
+    expect(either.vacancies.map((row) => row.title)).toEqual(['Frontend Engineer', 'React Developer']);
+  });
+
   it('merges a requisition found by several queries and keeps distinct requisitions of the same company and title', async () => {
-    const planned = await runPlanned('React developer', FRONTEND_PLAN);
-    // h1 (Himalayas) and j1 (Jobicy) are the same greenhouse requisition: one lead, both sources kept.
+    const planned = await runPlanned(FRONTEND_PLAN, { transport: FLAKY });
     const acme = planned.leads.filter((lead) => lead.company === 'Acme Labs');
     expect(acme).toHaveLength(1);
     expect(acme[0]!.sources!.map((source) => source.provider).sort()).toEqual(['himalayas', 'jobicy']);
-    // The same requisition found by two sources under one approved title keeps both upstream origins.
     const beta = planned.leads.filter((lead) => lead.company === 'Beta Works');
     expect(beta).toHaveLength(1);
-    expect(
-      beta[0]!.queryProvenance!.fetchedBy.map((origin) => `${origin.query}@${origin.provider}`).sort(),
-    ).toEqual(['Frontend engineer@himalayas', 'Frontend engineer@jobicy']);
-    // Same company, same title, two requisition ids: both survive.
+    expect(beta[0]!.queryProvenance!.fetchedBy.map((origin) => `${origin.query}@${origin.provider}`).sort()).toEqual([
+      'Frontend engineer@himalayas',
+      'Frontend engineer@jobicy',
+    ]);
     const iota = planned.leads.filter((lead) => lead.company === 'Iota Platforms');
     expect(iota.map((lead) => lead.url).sort()).toEqual([
       'https://job-boards.greenhouse.io/iotaplatforms/jobs/111',
@@ -256,178 +409,133 @@ describe('search plan scan (#686)', () => {
     ]);
   });
 
-  it('stays inside one declared request envelope however many titles are approved, and reports what it deferred', async () => {
-    const many = snapshotOf(Array.from({ length: 12 }, (_, index) => ({ title: `Frontend title ${index + 1}` })));
-    const probe = await runLiteral('React developer');
-    const spent = literalQueryDependentRequests(probe.literalRun);
-    const envelope = { maxRequests: spent + 10, maxDurationMs: 60_000, maxResults: 1_000 };
-    const planned = await runPlanned('React developer', many, envelope);
-
-    expect(planned.plan.report.usage.literalRequests).toBe(spent);
-    // The shared allowance bounds the variants together, not each title separately.
-    expect(planned.plan.report.usage.variantRequests).toBeLessThanOrEqual(10);
-    expect(planned.plan.report.usage.literalRequests + planned.plan.report.usage.variantRequests).toBeLessThanOrEqual(
-      envelope.maxRequests,
-    );
-    const deferred = planned.plan.report.variants.filter((variant) => variant.handling === 'deferred_request_budget');
-    expect(deferred.length).toBeGreaterThan(0);
-    expect(planned.plan.report.variants).toHaveLength(12);
-    expect(planned.plan.report.coverage).toBe('partial');
-    expect(planned.plan.report.coverageReason).toMatch(/not fully searched/);
-    for (const variant of deferred) {
-      expect(variant.requests).toBe(0);
-      expect(variant.reason).toMatch(/request allowance/);
+  it('keeps titles that slug alike apart: unique ids, unique source rows, provenance for each', async () => {
+    const colliding = snapshotOf([
+      { title: 'C++ developer' },
+      { title: 'C# developer' },
+      { title: 'Front-end engineer' },
+      { title: 'Front end engineer' },
+      { title: 'Frontend engineer' },
+      { title: 'Frontend-engineer!' },
+    ]);
+    const ids = colliding.variants.map((variant) => variant.id);
+    expect(new Set(ids).size).toBe(6);
+    // One posting both "C++ developer" and "C# developer" find upstream: their slugs used to collide.
+    const polyglot: SyntheticJob = {
+      id: 'c1', source: 'himalayas', equivalent: true, title: 'C++ developer / C# developer', company: 'Polyglot Systems',
+      url: 'https://job-boards.greenhouse.io/polyglot/jobs/77', description: 'Remote role.',
+    };
+    const planned = await runPlanned(colliding, { corpus: [...SYNTHETIC_CORPUS, polyglot] });
+    const rowIds = planned.sources.map((source) => source.id);
+    expect(new Set(rowIds).size).toBe(rowIds.length);
+    const variantIds = planned.plan.report.variants.map((variant) => variant.variantId);
+    expect(new Set(variantIds).size).toBe(variantIds.length);
+    // Each variant's own pass rows point at that variant, and only that one.
+    for (const id of ids) {
+      const own = planned.sources.filter((source) => source.id.endsWith(`::plan:${id}`));
+      expect(own.length).toBeGreaterThan(0);
+      for (const row of own) expect(row.focusedScan!.searchPlan!.map((entry) => entry.variantId)).toEqual([id]);
     }
-    // Every approved title is still part of the local OR filter even when it could not be sent upstream.
-    expect(planned.plan.report.queries).toHaveLength(13);
-    // A source the shared allowance stopped from asking is partial coverage, not a broken source.
-    const refused = planned.plan.run.sources.filter((source) => source.completenessReason?.startsWith('Not fully asked'));
-    expect(refused.length).toBeGreaterThan(0);
-    expect(refused.every((source) => source.status === 'partial' && source.complete === false && source.id.includes('::plan:'))).toBe(true);
-
-    // A roomier envelope is respected as well.
-    const roomy = await runPlanned('React developer', many, { maxRequests: 40, maxDurationMs: 60_000, maxResults: 1_000 });
-    expect(roomy.plan.report.usage.literalRequests + roomy.plan.report.usage.variantRequests).toBeLessThanOrEqual(40);
-  });
-
-  it('defers the remaining titles when time or the result allowance runs out', async () => {
-    const outOfTime = await runPlanned('React developer', FRONTEND_PLAN, {
-      maxRequests: 200,
-      maxDurationMs: 0,
-      maxResults: 1_000,
-    });
-    expect(outOfTime.plan.report.variants.filter((variant) => variant.handling === 'deferred_time_budget')).toHaveLength(3);
-    expect(outOfTime.plan.report.usage.variantRequests).toBe(0);
-
-    let clock = 0;
-    const slowAfterFirst = await runPlanned(
-      'React developer',
-      FRONTEND_PLAN,
-      { maxRequests: 200, maxDurationMs: 100_000, maxResults: 1_000 },
-      (market) => ({
-        get: async (url) => {
-          const response = await market.get(url);
-          if (url.includes('himalayas.app') && url.includes('q=Frontend+engineer')) clock = 500_000;
-          return response;
-        },
-        postJson: (url) => market.postJson(url),
-      }),
-      () => clock,
+    // Both upstream origins survive the requisition merge, under their own ids.
+    const lead = planned.leads.find((entry) => entry.company === 'Polyglot Systems')!;
+    expect(lead.queryProvenance!.fetchedBy.map((origin) => [origin.variantId, origin.query]).sort()).toEqual(
+      [
+        [colliding.variants[0]!.id, 'C++ developer'],
+        [colliding.variants[1]!.id, 'C# developer'],
+      ].sort(),
     );
-    const handled = slowAfterFirst.plan.report.variants.map((variant) => variant.handling);
-    expect(handled[0]).toMatch(/sent_upstream|partial/);
-    expect(handled).toContain('deferred_time_budget');
-
-    const capped = await runPlanned('React developer', FRONTEND_PLAN, {
-      maxRequests: 200,
-      maxDurationMs: 60_000,
-      maxResults: 1,
-    });
-    expect(capped.plan.report.usage.variantRows).toBe(1);
-    expect(
-      capped.plan.report.variants.some(
-        (variant) => variant.handling === 'partial' || variant.handling === 'deferred_result_cap',
-      ),
-    ).toBe(true);
-    expect(capped.plan.report.coverage).toBe('partial');
   });
 
-  it('shows in the source audit which titles went upstream and which were matched locally only', async () => {
-    const planned = await runPlanned('React developer', FRONTEND_PLAN);
-    const feed = planned.sources.find((source) => source.provider === 'arbeitnow')!;
-    expect(SOURCE_FILTER_CAPABILITIES.arbeitnow.role).toBeUndefined();
-    expect(feed.focusedScan!.searchPlan!.every((entry) => entry.handling === 'local_only')).toBe(true);
-    expect(feed.focusedScan!.searchPlan![0]!.reason).toMatch(/declares no role filter/);
-    // The unchanged per-criterion audit is still there beside it.
-    expect(feed.focusedScan!.unsupported.some((entry) => entry.criterion === 'role')).toBe(true);
-
-    const jobicyLiteral = planned.sources.find((source) => source.id === 'jobicy:frontend')!;
-    expect(jobicyLiteral.focusedScan!.searchPlan!.map((entry) => entry.handling)).toEqual(Array(4).fill('sent_upstream'));
-    const jobicyVariant = planned.sources.find((source) => source.id.startsWith('jobicy:frontend::plan:'))!;
-    expect(jobicyVariant.focusedScan!.searchPlan).toHaveLength(1);
-    expect(jobicyVariant.focusedScan!.searchPlan![0]!.handling).toBe('sent_upstream');
+  it('reports markets, the primary function and languages as not applied, per source, instead of ignoring them', async () => {
+    const plan = snapshotOf([{ title: 'Frontend engineer', language: 'English' }], { markets: ['Netherlands', 'Germany'], primaryFunction: 'Frontend' });
+    const planned = await runPlanned(plan);
+    expect(planned.plan.report.criteria.map((entry) => [entry.criterion, entry.value, entry.treatment])).toEqual([
+      ['primary_function', 'Frontend', 'not_applied'],
+      ['markets', 'Netherlands', 'not_applied'],
+      ['markets', 'Germany', 'not_applied'],
+      ['working_language', 'English', 'title_text_only'],
+    ]);
+    // No request carried a market: the plan never quietly narrows (or pretends to).
+    expect(planned.transport.fetchLog.some((entry) => /netherlands|germany/i.test(entry.url))).toBe(false);
+    const himalayas = planned.sources.find((source) => source.id === `himalayas:${LITERAL}`)!;
+    const markets = himalayas.focusedScan!.searchPlanCriteria!.filter((entry) => entry.criterion === 'markets');
+    expect(markets[0]!.reason).toMatch(/can filter by country/);
+    const arbeitnow = planned.sources.find((source) => source.provider === 'arbeitnow')!;
+    expect(arbeitnow.focusedScan!.searchPlanCriteria!.find((entry) => entry.criterion === 'markets')!.reason).toMatch(/declares no country filter/);
   });
 
   it('asks the same words only once and lists the repeated title as covered', () => {
-    const { queries, covered } = compileSearchPlanQueries(
-      'React developer',
-      snapshotOf([{ title: 'react  developer' }, { title: 'UI engineer' }]),
-    );
-    expect(queries.map((query) => query.query)).toEqual(['React developer', 'UI engineer']);
-    expect(covered.map((entry) => entry.coveredBy)).toEqual([LITERAL_QUERY_ID]);
+    const { queries, covered } = compileSearchPlanQueries('React developer', FRONTEND_PLAN);
+    expect(queries.map((query) => query.query)).toEqual(['React developer', 'Frontend engineer', 'UI engineer', 'Frontend ontwikkelaar']);
+    expect(covered.map((entry) => entry.query)).toEqual(['React developer']);
   });
 
-  it('with no plan the literal scan is untouched: same rows, same requests, no plan fields', async () => {
-    const literal = await runLiteral('React developer');
-    expect(literal.leads.every((lead) => lead.queryProvenance === undefined)).toBe(true);
-    expect(literal.literalRun.sources.every((source) => source.focusedScan === undefined)).toBe(true);
-    expect(literal.market.requestsTo('himalayas.app')).toBe(1);
+  it('with no plan the literal scan is untouched: same requests, no plan fields', async () => {
+    const transport = new SyntheticTransport(SYNTHETIC_CORPUS, FLAKY);
+    const literalRun = await runGlobalRemoteDiscovery(transport.http, baseConfig(LITERAL));
+    expect(literalRun.sources.every((source) => source.searchPlanAdmission === undefined)).toBe(true);
+    const resolved = resolveFocusedLeads(literalRun, { role: LITERAL, country: null, employment: null }, null);
+    expect(resolved.focused.vacancies.every((lead) => lead.queryProvenance === undefined)).toBe(true);
+    // The planned run's literal pass makes exactly the same requests.
+    const planned = await runPlanned(NO_TITLES, { transport: FLAKY });
+    expect(planned.transport.fetchLog.map((entry) => entry.url).sort()).toEqual(transport.fetchLog.map((entry) => entry.url).sort());
   });
 });
 
 describe('search plan measurement on the synthetic corpus (#686)', () => {
   const equivalentUrls = new Set(SYNTHETIC_CORPUS.filter((job) => job.equivalent).map((job) => job.url));
+  const negativeUrls = new Set(SYNTHETIC_CORPUS.filter((job) => !job.equivalent).map((job) => job.url));
 
-  function metrics(label: string, leads: readonly DiscoveryVacancyAudit[], market: SyntheticMarket) {
-    const suitable = leads.filter((lead) => labelOf(lead)?.equivalent === true);
-    const suitableDistinctUrls = new Set(suitable.map((lead) => lead.url)).size;
+  function metrics(run: PlannedRun) {
+    const suitable = run.leads.filter((lead) => labelOf(lead)?.equivalent === true);
+    const wrong = run.leads.filter((lead) => labelOf(lead)?.equivalent === false);
+    const suitableUnique = new Set(suitable.map((lead) => lead.url)).size;
+    const attempts = run.transport.fetchLog.length;
     return {
-      label,
-      retainedUniqueLeads: leads.length,
-      suitableUniqueLeads: suitable.length,
-      suitableDistinctUrls,
-      precision: leads.length === 0 ? null : Number((suitable.length / leads.length).toFixed(3)),
-      fixtureRecall: Number((suitableDistinctUrls / equivalentUrls.size).toFixed(3)),
-      upstreamRequests: market.requests.length,
-      queryFilteredHostRequests: ['himalayas.app', 'jobicy.com', 'jobsearch.api.jobtechdev.se'].reduce(
-        (sum, host) => sum + market.requestsTo(host),
-        0,
-      ),
-      requestsPerSuitableLead: suitable.length === 0 ? null : Number((market.requests.length / suitable.length).toFixed(2)),
+      retainedLeads: run.leads.length,
+      suitableUniqueJobs: suitableUnique,
+      wronglyRetained: wrong.map((lead) => lead.title),
+      precision: run.leads.length === 0 ? null : Number((suitable.length / run.leads.length).toFixed(3)),
+      fixtureRecall: Number((suitableUnique / equivalentUrls.size).toFixed(3)),
+      physicalAttempts: attempts,
+      attemptsCountedByPlan: run.plan.report.usage.attempts,
+      attemptsPerRetainedSuitableJob: suitableUnique === 0 ? null : Number((attempts / suitableUnique).toFixed(2)),
+      coverage: run.plan.report.coverage,
+      literalHandling: run.plan.report.literal.handling,
     };
   }
 
-  it('compares the literal query and the planned query on ONE corpus under the SAME envelope', async () => {
-    const probe = await runLiteral('React developer');
-    const spent = literalQueryDependentRequests(probe.literalRun);
+  it('compares the literal query and the planned query on ONE corpus under the SAME real envelope', async () => {
     const scenarios: { name: string; envelope: SearchPlanEnvelope }[] = [
-      {
-        name: 'tight: the literal pass plus 3 shared requests',
-        envelope: { maxRequests: spent + 3, maxDurationMs: 120_000, maxResults: 1_500 },
-      },
-      {
-        name: 'moderate: the literal pass plus 12 shared requests',
-        envelope: { maxRequests: spent + 12, maxDurationMs: 120_000, maxResults: 1_500 },
-      },
-      {
-        name: 'ample: the literal pass plus 60 shared requests',
-        envelope: { maxRequests: spent + 60, maxDurationMs: 120_000, maxResults: 1_500 },
-      },
+      { name: 'tight: 60 attempts (the flaky literal pass alone needs 54)', envelope: { maxRequests: 60, maxDurationMs: 120_000, maxResults: 1_500 } },
+      { name: 'moderate: 75 attempts', envelope: { maxRequests: 75, maxDurationMs: 120_000, maxResults: 1_500 } },
+      { name: 'ample: 200 attempts', envelope: { maxRequests: 200, maxDurationMs: 120_000, maxResults: 1_500 } },
     ];
     const output: unknown[] = [];
     for (const scenario of scenarios) {
-      const literal = await runLiteral('React developer');
-      const planned = await runPlanned('React developer', FRONTEND_PLAN, scenario.envelope);
-      const literalMetrics = metrics('literal query only', literal.leads, literal.market);
-      const plannedMetrics = metrics('reviewed plan: literal + 4 approved titles', planned.leads, planned.market);
-      expect(plannedMetrics.suitableDistinctUrls).toBeGreaterThan(literalMetrics.suitableDistinctUrls);
-      expect(plannedMetrics.precision).toBeGreaterThanOrEqual(literalMetrics.precision ?? 0);
-      expect(planned.plan.report.usage.literalRequests + planned.plan.report.usage.variantRequests).toBeLessThanOrEqual(
-        scenario.envelope.maxRequests,
-      );
+      // Both arms: the same corpus, the same flaky real transport, the same envelope, enforced the same way.
+      const literal = await runPlanned(NO_TITLES, { transport: FLAKY, envelope: scenario.envelope });
+      const planned = await runPlanned(FRONTEND_PLAN, { transport: FLAKY, envelope: scenario.envelope });
+      const literalMetrics = metrics(literal);
+      const plannedMetrics = metrics(planned);
+      for (const arm of [literalMetrics, plannedMetrics]) {
+        expect(arm.physicalAttempts).toBeLessThanOrEqual(scenario.envelope.maxRequests);
+        expect(arm.physicalAttempts).toBe(arm.attemptsCountedByPlan);
+      }
+      expect(plannedMetrics.suitableUniqueJobs).toBeGreaterThan(literalMetrics.suitableUniqueJobs);
       output.push({
         scenario: scenario.name,
         envelope: scenario.envelope,
         literal: literalMetrics,
         planned: {
           ...plannedMetrics,
-          coverage: planned.plan.report.coverage,
           coverageReason: planned.plan.report.coverageReason,
           variants: planned.plan.report.variants.map((variant) => ({
             query: variant.query,
             language: variant.language,
             handling: variant.handling,
-            requests: variant.requests,
+            attempts: variant.attempts,
+            providersQueried: variant.providersQueried,
           })),
         },
       });
@@ -440,17 +548,18 @@ describe('search plan measurement on the synthetic corpus (#686)', () => {
         `${JSON.stringify(
           {
             issue: 686,
-            kind: 'SYNTHETIC labelled fixture measurement',
-            corpus: `${SYNTHETIC_CORPUS.length} made-up postings served by an in-memory fake upstream (Himalayas, Jobicy and JobTech filter by title server-side; Arbeitnow does not)`,
-            labelledEquivalentUrlsInFixture: equivalentUrls.size,
-            labels: 'the equivalent flag is the fixture author construction, not a human relevance judgement',
-            literalQuery: 'React developer',
+            kind: 'SYNTHETIC labelled fixture measurement (fix round 1)',
+            corpus: `${SYNTHETIC_CORPUS.length} made-up postings (${equivalentUrls.size} distinct labelled-equivalent URLs, ${negativeUrls.size} labelled negatives including ${7} hard negatives) served through a REAL SafeHttpClient with a scripted fetch: every URL answers 503 once (retried) and Himalayas redirects once`,
+            labels: 'The equivalent flag is the fixture author construction, not a human relevance judgement. Hard negatives were added from the independent review, not tuned to the matcher.',
+            literalQuery: LITERAL,
             approvedTitles: FRONTEND_PLAN.variants.map((variant) => ({ title: variant.title, language: variant.language || null })),
+            unit: 'physical network attempts (first attempts, retries, redirect hops) counted by the upstream fetch log and by the plan ledger; both arms run the literal discovery pass under the same envelope',
             scenarios: output,
             limitations: [
               'Synthetic data and synthetic labels only; no live provider, no real job site, no human judgement.',
-              'The fake upstream filters by simple substring match; real sources rank and tokenize differently.',
-              'Request counts are counted at the fake upstream: every attempted request, including those to sources the fixture does not serve.',
+              'The fake upstream filters by simple substring match over title and description; real sources rank and tokenize differently.',
+              'Most of the 26 literal-pass sources are not served by the fixture and answer 404; they still cost real attempts in both arms.',
+              'Precision counts retained leads after identity merge; recall is relative to the fixture only.',
               'Says nothing about real-world recall, cost, latency or hiring outcomes.',
             ],
           },

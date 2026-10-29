@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { z } from 'zod';
@@ -94,12 +95,61 @@ export function searchPlanVariantKey(title: string, language: string): string {
   return `${squash(title).toLocaleLowerCase()}::${squash(language).toLocaleLowerCase()}`;
 }
 
-/** Stable id derived from the content, so the same variant keeps its id across edits and runs. */
+/** 32-bit FNV-1a over the UTF-16 code units, as 8 hex digits. Deterministic across runs and builds. */
+function contentHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+/**
+ * Stable id derived from the content, so the same variant keeps its id across edits, reorders and runs.
+ * A readable slug alone is lossy ("C++ developer" and "C# developer" both slug to "c-developer"), so the
+ * id also carries a hash of the full normalized title and language: distinct variants get distinct ids,
+ * and an id is never empty.
+ */
 export function searchPlanVariantId(title: string, language: string): string {
-  return searchPlanVariantKey(title, language)
+  const key = searchPlanVariantKey(title, language);
+  const slug = key
     .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/gu, '')
-    .slice(0, 80);
+    .slice(0, 60)
+    .replace(/-+$/gu, '');
+  return `${slug || 'title'}-${contentHash(key)}`;
+}
+
+/** A plan edit the person can fix, with a message written for them (never a raw schema error). */
+export class SearchPlanValidationError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'SearchPlanValidationError';
+  }
+}
+
+/** True when a title has at least one letter or digit, i.e. something a source can search for. */
+export function isSearchableTitle(title: string): boolean {
+  return /[\p{L}\p{N}]/u.test(title);
+}
+
+/** Parses what the renderer sent, turning a malformed draft into a readable error. */
+export function parseSearchPlanDraft(raw: unknown): SearchPlanDraft {
+  const parsed = searchPlanDraftSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    if (issue?.code === 'too_big' && issue.path[0] === 'variants') {
+      throw new SearchPlanValidationError(`A search plan holds at most ${SEARCH_PLAN_MAX_VARIANTS} titles.`);
+    }
+    if (issue?.code === 'too_big' && issue.path[0] === 'markets') {
+      throw new SearchPlanValidationError(`A search plan holds at most ${SEARCH_PLAN_MAX_MARKETS} markets.`);
+    }
+    throw new SearchPlanValidationError(
+      'The search plan could not be saved because it was not in the expected form. Reload the page and try again.',
+    );
+  }
+  return parsed.data;
 }
 
 function boundedText(value: string, max: number): string {
@@ -116,16 +166,32 @@ export function normalizeSearchPlanDraft(draft: SearchPlanDraft): {
   markets: string[];
 } {
   const seen = new Set<string>();
+  const ids = new Set<string>();
   const variants: SearchPlanVariant[] = [];
-  for (const raw of draft.variants) {
+  for (const [index, raw] of draft.variants.entries()) {
     const title = boundedText(raw.title, MAX_TITLE_CHARS);
     if (!title) continue;
+    if (!isSearchableTitle(title)) {
+      throw new SearchPlanValidationError(
+        `Title ${index + 1} ("${title}") has no letters or numbers, so no source can search for it. Change it or remove it.`,
+      );
+    }
     const language = boundedText(raw.language, MAX_LANGUAGE_CHARS);
     const key = searchPlanVariantKey(title, language);
     if (seen.has(key)) continue;
     seen.add(key);
-    variants.push({ id: searchPlanVariantId(title, language), title, language, origin: raw.origin });
-    if (variants.length === SEARCH_PLAN_MAX_VARIANTS) break;
+    // Distinct keys practically never share a hash; if two ever did, the later one gets an ordinal so
+    // ids stay unique within the plan (source rows, provenance and list keys all rely on that).
+    const base = searchPlanVariantId(title, language);
+    let id = base;
+    for (let ordinal = 2; ids.has(id); ordinal += 1) id = `${base}-${ordinal}`;
+    ids.add(id);
+    variants.push({ id, title, language, origin: raw.origin });
+  }
+  if (variants.length > SEARCH_PLAN_MAX_VARIANTS) {
+    throw new SearchPlanValidationError(
+      `A search plan holds at most ${SEARCH_PLAN_MAX_VARIANTS} titles; this one has ${variants.length}. Remove ${variants.length - SEARCH_PLAN_MAX_VARIANTS}.`,
+    );
   }
   const markets: string[] = [];
   for (const raw of draft.markets) {
@@ -133,7 +199,11 @@ export function normalizeSearchPlanDraft(draft: SearchPlanDraft): {
     if (market && !markets.some((existing) => existing.toLocaleLowerCase() === market.toLocaleLowerCase())) {
       markets.push(market);
     }
-    if (markets.length === SEARCH_PLAN_MAX_MARKETS) break;
+  }
+  if (markets.length > SEARCH_PLAN_MAX_MARKETS) {
+    throw new SearchPlanValidationError(
+      `A search plan holds at most ${SEARCH_PLAN_MAX_MARKETS} markets; this one has ${markets.length}.`,
+    );
   }
   return { primaryFunction: boundedText(draft.primaryFunction, MAX_FUNCTION_CHARS), variants, markets };
 }
@@ -189,7 +259,7 @@ export function addSearchPlanSuggestions(
     const parsed = suggestionInputSchema.safeParse(raw);
     if (!parsed.success) continue;
     const title = boundedText(parsed.data.title, MAX_TITLE_CHARS);
-    if (!title) continue;
+    if (!title || !isSearchableTitle(title)) continue;
     const language = boundedText(parsed.data.language, MAX_LANGUAGE_CHARS);
     const key = searchPlanVariantKey(title, language);
     if (known.has(key)) continue;
@@ -245,16 +315,78 @@ export function captureSearchPlanSnapshot(plan: SearchPlan): SearchPlanSnapshot 
   });
 }
 
-/** A missing file is the empty plan; a damaged one throws, exactly like the candidate profile. */
+export type SearchPlanReadFailure = 'damaged' | 'newer_version' | 'unreadable';
+
+/**
+ * Why a saved plan file could not be used, in words for the person. The file itself is never touched
+ * by a failed read; only an explicitly confirmed reset replaces it, after keeping a backup.
+ */
+export class SearchPlanReadError extends Error {
+  public constructor(
+    public readonly reason: SearchPlanReadFailure,
+    message: string,
+    public readonly fileVersion: number | null = null,
+  ) {
+    super(message);
+    this.name = 'SearchPlanReadError';
+  }
+}
+
+export function isSearchPlanReadError(error: unknown): error is SearchPlanReadError {
+  return error instanceof Error && error.name === 'SearchPlanReadError';
+}
+
+/**
+ * A missing file is the empty plan. Anything else that cannot be used throws a `SearchPlanReadError`
+ * saying which case it is: damaged content, a plan written by a newer version of the app, or a file
+ * that could not be opened at all.
+ */
 export async function loadSearchPlan(filePath: string): Promise<SearchPlan> {
   let content: string;
   try {
     content = await readFile(filePath, 'utf8');
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return EMPTY_SEARCH_PLAN;
-    throw error;
+    const code = error instanceof Error && 'code' in error ? String(error.code) : 'unknown error';
+    throw new SearchPlanReadError('unreadable', `Your search plan file could not be opened (${code}).`);
   }
-  return searchPlanSchema.parse(JSON.parse(content));
+  let json: unknown;
+  try {
+    json = JSON.parse(content);
+  } catch {
+    throw new SearchPlanReadError('damaged', 'Your search plan file is damaged: it is not valid JSON.');
+  }
+  const version = json !== null && typeof json === 'object' ? (json as { schemaVersion?: unknown }).schemaVersion : undefined;
+  if (typeof version === 'number' && Number.isFinite(version) && version > SEARCH_PLAN_SCHEMA_VERSION) {
+    throw new SearchPlanReadError(
+      'newer_version',
+      `Your search plan was saved by a newer version of Open Vacancy Radar (plan format ${version}). This version cannot read it and will not change it.`,
+      version,
+    );
+  }
+  const parsed = searchPlanSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new SearchPlanReadError('damaged', 'Your search plan file is damaged: its content is not a valid search plan.');
+  }
+  return parsed.data;
+}
+
+/**
+ * Keeps the exact bytes of an unusable plan file next to it, as `<file>.unreadable-<timestamp>.bak`,
+ * before anything replaces it. Never overwrites an earlier backup. Returns the backup's path.
+ */
+export async function backupUnreadableSearchPlan(filePath: string, now: Date = new Date()): Promise<string> {
+  const stamp = now.toISOString().replace(/[:.]/gu, '-');
+  for (let attempt = 0; ; attempt += 1) {
+    const backup = `${filePath}.unreadable-${stamp}${attempt === 0 ? '' : `-${attempt}`}.bak`;
+    try {
+      await copyFile(filePath, backup, fsConstants.COPYFILE_EXCL);
+      return backup;
+    } catch (error) {
+      if (attempt < 20 && error instanceof Error && 'code' in error && error.code === 'EEXIST') continue;
+      throw error;
+    }
+  }
 }
 
 /** Temp-file-then-rename, so a crash mid-write cannot leave a truncated plan behind. */

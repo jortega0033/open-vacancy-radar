@@ -136,7 +136,7 @@ describe('scheduledScanQueryFromProfile', () => {
 
   it('keeps scheduled scans wired when a saved role or keyword exists', () => {
     expect(source('main.ts')).toMatch(
-      /backgroundScanSelection\(\)[\s\S]*runVacancyScan\(\{[\s\S]*query: selection\.query,[\s\S]*useSearchPlan: true[\s\S]*isExpectedScanBusyError\(error\)/,
+      /backgroundScanSelection\(\)[\s\S]*runVacancyScan\([\s\S]*query: selection\.fallbackQuery, useSearchPlan: true, queryFromSearchPlan: true[\s\S]*query: selection\.query[\s\S]*isExpectedScanBusyError\(error\)/,
     );
   });
 });
@@ -154,6 +154,12 @@ describe('search plan request and background selection (#686)', () => {
     });
     expect(() => parseVacancyScanRequest({ mode: 'query', query: 'UI engineer', useSearchPlan: 'yes' })).toThrow('Search plan must be a boolean.');
     expect(parseVacancyScanRequest({ mode: 'browse_all', ...({ useSearchPlan: true } as object) })).toEqual({ mode: 'browse_all' });
+    // The background-only flag can never come from the page.
+    expect(parseVacancyScanRequest({ mode: 'query', query: 'UI engineer', useSearchPlan: true, queryFromSearchPlan: true })).toEqual({
+      mode: 'query',
+      query: 'UI engineer',
+      useSearchPlan: true,
+    });
   });
 
   it('selects the first approved plan title for the one background scan, else the first saved role', () => {
@@ -161,10 +167,19 @@ describe('search plan request and background selection (#686)', () => {
     const variant = (title: string) => ({ id: title, title, language: '', origin: 'user' as const });
     expect(selectBackgroundScan(profile, { variants: [variant('  React developer '), variant('UI engineer')] })).toEqual({
       query: 'React developer',
+      fallbackQuery: 'Backend Engineer',
       useSearchPlan: true,
     });
-    expect(selectBackgroundScan(profile, { variants: [] })).toEqual({ query: 'Backend Engineer', useSearchPlan: false });
-    expect(selectBackgroundScan(profile, null)).toEqual({ query: 'Backend Engineer', useSearchPlan: false });
+    expect(selectBackgroundScan(EMPTY_PROFILE, { variants: [variant('UI engineer')] })).toEqual({
+      query: 'UI engineer',
+      fallbackQuery: 'UI engineer',
+      useSearchPlan: true,
+    });
+    expect(selectBackgroundScan(profile, { variants: [] })).toEqual({ query: 'Backend Engineer', fallbackQuery: 'Backend Engineer', useSearchPlan: false });
+    expect(selectBackgroundScan(profile, null)).toEqual({ query: 'Backend Engineer', fallbackQuery: 'Backend Engineer', useSearchPlan: false });
+    // An unreadable plan still asks for the plan, so the run records why it searched the saved role instead.
+    expect(selectBackgroundScan(profile, 'unreadable')).toEqual({ query: 'Backend Engineer', fallbackQuery: 'Backend Engineer', useSearchPlan: true });
+    expect(selectBackgroundScan(EMPTY_PROFILE, 'unreadable')).toBeNull();
     expect(selectBackgroundScan(EMPTY_PROFILE, null)).toBeNull();
   });
 });

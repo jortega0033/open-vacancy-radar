@@ -46,7 +46,28 @@ describe('captureVacancyRunIntent', () => {
       salary: { minimumAnnual: 65_000, currency: 'EUR', includeUnknown: false },
       aiWebDiscovery: true,
       searchPlan: null,
+      searchPlanStatus: null,
     });
+    // Version 2: the intent shape gained the plan and its status (#686).
+    expect(intent.version).toBe(2);
+  });
+
+  it('records why a run that asked for the plan ran without one, and passes it to the engine (#686)', () => {
+    const status = { state: 'empty_at_start' as const, message: 'Your search plan had no approved titles when this search started.' };
+    const asked = captureVacancyRunIntent(
+      'scan-empty',
+      parseVacancyScanRequest({ mode: 'query', query: 'React developer', useSearchPlan: true }),
+      CAPTURED_AT,
+      null,
+      status,
+    );
+    expect(asked.searchPlanStatus).toEqual(status);
+    expect(Object.isFrozen(asked.searchPlanStatus)).toBe(true);
+    expect(deterministicScanCriteria(asked, 5_000)).toEqual({ query: 'React developer', searchPlanStatus: status });
+    expect(describeVacancyRunIntent(asked)).toBe('Role: React developer · Search plan: not used (see the notice on the results)');
+    // A run that never asked for the plan never carries a plan status.
+    const literal = captureVacancyRunIntent('scan-lit', parseVacancyScanRequest({ mode: 'query', query: 'React developer' }), CAPTURED_AT, null, status);
+    expect(literal.searchPlanStatus).toBeNull();
   });
 
   it('carries the search plan only for a run that asked for it, and the plan is frozen with the intent (#686)', () => {

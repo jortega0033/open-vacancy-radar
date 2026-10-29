@@ -176,3 +176,29 @@ describe('runAtsRosterDiscovery', () => {
     expect(result.vacancies).toHaveLength(0);
   });
 });
+
+describe('runAtsRosterDiscovery under a search plan allowance (#686)', () => {
+  it('a tenant the plan did not let this run ask is deferred: no request counted, no failure observation written', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const { SearchPlanBudgetError } = await import('../../src/global-remote/search-plan-ledger.js');
+    const { loadAtsSourceObservations } = await import('../../src/companies/ats-source-observation-repository.js');
+    const root = await mkdtemp(path.join(tmpdir(), 'ovr-686-roster-'));
+    try {
+      const refusing = {
+        get: () => Promise.reject(new SearchPlanBudgetError('request')),
+        postJson: () => Promise.reject(new SearchPlanBudgetError('request')),
+      };
+      const result = await runAtsRosterDiscovery(refusing, config(), [greenhouseEntry], root);
+      const row = result.sources.find((source) => source.provider === 'ats_roster_greenhouse')!;
+      expect(row.requests).toBe(0);
+      expect(row.status).toBe('partial');
+      expect(row.error).toBe("1/1 companies were not asked within the search plan's shared allowance.");
+      const observations = await loadAtsSourceObservations(root);
+      expect(observations.observations.filter((entry) => entry.slug === 'acme' && entry.status === 'error')).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

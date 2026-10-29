@@ -42,10 +42,18 @@ export {
   type WorkableJobDetail,
   type WorkableJobReference,
 } from './global-remote/structured-discovery.js';
-export { applyFocusedScanCriteria, isUnspecifiedCountry, SOURCE_FILTER_CAPABILITIES, vacancyMatchesRole, type FocusedScanCriteria } from './global-remote/focused-scan.js';
+export { applyFocusedScanCriteria, isUnspecifiedCountry, SOURCE_FILTER_CAPABILITIES, vacancyMatchesRole, vacancyTitleMatches, planQueryMatchField, type FocusedScanCriteria } from './global-remote/focused-scan.js';
 export {
   addSearchPlanSuggestions,
   approveSearchPlanDraft,
+  backupUnreadableSearchPlan,
+  isSearchableTitle,
+  isSearchPlanReadError,
+  parseSearchPlanDraft,
+  SearchPlanReadError,
+  SearchPlanValidationError,
+  searchPlanVariantId,
+  type SearchPlanReadFailure,
   captureSearchPlanSnapshot,
   dismissSearchPlanSuggestion,
   EMPTY_SEARCH_PLAN,
@@ -70,13 +78,25 @@ export {
   DEFAULT_SEARCH_PLAN_ENVELOPE,
   finalizeLeadProvenance,
   LITERAL_QUERY_ID,
+  OUTSIDE_ENVELOPE_PROVIDERS,
   roleFilteredProviders,
-  runSearchPlanVariantPasses,
+  runSearchPlan,
+  SEARCH_PLAN_BUDGET_SCOPE,
   SEARCH_PLAN_PASS_PROVIDERS,
+  searchPlanCriteria,
+  searchPlanCriteriaForSource,
   searchPlanHandlingForSource,
   type SearchPlanRunInput,
   type SearchPlanRunResult,
 } from './global-remote/search-plan.js';
+export {
+  admitSearchPlanAttempt,
+  isSearchPlanBudgetError,
+  SearchPlanBudgetError,
+  SearchPlanLedger,
+  SearchPlanTransportError,
+  type SearchPlanRefusal,
+} from './global-remote/search-plan-ledger.js';
 export {
   AiWebDiscoveryCandidateSchema,
   AiWebDiscoveryResponseSchema,
@@ -167,8 +187,11 @@ export type {
   LeadQueryProvenance,
   OfficialVacancyAudit,
   ProfileMatchBreakdown,
+  SearchPlanCriterionTreatment,
   SearchPlanEnvelope,
   SearchPlanHandling,
+  SearchPlanRunStatus,
+  SearchPlanVariantResult,
   SearchPlanQueryRef,
   SearchPlanReport,
   SearchPlanSourceHandling,

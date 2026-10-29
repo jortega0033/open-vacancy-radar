@@ -1,3 +1,4 @@
+import { isSearchPlanBudgetError } from './search-plan-ledger.js';
 import { createVacancyAdapter } from '../ats/factory.js';
 import type { AtsHttpClient } from '../ats/http.js';
 import {
@@ -95,11 +96,13 @@ type ProviderTally = {
   listings: number;
   companiesFailed: number;
   companiesBlocked: number;
+  /** Issue #686: companies a search plan's shared allowance did not let this run ask. Not failures. */
+  companiesDeferred: number;
   lastError: string | null;
 };
 
 function emptyTally(): ProviderTally {
-  return { requests: 0, listings: 0, companiesFailed: 0, companiesBlocked: 0, lastError: null };
+  return { requests: 0, listings: 0, companiesFailed: 0, companiesBlocked: 0, companiesDeferred: 0, lastError: null };
 }
 
 function sourceAuditFor(
@@ -133,9 +136,15 @@ function sourceAuditFor(
       ...(rosterScan === undefined ? {} : { rosterScan }),
     };
   }
+  const deferred =
+    tally.companiesDeferred > 0
+      ? `${tally.companiesDeferred}/${companiesAttempted} companies were not asked within the search plan's shared allowance.`
+      : null;
   const status: DiscoverySourceAudit['status'] =
     tally.companiesFailed === 0
-      ? 'success'
+      ? deferred === null
+        ? 'success'
+        : 'partial'
       : tally.companiesBlocked === companiesAttempted
         ? 'blocked'
         : tally.companiesFailed === companiesAttempted
@@ -143,8 +152,8 @@ function sourceAuditFor(
           : 'partial';
   const error =
     tally.companiesFailed === 0
-      ? null
-      : `${tally.companiesFailed}/${companiesAttempted} companies failed (last error: ${tally.lastError ?? 'unknown'}).`;
+      ? deferred
+      : `${tally.companiesFailed}/${companiesAttempted} companies failed (last error: ${tally.lastError ?? 'unknown'}).${deferred === null ? '' : ` ${deferred}`}`;
   return {
     id: `${discoveryProvider}:roster-scan`,
     provider: discoveryProvider,
@@ -156,7 +165,7 @@ function sourceAuditFor(
     ...networkAttemptFields(counters),
     // A complete scan walks the provider partition. A focused scan is deliberately marked
     // incomplete because its due queue and exploration budget cover only a bounded tenant batch.
-    ...(tally.companiesFailed > 0
+    ...(tally.companiesFailed > 0 || deferred !== null
       ? incompleteAudit(error ?? 'One or more attempted companies failed for this provider.')
       : scanMode === 'incremental'
         ? incompleteAudit(
@@ -267,6 +276,13 @@ export async function runAtsRosterDiscovery(
           vacancies: result.vacancies,
         });
       } catch (error) {
+        if (isSearchPlanBudgetError(error)) {
+          // The plan's shared allowance, not the tenant, stopped this one (#686): no request is
+          // counted and no health observation is written, so the tenant stays due for the next scan.
+          tally.companiesDeferred += 1;
+          tallyByProvider.set(entry.provider, tally);
+          continue;
+        }
         tally.requests += 1;
         tally.companiesFailed += 1;
         const failure = sourceFailure(error);

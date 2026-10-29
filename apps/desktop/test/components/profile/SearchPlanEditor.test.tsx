@@ -25,7 +25,7 @@ afterEach(() => {
 
 describe('SearchPlanEditor (#686)', () => {
   it('shows the approved titles in order with language and where each came from, apart from suggestions', async () => {
-    installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue(PLAN) });
+    installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: PLAN }) });
     render(<SearchPlanEditor />);
 
     const list = await screen.findByRole('list', { name: 'Approved titles, in order' });
@@ -45,7 +45,7 @@ describe('SearchPlanEditor (#686)', () => {
   it('lets a person approve a plan by hand, with no AI, in the order and language they chose', async () => {
     const saveSearchPlan = vi.fn().mockResolvedValue({ ...EMPTY_SEARCH_PLAN, revision: 1 });
     const bridge = installVacancyRadarBridge({
-      getSearchPlan: vi.fn().mockResolvedValue(EMPTY_SEARCH_PLAN),
+      getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: EMPTY_SEARCH_PLAN }),
       saveSearchPlan,
     });
     render(<SearchPlanEditor />);
@@ -77,7 +77,7 @@ describe('SearchPlanEditor (#686)', () => {
 
   it('adds a suggestion only when the person presses Add, keeping its origin', async () => {
     const saveSearchPlan = vi.fn().mockResolvedValue({ ...PLAN, suggestions: [] });
-    const bridge = installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue(PLAN), saveSearchPlan });
+    const bridge = installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: PLAN }), saveSearchPlan });
     render(<SearchPlanEditor />);
 
     await screen.findByRole('list', { name: 'Suggested titles' });
@@ -97,7 +97,7 @@ describe('SearchPlanEditor (#686)', () => {
     const dismissSearchPlanSuggestion = vi.fn().mockResolvedValue({ ...PLAN, suggestions: [] });
     const saveSearchPlan = vi.fn();
     installVacancyRadarBridge({
-      getSearchPlan: vi.fn().mockResolvedValue(PLAN),
+      getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: PLAN }),
       dismissSearchPlanSuggestion,
       saveSearchPlan,
     });
@@ -109,8 +109,93 @@ describe('SearchPlanEditor (#686)', () => {
   });
 
   it('says plainly when no title is approved yet and that searches then use only what is typed', async () => {
-    installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue(EMPTY_SEARCH_PLAN) });
+    installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: EMPTY_SEARCH_PLAN }) });
     render(<SearchPlanEditor />);
     expect(await screen.findByText(/No titles approved yet. Searches use only what you type/)).toBeInTheDocument();
+  });
+
+  it('says markets, the primary function and languages do not filter, so nothing looks applied when it is not', async () => {
+    installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: PLAN }) });
+    render(<SearchPlanEditor />);
+    expect(await screen.findByText(/Markets and the primary function are kept with your plan but do not filter searches/)).toBeInTheDocument();
+    expect(screen.getByText(/never treated as a requirement/)).toBeInTheDocument();
+    expect(screen.getByText('Markets (kept with the plan only)')).toBeInTheDocument();
+  });
+
+  it('a newer-version plan is named as such, kept untouched, and replaced only after confirmation with a backup', async () => {
+    const resetSearchPlan = vi.fn().mockResolvedValue({
+      plan: EMPTY_SEARCH_PLAN,
+      backupFileName: 'search-plan-v1.json.unreadable-2026-10-29T10-00-00-000Z.bak',
+    });
+    const saveSearchPlan = vi.fn();
+    installVacancyRadarBridge({
+      getSearchPlan: vi.fn().mockResolvedValue({
+        status: 'unreadable',
+        reason: 'newer_version',
+        message: 'Your search plan was saved by a newer version of Open Vacancy Radar (plan format 2). This version cannot read it and will not change it.',
+        fileName: 'search-plan-v1.json',
+      }),
+      resetSearchPlan,
+      saveSearchPlan,
+    });
+    render(<SearchPlanEditor />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Your search plan was saved by a newer version of the app');
+    expect(alert).toHaveTextContent('plan format 2');
+    expect(alert).toHaveTextContent('Updating Open Vacancy Radar lets you use it again.');
+    // One explicit step, then a confirmation; nothing is replaced before it.
+    fireEvent.click(screen.getByRole('button', { name: 'Start a new plan' }));
+    expect(resetSearchPlan).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start a new plan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep a backup and start a new plan' }));
+    await waitFor(() => expect(resetSearchPlan).toHaveBeenCalledWith({ confirm: true }));
+    expect(resetSearchPlan).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/kept unchanged as search-plan-v1\.json\.unreadable-2026-10-29T10-00-00-000Z\.bak/)).toBeInTheDocument();
+    // The editor is usable again, on an empty plan.
+    expect(screen.getByRole('button', { name: 'Add search plan titles' })).toBeInTheDocument();
+    expect(saveSearchPlan).not.toHaveBeenCalled();
+  });
+
+  it('a damaged plan reads differently from a newer-version plan', async () => {
+    installVacancyRadarBridge({
+      getSearchPlan: vi.fn().mockResolvedValue({
+        status: 'unreadable',
+        reason: 'damaged',
+        message: 'Your search plan file is damaged: it is not valid JSON.',
+        fileName: 'search-plan-v1.json',
+      }),
+    });
+    render(<SearchPlanEditor />);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Your search plan file is damaged');
+    expect(alert).not.toHaveTextContent('newer version');
+    expect(screen.getByRole('button', { name: 'Start a new plan' })).toBeInTheDocument();
+  });
+
+  it('shows a readable save refusal for an unusable title, not a raw validation error', async () => {
+    const saveSearchPlan = vi.fn().mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'vacancy:save-search-plan': SearchPlanValidationError: Title 1 (\"##\") has no letters or numbers, so no source can search for it. Change it or remove it.",
+      ),
+    );
+    installVacancyRadarBridge({ getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: EMPTY_SEARCH_PLAN }), saveSearchPlan });
+    render(<SearchPlanEditor />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add search plan titles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add a title' }));
+    fireEvent.change(screen.getByLabelText('Title 1'), { target: { value: '##' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve search plan' }));
+    expect(
+      await screen.findByText('Title 1 ("##") has no letters or numbers, so no source can search for it. Change it or remove it.'),
+    ).toBeInTheDocument();
+  });
+
+  it('offers a retry when the plan could not be loaded at all', async () => {
+    const getSearchPlan = vi.fn().mockRejectedValueOnce(new Error('ipc down')).mockResolvedValue({ status: 'ok', plan: EMPTY_SEARCH_PLAN });
+    installVacancyRadarBridge({ getSearchPlan });
+    render(<SearchPlanEditor />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/No titles approved yet/)).toBeInTheDocument();
   });
 });

@@ -21,6 +21,7 @@ import type {
   GlobalRemoteReport,
   ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
+import type { SearchPlanLoadResult, SearchPlanResetResult } from './search-plan-store.js';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
 import type {
@@ -161,8 +162,16 @@ export interface VacancyRadarBridge {
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
-  /** The saved search plan (#686): approved titles plus suggestions still waiting for review. */
-  getSearchPlan(): Promise<SearchPlan>;
+  /**
+   * The saved search plan (#686): approved titles plus suggestions still waiting for review -- or, when
+   * the file cannot be used, why (damaged, written by a newer version, unopenable). Never rejects for those.
+   */
+  getSearchPlan(): Promise<SearchPlanLoadResult>;
+  /**
+   * Starts a new, empty plan after the saved one could not be read. `confirm` must be true (the page asks
+   * first); the unreadable file's exact bytes are kept next to it as a timestamped backup.
+   */
+  resetSearchPlan(confirmation: { confirm: true }): Promise<SearchPlanResetResult>;
   /** Approves the plan as written; only this call changes which titles a search uses. */
   saveSearchPlan(draft: SearchPlanDraft): Promise<SearchPlan>;
   /** Stores titles to review. They are never searched until approved with `saveSearchPlan`. */
@@ -368,6 +377,9 @@ const vacancyApi: VacancyRadarBridge = {
   },
   getSearchPlan() {
     return ipcRenderer.invoke('vacancy:get-search-plan');
+  },
+  resetSearchPlan(confirmation) {
+    return ipcRenderer.invoke('vacancy:reset-search-plan', confirmation);
   },
   saveSearchPlan(draft) {
     return ipcRenderer.invoke('vacancy:save-search-plan', draft);

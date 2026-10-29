@@ -386,8 +386,13 @@ export type LeadQueryProvenance = {
    * lead from a source that takes no role filter: its single feed was matched locally.
    */
   fetchedBy: (SearchPlanQueryRef & { provider: DiscoveryProvider })[];
-  /** Every query (literal and approved titles) the final shared filter found in this lead's text. */
-  matchedLocally: SearchPlanQueryRef[];
+  /**
+   * Every query (literal and approved titles) the final shared filter found in this lead, and WHERE:
+   * `title` (or employer name) or only in the `description`. Approved titles are matched against the
+   * title only; the typed query keeps its long-standing title-and-description rule, so a
+   * description-only match can only come from the typed query and is marked as such.
+   */
+  matchedLocally: (SearchPlanQueryRef & { field?: 'title' | 'description' })[];
 };
 
 /** How one query was handled by one source or by the run (#686). */
@@ -395,6 +400,7 @@ export type SearchPlanHandling =
   | 'sent_upstream'
   | 'local_only'
   | 'partial'
+  | 'not_sent'
   | 'covered_by_earlier_query'
   | 'deferred_request_budget'
   | 'deferred_time_budget'
@@ -406,12 +412,33 @@ export type SearchPlanSourceHandling = SearchPlanQueryRef & {
   reason: string | null;
 };
 
+/** What the run did with a plan field that is not a title (#686): never applied silently. */
+export type SearchPlanCriterionTreatment = {
+  criterion: 'markets' | 'primary_function' | 'working_language';
+  value: string;
+  treatment: 'not_applied' | 'title_text_only';
+  reason: string;
+};
+
+/** The declared allowance of a plan, input side. Unit for `maxRequests`: one physical network attempt. */
 export type SearchPlanEnvelope = {
-  /** Query-dependent requests (sources that declare a role filter) across the literal pass and every variant. */
+  /** Physical network attempts (first attempts, retries and redirect hops) for the whole plan. */
   maxRequests: number;
+  /** One deadline for the whole plan, from the start of the literal pass. */
   maxDurationMs: number;
-  /** Rows the variant passes may add before merge. */
+  /** Rows matching the plan's OR set (before identity merge), across the literal pass and every title. */
   maxResults: number;
+};
+
+export type SearchPlanVariantResult = SearchPlanQueryRef & {
+  handling: SearchPlanHandling;
+  reason: string | null;
+  /** Physical network attempts this title's pass made. */
+  attempts: number;
+  /** Providers that really received at least one request for this title. */
+  providersQueried: DiscoveryProvider[];
+  /** Providers of the pass that received no request for this title (refused, not configured or failed first). */
+  providersNotAsked: DiscoveryProvider[];
 };
 
 export type SearchPlanReport = {
@@ -421,21 +448,39 @@ export type SearchPlanReport = {
   workingLanguages: string[];
   /** The OR set the final filter applied: the literal query first, then the approved titles. */
   queries: SearchPlanQueryRef[];
-  variants: (SearchPlanQueryRef & {
-    handling: SearchPlanHandling;
-    reason: string | null;
-    requests: number;
-    providersQueried: DiscoveryProvider[];
-  })[];
+  /** The typed query's own pass, measured against the same envelope. */
+  literal: Omit<SearchPlanVariantResult, keyof SearchPlanQueryRef>;
+  variants: SearchPlanVariantResult[];
   envelope: SearchPlanEnvelope;
+  /** What the envelope covers and what it does not, in words, as declared by the engine. */
+  budgetScope: { unit: 'network_attempt'; includes: string; excludes: string };
   usage: {
-    literalRequests: number;
-    variantRequests: number;
+    /** Every physical attempt charged to the plan: literalAttempts + variantAttempts. */
+    attempts: number;
+    literalAttempts: number;
+    variantAttempts: number;
+    /** Logical calls refused before any network contact (never counted as requests). */
+    refusedCalls: number;
+    /** Retries, redirect hops or in-flight attempts cut after their call had reached the network. */
+    refusedFollowUps: number;
     elapsedMs: number;
-    variantRows: number;
+    matchingRows: number;
+    trimmedRows: number;
+    /** Physical attempts of discovery work outside the envelope (bulk snapshots), reported, not charged. */
+    outsideEnvelopeAttempts: number;
   };
+  /** Plan fields that are not titles, and what the run did with each. */
+  criteria: SearchPlanCriterionTreatment[];
+  /** Pass providers that received no request for ANY approved title. */
+  providersNeverAsked: DiscoveryProvider[];
   coverage: 'complete' | 'partial';
   coverageReason: string | null;
+};
+
+/** Why a run that asked for the plan ran without one, or with an empty one (#686). */
+export type SearchPlanRunStatus = {
+  state: 'used' | 'empty_at_start' | 'unreadable';
+  message: string | null;
 };
 
 export type AiSearchIntentCriterion = 'role' | 'country' | 'employment' | 'salary';
@@ -500,6 +545,11 @@ export type DiscoverySourceAudit = {
    */
   networkAttempts: number;
   /**
+   * Issue #686: on a planned run, what the plan's shared allowance did with this row's logical calls:
+   * sent (reached the network), refused before any contact, or follow-ups cut. Absent otherwise.
+   */
+  searchPlanAdmission?: { sentCalls: number; refusedCalls: number; refusedFollowUps: number; refusal: 'request' | 'time' | null };
+  /**
    * The subset of `networkAttempts` beyond the first attempt of each logical request -- i.e.
    * retries `SafeHttpClient` performed after a 429/5xx/timeout response, whether or not the retry
    * eventually succeeded. A 429 followed by an eventual success is recorded here even though
@@ -551,6 +601,8 @@ export type DiscoverySourceAudit = {
      * budget. Absent on a run without a plan.
      */
     searchPlan?: SearchPlanSourceHandling[];
+    /** Issue #686: the plan's non-title fields and what this source could (not) do with each. */
+    searchPlanCriteria?: SearchPlanCriterionTreatment[];
   };
   /** Aggregate telemetry for the incremental ATS tenant planner. Present on the first roster
    * provider audit only, so report consumers can sum source rows without double-counting it. */
@@ -711,6 +763,8 @@ export type GlobalRemoteReport = {
   discoveryAudit: DiscoveryVacancyAudit[];
   /** Issue #686: the search plan this run used, as a copy, with its budget and coverage. Absent on a literal run. */
   searchPlan?: SearchPlanReport;
+  /** Issue #686: set when a run asked for the plan but ran with none (empty or unreadable at start). */
+  searchPlanStatus?: SearchPlanRunStatus;
   methodology: string[];
   attribution: { name: string; url: string }[];
 };

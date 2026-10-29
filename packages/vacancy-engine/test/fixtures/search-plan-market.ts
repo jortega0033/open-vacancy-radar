@@ -1,4 +1,9 @@
 import { AtsResponseError, type AtsHttpClient, type AtsHttpResponse } from '../../src/ats/http.js';
+import { SafeHttpClient, type SafeHttpClientOptions } from '../../src/crawler/http-client.js';
+import type { DnsResolver } from '../../src/crawler/url-safety.js';
+import { recordAttributedNetworkAttempt } from '../../src/global-remote/discovery-attribution.js';
+import { admitSearchPlanAttempt } from '../../src/global-remote/search-plan-ledger.js';
+import { createAtsHttpClient } from '../../src/pipeline/ats-http-client.js';
 
 /**
  * SYNTHETIC labelled corpus for issue #686. Every company, title, URL and description below is made
@@ -57,6 +62,16 @@ export const SYNTHETIC_CORPUS: readonly SyntheticJob[] = [
   // Two DIFFERENT requisitions: same company, same title, different ATS requisition ids.
   { id: 'a5', source: 'arbeitnow', equivalent: true, title: 'Frontend Engineer', company: 'Iota Platforms', url: 'https://job-boards.greenhouse.io/iotaplatforms/jobs/111', description: GENERIC },
   { id: 'a6', source: 'arbeitnow', equivalent: true, title: 'Frontend Engineer', company: 'Iota Platforms', url: 'https://job-boards.greenhouse.io/iotaplatforms/jobs/222', description: GENERIC },
+  // HARD NEGATIVES (labelled not equivalent by the fixture author; first raised by the #686 review):
+  // an approved title only MENTIONED in the description, adjacent managers/recruiters whose title
+  // embeds a frontend phrase, and other job families. Upstreams that search descriptions return them.
+  { id: 'n1', source: 'himalayas', equivalent: false, title: 'Backend Engineer', company: 'Neg One Systems', url: 'https://job-boards.greenhouse.io/negone/jobs/9101', description: 'You will pair daily with our React developer and Frontend engineer colleagues to ship APIs.' },
+  { id: 'n2', source: 'jobicy', equivalent: false, title: 'Engineering Manager, Frontend Engineering', company: 'Neg Two Labs', url: 'https://job-boards.greenhouse.io/negtwo/jobs/9102', description: 'Manage the team of frontend engineers.' },
+  { id: 'n3', source: 'himalayas', equivalent: false, title: 'Technical Recruiter', company: 'Neg Three Talent', url: 'https://job-boards.greenhouse.io/negthree/jobs/9103', description: 'We are hiring a React developer, a UI engineer and a frontend engineer this quarter. You will source candidates.' },
+  { id: 'n4', source: 'jobicy', equivalent: false, title: 'Sales Engineer', company: 'Neg Four Sales', url: 'https://job-boards.greenhouse.io/negfour/jobs/9104', description: 'Demo our UI engineer toolkit to prospects.' },
+  { id: 'n5', source: 'arbeitnow', equivalent: false, title: 'Data Scientist', company: 'Neg Five Data', url: 'https://www.arbeitnow.com/jobs/negfive-data', description: 'Our frontend engineer colleagues consume your models.' },
+  { id: 'n6', source: 'jobtech', equivalent: false, title: 'Frontend Engineering Manager', company: 'Neg Six Nordic', url: 'https://example.invalid/jobtech/negsix-manager', description: GENERIC },
+  { id: 'n7', source: 'arbeitnow', equivalent: false, title: 'React Native Developer', company: 'Neg Seven Mobile', url: 'https://www.arbeitnow.com/jobs/negseven-mobile', description: 'Build our iOS and Android apps.' },
 ];
 
 export interface MarketRequest {
@@ -90,6 +105,8 @@ export class SyntheticMarket implements AtsHttpClient {
 
   public async get(url: string): Promise<AtsHttpResponse> {
     const parsed = new URL(url);
+    parsed.searchParams.delete(REDIRECT_MARKER);
+    url = parsed.toString();
     this.requests.push({ url, host: parsed.hostname });
     if (parsed.hostname === 'himalayas.app') {
       const jobs = this.corpus.filter((job) => job.source === 'himalayas' && matchesUpstreamQuery(job, parsed.searchParams.get('q')));
@@ -150,4 +167,97 @@ export class SyntheticMarket implements AtsHttpClient {
     this.requests.push({ url, host: new URL(url).hostname });
     throw new AtsResponseError('synthetic-market', 'no such upstream in the synthetic corpus', 404);
   }
+}
+
+const REDIRECT_MARKER = 'ovr_hop';
+
+const publicResolver: DnsResolver = () => Promise.resolve([{ address: '93.184.216.34', family: 4 }]);
+
+export interface FetchLogEntry {
+  url: string;
+  host: string;
+  method: string;
+}
+
+export interface SyntheticTransportOptions {
+  /** The first N fetches of every distinct URL answer 503, so the real client retries them. */
+  transientFailuresPerUrl?: number;
+  /** Hosts whose first hop answers 302 back to the same URL with a marker: a real redirect hop. */
+  redirectHosts?: readonly string[];
+  /** Hosts whose fetch never answers until it is aborted (in-flight deadline tests). */
+  hangingHosts?: readonly string[];
+  /** Client retry ceiling; production defaults to 2. */
+  maxRetries?: number;
+  /**
+   * The hooks the client is wired with. Defaults to the production wiring; a test of the scan's own
+   * composition root passes whatever that root hands over, to prove the root wires them.
+   */
+  wiring?: Pick<SafeHttpClientOptions, 'admitNetworkRequest' | 'onNetworkRequest'>;
+}
+
+/**
+ * The REAL request path for the synthetic corpus: a real `SafeHttpClient` (URL safety, redirects,
+ * retries, scheduling) wired exactly like the scan's composition root -- `admitNetworkRequest` charges
+ * a search plan's ledger, `onNetworkRequest` feeds per-source attempt telemetry -- with only `fetch`
+ * scripted. `fetchLog` is the upstream's own log of every physical request it received.
+ */
+export class SyntheticTransport {
+  public readonly fetchLog: FetchLogEntry[] = [];
+  public readonly market: SyntheticMarket;
+  public readonly safeClient: SafeHttpClient;
+  public readonly http: AtsHttpClient;
+  readonly #seen = new Map<string, number>();
+  readonly #options: SyntheticTransportOptions;
+
+  public constructor(corpus: readonly SyntheticJob[] = SYNTHETIC_CORPUS, options: SyntheticTransportOptions = {}) {
+    this.#options = options;
+    this.market = new SyntheticMarket(corpus);
+    this.safeClient = new SafeHttpClient({
+      globalConcurrency: 8,
+      perDomainConcurrency: 4,
+      timeoutMs: 5_000,
+      maxRetries: options.maxRetries ?? 2,
+      userAgent: 'OpenVacancyRadar/test (+synthetic search plan fixture)',
+      resolver: publicResolver,
+      fetchFn: this.fetch,
+      random: () => 0.5,
+      sleep: () => Promise.resolve(),
+      ...(options.wiring ?? {
+        admitNetworkRequest: admitSearchPlanAttempt,
+        onNetworkRequest: (_url: string, meta: { retryIndex: number }) => recordAttributedNetworkAttempt(meta.retryIndex),
+      }),
+    });
+    this.http = createAtsHttpClient(this.safeClient);
+  }
+
+  public fetchesTo(host: string): FetchLogEntry[] {
+    return this.fetchLog.filter((entry) => entry.host === host);
+  }
+
+  public readonly fetch: typeof fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const parsed = new URL(url);
+    const method = init?.method ?? 'GET';
+    this.fetchLog.push({ url, host: parsed.hostname, method });
+    if (this.#options.hangingHosts?.includes(parsed.hostname)) {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      });
+    }
+    if (this.#options.redirectHosts?.includes(parsed.hostname) && !parsed.searchParams.has(REDIRECT_MARKER)) {
+      const target = new URL(url);
+      target.searchParams.set(REDIRECT_MARKER, '1');
+      return new Response(null, { status: 302, headers: { location: target.toString() } });
+    }
+    const seen = (this.#seen.get(url) ?? 0) + 1;
+    this.#seen.set(url, seen);
+    if (seen <= (this.#options.transientFailuresPerUrl ?? 0)) return new Response('busy', { status: 503 });
+    try {
+      const response = method === 'POST' ? await this.market.postJson(url) : await this.market.get(url);
+      return new Response(response.body, { status: response.status, headers: response.headers });
+    } catch (error) {
+      const status = error instanceof AtsResponseError && error.status !== null ? error.status : 500;
+      return new Response('not served', { status });
+    }
+  };
 }

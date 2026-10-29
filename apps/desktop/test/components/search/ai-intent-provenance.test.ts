@@ -48,9 +48,14 @@ describe('describeAiIntentProvenance', () => {
   });
 
   it('does not describe a version it does not know, and does not read its contents', () => {
-    expect(describeAiIntentProvenance({ ...V1, intentVersion: 2, criteria: null })).toBe(
-      'AI search intent v2 not shown (this version of the app reads v1)',
+    expect(describeAiIntentProvenance({ ...V1, intentVersion: 3, criteria: null })).toBe(
+      'AI search intent v3 not shown (this version of the app reads v1-v2)',
     );
+    // Version 2 (#686: the run intent gained the search plan) keeps the same provenance layout.
+    expect(describeAiIntentProvenance({ ...V1, intentVersion: 2 })).toBe(
+      describeAiIntentProvenance(V1).replace('AI search intent v1', 'AI search intent v2'),
+    );
+    expect(describeAiIntentProvenance({ ...V1, intentVersion: 2 })).toMatch(/^AI search intent v2, run /u);
     expect(describeAiIntentProvenance({ ...V1, intentVersion: '1' })).toBe('AI search intent not shown (unrecognised format)');
     expect(describeAiIntentProvenance({ criteria: V1.criteria })).toBe('AI search intent not shown (unrecognised format)');
   });

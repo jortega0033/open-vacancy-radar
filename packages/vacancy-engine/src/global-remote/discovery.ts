@@ -276,6 +276,13 @@ export async function runGlobalRemoteDiscovery(
   projectRoot?: string,
   onProgress?: ScanProgressCallback,
   signal?: AbortSignal,
+  options: {
+    /**
+     * Issue #686: true when a search plan's shared allowance refused some of this run's requests. Like a
+     * cancelled run, a refused request says nothing about the source, so it must not feed gap telemetry.
+     */
+    requestsWereRefused?: () => boolean;
+  } = {},
 ): Promise<DiscoveryRun> {
   const [himalayas, jobicy, aiDevJobs, taiwanJobs, philJobNet, structured, feeds, jobtech, additional, keyed, atsRosterScan] =
     await Promise.all([
@@ -319,7 +326,7 @@ export async function runGlobalRemoteDiscovery(
   ];
   // A cancelled run's sources all "failed" because their requests were refused, which says nothing
   // about the sources themselves, so it must not feed gap telemetry.
-  if (projectRoot !== undefined && signal?.aborted !== true) {
+  if (projectRoot !== undefined && signal?.aborted !== true && options.requestsWereRefused?.() !== true) {
     try {
       const gapReport = await recordDiscoveryGapTelemetry(sources, projectRoot);
       await writeGapTelemetryReport(gapReport, projectRoot);

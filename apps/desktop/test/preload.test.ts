@@ -172,11 +172,12 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the twenty documented capability functions and nothing else', async () => {
+  it('exposes exactly the twenty-one documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
       [
         'getSearchPlan',
+        'resetSearchPlan',
         'saveSearchPlan',
         'addSearchPlanSuggestions',
         'dismissSearchPlanSuggestion',
@@ -213,6 +214,8 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     expect(invoke).toHaveBeenLastCalledWith('vacancy:save-search-plan', draft);
     await (api.addSearchPlanSuggestions as (value: unknown) => Promise<unknown>)([{ title: 'UI engineer' }]);
     expect(invoke).toHaveBeenLastCalledWith('vacancy:add-search-plan-suggestions', [{ title: 'UI engineer' }]);
+    await (api.resetSearchPlan as (value: unknown) => Promise<unknown>)({ confirm: true });
+    expect(invoke).toHaveBeenLastCalledWith('vacancy:reset-search-plan', { confirm: true });
     await (api.dismissSearchPlanSuggestion as (value: unknown) => Promise<unknown>)('ui-engineer');
     expect(invoke).toHaveBeenLastCalledWith('vacancy:dismiss-search-plan-suggestion', 'ui-engineer');
   });
@@ -740,10 +743,12 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
   // trigger (the manual "Refresh company roster" Settings action), same reasoning again.
   // `getReportSummary` is a cheap metadata read for foreground resume: Search can avoid pulling
   // a 20k-row report over IPC when the stored report has not changed.
-  // `getSearchPlan`/`saveSearchPlan`/`addSearchPlanSuggestions`/`dismissSearchPlanSuggestion` added by
-  // issue #686 (the reviewed search plan), same reasoning again: a legitimate widening, not ADI-06/07.
+  // `getSearchPlan`/`saveSearchPlan`/`addSearchPlanSuggestions`/`dismissSearchPlanSuggestion`/
+  // `resetSearchPlan` added by issue #686 (the reviewed search plan), same reasoning again: a legitimate
+  // widening, not ADI-06/07.
   vacancyRadar: [
     'getSearchPlan',
+    'resetSearchPlan',
     'saveSearchPlan',
     'addSearchPlanSuggestions',
     'dismissSearchPlanSuggestion',

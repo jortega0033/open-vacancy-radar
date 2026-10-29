@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -9,7 +9,8 @@ import {
   ScanCancelledError,
   isScanCancelledError,
   resolveFocusedLeads,
-  runSearchPlanVariantPasses,
+  runSearchPlan,
+  type SearchPlanRunResult,
   type CandidateProfile,
   type GlobalRemoteReport,
   type GlobalRemoteScanOptions,
@@ -17,7 +18,7 @@ import {
 } from '@open-vacancy-radar/vacancy-engine';
 import { runGlobalRemoteDiscovery } from '../../../packages/vacancy-engine/src/global-remote/discovery.js';
 import type { GlobalRemoteConfig } from '../../../packages/vacancy-engine/src/global-remote/models.js';
-import { SyntheticMarket } from '../../../packages/vacancy-engine/test/fixtures/search-plan-market.js';
+import { SyntheticTransport } from '../../../packages/vacancy-engine/test/fixtures/search-plan-market.js';
 import { createScanGuard, isExpectedScanBusyError } from '../electron/scan-guard.js';
 import { createSearchPlanStore } from '../electron/search-plan-store.js';
 import { parseVacancyScanRequest, selectBackgroundScan } from '../electron/vacancy-scan-query.js';
@@ -28,10 +29,12 @@ import { createVacancyScanRunner } from '../electron/vacancy-scan-run.js';
 //
 // Real here: the plan store (approval, persistence to a temp file, suggestions, snapshot), the run
 // lifecycle (`createVacancyScanRunner`, what main.ts delegates to), background selection, the
-// engine's own discovery adapters, variant passes, identity merge, shared OR filter and provenance
-// (`runGlobalRemoteDiscovery`, `runSearchPlanVariantPasses`, `resolveFocusedLeads`).
-// Fake: the upstream sites (the engine package's synthetic labelled market) and the engine's report
-// writing and enrichment. No provider, job site or network is touched.
+// engine's own discovery adapters run through a real `SafeHttpClient`, the plan ledger and variant
+// passes, identity merge, shared OR filter and provenance (`runSearchPlan`, `resolveFocusedLeads`).
+// Fake: the upstream sites (the engine package's synthetic labelled corpus behind a scripted fetch)
+// and the engine's report writing and enrichment. The engine's own `runGlobalRemoteScan` with a plan
+// is covered end to end in packages/vacancy-engine/test/pipeline/global-remote-search-plan.test.ts.
+// No provider, job site or network is touched.
 // ---------------------------------------------------------------------------------------------
 
 const PROFILE: CandidateProfile = {
@@ -100,28 +103,33 @@ function gate(): Gate {
  */
 function planAwareEngine(options: { hold?: Gate } = {}) {
   const calls: GlobalRemoteScanOptions[] = [];
-  const markets: SyntheticMarket[] = [];
+  const transports: SyntheticTransport[] = [];
   async function run(scanOptions: GlobalRemoteScanOptions): Promise<GlobalRemoteScanResult> {
     calls.push(scanOptions);
     if (scanOptions.signal?.aborted) throw new ScanCancelledError();
-    const market = new SyntheticMarket();
-    markets.push(market);
+    const transport = new SyntheticTransport();
+    transports.push(transport);
     const literal = scanOptions.query ?? '';
     const config = baseConfig(literal);
-    const literalRun = await runGlobalRemoteDiscovery(market, config);
-    if (options.hold && calls.length === 1) await options.hold.promise;
-    const plan = scanOptions.searchPlan
-      ? await runSearchPlanVariantPasses({
-          http: market,
+    const callNumber = calls.length;
+    const literalPass = async (http: typeof transport.http) => {
+      const literalRun = await runGlobalRemoteDiscovery(http, config);
+      if (options.hold && callNumber === 1) await options.hold.promise;
+      return literalRun;
+    };
+    const plan: SearchPlanRunResult | null = scanOptions.searchPlan
+      ? await runSearchPlan({
+          http: transport.http,
           config,
           literal,
           snapshot: scanOptions.searchPlan,
-          literalRun,
           ...(scanOptions.searchPlanEnvelope ? { envelope: scanOptions.searchPlanEnvelope } : {}),
+          runLiteral: literalPass,
         })
       : null;
+    const literalRun = plan ? null : await literalPass(transport.http);
     const resolved = resolveFocusedLeads(
-      plan?.run ?? literalRun,
+      plan?.run ?? literalRun!,
       {
         role: literal,
         ...(plan ? { roleAlternatives: plan.report.queries.slice(1).map((query) => query.query) } : {}),
@@ -136,10 +144,11 @@ function planAwareEngine(options: { hold?: Gate } = {}) {
       discoveryAudit: resolved.focused.vacancies,
       discoverySources: resolved.discoverySources,
       ...(plan ? { searchPlan: plan.report } : {}),
+      ...(scanOptions.searchPlanStatus ? { searchPlanStatus: scanOptions.searchPlanStatus } : {}),
     } as unknown as GlobalRemoteReport;
     return { report, files: {} as GlobalRemoteScanResult['files'] };
   }
-  return { run, calls, markets };
+  return { run, calls, transports };
 }
 
 let directory: string | undefined;
@@ -231,13 +240,13 @@ describe('reviewed search plan, from approval to report (#686)', () => {
     for (const title of ['React Developer', 'Frontend Engineer', 'UI Engineer', 'Senior UI Engineer', 'Frontend ontwikkelaar']) {
       expect(titlesOf(report)).toContain(title);
     }
-    for (const unwanted of ['Backend Engineer', 'UI Designer', 'Sales Manager']) {
+    for (const unwanted of ['UI Designer', 'Sales Manager', 'Sales Engineer', 'Data Scientist']) {
       expect(titlesOf(report)).not.toContain(unwanted);
     }
     const senior = report.discoveryAudit.find((lead) => lead.title === 'Senior UI Engineer')!;
     expect(senior.queryProvenance).toMatchObject({
       planRevision: 1,
-      matchedLocally: [{ query: 'UI engineer', language: null }],
+      matchedLocally: [{ query: 'UI engineer', language: null, field: 'title' }],
       fetchedBy: [{ query: 'UI engineer', provider: 'jobicy' }],
     });
     const dutch = report.discoveryAudit.find((lead) => lead.title === 'Frontend ontwikkelaar')!;
@@ -261,7 +270,9 @@ describe('reviewed search plan, from approval to report (#686)', () => {
 
     expect(Object.keys(engine.calls[0]!)).not.toContain('searchPlan');
     expect(report.searchPlan).toBeUndefined();
-    expect(titlesOf(report).every((title) => /react developer/i.test(title))).toBe(true);
+    // The typed query keeps its title-and-description rule: labelled hard negatives that mention it in the
+    // description stay in a literal run, exactly as before #686.
+    expect(titlesOf(report).filter((title) => !/react developer/i.test(title)).sort()).toEqual(['Backend Engineer', 'Technical Recruiter']);
     expect(report.discoveryAudit.every((lead) => lead.queryProvenance === undefined)).toBe(true);
   });
 
@@ -335,42 +346,130 @@ describe('reviewed search plan, from approval to report (#686)', () => {
     const engine = planAwareEngine();
     const h = harness(store, engine);
 
-    const selection = selectBackgroundScan(PROFILE, await store.get());
-    expect(selection).toEqual({ query: 'React developer', useSearchPlan: true });
-    const report = await h.runner.run({ mode: 'query', query: selection!.query, ...(selection!.useSearchPlan ? { useSearchPlan: true } : {}) });
+    const loaded = await store.load();
+    const selection = selectBackgroundScan(PROFILE, loaded.status === 'ok' ? loaded.plan : 'unreadable');
+    expect(selection).toEqual({ query: 'React developer', fallbackQuery: 'Backend Engineer', useSearchPlan: true });
+    const report = await h.runner.run({ mode: 'query', query: selection!.fallbackQuery, useSearchPlan: true, queryFromSearchPlan: true });
 
     expect(engine.calls).toHaveLength(1);
+    // The run took its query from the snapshot it captured itself: the first approved title.
     expect(engine.calls[0]!.query).toBe('React developer');
     expect(engine.calls[0]!.searchPlan!.variants).toHaveLength(4);
     // The saved roles (backend, data, design) were not searched on their own.
-    expect(engine.markets[0]!.requests.map((request) => request.url).join(' ')).not.toMatch(/backend|data\+engineer|designer/i);
-    // Same declared allowance as a manual planned run.
+    expect(engine.transports[0]!.fetchLog.map((request) => request.url).join(' ')).not.toMatch(/backend|data\+engineer|designer/i);
     expect(report.searchPlan!.envelope).toEqual(DEFAULT_SEARCH_PLAN_ENVELOPE);
 
     // Without a usable plan it is the first saved role, as before; suggestions alone are not a plan.
-    expect(selectBackgroundScan(PROFILE, null)).toEqual({ query: 'Backend Engineer', useSearchPlan: false });
+    expect(selectBackgroundScan(PROFILE, null)).toEqual({ query: 'Backend Engineer', fallbackQuery: 'Backend Engineer', useSearchPlan: false });
     await store.save({ primaryFunction: '', variants: [] });
     const empty = await store.addSuggestions([{ title: 'UI engineer' }]);
-    expect(selectBackgroundScan(PROFILE, empty)).toEqual({ query: 'Backend Engineer', useSearchPlan: false });
+    expect(selectBackgroundScan(PROFILE, empty)).toEqual({ query: 'Backend Engineer', fallbackQuery: 'Backend Engineer', useSearchPlan: false });
     expect(selectBackgroundScan({ ...PROFILE, targetRoles: [], strongestSkills: [] }, empty)).toBeNull();
   });
 
-  it('fails clearly, before any source is asked, when the saved plan cannot be read', async () => {
+  it('reads the plan once per background run: a title removed after selection is not searched, and an emptied plan is reported', async () => {
+    const { store } = await newStore();
+    await store.save(DRAFT);
+    const engine = planAwareEngine();
+    const h = harness(store, engine);
+    const loaded = await store.load();
+    const selection = selectBackgroundScan(PROFILE, loaded.status === 'ok' ? loaded.plan : 'unreadable')!;
+
+    // Between selection and the run starting, the person removes the first title.
+    await store.save({ ...DRAFT, variants: DRAFT.variants.slice(1) });
+    await h.runner.run({ mode: 'query', query: selection.fallbackQuery, useSearchPlan: true, queryFromSearchPlan: true });
+    expect(engine.calls[0]!.query).toBe('Frontend engineer');
+    expect(engine.calls[0]!.searchPlan!.variants.map((variant) => variant.title)).not.toContain('React developer');
+
+    // And when the plan is emptied before the run starts, the run says what it searched instead.
+    await store.save({ ...DRAFT, variants: [] });
+    const fallback = await h.runner.run({ mode: 'query', query: selection.fallbackQuery, useSearchPlan: true, queryFromSearchPlan: true });
+    expect(engine.calls[1]!.query).toBe('Backend Engineer');
+    expect(engine.calls[1]!.searchPlan).toBeUndefined();
+    expect(fallback.searchPlanStatus).toEqual({
+      state: 'empty_at_start',
+      message: 'Your search plan had no approved titles when this background search started, so it searched your saved role or skill "Backend Engineer" only.',
+    });
+  });
+
+  it('a person-started planned run whose plan emptied before it began says so instead of silently searching one query', async () => {
+    const { store } = await newStore();
+    await store.save({ primaryFunction: '', variants: [] });
+    const engine = planAwareEngine();
+    const h = harness(store, engine);
+    const report = await h.runner.run(PLAN_RUN);
+    expect(engine.calls[0]!.searchPlan).toBeUndefined();
+    expect(report.searchPlanStatus).toEqual({
+      state: 'empty_at_start',
+      message: 'Your search plan had no approved titles when this search started, so only the typed query was searched.',
+    });
+    expect(h.runner.status()).toBeUndefined();
+  });
+
+  it('a damaged or newer-version plan fails a person-started planned run clearly, is never overwritten by a save, and resets only with confirmation and a byte-exact backup', async () => {
     const { store, file } = await newStore();
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, '{ not json', 'utf8');
+    const future = `${JSON.stringify({ schemaVersion: 2, revision: 7, variants: [{ id: 'x', title: 'Future title', weight: 2 }] })}\n`;
+    await writeFile(file, future, 'utf8');
     const engine = planAwareEngine();
     const h = harness(store, engine);
 
-    await expect(h.runner.run(PLAN_RUN)).rejects.toThrow();
+    const loaded = await store.load();
+    expect(loaded).toEqual({
+      status: 'unreadable',
+      reason: 'newer_version',
+      message: 'Your search plan was saved by a newer version of Open Vacancy Radar (plan format 2). This version cannot read it and will not change it.',
+      fileName: 'search-plan-v1.json',
+    });
+    await expect(h.runner.run(PLAN_RUN)).rejects.toThrow(/newer version/);
     expect(engine.calls).toHaveLength(0);
     expect(h.failed).toHaveLength(1);
-    // A literal search is unaffected by the damaged plan file.
+    // A literal search is unaffected.
     await expect(h.runner.run(LITERAL_RUN)).resolves.toBeDefined();
-    // Suggestions do not quietly replace a file the person may still want; approving a plan repairs it.
-    await expect(store.addSuggestions([{ title: 'UI engineer' }])).rejects.toThrow();
+
+    // Ordinary saves and suggestions refuse and leave the file byte-for-byte as it was.
+    await expect(store.save(DRAFT)).rejects.toThrow(/newer version/);
+    await expect(store.addSuggestions([{ title: 'UI engineer' }])).rejects.toThrow(/newer version/);
+    expect(await readFile(file, 'utf8')).toBe(future);
+
+    // A background run falls back to the saved role and reports why, on the report.
+    const background = await h.runner.run({ mode: 'query', query: 'Backend Engineer', useSearchPlan: true, queryFromSearchPlan: true });
+    expect(background.searchPlanStatus?.state).toBe('unreadable');
+    expect(background.searchPlanStatus?.message).toMatch(/newer version.*This background search used your saved role or skill "Backend Engineer" instead\./);
+
+    // Reset needs explicit confirmation, then keeps the exact bytes before starting an empty plan.
+    await expect(store.resetUnreadable({})).rejects.toThrow(/confirmation/);
+    expect(await readFile(file, 'utf8')).toBe(future);
+    const reset = await store.resetUnreadable({ confirm: true });
+    expect(reset.plan.variants).toEqual([]);
+    const backup = path.join(path.dirname(file), reset.backupFileName);
+    expect(reset.backupFileName).toMatch(/^search-plan-v1\.json\.unreadable-.*\.bak$/);
+    expect(await readFile(backup, 'utf8')).toBe(future);
+    expect((await store.load()).status).toBe('ok');
+    await expect(store.resetUnreadable({ confirm: true })).rejects.toThrow(/nothing to reset/);
+    expect((await readdir(path.dirname(file))).filter((name) => name.endsWith('.bak'))).toEqual([reset.backupFileName]);
+
+    // Now the person can approve a plan again.
     await store.save(DRAFT);
     const repaired = await h.runner.run(PLAN_RUN);
     expect(repaired.searchPlan!.planRevision).toBe(1);
+  });
+
+  it('a damaged plan is reported as damaged, not as a newer version', async () => {
+    const { store, file } = await newStore();
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, '{ not json', 'utf8');
+    const loaded = await store.load();
+    expect(loaded.status === 'unreadable' && loaded.reason).toBe('damaged');
+    await expect(store.save(DRAFT)).rejects.toThrow(/damaged/);
+    expect(await readFile(file, 'utf8')).toBe('{ not json');
+  });
+
+  it('refuses an unusable title with a readable message instead of a raw validation error', async () => {
+    const { store } = await newStore();
+    await expect(store.save({ primaryFunction: '', variants: [{ title: 'React developer' }, { title: '##' }] })).rejects.toThrow(
+      'Title 2 ("##") has no letters or numbers, so no source can search for it. Change it or remove it.',
+    );
+    await expect(store.save({ variants: 'nope' })).rejects.toThrow(/not in the expected form/);
   });
 });

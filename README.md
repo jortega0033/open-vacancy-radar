@@ -69,18 +69,34 @@ an ordered list of equivalent titles (for example React developer, Frontend engi
 the working language each title is written in, and the markets you care about. It describes the work
 you want, not facts about you, and it works by hand with no AI. Titles suggested by the
 CV tools ("Best-fit roles") or an AI answer wait in a separate list and are searched only after you add
-them. When a plan has titles, the Search page offers "Also search my N approved titles". The title
-you type is searched first, exactly as before; then each approved title is asked only of the job
-sources that can filter by title (the others return one feed whatever the title, so they are not
-asked again and the title is matched locally). All titles share ONE declared allowance of requests,
-time and extra rows, however many there are; titles the allowance did not reach are listed as
-deferred, with the reason, in the results notice and in "Copy diagnostics", together with what each
-source did with each title. A row is kept when it matches ANY approved title, and it says which title
-found it. The language you pick for a title is used for the search and for that note; it never makes
-a job count as requiring that language, which only an explicit statement in the advert does. A run
-takes a frozen copy of the plan when it starts, so editing or removing a title changes the next search
-only, and finished reports keep their own copy. The unattended background scan uses the same plan and
-allowance in one run instead of scanning each saved role. Without approved titles, or with the switch
+them. When a plan has titles, the Search page offers "Also search my N approved titles"; it starts off,
+shows the titles it adds, and remembers your choice. The title you type is searched first, exactly as
+before; then each approved title is asked only of the job sources that can filter by title (the others
+return one feed whatever the title, so they are not asked again and the title is matched locally).
+
+The whole plan -- the typed query's discovery pass, including fixed feeds and the company-roster batch,
+and every approved title -- runs inside ONE declared allowance: a number of network requests counted at
+the HTTP client before each request is made (every retry and redirect counts), one deadline that also
+cuts a request still in flight, and one limit on matching rows. The Workable and MPSV bulk snapshots,
+official employer checks, sponsor lookups and per-job detail fetches run the same with or without a plan
+and are outside it; the report lists them. Titles the allowance did not reach are listed as deferred, and
+each source row says whether that title really reached it, was only partly asked, or was not asked, with
+the reason, in the results notice and in "Copy diagnostics". A row is kept when the typed query matches
+it as before, or when an approved title appears in its title (a title only mentioned in a description
+does not count); each job says which query found it and whether the typed query matched only its
+description. Markets and the primary function are kept with the plan but do not filter searches (use
+Country for that); the report and diagnostics say so per source. The language you pick for a title is
+used for the search and for provenance; it never makes a job count as requiring that language, which
+only an explicit statement in the advert does. A job whose title matches an approved title is treated as
+in scope by the engine's pre-classification, so the usual language, location and salary checks apply to
+it. A run takes a frozen copy of the plan when it starts, so editing or removing a title changes the
+next search only, and finished reports keep their own copy. If the plan was empty or could not be read
+when a run started, the results say so. A damaged plan file, or one written by a newer version, is never
+overwritten by an ordinary save: the editor says which it is and offers "Start a new plan", which first
+keeps the file's exact bytes as a timestamped backup next to it. The unattended background scan uses the
+same plan and allowance in one run instead of scanning each saved role (falling back to the first saved
+role, and saying so, when the plan cannot be used); the background company-board scout checks only the
+first approved title, with no plan allowance of its own. Without approved titles, or with the switch
 off, a search is the single typed query it always was. Same-requisition duplicates are merged by the
 existing identity rules; different requisitions with the same company and title stay separate.
 

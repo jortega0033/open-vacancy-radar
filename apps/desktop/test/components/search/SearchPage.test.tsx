@@ -1764,8 +1764,8 @@ describe('SearchPage', () => {
     });
 
     it('copies the other diagnostics and says the line is not shown when the saved version is unknown', async () => {
-      const copied = await copiedDiagnosticsFor(aiSource({ ...intentV1('UI engineer'), intentVersion: 2, criteria: 'something new' }));
-      expect(copied).toContain('AI search intent v2 not shown (this version of the app reads v1)');
+      const copied = await copiedDiagnosticsFor(aiSource({ ...intentV1('UI engineer'), intentVersion: 3, criteria: 'something new' }));
+      expect(copied).toContain('AI search intent v3 not shown (this version of the app reads v1-v2)');
       expect(copied).not.toContain('UI engineer');
       expect(copied).toContain('Run ww-run-1');
       expect(copied).toContain('failed schema validation');
@@ -2876,28 +2876,65 @@ describe('SearchPage search plan (#686)', () => {
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'react developer' }));
   });
 
-  it('searches the approved titles by default, lets the person turn that off, and then sends the literal request', async () => {
+  it('leaves the plan off until the person turns it on, shows what it adds, and remembers the choice', async () => {
+    window.localStorage.removeItem('ovr.search.useSearchPlan');
     const bridge = installAllBridges({
       runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
-      getSearchPlan: vi.fn().mockResolvedValue(PLAN),
+      getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: PLAN }),
     });
-    render(<SearchPage />);
+    const first = render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
+    // Default OFF: approving titles never silently widens an unrelated search.
     const toggle = await screen.findByRole('checkbox', { name: 'Also search my 2 approved titles' });
-    expect(toggle).toBeChecked();
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByTestId('search-plan-titles')).not.toBeInTheDocument();
     enterSearchQuery('react developer');
     fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
-    await waitFor(() =>
-      expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'react developer', useSearchPlan: true }),
-    );
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'react developer' }));
 
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Search' })[0]).toBeEnabled());
     fireEvent.click(toggle);
-    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeChecked();
+    expect(screen.getByTestId('search-plan-titles')).toHaveTextContent('(React developer, UI engineer)');
     fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(2));
-    expect(bridge.runScan).toHaveBeenLastCalledWith({ mode: 'query', query: 'react developer' });
+    expect(bridge.runScan).toHaveBeenLastCalledWith({ mode: 'query', query: 'react developer', useSearchPlan: true });
+
+    // The choice is remembered for the next visit.
+    first.unmount();
+    render(<SearchPage />);
+    expect(await screen.findByRole('checkbox', { name: 'Also search my 2 approved titles' })).toBeChecked();
+    window.localStorage.removeItem('ovr.search.useSearchPlan');
+  });
+
+  it('says so when the saved plan cannot be read, instead of quietly offering no plan', async () => {
+    installAllBridges({
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
+      getSearchPlan: vi.fn().mockResolvedValue({
+        status: 'unreadable',
+        reason: 'damaged',
+        message: 'Your search plan file is damaged: it is not valid JSON.',
+        fileName: 'search-plan-v1.json',
+      }),
+    });
+    render(<SearchPage />);
+    expect(await screen.findByText(/Your search plan file is damaged\. Your search plan file is damaged: it is not valid JSON\./)).toBeInTheDocument();
+    expect(screen.getByText(/Searches use only what you type/)).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /approved title/i })).not.toBeInTheDocument();
+  });
+
+  it('shows why a run that asked for the plan ran without it', async () => {
+    const report: GlobalRemoteReport = {
+      ...makeFocusedReport([makeWorldwideVacancy({ key: 'a', title: 'React Developer', url: 'https://example.invalid/a' })], { role: 'React developer' }),
+      searchPlanStatus: {
+        state: 'empty_at_start',
+        message: 'Your search plan had no approved titles when this search started, so only the typed query was searched.',
+      },
+    };
+    installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+    render(<SearchPage />);
+    expect(await screen.findByText(/had no approved titles when this search started/)).toBeInTheDocument();
   });
 
   it('shows a result found under another approved title, with what found it, and warns about partial coverage', async () => {
@@ -2934,26 +2971,31 @@ describe('SearchPage search plan (#686)', () => {
             language: null,
             handling: 'partial',
             reason: 'Some sources were not asked.',
-            requests: 2,
+            attempts: 2,
             providersQueried: ['jobicy'],
+            providersNotAsked: ['himalayas'],
           },
         ],
-        envelope: { maxRequests: 120, maxDurationMs: 120_000, maxResults: 1_500 },
-        usage: { literalRequests: 10, variantRequests: 2, elapsedMs: 100, variantRows: 1 },
+        literal: { handling: 'sent_upstream', reason: null, attempts: 10, providersQueried: ['jobicy'], providersNotAsked: [] },
+        envelope: { maxRequests: 12, maxDurationMs: 120_000, maxResults: 1_500 },
+        budgetScope: { unit: 'network_attempt', includes: 'the plan', excludes: 'sponsor lookups' },
+        usage: { attempts: 12, literalAttempts: 10, variantAttempts: 2, refusedCalls: 1, refusedFollowUps: 0, elapsedMs: 100, matchingRows: 2, trimmedRows: 0, outsideEnvelopeAttempts: 0 },
+        criteria: [],
+        providersNeverAsked: ['himalayas'],
         coverage: 'partial',
         coverageReason: '1 of 1 approved title was not fully searched.',
       },
     };
     installAllBridges({
       getReport: vi.fn().mockResolvedValue(report),
-      getSearchPlan: vi.fn().mockResolvedValue(PLAN),
+      getSearchPlan: vi.fn().mockResolvedValue({ status: 'ok', plan: PLAN }),
     });
     render(<SearchPage />);
 
     // The typed query is "React developer", yet the row found under "UI engineer" is not hidden.
     expect((await screen.findAllByText('Senior UI Engineer')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('React Developer').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Your search plan was only partly searched at the sources/)).toBeInTheDocument();
+    expect(screen.getByText(/Your search plan used up its shared allowance: 1 of 1 approved title \(UI engineer\) could not be fully searched/)).toBeInTheDocument();
     fireEvent.click(screen.getAllByText('Senior UI Engineer')[0]!);
     expect(await screen.findByText('Found with')).toBeInTheDocument();
     expect(screen.getByText(/UI engineer\. Returned by the source for: UI engineer at/)).toBeInTheDocument();
