@@ -22,6 +22,7 @@ import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js
 import type { SupportPromptState } from './support-prompt.js';
 import type { CompanyResearchDiagnostics } from '../company-evidence.js';
 import type { PreparedApplicationFields } from './types.js';
+import type { BriefNotice, BriefSourceFacts, FrozenBrief, StoredAssessment } from '../application-brief.js';
 
 /**
  * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
@@ -930,3 +931,76 @@ export const applicationAttemptEvidenceUses = sqliteTable('application_attempt_e
 }, (table) => [
   index('application_attempt_evidence_uses_attempt_idx').on(table.attemptId),
 ]);
+
+/**
+ * #688: one compact decision brief per CANONICAL job. `identityKey` is the strongest identity known
+ * (an ATS requisition, else a specific posting URL, else a company/title/location fingerprint); every
+ * other way the same job was seen is an alias row, so two source copies of one requisition share this
+ * row while two requisitions at one employer stay two rows. Holds the employer-side scan facts, the
+ * stored posting text its sections were derived under (so a changed posting is detected, not guessed)
+ * and the derived assessment summary with the inputs it came from. It never holds CV text, notes or
+ * letters, and a preference correction never writes to `sourceFacts`.
+ */
+export const applicationBriefs = sqliteTable('application_briefs', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  identityKey: text('identity_key').notNull(),
+  identityKind: text('identity_kind', { enum: ['requisition', 'canonical_url', 'semantic'] }).notNull(),
+  employerKey: text('employer_key'),
+  requisitionId: text('requisition_id'),
+  /** Display copies from the newest source; never part of the identity. */
+  company: text('company').notNull(),
+  role: text('role').notNull(),
+  location: text('location').notNull().default(''),
+  sourceFacts: text('source_facts', { mode: 'json' }).$type<BriefSourceFacts | null>(),
+  jdText: text('jd_text'),
+  jdHash: text('jd_hash'),
+  jdComplete: integer('jd_complete', { mode: 'boolean' }).notNull().default(true),
+  jdCapturedAt: integer('jd_captured_at', { mode: 'timestamp_ms' }),
+  /** When the stored posting text last changed (null until it has changed once). */
+  jdChangedAt: integer('jd_changed_at', { mode: 'timestamp_ms' }),
+  assessment: text('assessment', { mode: 'json' }).$type<StoredAssessment | null>(),
+  /** Short, human-readable invalidation history, newest first. */
+  notices: text('notices', { mode: 'json' }).notNull().$type<BriefNotice[]>().default([]),
+  /** Incremented whenever employer-side facts or the posting text change; used as a write fence. */
+  factsVersion: integer('facts_version').notNull().default(1),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('application_briefs_identity_idx').on(table.identityKey),
+]);
+
+/**
+ * Every way a brief's job was seen: identity keys (`req:`, `url:`, `sem:`), a discovery row key per
+ * source copy (`key:`), and the saved jobs / attempts that point at it (`saved:`, `attempt:`). The
+ * last two double as references: a brief with none left is deleted. `provider`/`url` keep the original
+ * source reference visible.
+ */
+export const applicationBriefAliases = sqliteTable('application_brief_aliases', {
+  aliasKey: text('alias_key').primaryKey(),
+  briefId: text('brief_id')
+    .notNull()
+    .references(() => applicationBriefs.id, { onDelete: 'cascade' }),
+  kind: text('kind', {
+    enum: ['requisition', 'canonical_url', 'semantic', 'vacancy_key', 'saved_job', 'attempt'],
+  }).notNull(),
+  label: text('label').notNull().default(''),
+  provider: text('provider'),
+  url: text('url'),
+  firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+  lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  index('application_brief_aliases_brief_idx').on(table.briefId),
+]);
+
+/**
+ * The brief as it read when preparation of an attempt started. INSERT-ONLY: nothing updates it, and
+ * it has no foreign key to the live brief, so a later change to the posting, the CV or a preference
+ * can never rewrite what the person knew when they started. Cascades only with the attempt.
+ */
+export const applicationBriefPins = sqliteTable('application_brief_pins', {
+  attemptId: text('attempt_id')
+    .primaryKey()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  snapshot: text('snapshot', { mode: 'json' }).notNull().$type<FrozenBrief>(),
+  pinnedAt: integer('pinned_at', { mode: 'timestamp_ms' }).notNull(),
+});

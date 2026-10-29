@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
+import { ApplicationBriefPanel } from '../brief/ApplicationBriefPanel.js';
 import { Dialog } from '../shell/Dialog.js';
 import { SAVED_JOB_STATUSES, SAVED_JOB_STATUS_LABEL } from './saved-job-status.js';
 
@@ -104,6 +105,14 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
             ✕
           </button>
         </div>
+
+        {/* #688: the persisted decision brief for this job. Read-only and local: opening it starts no AI
+            and no request, and the form below never writes to it. */}
+        {job && (
+          <div className="mt-4">
+            <ApplicationBriefPanel target={{ savedJobId: job.id }} reloadKey={`${job.gapAnalysisAt ?? ''}|${job.status}`} />
+          </div>
+        )}
 
         <form className="mt-4 flex flex-1 flex-col gap-3" onSubmit={handleSubmit}>
           <label className="block">

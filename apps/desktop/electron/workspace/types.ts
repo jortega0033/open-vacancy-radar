@@ -1035,6 +1035,10 @@ export interface ApplicationDataResetResult {
     companyEvidenceFacts: number;
     companyEvidenceLinks: number;
     companyEvidenceUses: number;
+    /** #688: the application briefs, their source references and the pinned preparation copies. */
+    applicationBriefs: number;
+    applicationBriefAliases: number;
+    applicationBriefPins: number;
   };
 }
 

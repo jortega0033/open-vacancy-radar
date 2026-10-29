@@ -23,6 +23,8 @@ import type {
 } from '@open-vacancy-radar/vacancy-engine';
 import type { SearchPlanLoadResult, SearchPlanResetResult } from './search-plan-store.js';
 import type { CompanyEvidenceBridge } from './company-evidence.js';
+import type { ApplicationBriefBridge } from './application-brief.js';
+import { parseBriefResult, parseCommitAssessment, parseOkResult, parsePrepareAssessment } from './application-brief-parse.js';
 import { parseCancelResult, parseCompanyEvidenceProse, parseCompanyEvidenceResult } from './company-evidence-parse.js';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
@@ -2149,3 +2151,33 @@ const companyEvidenceApi: CompanyEvidenceBridge = {
 };
 
 contextBridge.exposeInMainWorld('companyEvidence', companyEvidenceApi);
+
+/**
+ * #688. The twelfth namespace: the application brief. Every method resolves with a result REBUILT from
+ * known fields by `application-brief-parse.ts` (fail closed). Arguments are ids, a version fence the
+ * main process issued, the page's own assessment result and a few preference answers: never CV text,
+ * notes or a prompt. Nothing here starts a model session or a network request.
+ */
+const applicationBriefApi: ApplicationBriefBridge = {
+  async get(target) {
+    return parseBriefResult(await ipcRenderer.invoke('application-brief:get', { ...target }));
+  },
+  async prepareAssessment(savedJobId) {
+    return parsePrepareAssessment(await ipcRenderer.invoke('application-brief:prepare-assessment', { savedJobId }));
+  },
+  async commitAssessment(input) {
+    return parseCommitAssessment(
+      await ipcRenderer.invoke('application-brief:commit-assessment', {
+        savedJobId: input.savedJobId,
+        fence: { ...input.fence },
+        requirements: input.requirements,
+        requirementCoverage: { ...input.requirementCoverage },
+      }),
+    );
+  },
+  async correctPreference(correction) {
+    return parseOkResult(await ipcRenderer.invoke('application-brief:correct-preference', { ...correction }));
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationBrief', applicationBriefApi);

@@ -421,6 +421,9 @@ declare global {
     /** #689. The eleventh namespace: sourced company evidence (read, add, confirm, correct, research,
      * refresh, delete). Takes ids and the person's own public-source input; never CV or note text. */
     companyEvidence: import('../electron/company-evidence.js').CompanyEvidenceBridge;
+    /** #688. The twelfth namespace: the versioned application brief (read, explicit assessment, preference
+     * correction). Takes ids, a version fence and the page's own assessment result; never CV or note text. */
+    applicationBrief: import('../electron/application-brief.js').ApplicationBriefBridge;
   }
 }
 
