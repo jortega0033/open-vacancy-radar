@@ -623,12 +623,13 @@ function applyFetchedCheck(tx: Tx, factId: string, fetched: FetchedCheck, now: D
   if (!row) return 'gone';
   if (row.claim !== fetched.claim || row.quote !== fetched.quote) return 'stale';
   if (row.verification !== 'user_confirmed') {
-    const fact = { claim: row.claim, quote: row.quote, viaLink: null, scope: row.scope, sourceUrl: row.sourceUrl };
+    const fact = { claim: row.claim, quote: row.quote, viaLink: null, scope: row.scope, sourceUrl: row.sourceUrl, roleLabel: row.roleLabel };
     const saved = factQuoteSupport(fact, fetched.employerNames, fetched.identity);
     const onPage =
       saved.ok && fetched.context !== null
         ? assessQuoteSupport(row.claim, fetched.context, fetched.employerNames, {
             unnamedSubjectAllowed: unnamedSubjectAllowed(fact, fetched.identity),
+            roleLabel: row.roleLabel,
           })
         : null;
     const reason = !saved.ok ? saved.reason : onPage?.ok ? null : 'quote_context_unsupported';

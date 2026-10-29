@@ -587,7 +587,7 @@ export async function confirmSourceQuote(
      * When set, the claim is ALSO checked against the page around the passage: the quote alone may
      * be a cut-off sentence ("...offers visa sponsorship" of "...for some roles, but not for this one").
      */
-    claim?: { text: string; employerNames: readonly string[]; unnamedSubjectAllowed: boolean };
+    claim?: { text: string; employerNames: readonly string[]; unnamedSubjectAllowed: boolean; roleLabel?: string };
   } = {},
 ): Promise<SourceCheck> {
   if (!isHttpsSource(sourceUrl)) return { ok: false, reason: 'source_not_https' };
@@ -636,6 +636,7 @@ export async function confirmSourceQuote(
     context = contextAround(broken, lowered, at, wanted.length);
     const floor = assessQuoteSupport(options.claim.text, context, options.claim.employerNames, {
       unnamedSubjectAllowed: options.claim.unnamedSubjectAllowed,
+      ...(options.claim.roleLabel === undefined ? {} : { roleLabel: options.claim.roleLabel }),
     });
     if (!floor.ok) return { ok: false, reason: 'quote_context_unsupported', floor: floor.reason };
   }
@@ -659,6 +660,6 @@ export const SOURCE_FAILURE_TEXT: Record<SourceCheckFailure, string> = {
   quote_too_short: 'Add a longer quote from the page so it can be checked.',
   content_too_large: 'The source page is too large to check safely, so it was not used.',
   quote_context_unsupported:
-    'On the page, the passage is part of a longer sentence, or sits next to wording on the same subject (such as "only", "except" or "but not"), that the claim leaves out, so it stays a lead.',
+    'On the page, the passage is part of a longer sentence (also after a ";" or ":"), or the sentence right before or after it, or one on the same subject, has wording such as "only", "except", "excluded" or "but not" that the claim leaves out, so it stays a lead.',
 };
 

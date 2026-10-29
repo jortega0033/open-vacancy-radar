@@ -100,21 +100,34 @@ means the same in every reading, or that word overlap within a sentence proves a
   the name, one of them an ordinary word): "Northwind Freight" or "Northwind Freight Europe" is `claim_too_vague`;
 - it equals **one whole sentence** of the passage, word for word. Only these differences are ignored: a/an/the
   (de/het/een), punctuation inside the sentence, letter case, a plural or third-person "-s", number formatting
-  (`12,000` = `12.000`) and is/are, has/have. Sentences end at `. ! ? … :` followed by a space, at `;`, and at a block
+  (`12,000` = `12.000`) and is/are, has/have. Sentences end at `. ! ?` or `…` followed by a space, and at a block
   boundary of the fetched page (a heading or list item is never the start of the next sentence); a dot after a single
-  letter or a known abbreviation (`B.V.`, `Inc.`, `e.g.`) does not end one. Nothing may be dropped (a trailing "for
+  letter or a known abbreviation (`B.V.`, `Inc.`, `e.g.`) does not end one. A `;` or `:` inside a line does **not**
+  end a sentence: "Northwind Freight offers remote work" does not stand for "...remote work; engineering teams are not
+  included" or "...visa sponsorship: for senior hires in Germany" (`claim_context_qualified` when the left-out clause
+  has a marker, `claim_not_whole_sentence` otherwise). A claim that keeps the clause can match the whole sentence. Nothing may be dropped (a trailing "for
   some roles, but not for this one", "except engineering", "only for senior hires", ", maar niet voor deze rol", a
   place, a date) and nothing may be borrowed from another sentence, clause or organisation;
 - the employer is the statement's **subject**: its name opens the claim (after at most "In 2019," / "Since 2020," /
   "the"), or the sentence says "we"/"wij" where the claim has the name and the sentence before it names no other
   organisation. "Acme, a competitor of Northwind Freight, employs 12,000 people" never supports a claim about Northwind
   Freight, quoted in part or in full. A claim without the employer as subject ("Visa sponsorship is available for this
-  role") passes only as a role claim from the employer's own posting or site. A claim that itself says "we" is refused;
-- no **other sentence** on the same subject (one sharing a content word with the claim), no sentence right after it
-  that refers back ("This...", "It...", "But...", "Dit...", "Maar..."), and no lead-in ("Acme Haulage says:") contains
-  negation, a qualifier, a restriction, a condition or an attribution (`not`, `only`, `except`, `unless`, `but`,
-  `some`, `if`, `according to`, `applies`, `niet`, `alleen`, `behalve`, `maar`, `tenzij`, `volgens`, ...), and no
-  same-subject sentence adds a figure the claim leaves out (`claim_context_qualified`).
+  role") passes only as a role claim from the employer's own posting or site, and only when it refers to this role
+  ("this role/position/vacancy/job", "the Data Engineer role", "deze functie/rol/vacature", or the vacancy's own title)
+  and names no other organisation: it must open with an ordinary word (a function word, a role noun, sponsorship
+  wording or a short list of role-condition words such as visa, relocation, remote, salary, thuiswerken, salaris), and
+  every other capitalised word must be the employer's name, a role title, or one place word after "in"/"te".
+  "Acme Haulage offers visa sponsorship for this role", "Acme offers...", "Contoso biedt visumsponsoring voor deze
+  functie", "...at Acme..." and a shortened alias ("Northwind" for "Northwind Freight") stay leads
+  (`claim_entity_mismatch`), even on the exact ATS tenant. A claim that itself says "we" is refused;
+- the sentence **directly before and directly after** it (whatever word it opens with, and even when it shares no word
+  with the claim: "Engineering roles are excluded from it today.", "Engineers zijn hiervan uitgesloten."), every
+  **other sentence** on the same subject (one sharing a content word with the claim), and a lead-in ("Acme Haulage
+  says:") contain no negation, qualifier, restriction, condition or attribution (`not`, `only`, `except`, `excluded`,
+  `unless`, `but`, `some`, `if`, `according to`, `applies`, `niet`, `alleen`, `behalve`, `maar`, `tenzij`,
+  `uitgesloten`, `volgens`, ...), and no same-subject sentence adds a figure the claim leaves out
+  (`claim_context_qualified`). This over-matches on purpose: a whole sentence next to a harmless "We can help you
+  move." also stays a lead.
 
 A saved passage can itself be a cut-off piece of a page sentence, so the claim is checked **twice**: against the saved
 passage before any request (a failure costs no fetch), and, once the one fetch has found the passage, against the page
@@ -126,7 +139,8 @@ re-checks the saved passage.
 So boilerplate cannot carry an unrelated claim, a corrected number cannot ride on the old passage, "does not sponsor"
 cannot support "sponsors", and a figure, date or subject cannot be borrowed from a neighbouring sentence. The cost is
 deliberate: a true paraphrase, a shortened sentence ("Northwind Freight operates 14 depots" from "...across the
-Netherlands and Belgium") and a sentence that opens with an unrelated lead-in stay leads. Copy a passage whose whole
+Netherlands and Belgium", reported as `claim_not_whole_sentence`) and a sentence that opens with an unrelated lead-in
+stay leads. Copy a passage whose whole
 sentence says it, or confirm it yourself. Over-matching of the marker words keeps more claims leads; it never makes one
 usable.
 
@@ -212,9 +226,15 @@ Stopping or failing research or a refresh writes nothing and leaves every prepar
 
 - The quote floor is lexical. It cannot tell whether a page is accurate or a claim true, and it keeps true paraphrases
   and shortened sentences as leads. Its marker lists (negation, qualifiers, restrictions, attribution, sponsorship
-  wording) are finite English/Dutch lists: a restriction worded without any of them, in a sentence that shares no
-  content word with the claim, is not detected. Sentence splitting is heuristic (abbreviations; headings without block
-  markup run into the next sentence, which keeps that claim a lead).
+  wording, role-claim openers) are finite English/Dutch lists. Not detected: a restriction or contradiction worded
+  without any listed marker that is not in the claim's own sentence and not in the sentence right before or after it
+  unless it shares a content word ("Remote work ended in 2023." two sentences later, "It ended in 2023." right after it,
+  an "Archived 2015 policy" heading), anything beyond the 300-character page window, and a page that repeats the
+  sentence (the first occurrence is checked). Neither list proves a statement true. Sentence splitting is heuristic
+  (abbreviations; headings without block markup run into the next sentence, which keeps that claim a lead). The
+  unnamed-role rule cannot tell an organisation whose name is an ordinary listed word, or one inside a single place
+  word after "in", from a place or a condition; the employer's name as a prefix of a longer subject ("Northwind
+  Freight Holdings") counts as the employer.
 - A person's confirmation is their own statement. The app records it as theirs, keeps it apart from
   `source_confirmed`, and cannot check it.
 - The synthetic measurement for this change counts only its own labelled fixture cases. It is not an accuracy rate and

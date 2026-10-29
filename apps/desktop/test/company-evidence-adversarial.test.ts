@@ -722,7 +722,8 @@ describe('fix round 2: a claim must repeat one whole statement of its passage', 
       ['G5 name + region', 'Northwind Freight Europe', 'Northwind Freight is a logistics firm operating in Europe today.', 'claim_too_vague'],
       ['G6 Dutch "maar niet"', 'Northwind Freight biedt visumsponsoring aan', 'Northwind Freight biedt visumsponsoring aan, maar niet voor deze rol', 'claim_negation_mismatch'],
       ['G7 borrowed across sentences', 'Northwind Freight employs 12,000 people', 'Northwind Freight is small. Acme employs 12,000 people.', 'claim_entity_mismatch'],
-      ['G8 dropped places', 'Northwind Freight operates 14 depots', 'Northwind Freight operates 14 depots across the Netherlands and Belgium', 'claim_entity_mismatch'],
+      // A shortened true sentence names no other subject: review 3 (P3) asked for the reason that says so.
+      ['G8 dropped places', 'Northwind Freight operates 14 depots', 'Northwind Freight operates 14 depots across the Netherlands and Belgium', 'claim_not_whole_sentence'],
       ['G9 competitor subject, own name inside', 'Northwind Freight employs 12,000 people', 'Acme, a competitor of Northwind Freight, employs 12,000 people', 'claim_entity_mismatch'],
       ['F1 competitor in the next sentence', 'Northwind Freight employs 12,000 people', 'Northwind Freight is a logistics firm. Our competitor Acme Haulage employs 12,000 people worldwide.', 'claim_entity_mismatch'],
       ['F2 partner attribution', 'Northwind Freight employs 12,000 people', 'Northwind Freight partners with Acme Haulage, which employs 12,000 people across Europe.', 'claim_entity_mismatch'],
@@ -918,5 +919,152 @@ describe('fix round 2: a claim must repeat one whole statement of its passage', 
     await researchCompany({ ...deps, runResearch: async () => outcome }, t(a.id), { topics: ['general'] }, runs);
     expect(factByClaim(t(a.id), 'Northwind Freight covers the 30% ruling for this role.')).toMatchObject({ topic: 'sponsorship', support: 'lead', reasons: expect.arrayContaining(['sponsorship_needs_role_source']) });
     expect(proseEvidence(deps, t(a.id), 'interview')).toEqual([]);
+  });
+});
+
+/* ========================== fix round 3: the clause / sentence right beside the claim, and its subject ===== */
+
+/**
+ * #689 review 3. (P1) The neighbour check was subject-overlap based and ';' / ':' split one sentence into
+ * two, so a claim could drop "; engineering teams are not included" or the next sentence "Engineering
+ * roles are excluded from it today." (review-689-3-probe N1-N8, e2e B1/B2/B4). (P2) The own-source
+ * unnamed-subject exception admitted a whole sentence about ANOTHER organisation (N22, e2e C1). (P3) A
+ * merely shortened sentence was reported as an entity mismatch (N19, e2e D5). These pin wording only.
+ */
+describe('fix round 3: neighbouring restrictions, unnamed role subjects and the shortened-sentence reason', () => {
+  const names = ['Northwind Freight'];
+  const NF = 'Northwind Freight';
+  const floor = (claim: string, quote: string, options = {}) => assessQuoteSupport(claim, quote, names, options);
+  const role = { unnamedSubjectAllowed: true, roleLabel: 'Platform Engineer' };
+
+  it('refuses a claim beside a restricting clause or sentence (EN and NL), whatever that neighbour opens with', () => {
+    const refused: Array<[string, string, string, string]> = [
+      ['N1 next sentence, marker mid-sentence, no shared word', `${NF} offers visa sponsorship.`, `${NF} offers visa sponsorship. Engineering roles are excluded from it today.`, 'claim_context_qualified'],
+      ['N2 next sentence "not", other subject', `${NF} offers remote work.`, `${NF} offers remote work. Engineering teams are not included at this time.`, 'claim_context_qualified'],
+      ['N3 ";" clause "not"', `${NF} offers remote work`, `${NF} offers remote work; engineering teams are not included at the moment`, 'claim_context_qualified'],
+      ['N4 ";" clause "excluded"', `${NF} offers remote work`, `${NF} offers remote work; engineering teams are excluded at the moment`, 'claim_context_qualified'],
+      ['N5 ":" clause without a marker', `${NF} offers visa sponsorship`, `${NF} offers visa sponsorship: for senior hires in Germany at the moment`, 'claim_not_whole_sentence'],
+      ['N6 ":" clause naming a place', `${NF} offers visa sponsorship`, `${NF} offers visa sponsorship: engineers in Germany at the moment`, 'claim_not_whole_sentence'],
+      ['N7 NL next sentence "uitgesloten"', `${NF} biedt thuiswerken`, `${NF} biedt thuiswerken. Engineers zijn hiervan uitgesloten vanaf nu.`, 'claim_context_qualified'],
+      ['N8 NL ";" clause "niet"', `${NF} biedt thuiswerken`, `${NF} biedt thuiswerken; engineers vallen hier niet onder op dit moment`, 'claim_context_qualified'],
+      ['NL ":" clause', `${NF} biedt visumsponsoring aan`, `${NF} biedt visumsponsoring aan: alleen voor senior engineers in Duitsland`, 'claim_context_qualified'],
+      ['previous sentence restricts, no shared word', `${NF} offers remote work.`, `Engineering teams are not eligible for the following. ${NF} offers remote work.`, 'claim_context_qualified'],
+      ['NL previous sentence restricts, no shared word', `${NF} biedt thuiswerken.`, `Voor engineers geldt een uitzondering. ${NF} biedt thuiswerken.`, 'claim_context_qualified'],
+      ['";" clause BEFORE the claim', `${NF} offers remote work`, `Engineering teams are excluded; ${NF} offers remote work`, 'claim_context_qualified'],
+      ['lead-in ":" before the claim, no marker', `${NF} offers visa sponsorship.`, `For senior hires in Germany: ${NF} offers visa sponsorship.`, 'claim_not_whole_sentence'],
+    ];
+    for (const [label, claim, quote, reason] of refused) expect(floor(claim, quote), label).toEqual({ ok: false, reason });
+  });
+
+  it('keeps whole statements usable, including one that carries its own ";" clause and one next to a sentence without a marker', () => {
+    const accepted: Array<[string, string, string]> = [
+      ['claim includes the ";" clause', `${NF} offers remote work; engineering teams are not included.`, `${NF} offers remote work; engineering teams are not included.`],
+      ['benign next sentence', `${NF} offers remote work.`, `${NF} offers remote work. Our main office is in Utrecht.`],
+      ['benign previous heading block', `${NF} offers remote work.`, `Benefits\n${NF} offers remote work.`],
+      ['we for the name', `${NF} operates 14 depots in the Netherlands.`, 'We operate 14 depots in the Netherlands.'],
+      ['legal form', `${NF} B.V. employs 450 people.`, `${NF} B.V. employs 450 people.`],
+      ['number format', `${NF} employs 12.000 people.`, `${NF} employs 12,000 people.`],
+      ['clock time is not a clause', `${NF} opens its Utrecht depot at 09:00 every weekday.`, `${NF} opens its Utrecht depot at 09:00 every weekday.`],
+    ];
+    for (const [label, claim, quote] of accepted) expect(floor(claim, quote), label).toEqual({ ok: true });
+  });
+
+  it('own-source unnamed role claims: about THIS role and nobody else, or a lead (EN and NL)', () => {
+    const refused: Array<[string, string]> = [
+      ['multi-word other organisation', 'Acme Haulage offers visa sponsorship for this role.'],
+      ['single-word other organisation', 'Acme offers visa sponsorship for this role.'],
+      ['NL single-word other organisation', 'Contoso biedt visumsponsoring voor deze functie.'],
+      ['NL multi-word other organisation', 'Acme Haulage biedt thuiswerken voor deze rol.'],
+      ['other organisation after "at"', 'Visa sponsorship at Acme is available for this role.'],
+      ['other organisation after an ordinary opener', 'Visa Partners arranges sponsorship for this role.'],
+      ['place run swallowing a name', 'In Rotterdam Acme offers visa sponsorship for this role.'],
+      ['a shortened alias of the employer is not its name', 'Northwind offers visa sponsorship for this role.'],
+      ['no reference to the role at all', 'Relocation support is offered to new hires.'],
+      ['competitor sentence after an own-name sentence', 'Acme Haulage employs 12,000 people.'],
+    ];
+    for (const [label, claim] of refused) {
+      const quote = label.startsWith('competitor') ? `${NF} is small. ${claim}` : claim;
+      expect(floor(claim, quote, role), label).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+    }
+    const accepted: Array<[string, string]> = [
+      ['EN this role', 'Visa sponsorship is available for this role.'],
+      ['EN the position, place after "in"', 'Remote work is possible for the position in Utrecht.'],
+      ['NL deze functie', 'Visumsponsoring is beschikbaar voor deze functie.'],
+      ['NL voor deze rol', 'Voor deze rol is thuiswerken mogelijk.'],
+      ['role title before a role noun', 'The Data Engineer role works on the depot forecasting pipeline.'],
+      ['role title and a place', 'The Planner role is based in Rotterdam.'],
+      ['the vacancy title itself', 'The Platform Engineer builds the routing platform.'],
+      ['the employer named inside', `Visa sponsorship from ${NF} is available for this role.`],
+    ];
+    for (const [label, claim] of accepted) expect(floor(claim, claim, role), label).toEqual({ ok: true });
+    // The vacancy title only counts when it IS this vacancy's title; never without the own-source rule.
+    expect(floor('The Platform Engineer builds the routing platform.', 'The Platform Engineer builds the routing platform.', { unnamedSubjectAllowed: true, roleLabel: 'Planner' })).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+    expect(floor('Visa sponsorship is available for this role.', 'Visa sponsorship is available for this role.', { roleLabel: 'Platform Engineer' })).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+    // A named employer claim does not need the role exception at all.
+    expect(floor(`${NF} sponsors work visas for this role.`, `${NF} sponsors work visas for this role.`)).toEqual({ ok: true });
+  });
+
+  it('says "not the whole sentence" for a merely shortened sentence, and still "entity" for another subject', () => {
+    expect(floor(`${NF} employs 450 people`, `${NF} employs 450 people across Europe.`)).toEqual({ ok: false, reason: 'claim_not_whole_sentence' });
+    expect(floor(`${NF} employs 450 people`, `${NF} employs 450 people in 12 countries.`)).toEqual({ ok: false, reason: 'claim_number_mismatch' });
+    expect(floor(`${NF} employs 450 people`, `Acme Haulage employs 450 people.`)).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+    expect(floor(`${NF} employs 12,000 people`, `Acme, a competitor of ${NF}, employs 12,000 people`)).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+  });
+
+  it('add: a whole-sentence quote whose PAGE neighbour or ";" / ":" clause restricts it costs one request and stays a lead; the store refuses the same context', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    const pages: Array<[string, string, string]> = [
+      ['https://northwind.example/remote', `<p>${NF} offers remote work. Engineering teams are not included at this time.</p>`, `${NF} offers remote work.`],
+      ['https://northwind.example/hybrid', `<p>${NF} offers hybrid work; engineering teams are excluded at the moment.</p>`, `${NF} offers hybrid work.`],
+      ['https://northwind.example/bonus', `<p>${NF} offers a yearly bonus: for managers in Germany at the moment.</p>`, `${NF} offers a yearly bonus.`],
+      ['https://northwind.example/nl', `<p>${NF} biedt thuiswerken aan. Engineers zijn hiervan uitgesloten vanaf nu.</p>`, `${NF} biedt thuiswerken aan.`],
+      ['https://northwind.example/prior', `<p>Engineering teams are not eligible for the following.</p><p>${NF} offers a travel budget.</p>`, `${NF} offers a travel budget.`],
+    ];
+    for (const [url, html, claim] of pages) {
+      web.pages.set(url, html);
+      const added = await addFact(deps, t(a.id), { claim, sourceUrl: url, quote: claim.slice(0, -1), scope: 'company', topic: 'general' });
+      expect(added, url).toMatchObject({ ok: true, stats: { requests: 1 } });
+      expect(factByClaim(t(a.id), claim), url).toMatchObject({ support: 'lead', verification: 'unverified', lastRefreshReason: 'quote_context_unsupported' });
+    }
+    // The neighbour inside the saved passage itself fails before any request.
+    const before = web.calls.length;
+    const inPassage = `${NF} offers visa sponsorship. Engineering roles are excluded from it today.`;
+    expect(await addFact(deps, t(a.id), { claim: `${NF} offers visa sponsorship.`, sourceUrl: 'https://northwind.example/v', quote: inPassage, scope: 'company', topic: 'general' })).toMatchObject({ ok: true, stats: { requests: 0 } });
+    expect(web.calls.length).toBe(before);
+    expect(factByClaim(t(a.id), `${NF} offers visa sponsorship.`)).toMatchObject({ support: 'lead', reasons: expect.arrayContaining(['claim_context_qualified']) });
+    expect(proseEvidence(deps, t(a.id), 'letter')).toEqual([]);
+    expect(proseEvidence(deps, t(a.id), 'interview')).toEqual([]);
+
+    // The store's own re-check refuses the same page contexts (a caller cannot promote a cut quote).
+    const claim = `${NF} offers remote work.`;
+    const id = factByClaim(t(a.id), claim)!.id;
+    const identity = getView(deps, t(a.id)).identity;
+    const check = (context: string) =>
+      store.confirmFactFromFetch(db, id, { retrievedAt: T0, contentHash: null, claim, quote: claim.slice(0, -1), employerNames: names, identity, context }, T0);
+    expect(check(`${NF} offers remote work; engineering teams are not included.`)).toBe('unsupported');
+    expect(check(`Engineering teams are excluded.\n${NF} offers remote work.`)).toBe('unsupported');
+    expect(check(`${NF} offers remote work: for senior hires only.`)).toBe('unsupported');
+    expect(check(`Benefits\n${NF} offers remote work.\nApply today`)).toBe('applied');
+  });
+
+  it('add / read: an Acme sentence on the exact own tenant is a lead (no request); a sentence about this role there is usable', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    web.pages.set(NORTHWIND, '<p>Acme Haulage offers visa sponsorship for this role.</p>');
+    const acme = await addFact(deps, t(a.id), { claim: 'Acme Haulage offers visa sponsorship for this role.', sourceUrl: NORTHWIND, quote: 'Acme Haulage offers visa sponsorship for this role', scope: 'role', topic: 'sponsorship' });
+    expect(acme).toMatchObject({ ok: true, stats: { requests: 0 } });
+    expect(web.calls).toEqual([]);
+    expect(factByClaim(t(a.id), 'Acme Haulage offers visa sponsorship for this role.')).toMatchObject({ support: 'lead', reasons: expect.arrayContaining(['claim_entity_mismatch']) });
+    // A row forced to source_confirmed is re-checked on every read and never reaches prose.
+    db.update(schema.companyEvidenceFacts).set({ verification: 'source_confirmed', retrievedAt: T0 }).run();
+    expect(factByClaim(t(a.id), 'Acme Haulage offers visa sponsorship for this role.')).toMatchObject({ support: 'lead', reasons: ['claim_entity_mismatch'] });
+    expect(proseEvidence(deps, t(a.id), 'letter')).toEqual([]);
+    expect(proseEvidence(deps, t(a.id), 'interview')).toEqual([]);
+
+    // Another vacancy of the same tenant: the unnamed sentence about THIS role stays usable.
+    const other = 'https://job-boards.greenhouse.io/northwind/jobs/1002';
+    const b = attempt('Northwind Freight', 'Data Engineer', other);
+    web.pages.set(other, '<p>Visa sponsorship is available for this role.</p>');
+    await addFact(deps, t(b.id), { claim: 'Visa sponsorship is available for this role.', sourceUrl: other, quote: 'Visa sponsorship is available for this role', scope: 'role', topic: 'sponsorship' });
+    expect(proseEvidence(deps, t(b.id), 'letter').map((fact) => fact.claim)).toEqual(['Visa sponsorship is available for this role.']);
   });
 });

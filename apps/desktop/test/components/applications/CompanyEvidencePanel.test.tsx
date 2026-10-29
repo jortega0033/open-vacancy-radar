@@ -410,7 +410,7 @@ describe('CompanyEvidencePanel: informed attestation and domain suggestions (fix
     expect(step).toHaveTextContent(`Only confirm this if you opened northwind.example yourself and it says exactly: “${BORROWED}”`);
     expect(step).toHaveTextContent('The app did not use it automatically:');
     expect(step).toHaveTextContent('the sentence is not about this employer as its subject');
-    expect(step).toHaveTextContent('your statement, not a check by the app');
+    expect(step).toHaveTextContent('this is your own statement; the app did not check it');
     fireEvent.click(within(step).getByRole('button', { name: 'Cancel' }));
     expect(within(card).queryByTestId('company-fact-attest')).toBeNull();
     expect(card).toHaveAttribute('data-support', 'lead');

@@ -3815,6 +3815,81 @@ describe('#689 company evidence in preparation', () => {
     expect(calls).toEqual([VISA_URL, ABOUT_URL]);
   });
 
+  it('keeps a claim beside a restricting sentence or ";"/":" clause, and another organisation\'s role sentence, out of the rendered letter and the snapshot (fix 3)', async () => {
+    const REMOTE_URL = 'https://northwind.example/remote';
+    const BONUS_URL = 'https://northwind.example/bonus';
+    const HYBRID_URL = 'https://northwind.example/hybrid';
+    const ACME_URL = 'https://northwind.example/careers/acme';
+    const ROLE_URL = 'https://northwind.example/careers/platform';
+    // An unnamed sentence about THIS vacancy (its own title), on the employer's own site: still usable.
+    const ROLE_CLAIM = 'The Logistics Platform Engineer role is based in Utrecht.';
+    const pages: Record<string, string> = {
+      [ABOUT_URL]: `<html><body><h1>About us</h1><p>${QUOTE}. Founded in 2009.</p></body></html>`,
+      [REMOTE_URL]: '<html><body><p>Northwind Freight offers remote work. Engineering teams are not included at this time.</p></body></html>',
+      [BONUS_URL]: '<html><body><p>Northwind Freight offers a yearly bonus: for managers in Germany at the moment.</p></body></html>',
+      [HYBRID_URL]: '<html><body><p>Northwind Freight offers hybrid work; engineers vallen hier niet onder op dit moment.</p></body></html>',
+      [ACME_URL]: '<html><body><p>Acme Haulage offers visa sponsorship for this role.</p></body></html>',
+      [ROLE_URL]: `<html><body><h2>Location</h2><p>${ROLE_CLAIM}</p></body></html>`,
+    };
+    const calls: string[] = [];
+    const client: AtsHttpClient = {
+      get: async (url) => {
+        calls.push(url);
+        const body = pages[url];
+        if (body === undefined) throw new Error('unexpected fetch');
+        return { status: 200, finalUrl: url, headers: {}, body };
+      },
+      postJson: async () => {
+        throw new Error('never used');
+      },
+    };
+    const { attemptId, ev } = await startConfirmedAttempt({ calls, client } as ReturnType<typeof evidenceWeb>);
+    const add = (claim: string, sourceUrl: string, scope: 'company' | 'role' = 'company') =>
+      evidenceService.addFact(ev, { attemptId }, { claim, sourceUrl, quote: claim.slice(0, -1), scope, topic: 'general' });
+
+    // Whole-sentence quotes, so only the page around them shows the restriction: one request each.
+    for (const [claim, url] of [
+      ['Northwind Freight offers remote work.', REMOTE_URL],
+      ['Northwind Freight offers a yearly bonus.', BONUS_URL],
+      ['Northwind Freight offers hybrid work.', HYBRID_URL],
+    ] as const) {
+      expect(await add(claim, url), claim).toMatchObject({ ok: true, stats: { requests: 1 } });
+    }
+    // Another organisation's sentence on the employer's own careers site: refused before any request.
+    expect(await add('Acme Haulage offers visa sponsorship for this role.', ACME_URL, 'role')).toMatchObject({ ok: true, stats: { requests: 0 } });
+    expect(await add(ROLE_CLAIM, ROLE_URL, 'role')).toMatchObject({ ok: true, stats: { requests: 1 } });
+    expect(await add(CLAIM, ABOUT_URL)).toMatchObject({ ok: true, stats: { requests: 1 } });
+
+    const view = evidenceService.getView(ev, { attemptId });
+    const byClaim = (claim: string) => view.facts.find((fact) => fact.claim === claim);
+    for (const claim of ['Northwind Freight offers remote work.', 'Northwind Freight offers a yearly bonus.', 'Northwind Freight offers hybrid work.']) {
+      expect(byClaim(claim), claim).toMatchObject({ support: 'lead', verification: 'unverified', lastRefreshReason: 'quote_context_unsupported' });
+    }
+    expect(byClaim('Acme Haulage offers visa sponsorship for this role.')).toMatchObject({ support: 'lead', lastRefreshReason: 'claim_entity_mismatch' });
+    expect(byClaim(ROLE_CLAIM)).toMatchObject({ support: 'supported', verification: 'source_confirmed', scope: 'role' });
+    expect(evidenceService.proseEvidence(ev, { attemptId }, 'interview').map((fact) => fact.claim).sort()).toEqual([CLAIM, ROLE_CLAIM].sort());
+
+    const prompts: string[] = [];
+    generateCoverLetter.mockImplementation(async (prompt: string) => {
+      prompts.push(prompt);
+      return { ok: true, text: '{"factIds":["summary","company-1","company-2"]}' };
+    });
+    const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (attempt) => evidenceService.proseEvidence(ev, { attemptId: attempt.id }, 'letter') };
+    queueApplicationDocumentRenders();
+    expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+
+    for (const wrong of ['remote work', 'yearly bonus', 'hybrid work', 'Acme']) {
+      expect(prompts[0], wrong).not.toContain(wrong);
+      expect(coverLetterHtml(), wrong).not.toContain(wrong);
+    }
+    const html = coverLetterHtml();
+    expect(html).toContain(`Something I noted about Northwind Freight from public sources: ${CLAIM}`);
+    expect(html).toContain(ROLE_CLAIM);
+    expect(evidenceStore.listEvidenceUses(db, attemptId).map((use) => use.claim).sort()).toEqual([CLAIM, ROLE_CLAIM].sort());
+    // Preparation itself fetched nothing: every request above was the person's own source check.
+    expect(calls).toEqual([REMOTE_URL, BONUS_URL, HYBRID_URL, ROLE_URL, ABOUT_URL]);
+  });
+
   /**
    * Fix round 1 (P5): the drafting session can run for a while. Whatever happens to the selected
    * evidence WHILE it runs must keep that claim out of the rendered letter and out of the "used"

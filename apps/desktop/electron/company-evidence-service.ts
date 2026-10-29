@@ -227,10 +227,15 @@ function employerNames(ctx: ResolvedContext): string[] {
 /** What the floor needs to check `claim` (against its passage, then against the page around it). */
 function claimCheckFor(
   ctx: ResolvedContext,
-  fact: { scope: CompanyEvidenceScope; sourceUrl: string; viaLink: string | null },
+  fact: { scope: CompanyEvidenceScope; sourceUrl: string; viaLink: string | null; roleLabel?: string },
   claim: string,
-): { text: string; employerNames: string[]; unnamedSubjectAllowed: boolean } {
-  return { text: claim, employerNames: employerNames(ctx), unnamedSubjectAllowed: unnamedSubjectAllowed(fact, ctx.identity) };
+): { text: string; employerNames: string[]; unnamedSubjectAllowed: boolean; roleLabel: string } {
+  return {
+    text: claim,
+    employerNames: employerNames(ctx),
+    unnamedSubjectAllowed: unnamedSubjectAllowed(fact, ctx.identity),
+    roleLabel: fact.roleLabel ?? ctx.roleLabel,
+  };
 }
 
 /** The store's view of a successful fetch: what was checked, and the page text it was checked against. */
@@ -536,7 +541,7 @@ export function confirmFact(deps: CompanyEvidenceDeps, target: EvidenceTarget, f
   return {
     ok: true,
     view: getView(deps, target),
-    notice: `Recorded your confirmation that ${host} says this claim. It is marked "You confirmed": your statement, not a check by the app.`,
+    notice: `Recorded your confirmation that ${host} says this claim. It is marked "You confirmed": this is your own statement; the app did not check it.`,
   };
 }
 

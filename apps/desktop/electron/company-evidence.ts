@@ -456,6 +456,11 @@ export interface QuoteSupportOptions {
    * source is the employer's own posting/site (`sourceMatchesIdentity`). Never for company scope.
    */
   unnamedSubjectAllowed?: boolean;
+  /**
+   * The vacancy's role title. With `unnamedSubjectAllowed`, an unnamed claim must refer to this role:
+   * "this role/position/..." (EN/NL), or this exact title ("The Platform Engineer builds...").
+   */
+  roleLabel?: string;
 }
 
 /** Ignored when comparing a claim with its sentence. Nothing else is. */
@@ -488,7 +493,8 @@ const QUALIFIERS = new Set([
   'mostly', 'mainly', 'typically', 'generally', 'often', 'according', 'reportedly', 'allegedly', 'rumoured', 'rumored',
   'says', 'said', 'claims', 'claimed', 'reports', 'reported', 'estimated', 'applies', 'applicable', 'includes',
   'including', 'excludes', 'exclude', 'counts', 'counted', 'refers', 'figure', 'figures', 'outdated', 'incorrect', 'wrong',
-  'geldt', 'gelden', 'inclusief', 'exclusief', 'betreft',
+  'excluded', 'exception', 'exceptions', 'restricted',
+  'geldt', 'gelden', 'inclusief', 'exclusief', 'betreft', 'uitgesloten', 'uitzondering', 'uitzonderingen',
   'zal', 'zullen', 'zou', 'zouden', 'kan', 'kunnen', 'mag', 'mogen', 'mogelijk', 'misschien', 'voorheen',
   'vroeger', 'gestopt', 'tenzij', 'behalve', 'binnenkort', 'gepland', 'alleen',
   'maar', 'echter', 'hoewel', 'uitgezonderd', 'uitsluitend', 'slechts', 'sommige', 'bepaalde', 'enkele', 'beperkt',
@@ -499,6 +505,26 @@ const QUALIFIERS = new Set([
 const OPENERS = new Set([
   'this', 'that', 'these', 'those', 'it', 'they', 'such', 'note', 'also', 'dit', 'dat', 'deze', 'die', 'het', 'zij', 'ze',
   'let', 'ook', 'wel',
+]);
+/**
+ * An unnamed-subject role claim (#689 review 3) must be about THIS role: one of these determiners
+ * directly before one of the role nouns ("this role", "the position", "deze functie", "de vacature").
+ */
+const ROLE_DETERMINERS = new Set(['this', 'these', 'that', 'the', 'deze', 'die', 'dit', 'de', 'het']);
+const ROLE_NOUNS = new Set(['role', 'position', 'vacancy', 'job', 'opening', 'post', 'posting', 'rol', 'functie', 'vacature', 'baan', 'positie']);
+/**
+ * What an unnamed-subject role claim may open with: a function word, a role noun, sponsorship wording
+ * or one of these role-condition words. Anything else ("Acme offers...", "Contoso biedt...") may be
+ * an organisation's name, so the claim stays a lead. A finite list on purpose: fail closed.
+ */
+const ROLE_CLAIM_OPENERS = new Set([
+  'for', 'in', 'within', 'with', 'at', 'as', 'from', 'voor', 'binnen', 'bij', 'met', 'als', 'vanaf', 'sinds',
+  'visa', 'sponsorship', 'relocation', 'remote', 'hybrid', 'flexible', 'salary', 'pay', 'compensation', 'bonus',
+  'benefits', 'benefit', 'equity', 'training', 'travel', 'work', 'working', 'home', 'office', 'onboarding', 'contract',
+  'hours', 'holiday', 'holidays', 'leave', 'pension', 'support', 'help', 'applications', 'applicants', 'candidates',
+  'visumsponsoring', 'sponsoring', 'relocatie', 'verhuizing', 'verhuiskosten', 'thuiswerken', 'hybride', 'flexibel',
+  'salaris', 'loon', 'beloning', 'opleiding', 'reiskosten', 'werk', 'werken', 'uren', 'vakantie', 'verlof', 'pensioen',
+  'ondersteuning', 'hulp', 'sollicitaties', 'kandidaten',
 ]);
 const FIRST_PERSON = new Set(['we', 'our', 'us', 'ours', 'wij', 'ons', 'onze']);
 /** First-person SUBJECT pronouns the employer's own name may stand for. */
@@ -520,9 +546,24 @@ interface Token {
 }
 
 interface Sentence {
+  /** Every token of the ORIGINAL sentence: a ';' or ':' clause inside it does not end it. */
   tokens: Token[];
-  /** The sentence ended with ':' -- a lead-in such as "Acme Haulage says:". */
+  /** Token offsets (> 0) where a ';' / ':' clause starts inside the sentence. */
+  clauseStarts: number[];
+  /** The sentence ended with ':' -- a lead-in such as "Acme Haulage says:" before a line break. */
   leadIn: boolean;
+}
+
+/** The ';' / ':' clauses of one sentence (the sentence itself when it has none). */
+function clausesOf(sentence: Sentence): Sentence[] {
+  if (sentence.clauseStarts.length === 0) return [sentence];
+  const bounds = [0, ...sentence.clauseStarts, sentence.tokens.length];
+  const out: Sentence[] = [];
+  for (let index = 0; index + 1 < bounds.length; index += 1) {
+    const tokens = sentence.tokens.slice(bounds[index], bounds[index + 1]);
+    if (tokens.length > 0) out.push({ tokens, clauseStarts: [], leadIn: false });
+  }
+  return out;
 }
 
 function stem(word: string): string {
@@ -544,24 +585,36 @@ const TERMINATOR_START = /^[.!?;:…\n]/u;
 const AFTER_TERMINATOR = /[\s"'()[\]«»“”]/u;
 
 /**
- * Linear segmentation of a bounded claim, quote or page window into sentences. A sentence ends at
- * `. ! ? … :` followed by a space or the end, at any `;`, and at a line break (block boundaries of
- * a fetched page). A '.' after a single letter or a known abbreviation does not end it.
+ * Linear segmentation of a bounded claim, quote or page window into ORIGINAL sentences. A sentence
+ * ends at `. ! ? …` followed by a space or the end, and at a line break (block boundaries of a
+ * fetched page). A '.' after a single letter or a known abbreviation does not end it. A `;` or `:`
+ * inside a line does NOT end it (#689 review 3): it starts a clause of the same sentence, so a claim
+ * can never drop "; engineering teams are not included" or ": for senior hires in Germany".
  */
 function sentences(text: string): Sentence[] {
   const normalised = text.slice(0, 4000).normalize('NFKC').replace(/[‘’ʼ]/gu, "'");
   const out: Sentence[] = [];
   let current: Token[] = [];
+  let clauseStarts: number[] = [];
+  const flush = (leadIn: boolean) => {
+    if (current.length > 0) out.push({ tokens: current, clauseStarts: clauseStarts.filter((at) => at > 0 && at < current.length), leadIn });
+    current = [];
+    clauseStarts = [];
+  };
   for (const match of normalised.matchAll(TOKEN_PATTERN)) {
     const raw = match[0];
     if (TERMINATOR_START.test(raw)) {
       const after = normalised[match.index + raw.length];
-      const hard = raw.includes(';') || raw.includes('\n');
+      const hard = raw.includes('\n');
       if (!hard && after !== undefined && !AFTER_TERMINATOR.test(after)) continue;
+      if (!hard && !/[.!?…]/u.test(raw)) {
+        // Only ';' / ':' inside a line: a clause of the same sentence, never a sentence of its own.
+        if (clauseStarts[clauseStarts.length - 1] !== current.length) clauseStarts.push(current.length);
+        continue;
+      }
       const previous = current[current.length - 1];
       if (!hard && raw === '.' && previous && !previous.isNumber && (previous.word.length === 1 || ABBREVIATIONS.has(previous.word))) continue;
-      if (current.length > 0) out.push({ tokens: current, leadIn: raw.endsWith(':') });
-      current = [];
+      flush(raw.includes(':'));
       continue;
     }
     if (/^\d/u.test(raw)) {
@@ -577,7 +630,7 @@ function sentences(text: string): Sentence[] {
     const word = lower.replace(/'.*$/u, '');
     current.push({ word, key: stem(word), isNumber: false, capitalised: raw[0] !== raw[0]!.toLowerCase() });
   }
-  if (current.length > 0) out.push({ tokens: current, leadIn: false });
+  flush(false);
   return out;
 }
 
@@ -644,10 +697,14 @@ function namesIn(sentence: Sentence, known: ReadonlySet<string>): Token[] {
  *    no other organisation is named in that sentence, its lead-in or a related sentence. A claim
  *    without the employer as subject is accepted only when the caller allows it (a role-scope claim
  *    on the employer's own posting);
- *  - no other sentence of the passage on the same subject (sharing a content word), no sentence that
- *    refers back to it ("This...", "It...", "But..."), and no lead-in ("Acme says:") negates,
- *    restricts, conditions or attributes it ("not", "only", "except", "unless", "some", "if",
- *    "according to", "maar", "alleen", "behalve"...) or adds a number it leaves out.
+ *  - a ';' / ':' clause is part of its sentence: a claim equal to one clause only is refused;
+ *  - the sentence directly before and directly after it (whatever it opens with, sharing a word or
+ *    not), every other sentence of the passage on the same subject (sharing a content word), and a
+ *    lead-in ("Acme says:") contain no negation, restriction, condition or attribution marker ("not",
+ *    "only", "except", "excluded", "unless", "some", "if", "according to", "maar", "alleen",
+ *    "uitgesloten"...), and no same-subject sentence adds a number it leaves out;
+ *  - an unnamed-subject role claim (own source only) refers to this role and names no other
+ *    organisation (`unnamedRoleStatement`).
  *
  * A paraphrase therefore stays a lead even when it is true: the person can confirm it themselves.
  * This shows the claim repeats a statement found on the page, never that the statement is true.
@@ -688,15 +745,9 @@ export function assessQuoteSupport(
   const namedSubject = name !== null && said.slice(0, name[0]).every((token) => token.isNumber || SUBJECT_LEAD.has(token.word));
   const claimKeys = new Set(said.map((token) => token.key));
 
-  // ONE whole sentence, exactly (or with "we" where the claim has the employer's name).
-  let matchIndex = -1;
-  let firstPerson = false;
-  for (const [index, sentence] of passage.entries()) {
-    const words = comparable(sentence.tokens);
-    if (sameKeys(said, words)) {
-      matchIndex = index;
-      break;
-    }
+  // ONE whole ORIGINAL sentence, exactly (or with "we" where the claim has the employer's name).
+  const matches = (words: readonly Token[]): 'exact' | 'first_person' | null => {
+    if (sameKeys(said, words)) return 'exact';
     if (namedSubject && name) {
       const [start, end] = name;
       const pronoun = words[start];
@@ -707,26 +758,52 @@ export function assessQuoteSupport(
         sameKeys(said.slice(0, start), words.slice(0, start)) &&
         sameKeys(said.slice(end), words.slice(start + 1))
       ) {
-        matchIndex = index;
-        firstPerson = true;
-        break;
+        return 'first_person';
       }
     }
+    return null;
+  };
+  let matchIndex = -1;
+  let firstPerson = false;
+  for (const [index, sentence] of passage.entries()) {
+    const found = matches(comparable(sentence.tokens));
+    if (found) {
+      matchIndex = index;
+      firstPerson = found === 'first_person';
+      break;
+    }
   }
-  if (matchIndex < 0) return diagnose(said, passage, runs, nameKeys, firstPersonPassage);
-
-  if (!namedSubject && !options.unnamedSubjectAllowed) return fail('claim_entity_mismatch');
-
-  // The rest of the passage: related sentences, a sentence that refers back, a lead-in.
   const known = new Set([...claimKeys, ...nameKeys]);
+  if (matchIndex < 0) {
+    // The claim is ONE ';' / ':' clause of a longer sentence: it drops the rest of that sentence.
+    for (const sentence of passage) {
+      const clauses = clausesOf(sentence);
+      if (clauses.length < 2) continue;
+      const at = clauses.findIndex((clause) => matches(comparable(clause.tokens)) !== null);
+      if (at < 0) continue;
+      const rest = clauses.filter((_, index) => index !== at);
+      return fail(rest.some((clause) => clause.tokens.some(isMarker)) ? 'claim_context_qualified' : 'claim_not_whole_sentence');
+    }
+    return diagnose(said, passage.flatMap(clausesOf), runs, nameKeys, firstPersonPassage);
+  }
+
+  if (!namedSubject) {
+    if (!options.unnamedSubjectAllowed) return fail('claim_entity_mismatch');
+    // Without the employer's name, the sentence must be about THIS role and name no other organisation:
+    // the exact own source alone does not make "Acme Haulage offers visa sponsorship" a fact about it.
+    if (!unnamedRoleStatement(claimSentences[0]!.tokens, said, nameKeys, options.roleLabel)) return fail('claim_entity_mismatch');
+  }
+
+  // The rest of the passage: the sentences right before and after it, related sentences, a lead-in.
   for (const [index, sentence] of passage.entries()) {
     if (index === matchIndex) continue;
+    // The sentence directly before or after: ANY marker in it may limit the claim, whatever it opens
+    // with and even when it shares no word ("Engineering roles are excluded from it today.").
+    const adjacent = index === matchIndex - 1 || index === matchIndex + 1;
     // Same subject: shares a content word (not the employer's name) with the claim.
     const sameSubject = sentence.tokens.some((token) => isContent(token) && !nameKeys.has(token.key) && claimKeys.has(token.key));
-    const refersBack =
-      index === matchIndex + 1 && sentence.tokens[0] !== undefined && (OPENERS.has(sentence.tokens[0].word) || isMarker(sentence.tokens[0]));
     const leadIn = index === matchIndex - 1 && (sentence.leadIn || firstPerson);
-    if (!sameSubject && !refersBack && !leadIn) continue;
+    if (!sameSubject && !adjacent && !leadIn) continue;
     if (sentence.tokens.some(isMarker)) return fail('claim_context_qualified');
     // A different figure on the same subject may revise or scope the claim's ("14 depots. 9 of the depots...").
     if (sameSubject && sentence.tokens.some((token) => token.isNumber && !claimKeys.has(token.key))) return fail('claim_context_qualified');
@@ -736,6 +813,72 @@ export function assessQuoteSupport(
     }
   }
   return { ok: true };
+}
+
+/** Words before which a single capitalised word is read as a place ("based in Rotterdam"). */
+const PLACE_PREPOSITIONS = new Set(['in', 'near', 'across', 'throughout', 'outside', 'te', 'nabij', 'buiten']);
+
+/**
+ * Whether a claim WITHOUT the employer as its subject is a statement about this role and nobody else
+ * (#689 review 3, P2). It must refer to the role ("this role", "the Data Engineer position", "deze
+ * functie", or the vacancy's own title), open with an ordinary word or that role reference, and name
+ * no other organisation: every other capitalised word must be the employer's name, a role title
+ * directly before a role noun or the title itself, or ONE word of a place after "in"/"te"/... An
+ * unknown first word ("Acme offers...", "Contoso biedt...", a shortened alias of the employer) or
+ * any other capitalised run ("Acme Haulage", "at Acme", "In Rotterdam, Acme") keeps it a lead.
+ */
+function unnamedRoleStatement(raw: readonly Token[], said: readonly Token[], nameKeys: ReadonlySet<string>, roleLabel?: string): boolean {
+  const title = roleLabel ? comparable(sentences(roleLabel).flatMap((sentence) => sentence.tokens)).map((token) => token.key) : [];
+  let titleAt = -1;
+  if (title.length > 0) {
+    for (let start = 0; start + title.length <= said.length && titleAt < 0; start += 1) {
+      if (title.every((key, offset) => said[start + offset]!.key === key)) titleAt = start;
+    }
+  }
+  const inTitle = (index: number) => titleAt >= 0 && index >= titleAt && index < titleAt + title.length;
+  const named = (token: Token) =>
+    token.capitalised && !token.isNumber && !nameKeys.has(token.key) && !STOPWORDS.has(token.word) && !FIRST_PERSON.has(token.word) && !isMarker(token) && !ROLE_NOUNS.has(token.key);
+
+  // A role noun after a determiner, with an optional capitalised title between ("the Data Engineer role").
+  const aboutRole =
+    titleAt >= 0 ||
+    raw.some((token, index) => {
+      if (!ROLE_NOUNS.has(token.key)) return false;
+      let before = index - 1;
+      while (before >= 0 && raw[before]!.capitalised && !raw[before]!.isNumber && !ROLE_DETERMINERS.has(raw[before]!.word)) before -= 1;
+      return before >= 0 && ROLE_DETERMINERS.has(raw[before]!.word);
+    });
+  if (!aboutRole) return false;
+
+  /** End of the capitalised run starting at `index`, and whether a role noun directly follows it. */
+  const runAt = (index: number): { end: number; title: boolean } => {
+    let end = index;
+    while (end < said.length && said[end]!.capitalised && !said[end]!.isNumber && !ROLE_NOUNS.has(said[end]!.key) && !nameKeys.has(said[end]!.key)) end += 1;
+    return { end, title: end > index && end < said.length && ROLE_NOUNS.has(said[end]!.key) };
+  };
+  const opener = said[0];
+  if (!opener || opener.isNumber) return false;
+  const openerOrdinary =
+    STOPWORDS.has(opener.word) ||
+    SUBJECT_LEAD.has(opener.word) ||
+    OPENERS.has(opener.word) ||
+    ROLE_NOUNS.has(opener.key) ||
+    ROLE_CLAIM_OPENERS.has(opener.word) ||
+    mentionsSponsorship(opener.word);
+  if (!openerOrdinary && !inTitle(0) && !runAt(0).title) return false;
+
+  for (let index = openerOrdinary ? 1 : 0; index < said.length; index += 1) {
+    if (inTitle(index) || !named(said[index]!)) continue;
+    const run = runAt(index);
+    if (run.title) {
+      index = run.end;
+      continue;
+    }
+    const before = said[index - 1];
+    if (run.end - index === 1 && before && PLACE_PREPOSITIONS.has(before.word)) continue;
+    return false;
+  }
+  return true;
 }
 
 /** Why no sentence matched: the most specific reason the closest sentence gives. */
@@ -766,13 +909,16 @@ function diagnose(
   const covered = bestCover === wanted.size;
   if (covered && markers(said) !== markers(best.tokens)) return fail('claim_negation_mismatch');
   const known = new Set([...claimKeys, ...nameKeys]);
+  const words = comparable(best.tokens);
+  // The sentence starts with exactly the claim and goes on ("...employs 450 people" of "...across
+  // Europe"): a shortened sentence, not another subject, so the reason says so (#689 review 3, P3).
+  const shortened = covered && words.length > said.length && sameKeys(said, words.slice(0, said.length));
   const foreign = best.tokens.some(
     (token, index) =>
       token.capitalised && !token.isNumber && !known.has(token.key) && !STOPWORDS.has(token.word) && !isMarker(token) && !FIRST_PERSON.has(token.word) && (index > 0 || isContent(token)),
   );
-  if (foreign && bestCover > 0) return fail('claim_entity_mismatch');
+  if (foreign && bestCover > 0 && !shortened) return fail('claim_entity_mismatch');
   // The sentence names the employer, but not as its subject ("Contoso acquired Northwind Freight").
-  const words = comparable(best.tokens);
   const named = findName(words, runs);
   if (covered && named && !words.slice(0, named[0]).every((token) => token.isNumber || SUBJECT_LEAD.has(token.word))) return fail('claim_entity_mismatch');
   if (covered && best.tokens.some((token) => token.isNumber && !claimKeys.has(token.key))) return fail('claim_number_mismatch');
@@ -879,12 +1025,13 @@ export function unnamedSubjectAllowed(
 
 /** The quote floor for one stored fact (the linked company's name counts as an own name for its facts). */
 export function factQuoteSupport(
-  fact: Pick<CompanyEvidenceFactData, 'claim' | 'quote' | 'viaLink' | 'scope' | 'sourceUrl'>,
+  fact: Pick<CompanyEvidenceFactData, 'claim' | 'quote' | 'viaLink' | 'scope' | 'sourceUrl' | 'roleLabel'>,
   employerNames: readonly string[] = [],
   identity?: Pick<CompanyIdentity, 'verifiedKey' | 'host'> | null,
 ): QuoteSupport {
   return assessQuoteSupport(fact.claim, fact.quote, fact.viaLink ? [...employerNames, fact.viaLink] : employerNames, {
     unnamedSubjectAllowed: unnamedSubjectAllowed(fact, identity),
+    roleLabel: fact.roleLabel,
   });
 }
 
@@ -1056,9 +1203,9 @@ export const LEAD_REASON_TEXT: Record<CompanyEvidenceLeadReason, string> = {
   claim_negation_mismatch:
     'The claim and the passage differ in wording such as "not", "only", "except", "but", "some", "will" or "formerly", so they may not say the same thing.',
   claim_entity_mismatch:
-    'The claim and its passage differ in who or what is named, or the sentence is not about this employer as its subject (for example it is about another organisation).',
+    'The claim and its passage differ in who or what is named, or the sentence is not about this employer as its subject (for example it is about another organisation, or a sentence without the employer\'s name does not clearly refer to this role).',
   claim_context_qualified:
-    'Another sentence next to the passage on the same subject limits or hedges it (such as "not", "only", "except", "but", "if" or "according to"), so it is not used automatically.',
+    'Wording right next to the passage limits or hedges it (such as "not", "only", "except", "excluded", "but", "if" or "according to"): in the rest of its sentence after a ";" or ":", in the sentence right before or after it, or in another sentence on the same subject. So it is not used automatically.',
 };
 
 /** Every lead reason, for fail-closed parsing across the preload boundary. */

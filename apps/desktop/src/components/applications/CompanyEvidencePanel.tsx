@@ -55,7 +55,7 @@ function lastCheckText(fact: ClassifiedFact): string | null {
   if (!fact.lastRefreshOutcome || fact.lastRefreshOutcome === 'renewed') return null;
   if (fact.lastRefreshOutcome === 'cache_hit') return 'Still current, so the source was not fetched again.';
   if (fact.lastRefreshReason === 'quote_context_unsupported') {
-    return 'On the page, this passage is part of a longer sentence, or next to wording on the same subject (such as "only", "except" or "but not"), that the claim leaves out.';
+    return 'On the page, this passage is part of a longer sentence (also after a ";" or ":"), or the sentence right before or after it, or one on the same subject, has wording such as "only", "except", "excluded" or "but not" that the claim leaves out.';
   }
   if (fact.lastRefreshOutcome === 'source_changed') return 'The last check no longer found this passage on the source page.';
   if (fact.lastRefreshReason === 'quote_not_found') return 'The quoted passage was not found on the source page.';
@@ -319,7 +319,7 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
               </p>
             )}
             <p className="mt-1 text-base-content/70">
-              It is then marked &ldquo;You confirmed&rdquo; (your statement, not a check by the app). Sponsorship still needs the
+              It is then marked &ldquo;You confirmed&rdquo; (this is your own statement; the app did not check it). Sponsorship still needs the
               employer&apos;s own page about this role.
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
