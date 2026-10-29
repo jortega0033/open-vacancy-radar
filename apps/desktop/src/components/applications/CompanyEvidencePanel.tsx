@@ -54,6 +54,9 @@ const UNREACHABLE_REASONS = new Set(['timeout', 'blocked', 'not_found', 'fetch_f
 function lastCheckText(fact: ClassifiedFact): string | null {
   if (!fact.lastRefreshOutcome || fact.lastRefreshOutcome === 'renewed') return null;
   if (fact.lastRefreshOutcome === 'cache_hit') return 'Still current, so the source was not fetched again.';
+  if (fact.lastRefreshReason === 'quote_context_unsupported') {
+    return 'On the page, this passage is part of a longer sentence, or next to wording on the same subject (such as "only", "except" or "but not"), that the claim leaves out.';
+  }
   if (fact.lastRefreshOutcome === 'source_changed') return 'The last check no longer found this passage on the source page.';
   if (fact.lastRefreshReason === 'quote_not_found') return 'The quoted passage was not found on the source page.';
   if (fact.lastRefreshReason === 'content_too_large') return 'The source page is too large to check safely, so it was not used.';
@@ -73,8 +76,9 @@ function sourceHost(url: string): string {
  * Sourced company evidence for one application (#689), in the screens the person already uses (the
  * attempt drawer and "Prepare interview"). Every claim shows its scope, its public source, when the
  * app last observed it and why it is, or is not, usable. A claim is "Usable" (eligible) only while
- * its quoted passage was found on its page and the claim is worded from it (or the person confirmed
- * reading it), it is current, nothing disagrees with it and it fits this role. "Used" is reserved
+ * its quoted passage was found on its page and the claim repeats one whole sentence of it with nothing
+ * nearby limiting it (or the person confirmed the source says it), it is current, nothing disagrees with
+ * it and it fits this role. "Used" is reserved
  * for what a prepared letter actually carried (its snapshot), never for mere eligibility.
  *
  * Nothing here runs by itself: reading shows what is stored, and every network action (research,
@@ -90,6 +94,8 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
   const [domain, setDomain] = useState('');
   const [entityRef, setEntityRef] = useState('');
   const [editing, setEditing] = useState<{ id: string; claim: string; quote: string } | null>(null);
+  /** The fact whose one-step "the source says this" attestation is open. */
+  const [attesting, setAttesting] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState({ claim: '', sourceUrl: '', quote: '', scope: 'company' as CompanyEvidenceScope, topic: 'general' as CompanyEvidenceTopic });
   const mounted = useRef(true);
@@ -278,14 +284,9 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
               </>
             ) : (
               <>
-                {fact.verification !== 'user_confirmed' && fact.sourceKind !== 'ind_register' && (
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-xs"
-                    disabled={!idle}
-                    onClick={() => void run('confirm', () => window.companyEvidence.confirmFact(target, fact.id))}
-                  >
-                    I read the source
+                {fact.verification !== 'user_confirmed' && fact.sourceKind !== 'ind_register' && attesting !== fact.id && (
+                  <button type="button" className="btn btn-outline btn-xs" disabled={!idle} onClick={() => setAttesting(fact.id)}>
+                    The source says this&hellip;
                   </button>
                 )}
                 <button type="button" className="btn btn-ghost btn-xs" disabled={!idle} onClick={() => setEditing({ id: fact.id, claim: fact.claim, quote: '' })}>
@@ -303,6 +304,41 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
             )}
           </div>
         )}
+        {attesting === fact.id && !isEditing && (
+          <div className="mt-2 rounded-box border border-warning/60 p-2 text-xs" role="group" aria-label="Confirm what the source says" data-testid="company-fact-attest">
+            <p className="break-words">
+              Only confirm this if you opened {sourceHost(fact.sourceUrl)} yourself and it says exactly: &ldquo;{fact.claim}&rdquo;
+            </p>
+            {fact.reasons.some((reason) => reason !== 'unverified') && (
+              <p className="mt-1 break-words">
+                The app did not use it automatically:{' '}
+                {fact.reasons
+                  .filter((reason) => reason !== 'unverified')
+                  .map((reason) => LEAD_REASON_TEXT[reason])
+                  .join(' ')}
+              </p>
+            )}
+            <p className="mt-1 text-base-content/70">
+              It is then marked &ldquo;You confirmed&rdquo; (your statement, not a check by the app). Sponsorship still needs the
+              employer&apos;s own page about this role.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-warning btn-xs"
+                disabled={!idle}
+                onClick={() =>
+                  void run('confirm', () => window.companyEvidence.confirmFact(target, fact.id)).then(() => setAttesting(null))
+                }
+              >
+                I read {sourceHost(fact.sourceUrl)} and it says this
+              </button>
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setAttesting(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </li>
     );
   }
@@ -313,9 +349,9 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
       <p className="mt-0.5 text-xs text-base-content/70">
         Public facts about this employer, kept apart from your CV. Only two things use them: the cover letter this app prepares
         for an application, and the &ldquo;Prepare interview&rdquo; prompt. The Letters page and the CV assistant do not. A claim
-        is usable only while its quoted passage was found on its page and the claim is worded from that passage (or you
-        confirmed you read it), it is current, nothing disagrees with it and it fits this role. That checks the wording only; it
-        does not prove the page is right. Everything else is a lead.
+        is usable only while its quoted passage was found on its page and the claim repeats one whole sentence of it, with nothing
+        on the page next to it limiting it (or you confirmed the source says it), it is current, nothing disagrees with it and it
+        fits this role. That checks the wording only; it does not prove the page or the claim is right. Everything else is a lead.
       </p>
 
       <div role="status" aria-live="polite" className="mt-2 min-h-4 text-xs">
@@ -331,7 +367,9 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
         <div className="mt-2" data-testid="company-identity-missing">
           <p className="text-xs">
             We cannot tell which employer this is from the posting alone, and a name or a register match is not enough. Enter the
-            employer&apos;s own website to start a record for this vacancy. Another vacancy with the same name is not affected.
+            employer&apos;s own website to start a record for this vacancy (not a job board, recruiting system or hosting site:
+            every page on the address you confirm counts as the employer&apos;s own). Another vacancy with the same name is not
+            affected.
           </p>
           {view.suggestions.length > 0 && (
             <ul className="mt-2 space-y-1" data-testid="company-domain-suggestions">
@@ -340,7 +378,7 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
                   <span>
                     {suggestion.domain} (
                     {suggestion.basis === 'posting_domain'
-                      ? 'the domain of this posting'
+                      ? "the domain of this posting. It may be a job site or a hosting service: use it only if it is the employer's own website"
                       : 'you confirmed it for another vacancy with this name'}
                     )
                   </span>
@@ -528,7 +566,10 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
               {view.lettersUsed.length === 0
                 ? 'The prepared letter makes no claim about the company from these sources.'
                 : `Used in the prepared letter: ${view.lettersUsed.length} sourced company claim${view.lettersUsed.length === 1 ? '' : 's'}: ${view.lettersUsed
-                    .map((use) => `"${use.claim}" (${sourceHost(use.sourceUrl)}, observed ${formatDay(use.observedAt)})`)
+                    .map(
+                      (use) =>
+                        `"${use.claim}" (${sourceHost(use.sourceUrl)}, observed ${formatDay(use.observedAt)}${use.verification === 'user_confirmed' ? ', you confirmed it; the app did not check its wording' : ''})`,
+                    )
                     .join('; ')}. Changing the evidence later does not change that letter.`}
             </p>
           )}

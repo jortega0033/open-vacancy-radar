@@ -14,6 +14,7 @@ import {
 import { CompanyEvidenceRuns, type CompanyEvidenceDeps } from '../../../electron/company-evidence-service.js';
 import { createWorkspaceDb, type WorkspaceDb } from '../../../electron/workspace/client.js';
 import * as workspace from '../../../electron/workspace/repository.js';
+import * as evidenceStore from '../../../electron/workspace/company-evidence-store.js';
 import { CompanyEvidencePanel } from '../../../src/components/applications/CompanyEvidencePanel.js';
 import { InterviewPrepDrawer } from '../../../src/components/applications/InterviewPrepDrawer.js';
 import { installBridges } from '../../cv-bridges.js';
@@ -125,7 +126,7 @@ describe('CompanyEvidencePanel', () => {
 
     fireEvent.change(screen.getByLabelText('Company website'), { target: { value: 'jobgether.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm website' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent("a job board or recruiting system, not the employer's own website");
+    expect(await screen.findByRole('alert')).toHaveTextContent("a job board, recruiting system or shared publishing/hosting platform used by many organisations, not the employer's own website");
 
     fireEvent.change(screen.getByLabelText('Company website'), { target: { value: 'harbor-systems.example' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm website' }));
@@ -178,11 +179,11 @@ describe('CompanyEvidencePanel', () => {
     const platform = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
     const group = attempt('Northwind Freight Group', 'Dispatcher', 'https://careers.northwind-freight-group.example/jobs/9');
     pages.set(ABOUT, 'Northwind Freight has 200 employees');
-    pages.set('https://news.example/n', 'Northwind Freight employs about 450 people in total');
+    pages.set('https://news.example/n', 'Northwind Freight employs about 450 people');
     pages.set('https://northwind-freight-group.example/about', 'Northwind Freight Group runs a dispatch centre in Rotterdam for its own fleet');
     const api = bridge();
     await api.addFact({ attemptId: platform.id }, { claim: 'Northwind Freight has 200 employees.', sourceUrl: ABOUT, quote: 'Northwind Freight has 200 employees', scope: 'company', topic: 'size' });
-    await api.addFact({ attemptId: platform.id }, { claim: 'Northwind Freight employs about 450 people.', sourceUrl: 'https://news.example/n', quote: 'Northwind Freight employs about 450 people in total', scope: 'company', topic: 'size' });
+    await api.addFact({ attemptId: platform.id }, { claim: 'Northwind Freight employs about 450 people.', sourceUrl: 'https://news.example/n', quote: 'Northwind Freight employs about 450 people', scope: 'company', topic: 'size' });
     await api.addFact({ attemptId: group.id }, { claim: 'Northwind Freight Group runs a dispatch centre in Rotterdam.', sourceUrl: 'https://northwind-freight-group.example/about', quote: 'Northwind Freight Group runs a dispatch centre in Rotterdam for its own fleet', scope: 'company', topic: 'general' });
 
     const onChanged = vi.fn();
@@ -248,7 +249,7 @@ describe('CompanyEvidencePanel', () => {
     const panel = await screen.findByTestId('company-evidence');
     expect(panel).toHaveTextContent('the cover letter this app prepares for an application, and the “Prepare interview” prompt');
     expect(panel).toHaveTextContent('The Letters page and the CV assistant do not.');
-    expect(panel).toHaveTextContent('That checks the wording only; it does not prove the page is right.');
+    expect(panel).toHaveTextContent('That checks the wording only; it does not prove the page or the claim is right.');
     expect(panel).toHaveTextContent('greenhouse board "northwind"; the employer\'s own website is not known');
     expect(panel).toHaveTextContent('takes up to about 90 seconds');
     expect(panel).not.toHaveTextContent('Northwind Freight');
@@ -268,12 +269,12 @@ describe('CompanyEvidencePanel', () => {
 
     pages.set(ABOUT, 'Northwind Freight now operates 15 depots in the Benelux');
     fireEvent.click(within(card).getByRole('button', { name: 'Correct' }));
-    fireEvent.change(screen.getByLabelText('Corrected claim'), { target: { value: 'Northwind Freight operates 15 depots in the Benelux.' } });
+    fireEvent.change(screen.getByLabelText('Corrected claim'), { target: { value: 'Northwind Freight now operates 15 depots in the Benelux.' } });
     fireEvent.change(screen.getByLabelText(/Passage from the page that says the corrected wording/), {
       target: { value: 'Northwind Freight now operates 15 depots in the Benelux' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
-    const fixed = (await screen.findByText('Northwind Freight operates 15 depots in the Benelux.')).closest('[data-testid="company-fact"]') as HTMLElement;
+    const fixed = (await screen.findByText('Northwind Freight now operates 15 depots in the Benelux.')).closest('[data-testid="company-fact"]') as HTMLElement;
     await waitFor(() => expect(fixed).toHaveAttribute('data-support', 'supported'));
     expect(within(fixed).getByText('Quoted passage found')).toBeInTheDocument();
   });
@@ -385,5 +386,86 @@ describe('Prepare interview with company evidence', () => {
     expect(prompt).toContain(`source: ${ABOUT}`);
     expect(prompt).not.toContain('LEAD-RUMOUR');
     expect(prompt).not.toContain('Valid until');
+  });
+});
+
+/* Fix round 2 (review 2, P3): an attestation names the claim and the source, and says why the app refused it;
+ * a self-attested use is marked as such; a posting-domain suggestion warns that it may be a job or hosting site. */
+describe('CompanyEvidencePanel: informed attestation and domain suggestions (fix 2)', () => {
+  const BORROWED = 'Northwind Freight employs 12,000 people.';
+  const COMPETITOR = 'Northwind Freight is a logistics firm. Our competitor Acme Haulage employs 12,000 people worldwide.';
+
+  it('asks for a one-step confirmation that names the source and the exact claim, with the reason the app refused it', async () => {
+    const platform = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    pages.set(ABOUT, COMPETITOR);
+    const api = bridge();
+    await api.addFact({ attemptId: platform.id }, { claim: BORROWED, sourceUrl: ABOUT, quote: COMPETITOR, scope: 'company', topic: 'size' });
+    render(<CompanyEvidencePanel target={{ attemptId: platform.id }} />);
+    const card = (await screen.findByText(BORROWED)).closest('[data-testid="company-fact"]') as HTMLElement;
+    expect(card).toHaveAttribute('data-support', 'lead');
+    // No single click turns a refused lead into a confirmed one.
+    expect(within(card).queryByRole('button', { name: /I read the source/ })).toBeNull();
+    fireEvent.click(within(card).getByRole('button', { name: 'The source says this…' }));
+    const step = within(card).getByTestId('company-fact-attest');
+    expect(step).toHaveTextContent(`Only confirm this if you opened northwind.example yourself and it says exactly: “${BORROWED}”`);
+    expect(step).toHaveTextContent('The app did not use it automatically:');
+    expect(step).toHaveTextContent('the sentence is not about this employer as its subject');
+    expect(step).toHaveTextContent('your statement, not a check by the app');
+    fireEvent.click(within(step).getByRole('button', { name: 'Cancel' }));
+    expect(within(card).queryByTestId('company-fact-attest')).toBeNull();
+    expect(card).toHaveAttribute('data-support', 'lead');
+
+    fireEvent.click(within(card).getByRole('button', { name: 'The source says this…' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'I read northwind.example and it says this' }));
+    // Confirmed, the claim moves to the usable list (a new list item), labelled as the person's own confirmation.
+    await waitFor(() => expect(screen.getByText(BORROWED).closest('[data-testid="company-fact"]')).toHaveAttribute('data-support', 'supported'));
+    const confirmed = screen.getByText(BORROWED).closest('[data-testid="company-fact"]') as HTMLElement;
+    expect(within(confirmed).getByText('You confirmed')).toBeInTheDocument();
+    expect(within(confirmed).queryByTestId('company-fact-attest')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Recorded your confirmation that northwind.example says this claim.');
+  });
+
+  it('marks each claim the prepared letter used that only the person confirmed', async () => {
+    const platform = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    const api = bridge();
+    await api.addFact({ attemptId: platform.id }, { claim: CLAIM, sourceUrl: ABOUT, quote: QUOTE, scope: 'company', topic: 'general' });
+    pages.set('https://northwind.example/rail', COMPETITOR);
+    await api.addFact({ attemptId: platform.id }, { claim: BORROWED, sourceUrl: 'https://northwind.example/rail', quote: COMPETITOR, scope: 'company', topic: 'size' });
+    const lead = (await api.get({ attemptId: platform.id })) as Extract<Awaited<ReturnType<CompanyEvidenceBridge['get']>>, { ok: true }>;
+    await api.confirmFact({ attemptId: platform.id }, lead.view.facts.find((fact) => fact.claim === BORROWED)!.id);
+    const prose = await api.prose({ attemptId: platform.id });
+    if (!prose.ok) throw new Error('prose refused');
+    evidenceStore.recordEvidenceUses(db, platform.id, prose.facts, new Date('2026-10-05T10:00:00.000Z'));
+
+    render(<CompanyEvidencePanel target={{ attemptId: platform.id }} />);
+    const uses = await screen.findByTestId('company-letter-uses');
+    expect(uses).toHaveTextContent(`"${BORROWED}" (northwind.example, observed`);
+    expect(uses).toHaveTextContent('you confirmed it; the app did not check its wording');
+    expect(uses.textContent!.match(/you confirmed it/g)).toHaveLength(1);
+    expect(uses).toHaveTextContent(`"${CLAIM}" (northwind.example, observed`);
+  });
+
+  it('says a posting-domain suggestion may be a job or hosting site, and never suggests or accepts a shared platform', async () => {
+    const apex = attempt('Apex', 'Engineer', 'https://careers.apex-jobs-network.example/jobs/1');
+    render(<CompanyEvidencePanel target={{ attemptId: apex.id }} />);
+    const suggestions = await screen.findByTestId('company-domain-suggestions');
+    expect(suggestions).toHaveTextContent(
+      "apex-jobs-network.example (the domain of this posting. It may be a job site or a hosting service: use it only if it is the employer's own website)",
+    );
+    expect(screen.getByTestId('company-identity-missing')).toHaveTextContent('not a job board, recruiting system or hosting site');
+
+    for (const domain of ['bamboohr.com', 'apex.jobvite.com', 'icims.com', 'medium.com', 'apex.substack.com', 'wordpress.com', 'ghost.io', 'sslip.io']) {
+      fireEvent.change(screen.getByLabelText('Company website'), { target: { value: domain } });
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm website' }));
+      expect(await screen.findByRole('alert'), domain).toHaveTextContent(/job board, recruiting system or shared publishing\/hosting platform|shared hosting service or a public suffix/);
+    }
+    expect(screen.getByTestId('company-identity-missing')).toBeInTheDocument();
+  });
+
+  it('offers no posting-domain suggestion at all for a shared ATS or hosting platform', async () => {
+    const onBamboo = attempt('Apex', 'Engineer', 'https://apex.bamboohr.com/careers/1');
+    render(<CompanyEvidencePanel target={{ attemptId: onBamboo.id }} />);
+    await screen.findByTestId('company-identity-missing');
+    expect(screen.queryByTestId('company-domain-suggestions')).toBeNull();
   });
 });

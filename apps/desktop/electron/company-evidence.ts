@@ -19,8 +19,9 @@
  *  3. **Renewal is explicit.** `expiresAt` is written when the evidence is observed. Nothing in
  *     here extends it; only a successful re-fetch of the source (the service) writes a new one.
  *  4. **A found passage must say the claim.** "Source confirmed" means the quoted passage was found
- *     on the page AND the claim is worded from that passage (`assessQuoteSupport`). It is a lexical
- *     floor, not semantic verification: a true paraphrase stays a lead until the person confirms it.
+ *     on the page AND the claim repeats one whole sentence of it, with nothing next to it (in the
+ *     passage or on the page) limiting it (`assessQuoteSupport`). It is a lexical wording floor, not
+ *     semantic or truth verification: a true paraphrase stays a lead until the person confirms it.
  */
 
 import { parse as parseDomain } from 'tldts';
@@ -106,7 +107,11 @@ export function nameKeyOf(company: string): string {
     .replace(/^-+|-+$/gu, '');
 }
 
-/** Job boards, aggregators and ATS providers: a page hosted here says nothing about who the employer is. */
+/**
+ * Job boards, aggregators, ATS providers and shared publishing / hosting platforms that are not on
+ * the Public Suffix List's private section: a page hosted here says nothing about who the employer
+ * is, so none of them can become an employer's "own website", even when a person confirms it.
+ */
 const JOB_BOARD_DOMAINS = [
   'linkedin.com',
   'indeed.com',
@@ -142,6 +147,61 @@ const JOB_BOARD_DOMAINS = [
   'teamtailor.com',
   'myworkdayjobs.com',
   'workday.com',
+  'bamboohr.com',
+  'jobvite.com',
+  'icims.com',
+  'breezy.hr',
+  'jazzhr.com',
+  'applytojob.com',
+  'recruiterbox.com',
+  'homerun.co',
+  'join.com',
+  'pinpointhq.com',
+  'zohorecruit.com',
+  'freshteam.com',
+  'manatal.com',
+  'jobylon.com',
+  'softgarden.io',
+  'taleo.net',
+  'successfactors.com',
+  'successfactors.eu',
+  'oraclecloud.com',
+  'adp.com',
+  'ultipro.com',
+  'paylocity.com',
+  'welcometothejungle.com',
+  'otta.com',
+  'builtin.com',
+  'dice.com',
+  'stepstone.de',
+  'stepstone.nl',
+  'xing.com',
+  'indeed.nl',
+  'glassdoor.nl',
+  'monsterboard.nl',
+  // Shared publishing / hosting: anyone can publish a page under these.
+  'medium.com',
+  'substack.com',
+  'wordpress.com',
+  'weebly.com',
+  'wix.com',
+  'squarespace.com',
+  'webflow.io',
+  'ghost.io',
+  'gitbook.io',
+  'notion.so',
+  'notion.site',
+  'github.com',
+  'gitlab.io',
+  'carrd.co',
+  'tumblr.com',
+  'blogger.com',
+  'linktr.ee',
+  'about.me',
+  'framer.website',
+  'strikingly.com',
+  'sslip.io',
+  'nip.io',
 ];
 
 /** Trailing legal-form words that may be dropped when comparing a name to a domain label. */
@@ -374,55 +434,102 @@ export function inferSourceKind(
 
 /**
  * Why a quoted passage does not adequately support a claim. These are LEXICAL checks, stated as
- * such: they establish that the claim is worded from its passage (near-verbatim), not that the
+ * such: they establish that the claim repeats one whole statement of its passage, not that the
  * passage is true or that the claim means the same in every reading.
  */
 export type QuoteSupportFailure =
   | 'quote_missing'
+  | 'claim_too_vague'
+  | 'claim_not_whole_sentence'
   | 'claim_number_mismatch'
   | 'claim_negation_mismatch'
   | 'claim_entity_mismatch'
+  | 'claim_context_qualified'
   | 'claim_not_in_quote';
 
 export type QuoteSupport = { ok: true } | { ok: false; reason: QuoteSupportFailure };
 
+export interface QuoteSupportOptions {
+  /**
+   * A claim that does not name the employer as its subject ("Visa sponsorship is available for this
+   * role") may be supported only when this is true: the caller sets it for a ROLE-scope claim whose
+   * source is the employer's own posting/site (`sourceMatchesIdentity`). Never for company scope.
+   */
+  unnamedSubjectAllowed?: boolean;
+}
+
+/** Ignored when comparing a claim with its sentence. Nothing else is. */
+const ARTICLES = new Set(['a', 'an', 'the', 'de', 'het', 'een']);
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'for', 'by', 'with', 'from', 'as', 'is', 'are', 'was',
   'were', 'be', 'been', 'being', 'it', 'its', 'this', 'that', 'these', 'those', 'has', 'have', 'had', 'do', 'does',
   'did', 'about', 'into', 'over', 'per', 'than', 'then', 'also', 'which', 'who', 'whose', 'where', 'there', 'here',
   'all', 'both', 'each', 'so', 'such', 'very', 'just', 'today', 'currently', 'now',
   'de', 'het', 'een', 'en', 'van', 'op', 'te', 'voor', 'met', 'zijn', 'die', 'dat', 'deze', 'dit', 'bij',
-  'naar', 'uit', 'als', 'ook', 'om', 'aan', 'tot', 'door', 'er', 'wordt', 'worden', 'heeft', 'hebben',
+  'naar', 'uit', 'ook', 'om', 'aan', 'tot', 'door', 'er', 'wordt', 'worden', 'heeft', 'hebben',
 ]);
+/** What may come before the employer's name for it still to be the statement's subject. */
+const SUBJECT_LEAD = new Set([...ARTICLES, 'in', 'on', 'at', 'as', 'of', 'since', 'sinds', 'vanaf', 'today', 'currently', 'now', 'nu', 'per']);
 const NEGATIONS = new Set([
   'not', 'no', 'never', 'none', 'nor', 'neither', 'without', 'cannot', 'nobody', 'nothing', 'nowhere',
   'niet', 'geen', 'nooit', 'zonder', 'noch', 'niets', 'niemand', 'nergens',
 ]);
-/** Modality / time qualifiers: "will", "may", "formerly"... change what a sentence asserts. */
+/**
+ * Modality, time, scope, condition, contrast and attribution words: each can narrow, hedge or
+ * reverse what a statement asserts. Over-matching is deliberate (it can only keep a claim a lead).
+ */
 const QUALIFIERS = new Set([
   'will', 'would', 'may', 'might', 'could', 'should', 'can', 'plan', 'plans', 'planned', 'planning', 'aim', 'aims',
   'intend', 'intends', 'intended', 'expect', 'expects', 'expected', 'hope', 'hopes', 'soon', 'formerly', 'former',
   'previously', 'ceased', 'stopped', 'discontinued', 'until', 'except', 'unless', 'only',
+  'but', 'however', 'although', 'though', 'yet', 'whereas', 'excluding', 'excl', 'exclusively', 'solely', 'merely',
+  'limited', 'some', 'certain', 'selected', 'specific', 'depending', 'depends', 'subject', 'provided', 'if', 'whether',
+  'apart', 'besides', 'instead', 'rather', 'partly', 'partially', 'sometimes', 'occasionally', 'rarely', 'usually',
+  'mostly', 'mainly', 'typically', 'generally', 'often', 'according', 'reportedly', 'allegedly', 'rumoured', 'rumored',
+  'says', 'said', 'claims', 'claimed', 'reports', 'reported', 'estimated', 'applies', 'applicable', 'includes',
+  'including', 'excludes', 'exclude', 'counts', 'counted', 'refers', 'figure', 'figures', 'outdated', 'incorrect', 'wrong',
+  'geldt', 'gelden', 'inclusief', 'exclusief', 'betreft',
   'zal', 'zullen', 'zou', 'zouden', 'kan', 'kunnen', 'mag', 'mogen', 'mogelijk', 'misschien', 'voorheen',
   'vroeger', 'gestopt', 'tenzij', 'behalve', 'binnenkort', 'gepland', 'alleen',
+  'maar', 'echter', 'hoewel', 'uitgezonderd', 'uitsluitend', 'slechts', 'sommige', 'bepaalde', 'enkele', 'beperkt',
+  'afhankelijk', 'indien', 'mits', 'als', 'wanneer', 'soms', 'meestal', 'vaak', 'deels', 'gedeeltelijk', 'volgens',
+  'verluidt', 'zelden',
+]);
+/** A following sentence that starts like this refers back to (or limits) the one before it. */
+const OPENERS = new Set([
+  'this', 'that', 'these', 'those', 'it', 'they', 'such', 'note', 'also', 'dit', 'dat', 'deze', 'die', 'het', 'zij', 'ze',
+  'let', 'ook', 'wel',
 ]);
 const FIRST_PERSON = new Set(['we', 'our', 'us', 'ours', 'wij', 'ons', 'onze']);
+/** First-person SUBJECT pronouns the employer's own name may stand for. */
+const FIRST_PERSON_SUBJECT = new Set(['we', 'wij']);
+/** A '.' after these (or after a single letter: "B.V.", "e.g.") does not end a sentence. */
+const ABBREVIATIONS = new Set([
+  'bv', 'nv', 'inc', 'ltd', 'llc', 'llp', 'co', 'corp', 'plc', 'gmbh', 'ag', 'sa', 'etc', 'approx', 'ca', 'no', 'nr',
+  'st', 'dr', 'mr', 'mrs', 'ms', 'vs', 'jr', 'sr', 'dept', 'incl', 'excl', 'bijv', 'eg', 'ie',
+]);
+/** Copula / auxiliary forms compared as one word (person agreement only; tense stays distinct). */
+const KEY_ALIAS: Record<string, string> = { are: 'is', am: 'is', zijn: 'is', ben: 'is', have: 'has', hebben: 'heeft', do: 'does' };
 
 interface Token {
   word: string;
-  /** Comparison key: a normalised number, or a lightly stemmed word. */
+  /** Comparison key: a normalised number, or a word with only a plural / 3rd-person -s removed. */
   key: string;
   isNumber: boolean;
   capitalised: boolean;
 }
 
+interface Sentence {
+  tokens: Token[];
+  /** The sentence ended with ':' -- a lead-in such as "Acme Haulage says:". */
+  leadIn: boolean;
+}
+
 function stem(word: string): string {
-  if (word.length > 5 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
-  if (word.length > 5 && word.endsWith('ing')) return word.slice(0, -3);
-  if (word.length > 4 && word.endsWith('ed')) return word.slice(0, -2);
-  if (word.length > 4 && word.endsWith('es')) return word.slice(0, -2);
-  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
-  return word;
+  const base = KEY_ALIAS[word] ?? word;
+  if (base.length > 4 && base.endsWith('ies')) return `${base.slice(0, -3)}y`;
+  if (base.length > 3 && base.endsWith('s') && !/(?:ss|us|is)$/u.test(base)) return base.slice(0, -1);
+  return base;
 }
 
 function normaliseNumber(raw: string): string {
@@ -430,110 +537,257 @@ function normaliseNumber(raw: string): string {
   return raw.replace(/,/gu, '.');
 }
 
-const TOKEN_PATTERN = /\d+(?:[.,]\d+)*|\p{L}[\p{L}\p{M}]*(?:'\p{L}+)?/gu;
+/** Words, numbers and sentence terminators. Alternation of simple classes: linear on bounded text. */
+const TOKEN_PATTERN = /\d+(?:[.,]\d+)*|\p{L}[\p{L}\p{M}]*(?:'\p{L}+)?|[.!?;:…\n]+/gu;
+const TERMINATOR_START = /^[.!?;:…\n]/u;
+/** What may follow a terminator for it to end a sentence ("northwind.example" is not two sentences). */
+const AFTER_TERMINATOR = /[\s"'()[\]«»“”]/u;
 
-/** Linear tokenizer over a bounded claim or quote. */
-function tokens(text: string): Token[] {
+/**
+ * Linear segmentation of a bounded claim, quote or page window into sentences. A sentence ends at
+ * `. ! ? … :` followed by a space or the end, at any `;`, and at a line break (block boundaries of
+ * a fetched page). A '.' after a single letter or a known abbreviation does not end it.
+ */
+function sentences(text: string): Sentence[] {
   const normalised = text.slice(0, 4000).normalize('NFKC').replace(/[‘’ʼ]/gu, "'");
-  const out: Token[] = [];
+  const out: Sentence[] = [];
+  let current: Token[] = [];
   for (const match of normalised.matchAll(TOKEN_PATTERN)) {
     const raw = match[0];
+    if (TERMINATOR_START.test(raw)) {
+      const after = normalised[match.index + raw.length];
+      const hard = raw.includes(';') || raw.includes('\n');
+      if (!hard && after !== undefined && !AFTER_TERMINATOR.test(after)) continue;
+      const previous = current[current.length - 1];
+      if (!hard && raw === '.' && previous && !previous.isNumber && (previous.word.length === 1 || ABBREVIATIONS.has(previous.word))) continue;
+      if (current.length > 0) out.push({ tokens: current, leadIn: raw.endsWith(':') });
+      current = [];
+      continue;
+    }
     if (/^\d/u.test(raw)) {
       const value = normaliseNumber(raw);
-      out.push({ word: value, key: value, isNumber: true, capitalised: false });
+      current.push({ word: value, key: value, isNumber: true, capitalised: false });
       continue;
     }
     const lower = raw.toLowerCase();
     if (lower.endsWith("n't")) {
-      out.push({ word: 'not', key: 'not', isNumber: false, capitalised: false });
+      current.push({ word: 'not', key: 'not', isNumber: false, capitalised: false });
       continue;
     }
     const word = lower.replace(/'.*$/u, '');
-    out.push({ word, key: stem(word), isNumber: false, capitalised: raw[0] !== raw[0]!.toLowerCase() });
+    current.push({ word, key: stem(word), isNumber: false, capitalised: raw[0] !== raw[0]!.toLowerCase() });
   }
+  if (current.length > 0) out.push({ tokens: current, leadIn: false });
   return out;
 }
 
-const isContent = (token: Token): boolean =>
-  token.isNumber ||
-  !(STOPWORDS.has(token.word) || NEGATIONS.has(token.word) || QUALIFIERS.has(token.word) || FIRST_PERSON.has(token.word));
+const isMarker = (token: Token): boolean => NEGATIONS.has(token.word) || QUALIFIERS.has(token.word);
+const isContent = (token: Token): boolean => token.isNumber || !(STOPWORDS.has(token.word) || isMarker(token) || FIRST_PERSON.has(token.word));
+const comparable = (list: readonly Token[]): Token[] => list.filter((token) => !ARTICLES.has(token.word));
+const sameKeys = (a: readonly Token[], b: readonly Token[]): boolean =>
+  a.length === b.length && a.every((token, index) => token.key === b[index]!.key);
 
 /**
- * The deterministic, fail-closed support floor (#689): may this passage, found on the source page,
- * stand behind this exact claim? Conservative by design -- a claim must be worded from its passage:
+ * The employer's names as key runs (articles left out): the whole name ("Emp1 Corp Group"), and the
+ * name without a trailing legal form or initials ("Northwind Freight" for "Northwind Freight B.V.").
+ */
+function nameRunsOf(employerNames: readonly string[]): string[][] {
+  const runs = new Map<string, string[]>();
+  for (const name of employerNames) {
+    const full = sentences(name)
+      .flatMap((sentence) => sentence.tokens)
+      .filter((token) => !ARTICLES.has(token.word));
+    const trimmed = [...full];
+    while (trimmed.length > 1 && (LEGAL_FORMS.has(trimmed[trimmed.length - 1]!.word) || trimmed[trimmed.length - 1]!.word.length === 1)) trimmed.pop();
+    for (const run of [full, trimmed]) {
+      const keys = run.map((token) => token.key);
+      if (keys.length > 0 && run.some((token) => !token.isNumber)) runs.set(keys.join(' '), keys);
+    }
+  }
+  return [...runs.values()];
+}
+
+/** The first (longest) employer-name run in `list`, as [start, end). */
+function findName(list: readonly Token[], runs: readonly string[][]): [number, number] | null {
+  for (let start = 0; start < list.length; start += 1) {
+    let best = 0;
+    for (const run of runs) {
+      if (run.length > best && start + run.length <= list.length && run.every((key, offset) => list[start + offset]!.key === key)) best = run.length;
+    }
+    if (best > 0) return [start, start + best];
+  }
+  return null;
+}
+
+/** Capitalised words other than a sentence's first word: names of people, places, organisations. */
+function namesIn(sentence: Sentence, known: ReadonlySet<string>): Token[] {
+  return sentence.tokens.filter(
+    (token, index) =>
+      index > 0 && token.capitalised && !known.has(token.key) && !STOPWORDS.has(token.word) && !isMarker(token) && !FIRST_PERSON.has(token.word),
+  );
+}
+
+/**
+ * The deterministic, fail-closed support floor (#689): may this passage stand behind this exact
+ * claim? A WORDING check only, and deliberately strict -- the claim must repeat ONE WHOLE statement
+ * of the passage:
  *
- *  - every number in the claim (14, 2009, 12,000 = 12.000) is a number in the passage (14 is not 140);
- *  - every content word of the claim occurs in the passage, IN THE SAME ORDER (light stemming only);
- *  - negation ("not", "no", "geen", "niet", "n't") and modality/time qualifiers ("will", "may",
- *    "formerly", "only"...) agree between the claim and the part of the passage it was matched to;
- *  - a capitalised name in the claim is in the passage. The employer's own name may be left out of
- *    the passage only when the passage speaks in the first person ("we", "our") and names no other
- *    organisation where the claim was matched.
+ *  - the claim is one sentence and says something beyond the employer's name (>= 2 distinct content
+ *    words besides the name, at least one of them an ordinary word);
+ *  - it equals one whole sentence of the passage, word for word, ignoring only a/an/the (de/het/een),
+ *    punctuation inside the sentence, letter case, a plural/3rd-person "-s", number formatting
+ *    (12,000 = 12.000) and is/are, has/have. Nothing may be dropped: not a trailing "but not for this
+ *    role", "except engineering", "only for senior hires", "maar niet voor deze rol", nor a date or a
+ *    number. Nothing may be borrowed from another sentence, clause or organisation;
+ *  - the employer is the statement's subject: its name opens the claim (after at most "In 2019," /
+ *    "Since 2020," / "the"), or the sentence says "we"/"wij" where the claim has the name -- and then
+ *    no other organisation is named in that sentence, its lead-in or a related sentence. A claim
+ *    without the employer as subject is accepted only when the caller allows it (a role-scope claim
+ *    on the employer's own posting);
+ *  - no other sentence of the passage on the same subject (sharing a content word), no sentence that
+ *    refers back to it ("This...", "It...", "But..."), and no lead-in ("Acme says:") negates,
+ *    restricts, conditions or attributes it ("not", "only", "except", "unless", "some", "if",
+ *    "according to", "maar", "alleen", "behalve"...) or adds a number it leaves out.
  *
  * A paraphrase therefore stays a lead even when it is true: the person can confirm it themselves.
- * This proves wording overlap with a passage that was found on the page, never semantic truth.
+ * This shows the claim repeats a statement found on the page, never that the statement is true.
  */
-export function assessQuoteSupport(claim: string, quote: string, employerNames: readonly string[] = []): QuoteSupport {
+export function assessQuoteSupport(
+  claim: string,
+  quote: string,
+  employerNames: readonly string[] = [],
+  options: QuoteSupportOptions = {},
+): QuoteSupport {
   const fail = (reason: QuoteSupportFailure): QuoteSupport => ({ ok: false, reason });
-  const passage = tokens(quote);
+  const passage = sentences(quote);
   if (quote.replace(/\s+/gu, ' ').trim().length < MIN_QUOTE_CHARS || passage.length === 0) return fail('quote_missing');
-  const said = tokens(claim);
-  const passageKeys = new Set(passage.map((token) => token.key));
+  const claimSentences = sentences(claim);
+  if (claimSentences.length === 0) return fail('claim_too_vague');
+  if (claimSentences.length > 1) return fail('claim_not_whole_sentence');
+  const said = comparable(claimSentences[0]!.tokens);
+  // A claim speaks ABOUT the employer by name; "we"/"our" in a claim has no checkable subject.
+  if (said.some((token) => FIRST_PERSON.has(token.word))) return fail('claim_entity_mismatch');
+  const runs = nameRunsOf(employerNames);
+  const nameKeys = new Set(runs.flat());
 
+  const content = new Set(said.filter((token) => isContent(token) && !nameKeys.has(token.key)).map((token) => token.key));
+  const predicate = said.some((token) => !token.isNumber && !token.capitalised && isContent(token) && !nameKeys.has(token.key));
+  if (content.size < 2 || !predicate) return fail('claim_too_vague');
+
+  const allTokens = passage.flatMap((sentence) => sentence.tokens);
+  const passageKeys = new Set(allTokens.map((token) => token.key));
   for (const token of said) if (token.isNumber && !passageKeys.has(token.key)) return fail('claim_number_mismatch');
+  const firstPersonPassage = allTokens.some((token) => FIRST_PERSON.has(token.word));
+  for (const token of said) {
+    if (token.capitalised && !token.isNumber && isContent(token) && !passageKeys.has(token.key)) {
+      if (!(firstPersonPassage && nameKeys.has(token.key))) return fail('claim_entity_mismatch');
+    }
+  }
 
-  const nameKeys = new Set(
-    employerNames.flatMap((name) => tokens(name).filter((token) => !token.isNumber).map((token) => token.key)),
-  );
-  const firstPerson = passage.some((token) => FIRST_PERSON.has(token.word));
-  const content = said.filter(isContent);
-  const required = content.filter((token) => !(firstPerson && nameKeys.has(token.key) && !passageKeys.has(token.key)));
-  const nameLeftOut = required.length < content.length;
-  if (required.length === 0) return fail('claim_not_in_quote');
-  for (const token of required) if (token.capitalised && !passageKeys.has(token.key)) return fail('claim_entity_mismatch');
+  const name = findName(said, runs);
+  const namedSubject = name !== null && said.slice(0, name[0]).every((token) => token.isNumber || SUBJECT_LEAD.has(token.word));
+  const claimKeys = new Set(said.map((token) => token.key));
 
-  const matched: number[] = [];
-  let cursor = 0;
-  for (const token of required) {
-    let found = -1;
-    for (let index = cursor; index < passage.length; index += 1) {
-      if (passage[index]!.key === token.key) {
-        found = index;
+  // ONE whole sentence, exactly (or with "we" where the claim has the employer's name).
+  let matchIndex = -1;
+  let firstPerson = false;
+  for (const [index, sentence] of passage.entries()) {
+    const words = comparable(sentence.tokens);
+    if (sameKeys(said, words)) {
+      matchIndex = index;
+      break;
+    }
+    if (namedSubject && name) {
+      const [start, end] = name;
+      const pronoun = words[start];
+      if (
+        pronoun &&
+        FIRST_PERSON_SUBJECT.has(pronoun.word) &&
+        words.length === said.length - (end - start) + 1 &&
+        sameKeys(said.slice(0, start), words.slice(0, start)) &&
+        sameKeys(said.slice(end), words.slice(start + 1))
+      ) {
+        matchIndex = index;
+        firstPerson = true;
         break;
       }
     }
-    if (found < 0) return fail('claim_not_in_quote');
-    matched.push(found);
-    cursor = found + 1;
   }
-  const span = passage.slice(Math.max(0, matched[0]! - 4), matched[matched.length - 1]! + 1);
-  const negated = (list: readonly Token[]) => list.some((token) => NEGATIONS.has(token.word));
-  if (negated(said) !== negated(span)) return fail('claim_negation_mismatch');
-  const qualifiers = (list: readonly Token[]) =>
-    [...new Set(list.filter((token) => QUALIFIERS.has(token.word)).map((token) => token.word))].sort().join('|');
-  if (qualifiers(said) !== qualifiers(span)) return fail('claim_negation_mismatch');
-  if (nameLeftOut) {
-    const claimKeys = new Set(said.map((token) => token.key));
-    const foreign = span.some(
-      (token) =>
-        token.capitalised &&
-        !FIRST_PERSON.has(token.word) &&
-        !STOPWORDS.has(token.word) &&
-        !claimKeys.has(token.key) &&
-        !nameKeys.has(token.key),
-    );
-    if (foreign) return fail('claim_entity_mismatch');
+  if (matchIndex < 0) return diagnose(said, passage, runs, nameKeys, firstPersonPassage);
+
+  if (!namedSubject && !options.unnamedSubjectAllowed) return fail('claim_entity_mismatch');
+
+  // The rest of the passage: related sentences, a sentence that refers back, a lead-in.
+  const known = new Set([...claimKeys, ...nameKeys]);
+  for (const [index, sentence] of passage.entries()) {
+    if (index === matchIndex) continue;
+    // Same subject: shares a content word (not the employer's name) with the claim.
+    const sameSubject = sentence.tokens.some((token) => isContent(token) && !nameKeys.has(token.key) && claimKeys.has(token.key));
+    const refersBack =
+      index === matchIndex + 1 && sentence.tokens[0] !== undefined && (OPENERS.has(sentence.tokens[0].word) || isMarker(sentence.tokens[0]));
+    const leadIn = index === matchIndex - 1 && (sentence.leadIn || firstPerson);
+    if (!sameSubject && !refersBack && !leadIn) continue;
+    if (sentence.tokens.some(isMarker)) return fail('claim_context_qualified');
+    // A different figure on the same subject may revise or scope the claim's ("14 depots. 9 of the depots...").
+    if (sameSubject && sentence.tokens.some((token) => token.isNumber && !claimKeys.has(token.key))) return fail('claim_context_qualified');
+    // "Acme Haulage says:" / "Acme Haulage is a carrier. We operate...": "we" may be someone else.
+    if (leadIn && namesIn(sentence, known).length > 0 && (sentence.leadIn || findName(comparable(sentence.tokens), runs) === null)) {
+      return fail('claim_entity_mismatch');
+    }
   }
   return { ok: true };
 }
 
+/** Why no sentence matched: the most specific reason the closest sentence gives. */
+function diagnose(
+  said: readonly Token[],
+  passage: readonly Sentence[],
+  runs: readonly string[][],
+  nameKeys: ReadonlySet<string>,
+  firstPersonPassage: boolean,
+): QuoteSupport {
+  const fail = (reason: QuoteSupportFailure): QuoteSupport => ({ ok: false, reason });
+  const wanted = new Set(
+    said.filter((token) => isContent(token) && !(firstPersonPassage && nameKeys.has(token.key))).map((token) => token.key),
+  );
+  const claimKeys = new Set(said.map((token) => token.key));
+  let best: Sentence | null = null;
+  let bestCover = -1;
+  for (const sentence of passage) {
+    const keys = new Set(sentence.tokens.map((token) => token.key));
+    const cover = [...wanted].filter((key) => keys.has(key)).length;
+    if (cover > bestCover) {
+      best = sentence;
+      bestCover = cover;
+    }
+  }
+  if (!best) return fail('claim_not_in_quote');
+  const markers = (list: readonly Token[]) => [...new Set(list.filter(isMarker).map((token) => token.word))].sort().join('|');
+  const covered = bestCover === wanted.size;
+  if (covered && markers(said) !== markers(best.tokens)) return fail('claim_negation_mismatch');
+  const known = new Set([...claimKeys, ...nameKeys]);
+  const foreign = best.tokens.some(
+    (token, index) =>
+      token.capitalised && !token.isNumber && !known.has(token.key) && !STOPWORDS.has(token.word) && !isMarker(token) && !FIRST_PERSON.has(token.word) && (index > 0 || isContent(token)),
+  );
+  if (foreign && bestCover > 0) return fail('claim_entity_mismatch');
+  // The sentence names the employer, but not as its subject ("Contoso acquired Northwind Freight").
+  const words = comparable(best.tokens);
+  const named = findName(words, runs);
+  if (covered && named && !words.slice(0, named[0]).every((token) => token.isNumber || SUBJECT_LEAD.has(token.word))) return fail('claim_entity_mismatch');
+  if (covered && best.tokens.some((token) => token.isNumber && !claimKeys.has(token.key))) return fail('claim_number_mismatch');
+  if (covered) return fail('claim_not_whole_sentence');
+  const everywhere = new Set(passage.flatMap((sentence) => sentence.tokens.map((token) => token.key)));
+  return [...wanted].every((key) => everywhere.has(key)) ? fail('claim_not_whole_sentence') : fail('claim_not_in_quote');
+}
+
 /**
- * Sponsorship / visa / work-permit wording (English and Dutch). Decided from the claim AND its
- * quote, never from the topic label a model or a form supplied, so a mislabelled claim still has to
- * meet the sponsorship rule. Over-matching is deliberate: it can only make a claim harder to use.
+ * Sponsorship / visa / work-permit / immigration wording (English and Dutch). Decided from the claim
+ * AND its quote, never from the topic label a model or a form supplied, so a mislabelled claim still
+ * has to meet the sponsorship rule. Over-matching is deliberate: it can only make a claim harder to use.
  */
 const SPONSORSHIP_WORDING =
-  /\b(?:visas?|visum\w*|sponsor\w*|work[\s-]permits?|work[\s-]authori[sz]ation|right[\s-]to[\s-]work|kennismigrant\w*|highly[\s-]skilled[\s-]migrants?|blue[\s-]card|blauwe[\s-]kaart|werkvergunning\w*|tewerkstellingsvergunning\w*|verblijfsvergunning\w*|erkend[\s-]referent\w*|ind)\b/u;
+  /\b(?:visas?|visum\w*|sponsor\w*|work[\s-]permits?|work[\s-]authori[sz]ation|right[\s-]to[\s-]work|kennismigrant\w*|highly[\s-]skilled[\s-]migrants?|blue[\s-]card|blauwe[\s-]kaart|werkvergunning\w*|tewerkstellingsvergunning\w*|verblijfsvergunning\w*|verblijfsdocument\w*|residence[\s-]permits?|residency[\s-]permits?|(?:single|combined)[\s-]permits?|gvva|erkend[\s-]referent\w*|ind|immigra\w*|(?:non|niet)[\s-]?eu|third[\s-]countr\w*|derdelander\w*|expat\w*|30[\s-]?%[\s-]?(?:ruling|regeling|tax)|30[\s-]?(?:percent|procent)[\s-]?(?:ruling|regeling)|dertig[\s-]?procent\w*)\b/u;
 
 export function mentionsSponsorship(...texts: readonly string[]): boolean {
   return SPONSORSHIP_WORDING.test(texts.join(' ').normalize('NFKC').toLowerCase().slice(0, 4000));
@@ -611,9 +865,27 @@ export interface ClassifiedFact extends CompanyEvidenceFactData {
   official: boolean;
 }
 
+/**
+ * Whether a claim that does not name the employer as its subject may still be supported: only a
+ * ROLE-scope claim (about this posting) whose source is the employer's own posting or site, never a
+ * company-scope claim and never one that arrived over a link.
+ */
+export function unnamedSubjectAllowed(
+  fact: Pick<CompanyEvidenceFactData, 'scope' | 'sourceUrl' | 'viaLink'>,
+  identity: Pick<CompanyIdentity, 'verifiedKey' | 'host'> | null | undefined,
+): boolean {
+  return fact.scope === 'role' && fact.viaLink === null && !!identity && sourceMatchesIdentity(fact.sourceUrl, identity);
+}
+
 /** The quote floor for one stored fact (the linked company's name counts as an own name for its facts). */
-export function factQuoteSupport(fact: Pick<CompanyEvidenceFactData, 'claim' | 'quote' | 'viaLink'>, employerNames: readonly string[] = []): QuoteSupport {
-  return assessQuoteSupport(fact.claim, fact.quote, fact.viaLink ? [...employerNames, fact.viaLink] : employerNames);
+export function factQuoteSupport(
+  fact: Pick<CompanyEvidenceFactData, 'claim' | 'quote' | 'viaLink' | 'scope' | 'sourceUrl'>,
+  employerNames: readonly string[] = [],
+  identity?: Pick<CompanyIdentity, 'verifiedKey' | 'host'> | null,
+): QuoteSupport {
+  return assessQuoteSupport(fact.claim, fact.quote, fact.viaLink ? [...employerNames, fact.viaLink] : employerNames, {
+    unnamedSubjectAllowed: unnamedSubjectAllowed(fact, identity),
+  });
 }
 
 export function classifyFact(fact: CompanyEvidenceFactData, ctx: ClassificationContext, now: Date): ClassifiedFact {
@@ -622,10 +894,10 @@ export function classifyFact(fact: CompanyEvidenceFactData, ctx: ClassificationC
   if (fact.status === 'superseded') reasons.push('superseded');
   if (!ctx.identityVerified) reasons.push('identity_not_verified');
   if (fact.verification === 'unverified') reasons.push('unverified');
-  // A person's explicit "I read the source" is their own attested observation; everything else that
+  // A person's explicit confirmation is their own attested observation; everything else that
   // claims support must pass the quote floor, re-checked here on every read and every prose use.
   if (fact.verification !== 'user_confirmed') {
-    const floor = factQuoteSupport(fact, ctx.employerNames ?? []);
+    const floor = factQuoteSupport(fact, ctx.employerNames ?? [], ctx.identity);
     if (!floor.ok) reasons.push(floor.reason);
   }
   if (Date.parse(fact.expiresAt) <= now.getTime() || Number.isNaN(Date.parse(fact.expiresAt))) reasons.push('expired');
@@ -776,10 +1048,17 @@ export const LEAD_REASON_TEXT: Record<CompanyEvidenceLeadReason, string> = {
   sponsorship_needs_role_source: 'Sponsorship needs a source from the employer about this role.',
   source_not_https: 'The source is not a secure public web address.',
   quote_missing: 'No passage copied from the page is saved for this wording, so it cannot be checked. Add one, or confirm you read the source yourself.',
-  claim_not_in_quote: 'The saved passage does not say this in these words. Only a claim worded from its passage is used automatically.',
-  claim_number_mismatch: 'A number or date in the claim is not in the saved passage.',
-  claim_negation_mismatch: 'The claim and the passage differ in wording such as "not", "no", "will" or "formerly", so they may not say the same thing.',
-  claim_entity_mismatch: 'The claim names someone or something the passage does not, or the passage is about another organisation.',
+  claim_not_in_quote: 'The saved passage does not say this in these words. Only a claim that repeats one whole sentence of its passage is used automatically.',
+  claim_not_whole_sentence:
+    'The claim leaves out part of the sentence it comes from (or joins words from different sentences), and the left-out words may limit it. Only a claim that repeats one whole sentence of its passage is used automatically.',
+  claim_too_vague: 'The claim says too little beyond the company name to be checked against a passage.',
+  claim_number_mismatch: 'A number or date in the claim is not in the saved passage, or the sentence it comes from has one the claim leaves out.',
+  claim_negation_mismatch:
+    'The claim and the passage differ in wording such as "not", "only", "except", "but", "some", "will" or "formerly", so they may not say the same thing.',
+  claim_entity_mismatch:
+    'The claim and its passage differ in who or what is named, or the sentence is not about this employer as its subject (for example it is about another organisation).',
+  claim_context_qualified:
+    'Another sentence next to the passage on the same subject limits or hedges it (such as "not", "only", "except", "but", "if" or "according to"), so it is not used automatically.',
 };
 
 /** Every lead reason, for fail-closed parsing across the preload boundary. */

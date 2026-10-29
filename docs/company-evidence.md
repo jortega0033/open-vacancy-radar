@@ -35,7 +35,15 @@ A record is keyed by one of:
 Registrable domains come from the Public Suffix List (the `tldts` library, including its private section). A public
 suffix (`co.uk`), an IP address, a job board or ATS domain, and any host under a shared-hosting suffix (`github.io`,
 `blogspot.com`, `herokuapp.com`, `vercel.app` and the rest of the list) are refused as an employer domain, and a page
-there never counts as the employer's own source. Credentials in a URL and non-default ports are refused too.
+there never counts as the employer's own source. Common shared platforms that are **not** on that list are refused by
+an app list too: ATS and job sites (`bamboohr.com`, `jobvite.com`, `icims.com`, `breezy.hr`, `jazzhr.com`, `taleo.net`,
+`successfactors.com`, `stepstone.de`, `indeed.nl`, ...) and publishing/hosting platforms (`medium.com`, `substack.com`,
+`wordpress.com`, `weebly.com`, `wix.com`, `ghost.io`, `gitbook.io`, `notion.so`, `github.com`, `sslip.io`, `nip.io`,
+...). The list is finite: an unlisted job or hosting site can still be confirmed by a person. That is why the panel's
+"domain of this posting" suggestion says the posting may be on a job site or hosting service and must be used only if
+it is the employer's own website. Clicking the suggestion only fills the address field; confirming it is a separate,
+explicit step bound to this vacancy, after which every page on that domain counts as the employer's own. Credentials in
+a URL and non-default ports are refused too.
 
 A company **name** is never a key. A name match in a public register (for example the IND recognised-sponsor list) is
 not an identity and never proves sponsorship for a role.
@@ -55,40 +63,72 @@ after the drafting session returns, see below):
 1. The employer is verified (above).
 2. The claim has adequate support. Either:
    - **Quoted passage found** (`source_confirmed`): the app fetched the page and found the quoted passage, **and** the
-     claim is worded from that passage (`assessQuoteSupport`, below); or
-   - **You confirmed** (`user_confirmed`): you pressed *I read the source*, recorded as your own attestation.
+     claim repeats one whole sentence of it with nothing nearby limiting it, both in the saved passage and in the page
+     text around it (`assessQuoteSupport`, below); or
+   - **You confirmed** (`user_confirmed`): your own attestation. A fact's *The source says this...* button opens one
+     confirmation step that names the source host and the exact claim ("Only confirm this if you opened
+     northwind.example yourself and it says exactly: ..."), repeats why the app did not use it automatically, and is
+     confirmed with *I read northwind.example and it says this*. It is labelled *You confirmed* in the panel, and the
+     "Used in the prepared letter" line marks such a use "you confirmed it; the app did not check its wording". An
+     attestation skips the wording check only: the identity, expiry, contradiction, role, sponsorship (a role claim
+     from the employer's own page) and register rules still apply, and a register match cannot be attested.
 3. It has not expired. Company claims are valid for 90 days from the observation, role claims for 14. The expiry is
    written when the evidence is observed. Nothing extends it except a successful re-fetch of the source that finds the
-   quote again (for a claim that still passes the floor), or an explicit *I read the source* by you.
+   quote again (for a claim that still passes the floor on its passage and on the page around it), or your explicit
+   confirmation.
 4. It has no open contradiction (including one across a confirmed link).
 5. A role claim belongs to *this* role.
 6. **Sponsorship**: a claim whose wording (claim *or* quote, English or Dutch: visa, sponsor, work permit, work
-   authorisation, kennismigrant, highly skilled migrant, blue card / blauwe kaart, werkvergunning,
-   tewerkstellingsvergunning, verblijfsvergunning, erkend referent, IND) is about sponsorship is treated as a
-   sponsorship claim **whatever topic label it was given**. It must be about this role and come from the employer's
+   authorisation, right to work, kennismigrant, highly skilled migrant, blue card / blauwe kaart, werkvergunning,
+   tewerkstellingsvergunning, verblijfsvergunning / verblijfsdocument, residence permit, single / combined permit,
+   GVVA, erkend referent, IND, immigration / immigratie, non-EU / niet-EU, third-country / derdelanders, expat, 30%
+   ruling / 30%-regeling) is about sponsorship is treated as a sponsorship claim **whatever topic label it was given**
+   (over-matching is deliberate: it can only make a claim harder to use). It must be about this role and come from the employer's
    own domain or its exact ATS tenant; a register entry or a random page never qualifies.
 7. The source is a credential-free https address, and is not a register name match.
 
 Anything else is a **lead**: visible in the panel with the reason, never sent to a model as fact. A letter built with no
 evidence is byte-identical to one built before this feature.
 
-### The quote floor (what "worded from the passage" means)
+### The quote floor (a whole-statement wording check)
 
-`assessQuoteSupport` is deterministic and deliberately strict. It is a **wording check, not semantic verification**: it
-shows the claim was written from a passage that was found on the page, not that the page is right or that every
-reading of the claim is true. A claim passes only when:
+`assessQuoteSupport` is deterministic and deliberately strict. It is a **wording check, not semantic or truth
+verification**: it shows the claim repeats a statement found on the page, not that the page is right, that the claim
+means the same in every reading, or that word overlap within a sentence proves anything. A claim passes only when:
 
-- every number or year in the claim is a number in the passage (`14` is not `140`; `12,000` = `12.000`);
-- every content word of the claim occurs in the passage **in the same order** (light stemming only);
-- negation (`not`, `no`, `n't`, `geen`, `niet`, ...) and qualifiers (`will`, `may`, `formerly`, `only`, `zal`, ...)
-  agree between the claim and the part of the passage it was matched to;
-- every capitalised name in the claim is in the passage. The employer's own name may be absent from the passage only
-  when the passage speaks in the first person ("we", "our") and names no other organisation where the claim matched.
+- it is **one sentence** and says something beyond the employer's name (at least two distinct content words besides
+  the name, one of them an ordinary word): "Northwind Freight" or "Northwind Freight Europe" is `claim_too_vague`;
+- it equals **one whole sentence** of the passage, word for word. Only these differences are ignored: a/an/the
+  (de/het/een), punctuation inside the sentence, letter case, a plural or third-person "-s", number formatting
+  (`12,000` = `12.000`) and is/are, has/have. Sentences end at `. ! ? … :` followed by a space, at `;`, and at a block
+  boundary of the fetched page (a heading or list item is never the start of the next sentence); a dot after a single
+  letter or a known abbreviation (`B.V.`, `Inc.`, `e.g.`) does not end one. Nothing may be dropped (a trailing "for
+  some roles, but not for this one", "except engineering", "only for senior hires", ", maar niet voor deze rol", a
+  place, a date) and nothing may be borrowed from another sentence, clause or organisation;
+- the employer is the statement's **subject**: its name opens the claim (after at most "In 2019," / "Since 2020," /
+  "the"), or the sentence says "we"/"wij" where the claim has the name and the sentence before it names no other
+  organisation. "Acme, a competitor of Northwind Freight, employs 12,000 people" never supports a claim about Northwind
+  Freight, quoted in part or in full. A claim without the employer as subject ("Visa sponsorship is available for this
+  role") passes only as a role claim from the employer's own posting or site. A claim that itself says "we" is refused;
+- no **other sentence** on the same subject (one sharing a content word with the claim), no sentence right after it
+  that refers back ("This...", "It...", "But...", "Dit...", "Maar..."), and no lead-in ("Acme Haulage says:") contains
+  negation, a qualifier, a restriction, a condition or an attribution (`not`, `only`, `except`, `unless`, `but`,
+  `some`, `if`, `according to`, `applies`, `niet`, `alleen`, `behalve`, `maar`, `tenzij`, `volgens`, ...), and no
+  same-subject sentence adds a figure the claim leaves out (`claim_context_qualified`).
 
-So boilerplate ("we are an equal opportunity employer") cannot carry an unrelated claim, a corrected number cannot
-ride on the old passage, and "does not sponsor" cannot support "sponsors". A true paraphrase also stays a lead: copy a
-passage that says it, or confirm you read it. The floor is applied on every read, before any fetch is spent, and by the
-store itself before it records a confirmation or a renewal.
+A saved passage can itself be a cut-off piece of a page sentence, so the claim is checked **twice**: against the saved
+passage before any request (a failure costs no fetch), and, once the one fetch has found the passage, against the page
+text around it (up to 300 characters each side, block boundaries kept). A claim whose page sentence goes on "...but
+not for this one" stays a lead (`quote_context_unsupported`) although its passage was found. The store re-checks both
+before it records a confirmation or a renewal and refuses one without the page text; every read and every prose use
+re-checks the saved passage.
+
+So boilerplate cannot carry an unrelated claim, a corrected number cannot ride on the old passage, "does not sponsor"
+cannot support "sponsors", and a figure, date or subject cannot be borrowed from a neighbouring sentence. The cost is
+deliberate: a true paraphrase, a shortened sentence ("Northwind Freight operates 14 depots" from "...across the
+Netherlands and Belgium") and a sentence that opens with an unrelated lead-in stay leads. Copy a passage whose whole
+sentence says it, or confirm it yourself. Over-matching of the marker words keeps more claims leads; it never makes one
+usable.
 
 ### Corrections
 
@@ -137,9 +177,13 @@ the model's public queries). What the model returns is never authority: each cla
 supported if it passes the floor and the app's own fetch finds the quoted passage on the cited page.
 
 **Page checks are bounded.** A page larger than 3,000,000 characters is refused as `content_too_large` (never silently
-truncated). Text is extracted by a single linear forward scan (no regular expression runs over the page): markup, runs
-of `<`, unclosed `<script>` elements, deep nesting and malformed entities cannot make it slow, and each character
-reference is decoded exactly once (`&amp;quot;` stays the literal text `&quot;`).
+truncated). Text is extracted by a single linear forward scan, and **no backtracking regular expression** runs over the
+page: the only expressions applied to the whole text are single character-class runs (upper-case runs for lower-casing,
+whitespace runs, line breaks), which are linear. Markup, runs of `<`, unclosed `<script>` elements, deep nesting and
+malformed entities cannot make it slow, and each character reference is decoded exactly once (`&amp;quot;` stays the
+literal text `&quot;`). The scanner does not evaluate CSS or fully parse attributes: text inside hidden elements
+(`hidden`, `display:none`) and an attribute value containing `>` are read as page text. That is content the page author
+published, but a passage found there may not be visible to a reader.
 
 A current, confirmed **company-scope** claim for every requested topic is a **cache hit**: no session, no request, and
 the original retrieval time stays visible (a role claim never satisfies a company topic). The in-app counts report only
@@ -166,7 +210,15 @@ Stopping or failing research or a refresh writes nothing and leaves every prepar
 
 ## Limits
 
-- The quote floor is lexical. It cannot tell whether a page is accurate, and it keeps true paraphrases as leads.
+- The quote floor is lexical. It cannot tell whether a page is accurate or a claim true, and it keeps true paraphrases
+  and shortened sentences as leads. Its marker lists (negation, qualifiers, restrictions, attribution, sponsorship
+  wording) are finite English/Dutch lists: a restriction worded without any of them, in a sentence that shares no
+  content word with the claim, is not detected. Sentence splitting is heuristic (abbreviations; headings without block
+  markup run into the next sentence, which keeps that claim a lead).
+- A person's confirmation is their own statement. The app records it as theirs, keeps it apart from
+  `source_confirmed`, and cannot check it.
+- The synthetic measurement for this change counts only its own labelled fixture cases. It is not an accuracy rate and
+  does not show that no wrong claim can become usable.
 - Role-scoped claims are never reused across roles, so role-level facts always need their own source.
 - The entity reference is whatever you type; the app does not look it up in any register.
 - No third-party company database, employee scraping, credential use, culture or sentiment score, or automatic profile

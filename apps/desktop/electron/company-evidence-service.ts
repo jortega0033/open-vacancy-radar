@@ -20,6 +20,7 @@ import {
   sanitizeLabel,
   selectProseEvidence,
   suggestedEmployerDomain,
+  unnamedSubjectAllowed,
   type ClassificationContext,
   type ActionStats,
   type CompanyEvidenceProseFact,
@@ -223,6 +224,33 @@ function employerNames(ctx: ResolvedContext): string[] {
   return [...new Set([ctx.identity.displayName, sanitizeLabel(ctx.company)].filter((name) => name !== ''))];
 }
 
+/** What the floor needs to check `claim` (against its passage, then against the page around it). */
+function claimCheckFor(
+  ctx: ResolvedContext,
+  fact: { scope: CompanyEvidenceScope; sourceUrl: string; viaLink: string | null },
+  claim: string,
+): { text: string; employerNames: string[]; unnamedSubjectAllowed: boolean } {
+  return { text: claim, employerNames: employerNames(ctx), unnamedSubjectAllowed: unnamedSubjectAllowed(fact, ctx.identity) };
+}
+
+/** The store's view of a successful fetch: what was checked, and the page text it was checked against. */
+function fetchedCheck(
+  ctx: ResolvedContext,
+  check: Extract<SourceCheck, { ok: true }>,
+  claim: string,
+  quote: string,
+): store.FetchedCheck {
+  return {
+    retrievedAt: check.checkedAt,
+    contentHash: check.contentHash,
+    claim,
+    quote,
+    employerNames: employerNames(ctx),
+    identity: ctx.identity,
+    context: check.context ?? null,
+  };
+}
+
 function classificationContext(ctx: ResolvedContext): ClassificationContext {
   return {
     roleKey: ctx.roleKey,
@@ -355,7 +383,8 @@ const DOMAIN_REFUSAL: Record<Exclude<EmployerDomainCheck, { ok: true }>['reason'
   invalid_domain: "Enter the employer's own website address, such as example.com.",
   shared_or_public_domain:
     'That address is a shared hosting service or a public suffix, where anyone can publish. Enter the employer\'s own domain.',
-  job_board_domain: "That is a job board or recruiting system, not the employer's own website.",
+  job_board_domain:
+    "That is a job board, recruiting system or shared publishing/hosting platform used by many organisations, not the employer's own website.",
 };
 
 export function confirmDomain(
@@ -389,12 +418,14 @@ async function checkAndConfirm(
   deps: CompanyEvidenceDeps,
   ctx: ResolvedContext,
   factId: string,
+  scope: CompanyEvidenceScope,
   sourceUrl: string,
   claim: string,
   quote: string,
   signal: AbortSignal | undefined,
 ): Promise<{ notice: string; requests: number }> {
-  const floor = assessQuoteSupport(claim, quote, employerNames(ctx));
+  const claimCheck = claimCheckFor(ctx, { scope, sourceUrl, viaLink: null }, claim);
+  const floor = assessQuoteSupport(claim, quote, claimCheck.employerNames, claimCheck);
   if (!floor.ok) {
     store.recordRefreshAttempt(deps.db, factId, 'failed', floor.reason, deps.now());
     return { notice: `Saved as a lead. ${LEAD_REASON_TEXT[floor.reason]}`, requests: 0 };
@@ -403,6 +434,7 @@ async function checkAndConfirm(
   const check = await confirmSourceQuote(await deps.getHttp(), sourceUrl, quote, {
     ...(signal ? { signal } : {}),
     now: deps.now,
+    claim: claimCheck,
   });
   if (!check.ok) {
     store.recordRefreshAttempt(deps.db, factId, 'failed', check.reason, deps.now());
@@ -411,13 +443,13 @@ async function checkAndConfirm(
   const applied = store.confirmFactFromFetch(
     deps.db,
     factId,
-    { retrievedAt: check.checkedAt, contentHash: check.contentHash, claim, quote, employerNames: employerNames(ctx) },
+    fetchedCheck(ctx, check, claim, quote),
     deps.now(),
   );
   return {
     notice:
       applied === 'applied'
-        ? 'Quoted passage found on the page, and the claim is worded from it. It can be used.'
+        ? 'Quoted passage found on the page, and the claim repeats one whole sentence of it. It can be used (a wording check, not proof that it is true).'
         : 'Saved as a lead. The claim changed while its source was being checked, so nothing was confirmed.',
     requests: 1,
   };
@@ -474,7 +506,7 @@ export async function addFact(
   let notice = 'Saved as a lead. Add a passage copied from the page, or confirm you read the source yourself.';
   let requests = 0;
   if (quote.length >= MIN_QUOTE_CHARS) {
-    ({ notice, requests } = await checkAndConfirm(deps, ctx, inserted.id, sourceUrl, claim, quote, signal));
+    ({ notice, requests } = await checkAndConfirm(deps, ctx, inserted.id, input.scope, sourceUrl, claim, quote, signal));
   }
   return { ok: true, view: getView(deps, target), notice, stats: stats({ requests }) };
 }
@@ -495,7 +527,17 @@ export function confirmFact(deps: CompanyEvidenceDeps, target: EvidenceTarget, f
     return fail('ind_name_match_only', 'A register name match cannot be confirmed as this employer or as sponsorship for this role.');
   }
   store.confirmFactByUser(deps.db, factId, deps.now());
-  return { ok: true, view: getView(deps, target), notice: 'Recorded that you read the source and it says this.' };
+  let host = fact.sourceUrl;
+  try {
+    host = new URL(fact.sourceUrl).hostname;
+  } catch {
+    // keep the address as given
+  }
+  return {
+    ok: true,
+    view: getView(deps, target),
+    notice: `Recorded your confirmation that ${host} says this claim. It is marked "You confirmed": your statement, not a check by the app.`,
+  };
 }
 
 /**
@@ -523,7 +565,7 @@ export async function correctFact(
   store.correctFact(deps.db, factId, clean, deps.now(), quote);
   let notice = 'Claim corrected. The original wording and passage are kept, and it is a lead until a passage that says the new wording is checked.';
   let requests = 0;
-  if (quote !== '') ({ notice, requests } = await checkAndConfirm(deps, ctx, factId, fact.sourceUrl, clean, quote, signal));
+  if (quote !== '') ({ notice, requests } = await checkAndConfirm(deps, ctx, factId, fact.scope, fact.sourceUrl, clean, quote, signal));
   return { ok: true, view: getView(deps, target), notice: quote === '' ? notice : `Claim corrected. ${notice}`, stats: stats({ requests }) };
 }
 
@@ -595,7 +637,8 @@ const checkable = (fact: { quote: string; sourceUrl: string }): boolean => fact.
 /**
  * Re-checks the stored sources of this company's non-current claims. A current, supported claim is a
  * CACHE HIT: no request, its original retrieval time stays. Only a source that still contains the
- * quoted passage -- for a claim that is worded from that passage -- renews a claim; a failure, a
+ * quoted passage -- for a claim that repeats one whole sentence of it, on the passage and on the page
+ * around it -- renews a claim; a failure, a
  * timeout or a cancel leaves `retrievedAt`/`expiresAt` exactly as they were, a source that no longer
  * says it demotes the claim to a lead, and a claim that fails the quote floor (a corrected claim
  * whose old passage was set aside, a paraphrase) is not fetched at all. The whole pass shares one
@@ -638,20 +681,23 @@ export async function refreshEvidence(
         notCheckable += 1;
         continue;
       }
-      if (fact.verification !== 'user_confirmed' && !assessQuoteSupport(fact.claim, fact.quote, employerNames(ctx)).ok) {
+      // A person-attested fact is renewed on its passage alone (their attestation is not re-judged);
+      // every other fact must pass the floor on its passage AND on the page around it.
+      const attested = fact.verification === 'user_confirmed';
+      const claimCheck = claimCheckFor(ctx, fact, fact.claim);
+      if (!attested && !assessQuoteSupport(fact.claim, fact.quote, claimCheck.employerNames, claimCheck).ok) {
         notCheckable += 1;
         continue;
       }
       checked += 1;
       result.requests += 1;
-      const check = await confirmSourceQuote(http, fact.sourceUrl, fact.quote, { signal, now: deps.now });
+      const check = await confirmSourceQuote(http, fact.sourceUrl, fact.quote, {
+        signal,
+        now: deps.now,
+        ...(attested ? {} : { claim: claimCheck }),
+      });
       if (check.ok) {
-        const applied = store.renewFact(
-          deps.db,
-          fact.id,
-          { retrievedAt: check.checkedAt, contentHash: check.contentHash, claim: fact.claim, quote: fact.quote, employerNames: employerNames(ctx) },
-          deps.now(),
-        );
+        const applied = store.renewFact(deps.db, fact.id, fetchedCheck(ctx, check, fact.claim, fact.quote), deps.now());
         if (applied === 'applied') result.renewed += 1;
       } else if (check.reason === 'cancelled') {
         if (!controller.signal.aborted && envelope.aborted) {
@@ -659,7 +705,7 @@ export async function refreshEvidence(
           result.failed += 1;
         }
         break;
-      } else if (check.reason === 'quote_not_found') {
+      } else if (check.reason === 'quote_not_found' || check.reason === 'quote_context_unsupported') {
         store.recordRefreshAttempt(deps.db, fact.id, 'source_changed', check.reason, deps.now());
         result.demoted += 1;
       } else {
@@ -767,13 +813,16 @@ export async function researchCompany(
     let finalReason = outcome.reason;
     if (outcome.status === 'completed') {
       const http = deps.getHttp ? await deps.getHttp() : undefined;
-      const names = employerNames(ctx);
       const usable = outcome.candidates
         .filter((candidate) => !(candidate.scope === 'role' && (options.includeRole === false || ctx.roleKey === null)))
-        .map((candidate) => ({
-          candidate: { ...candidate, topic: effectiveTopic(candidate.topic, candidate.claim, candidate.quote) },
-          floor: assessQuoteSupport(candidate.claim, candidate.quote, names),
-        }));
+        .map((candidate) => {
+          const claimCheck = claimCheckFor(ctx, { scope: candidate.scope, sourceUrl: candidate.sourceUrl, viaLink: null }, candidate.claim);
+          return {
+            candidate: { ...candidate, topic: effectiveTopic(candidate.topic, candidate.claim, candidate.quote) },
+            claimCheck,
+            floor: assessQuoteSupport(candidate.claim, candidate.quote, claimCheck.employerNames, claimCheck),
+          };
+        });
       const phase = AbortSignal.timeout(deps.deadlines?.confirmPhaseMs ?? RESEARCH_CONFIRM_PHASE_MS);
       const signal = AbortSignal.any([controller.signal, phase]);
       const checks = await boundedMap(usable, SOURCE_CHECK_CONCURRENCY, async (item): Promise<SourceCheck | null> => {
@@ -782,7 +831,7 @@ export async function researchCompany(
         // The shared deadline passed before this page was reached: recorded as a timeout, not fetched.
         if (signal.aborted) return controller.signal.aborted ? null : { ok: false, reason: 'timeout' };
         result.requests += 1;
-        const check = await confirmSourceQuote(http, item.candidate.sourceUrl, item.candidate.quote, { signal, now: deps.now });
+        const check = await confirmSourceQuote(http, item.candidate.sourceUrl, item.candidate.quote, { signal, now: deps.now, claim: item.claimCheck });
         return !check.ok && check.reason === 'cancelled' && !controller.signal.aborted ? { ok: false, reason: 'timeout' } : check;
       });
       if (controller.signal.aborted) {
@@ -828,7 +877,7 @@ export async function researchCompany(
             const applied = store.confirmFactFromFetch(
               deps.db,
               inserted.id,
-              { retrievedAt: confirm.checkedAt, contentHash: confirm.contentHash, claim: candidate.claim, quote: candidate.quote, employerNames: names },
+              fetchedCheck(ctx, confirm, candidate.claim, candidate.quote),
               deps.now(),
             );
             if (applied === 'applied') confirmedCount += 1;

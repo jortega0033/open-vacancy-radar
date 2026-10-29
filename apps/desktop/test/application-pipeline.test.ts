@@ -3750,6 +3750,72 @@ describe('#689 company evidence in preparation', () => {
   });
 
   /**
+   * Fix round 2 (review 2, P1): a claim that borrows a figure from a competitor's sentence, or a
+   * role-sponsorship claim whose page sentence goes on "...for some roles, but not for this one",
+   * reached the rendered letter and the use snapshot. Both now stay leads through the REAL
+   * preparation run; the borrowed one costs no fetch, the truncated one costs exactly the one fetch
+   * that showed the page sentence. The whole-sentence claim on the same site is still used.
+   */
+  it('keeps a wrong-entity claim and a truncated role-sponsorship claim out of the rendered letter and the snapshot (fix 2)', async () => {
+    const NEWS_URL = 'https://northwind.example/news';
+    const VISA_URL = 'https://northwind.example/careers/visa';
+    const COMPETITOR_QUOTE = 'Northwind Freight is a logistics firm. Our competitor Acme Haulage employs 12,000 people worldwide.';
+    const pages: Record<string, string> = {
+      [ABOUT_URL]: `<html><body><h1>About us</h1><p>${QUOTE}. Founded in 2009.</p></body></html>`,
+      [NEWS_URL]: `<html><body><p>${COMPETITOR_QUOTE}</p></body></html>`,
+      [VISA_URL]: '<html><body><h2>Visa</h2><p>Northwind Freight offers visa sponsorship for some roles, but not for this one.</p></body></html>',
+    };
+    const calls: string[] = [];
+    const client: AtsHttpClient = {
+      get: async (url) => {
+        calls.push(url);
+        const body = pages[url];
+        if (body === undefined) throw new Error('unexpected fetch');
+        return { status: 200, finalUrl: url, headers: {}, body };
+      },
+      postJson: async () => {
+        throw new Error('never used');
+      },
+    };
+    const web = { calls, client };
+    const { attemptId, ev } = await startConfirmedAttempt(web as ReturnType<typeof evidenceWeb>);
+
+    const borrowed = await evidenceService.addFact(ev, { attemptId }, { claim: 'Northwind Freight employs 12,000 people.', sourceUrl: NEWS_URL, quote: COMPETITOR_QUOTE, scope: 'company', topic: 'size' });
+    expect(borrowed).toMatchObject({ ok: true, stats: { requests: 0 } });
+    const truncated = await evidenceService.addFact(ev, { attemptId }, { claim: 'Northwind Freight offers visa sponsorship.', sourceUrl: VISA_URL, quote: 'Northwind Freight offers visa sponsorship', scope: 'role', topic: 'general' });
+    expect(truncated).toMatchObject({ ok: true, stats: { requests: 1 } });
+    expect(truncated.ok && truncated.notice).toContain('but not');
+    expect(calls).toEqual([VISA_URL]);
+    expect(await evidenceService.addFact(ev, { attemptId }, { claim: CLAIM, sourceUrl: ABOUT_URL, quote: QUOTE, scope: 'company', topic: 'general' })).toMatchObject({ ok: true, stats: { requests: 1 } });
+
+    const view = evidenceService.getView(ev, { attemptId });
+    const byClaim = (claim: string) => view.facts.find((fact) => fact.claim === claim);
+    expect(byClaim('Northwind Freight employs 12,000 people.')).toMatchObject({ support: 'lead', verification: 'unverified', lastRefreshReason: 'claim_entity_mismatch' });
+    expect(byClaim('Northwind Freight offers visa sponsorship.')).toMatchObject({ support: 'lead', topic: 'sponsorship', verification: 'unverified', lastRefreshReason: 'quote_context_unsupported' });
+    expect(byClaim(CLAIM)).toMatchObject({ support: 'supported', verification: 'source_confirmed' });
+    expect(evidenceService.proseEvidence(ev, { attemptId }, 'interview').map((fact) => fact.claim)).toEqual([CLAIM]);
+
+    const prompts: string[] = [];
+    generateCoverLetter.mockImplementation(async (prompt: string) => {
+      prompts.push(prompt);
+      return { ok: true, text: '{"factIds":["summary","company-1"]}' };
+    });
+    const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (attempt) => evidenceService.proseEvidence(ev, { attemptId: attempt.id }, 'letter') };
+    queueApplicationDocumentRenders();
+    expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+
+    expect(prompts[0]).not.toContain('12,000');
+    expect(prompts[0]).not.toContain('visa sponsorship');
+    const html = coverLetterHtml();
+    expect(html).toContain(`Something I noted about Northwind Freight from public sources: ${CLAIM}`);
+    expect(html).not.toContain('12,000');
+    expect(html).not.toContain('visa sponsorship');
+    expect(evidenceStore.listEvidenceUses(db, attemptId).map((use) => use.claim)).toEqual([CLAIM]);
+    // Preparation itself fetched nothing: the two requests above were the person's own source checks.
+    expect(calls).toEqual([VISA_URL, ABOUT_URL]);
+  });
+
+  /**
    * Fix round 1 (P5): the drafting session can run for a while. Whatever happens to the selected
    * evidence WHILE it runs must keep that claim out of the rendered letter and out of the "used"
    * snapshot, without failing the letter and without substituting a different fact.
@@ -3757,7 +3823,7 @@ describe('#689 company evidence in preparation', () => {
   describe('evidence that changes while the letter is being drafted', () => {
     const OTHER_URL = 'https://news.example/northwind';
     const LINKED_URL = 'https://northwind-freight-group.example/about';
-    const LINKED_QUOTE = 'Northwind Freight Group runs a dispatch centre in Rotterdam for its fleet';
+    const LINKED_QUOTE = 'Northwind Freight Group runs a dispatch centre in Rotterdam';
 
     function raceWeb() {
       const pages = new Map<string, string>([
@@ -3832,7 +3898,8 @@ describe('#689 company evidence in preparation', () => {
       const ev: evidenceService.CompanyEvidenceDeps = { db, now: () => NOW, getHttp: async () => web.client };
       expect(evidenceService.confirmDomain(ev, { attemptId }, { domain: 'northwind.example' }).ok).toBe(true);
       const { identityFromConfirmedDomain } = await import('../electron/company-evidence.js');
-      const group = evidenceStore.ensureRecord(db, identityFromConfirmedDomain('Northwind Freight Group', 'northwind-freight-group.example')!, NOW).record;
+      const groupIdentity = identityFromConfirmedDomain('Northwind Freight Group', 'northwind-freight-group.example')!;
+      const group = evidenceStore.ensureRecord(db, groupIdentity, NOW).record;
       const inserted = evidenceStore.insertFact(
         db,
         {
@@ -3857,7 +3924,7 @@ describe('#689 company evidence in preparation', () => {
       evidenceStore.confirmFactFromFetch(
         db,
         inserted.id,
-        { retrievedAt: NOW, contentHash: null, claim: 'Northwind Freight Group runs a dispatch centre in Rotterdam.', quote: LINKED_QUOTE, employerNames: ['Northwind Freight Group'] },
+        { retrievedAt: NOW, contentHash: null, claim: 'Northwind Freight Group runs a dispatch centre in Rotterdam.', quote: LINKED_QUOTE, employerNames: ['Northwind Freight Group'], identity: groupIdentity, context: LINKED_QUOTE },
         NOW,
       );
       const link = evidenceService.getView(ev, { attemptId }).links[0]!;

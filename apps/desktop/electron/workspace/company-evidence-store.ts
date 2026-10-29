@@ -1,11 +1,13 @@
 import { and, asc, desc, eq, inArray, or } from 'drizzle-orm';
 import {
   SINGLE_VALUE_TOPICS,
+  assessQuoteSupport,
   effectiveTopic,
   factQuoteSupport,
   nameKeyOf,
   normalizeClaim,
   ttlFor,
+  unnamedSubjectAllowed,
   type CompanyEvidenceContradictionView,
   type CompanyEvidenceFactData,
   type CompanyEvidenceKeyKind,
@@ -597,7 +599,9 @@ function activeFact(tx: Tx, factId: string): FactRow | undefined {
 /**
  * What a fetch actually checked. The store renews or confirms ONLY when the row still carries this
  * exact claim and quote (a correction that landed while the page was being fetched makes the check
- * stale) and the claim passes the quote floor (`factQuoteSupport`).
+ * stale) and the claim passes the quote floor (`factQuoteSupport`) against its saved passage AND
+ * against the page text around that passage that the fetch actually saw (`context`). A claim the
+ * person did not attest themselves is never confirmed or renewed without that page text (fail closed).
  */
 export interface FetchedCheck {
   retrievedAt: Date;
@@ -606,6 +610,10 @@ export interface FetchedCheck {
   quote: string;
   /** Employer names for the floor's own-name rule. */
   employerNames: readonly string[];
+  /** The verified identity, for the floor's rule on role claims without the employer as subject. */
+  identity: Pick<CompanyIdentity, 'verifiedKey' | 'host'>;
+  /** The page text around the found passage (`SourceCheck.context`); null only for a person-attested fact. */
+  context: string | null;
 }
 
 export type FetchApplyOutcome = 'applied' | 'stale' | 'unsupported' | 'gone';
@@ -615,10 +623,18 @@ function applyFetchedCheck(tx: Tx, factId: string, fetched: FetchedCheck, now: D
   if (!row) return 'gone';
   if (row.claim !== fetched.claim || row.quote !== fetched.quote) return 'stale';
   if (row.verification !== 'user_confirmed') {
-    const floor = factQuoteSupport({ claim: row.claim, quote: row.quote, viaLink: null }, fetched.employerNames);
-    if (!floor.ok) {
+    const fact = { claim: row.claim, quote: row.quote, viaLink: null, scope: row.scope, sourceUrl: row.sourceUrl };
+    const saved = factQuoteSupport(fact, fetched.employerNames, fetched.identity);
+    const onPage =
+      saved.ok && fetched.context !== null
+        ? assessQuoteSupport(row.claim, fetched.context, fetched.employerNames, {
+            unnamedSubjectAllowed: unnamedSubjectAllowed(fact, fetched.identity),
+          })
+        : null;
+    const reason = !saved.ok ? saved.reason : onPage?.ok ? null : 'quote_context_unsupported';
+    if (reason !== null) {
       tx.update(companyEvidenceFacts)
-        .set({ verification: 'unverified', lastRefreshAt: now, lastRefreshOutcome: 'failed', lastRefreshReason: floor.reason })
+        .set({ verification: 'unverified', lastRefreshAt: now, lastRefreshOutcome: 'failed', lastRefreshReason: reason })
         .where(eq(companyEvidenceFacts.id, factId))
         .run();
       return 'unsupported';

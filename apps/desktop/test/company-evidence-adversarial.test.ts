@@ -172,13 +172,13 @@ describe('a found passage must actually say the claim (deterministic floor)', ()
   const names = ['Northwind Freight'];
   it('accepts a claim worded from its passage, and states every refusal with a stable reason', () => {
     expect(assessQuoteSupport('Northwind Freight operates 14 depots across the Netherlands and Belgium.', DEPOTS, names)).toEqual({ ok: true });
-    expect(assessQuoteSupport('Northwind Freight employs about 450 people.', 'We employ about 450 people across our depots', names)).toEqual({ ok: true });
+    expect(assessQuoteSupport('Northwind Freight employs about 450 people.', 'We employ about 450 people.', names)).toEqual({ ok: true });
     // Unrelated boilerplate cannot carry a claim.
     expect(assessQuoteSupport('Northwind Freight employs 12,000 people worldwide.', 'We are an equal opportunity employer and value diversity', names)).toEqual({ ok: false, reason: 'claim_number_mismatch' });
     expect(assessQuoteSupport('Northwind Freight is a leader in green logistics.', 'We are an equal opportunity employer and value diversity', names)).toEqual({ ok: false, reason: 'claim_not_in_quote' });
     // 14 is not 140; 12,000 is 12.000.
     expect(assessQuoteSupport('Northwind Freight operates 140 depots.', DEPOTS, names)).toEqual({ ok: false, reason: 'claim_number_mismatch' });
-    expect(assessQuoteSupport('Northwind Freight employs 12,000 people.', 'Northwind Freight employs 12.000 people in total', names)).toEqual({ ok: true });
+    expect(assessQuoteSupport('Northwind Freight employs 12,000 people in total.', 'Northwind Freight employs 12.000 people in total', names)).toEqual({ ok: true });
     // Opposite negation, either way; Dutch too; and modality.
     expect(assessQuoteSupport('Northwind Freight sponsors work visas for this role.', 'Northwind Freight does not sponsor work visas for this role', names)).toEqual({ ok: false, reason: 'claim_negation_mismatch' });
     expect(assessQuoteSupport("Northwind Freight doesn't offer remote work.", 'Northwind Freight offers remote work to every engineer', names)).toEqual({ ok: false, reason: 'claim_negation_mismatch' });
@@ -252,7 +252,7 @@ describe('a found passage must actually say the claim (deterministic floor)', ()
 describe('a correction cannot be renewed by the old passage', () => {
   async function confirmed(): Promise<{ target: EvidenceTarget; id: string; before: { expiresAt: string; retrievedAt: string | null } }> {
     const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
-    await addFact(deps, t(a.id), { claim: 'Northwind Freight operates 14 depots.', sourceUrl: ABOUT, quote: DEPOTS, scope: 'company', topic: 'general' });
+    await addFact(deps, t(a.id), { claim: `${DEPOTS}.`, sourceUrl: ABOUT, quote: DEPOTS, scope: 'company', topic: 'general' });
     const fact = getView(deps, t(a.id)).facts[0]!;
     expect(fact.support).toBe('supported');
     return { target: t(a.id), id: fact.id, before: { expiresAt: fact.expiresAt, retrievedAt: fact.retrievedAt } };
@@ -274,7 +274,7 @@ describe('a correction cannot be renewed by the old passage', () => {
       support: 'lead',
       expiresAt: before.expiresAt,
       retrievedAt: before.retrievedAt,
-      correction: { originalClaim: 'Northwind Freight operates 14 depots.', originalQuote: DEPOTS },
+      correction: { originalClaim: `${DEPOTS}.`, originalQuote: DEPOTS },
     });
     expect(fact.reasons).toEqual(expect.arrayContaining(['unverified', 'quote_missing']));
     expect(proseEvidence(deps, target, 'interview')).toEqual([]);
@@ -286,13 +286,13 @@ describe('a correction cannot be renewed by the old passage', () => {
     expect(getView(deps, target).facts[0]).toMatchObject({ support: 'lead', reasons: expect.arrayContaining(['claim_number_mismatch']) });
 
     web.page('https://northwind.example/news', 'Northwind Freight now operates 15 depots in the Benelux');
-    const fixed = await correctFact(deps, target, id, 'Northwind Freight operates 15 depots in the Benelux.', 'Northwind Freight now operates 15 depots in the Benelux');
+    const fixed = await correctFact(deps, target, id, 'Northwind Freight now operates 15 depots in the Benelux.', 'Northwind Freight now operates 15 depots in the Benelux');
     // The passage must be on the fact's OWN source page: this one is not, so it stays a lead.
     expect(fixed).toMatchObject({ ok: true, stats: { requests: 1 } });
     expect(getView(deps, target).facts[0]).toMatchObject({ support: 'lead', lastRefreshReason: 'quote_not_found' });
 
     web.page(ABOUT, 'Northwind Freight now operates 15 depots in the Benelux');
-    await correctFact(deps, target, id, 'Northwind Freight operates 15 depots in the Benelux.', 'Northwind Freight now operates 15 depots in the Benelux');
+    await correctFact(deps, target, id, 'Northwind Freight now operates 15 depots in the Benelux.', 'Northwind Freight now operates 15 depots in the Benelux');
     expect(getView(deps, target).facts[0]).toMatchObject({ verification: 'source_confirmed', support: 'supported' });
   });
 
@@ -483,10 +483,10 @@ describe('contradictions across a confirmed identity link', () => {
   async function linkedPair() {
     const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
     const b = attempt('Northwind Freight Group', 'Planner', 'https://careers.northwind-freight-group.example/jobs/9');
-    web.page('https://northwind.example/a', 'Northwind Freight employs about 450 people in total');
-    web.page('https://northwind-freight-group.example/b', 'Northwind Freight Group employs about 9000 people in total');
-    await addFact(deps, t(a.id), { claim: 'Northwind Freight employs about 450 people.', sourceUrl: 'https://northwind.example/a', quote: 'Northwind Freight employs about 450 people in total', scope: 'company', topic: 'size' });
-    await addFact(deps, t(b.id), { claim: 'Northwind Freight Group employs about 9000 people.', sourceUrl: 'https://northwind-freight-group.example/b', quote: 'Northwind Freight Group employs about 9000 people in total', scope: 'company', topic: 'size' });
+    web.page('https://northwind.example/a', 'Northwind Freight employs about 450 people');
+    web.page('https://northwind-freight-group.example/b', 'Northwind Freight Group employs about 9000 people');
+    await addFact(deps, t(a.id), { claim: 'Northwind Freight employs about 450 people.', sourceUrl: 'https://northwind.example/a', quote: 'Northwind Freight employs about 450 people', scope: 'company', topic: 'size' });
+    await addFact(deps, t(b.id), { claim: 'Northwind Freight Group employs about 9000 people.', sourceUrl: 'https://northwind-freight-group.example/b', quote: 'Northwind Freight Group employs about 9000 people', scope: 'company', topic: 'size' });
     // A role fact on B never takes part.
     web.page('https://careers.northwind-freight-group.example/jobs/9', 'The Planner role is based in Rotterdam');
     await addFact(deps, t(b.id), { claim: 'The Planner role is based in Rotterdam.', sourceUrl: 'https://careers.northwind-freight-group.example/jobs/9', quote: 'The Planner role is based in Rotterdam', scope: 'role', topic: 'location' });
@@ -543,10 +543,10 @@ describe('contradictions across a confirmed identity link', () => {
     // Remove B's size claim so the link starts clean, then confirm, then B adds a conflicting one.
     db.delete(schema.companyEvidenceFacts).run();
     decideLink(deps, t(a.id), link.id, 'confirmed');
-    web.page('https://northwind.example/a', 'Northwind Freight employs about 450 people in total');
-    await addFact(deps, t(a.id), { claim: 'Northwind Freight employs about 450 people.', sourceUrl: 'https://northwind.example/a', quote: 'Northwind Freight employs about 450 people in total', scope: 'company', topic: 'size' });
+    web.page('https://northwind.example/a', 'Northwind Freight employs about 450 people');
+    await addFact(deps, t(a.id), { claim: 'Northwind Freight employs about 450 people.', sourceUrl: 'https://northwind.example/a', quote: 'Northwind Freight employs about 450 people', scope: 'company', topic: 'size' });
     expect(claims(t(a.id))).toEqual(['Northwind Freight employs about 450 people.']);
-    await addFact(deps, t(b.id), { claim: 'Northwind Freight Group employs about 9000 people.', sourceUrl: 'https://northwind-freight-group.example/b', quote: 'Northwind Freight Group employs about 9000 people in total', scope: 'company', topic: 'size' });
+    await addFact(deps, t(b.id), { claim: 'Northwind Freight Group employs about 9000 people.', sourceUrl: 'https://northwind-freight-group.example/b', quote: 'Northwind Freight Group employs about 9000 people', scope: 'company', topic: 'size' });
     expect(claims(t(a.id))).toEqual([]);
     expect(getView(deps, t(a.id)).contradictions).toHaveLength(1);
   });
@@ -697,5 +697,226 @@ describe('cache scope, observed stats, admission bound and time envelope', () =>
     const refreshStarted = Date.now();
     await refreshEvidence({ ...deps, deadlines: { refreshEnvelopeMs: 300 } }, t(a.id), runs);
     expect(Date.now() - refreshStarted).toBeLessThan(5_000);
+  });
+});
+
+/* ========================================== fix round 2: the floor is a WHOLE-statement check ===== */
+
+/**
+ * #689 review 2 (P1): the round-1 floor matched the claim's words as an ordered subsequence ANYWHERE
+ * in the passage and checked negation/qualifiers only inside the matched span, so a claim could drop
+ * a trailing "but not for this one" or borrow a number from a competitor's sentence. Every shape the
+ * reviewer reproduced (G1-G9, F1-F3, F6, F7, F12, F15, F17 in review-689-2-probe) is pinned here,
+ * with the reason the person is shown. These pin WORDING only; none says a statement is true.
+ */
+describe('fix round 2: a claim must repeat one whole statement of its passage', () => {
+  const names = ['Northwind Freight'];
+  const floor = (claim: string, quote: string, options = {}) => assessQuoteSupport(claim, quote, names, options);
+
+  it('refuses every reviewer shape (dropped restriction, borrowed words, name-only), with a stable reason', () => {
+    const refused: Array<[string, string, string, string]> = [
+      ['G1 trailing "only" + place', 'Northwind Freight sponsors work visas for this role', 'Northwind Freight sponsors work visas for this role in Germany only for senior hires', 'claim_negation_mismatch'],
+      ['G2 trailing "but not"', 'Northwind Freight offers visa sponsorship', 'Northwind Freight offers visa sponsorship for some roles, but not for this one', 'claim_negation_mismatch'],
+      ['G3 trailing "except"', 'Northwind Freight offers remote work', 'Northwind Freight offers remote work for every team except engineering', 'claim_negation_mismatch'],
+      ['G4 name only', 'Northwind Freight', 'Northwind Freight is a logistics firm operating in Europe today.', 'claim_too_vague'],
+      ['G5 name + region', 'Northwind Freight Europe', 'Northwind Freight is a logistics firm operating in Europe today.', 'claim_too_vague'],
+      ['G6 Dutch "maar niet"', 'Northwind Freight biedt visumsponsoring aan', 'Northwind Freight biedt visumsponsoring aan, maar niet voor deze rol', 'claim_negation_mismatch'],
+      ['G7 borrowed across sentences', 'Northwind Freight employs 12,000 people', 'Northwind Freight is small. Acme employs 12,000 people.', 'claim_entity_mismatch'],
+      ['G8 dropped places', 'Northwind Freight operates 14 depots', 'Northwind Freight operates 14 depots across the Netherlands and Belgium', 'claim_entity_mismatch'],
+      ['G9 competitor subject, own name inside', 'Northwind Freight employs 12,000 people', 'Acme, a competitor of Northwind Freight, employs 12,000 people', 'claim_entity_mismatch'],
+      ['F1 competitor in the next sentence', 'Northwind Freight employs 12,000 people', 'Northwind Freight is a logistics firm. Our competitor Acme Haulage employs 12,000 people worldwide.', 'claim_entity_mismatch'],
+      ['F2 partner attribution', 'Northwind Freight employs 12,000 people', 'Northwind Freight partners with Acme Haulage, which employs 12,000 people across Europe.', 'claim_entity_mismatch'],
+      ['F3 date of another event', 'Northwind Freight was founded in 2019', 'Northwind Freight was founded in 1998 and acquired by Contoso Holdings in 2019 for growth.', 'claim_entity_mismatch'],
+      ['F6 "to nobody"', 'Northwind Freight offers remote work', 'We never allow remote roles at all anywhere in the company. Northwind Freight offers remote work to nobody in practice, sadly.', 'claim_negation_mismatch'],
+      ['F7 "only on request"', 'Northwind Freight sponsors visas', 'Northwind Freight sponsors visas for interns only on request in 2019.', 'claim_negation_mismatch'],
+      ['F8 repeated word', 'employs employs employs', 'employs employs employs employs employs employs', 'claim_too_vague'],
+      ['F12 conditional', 'Northwind Freight has 400 employees', 'If Northwind Freight had 400 employees we would be larger than we are now, honestly.', 'claim_negation_mismatch'],
+      ['F15 number of another clause', 'Northwind Freight operates 14 depots', 'Northwind Freight operates 140 depots; also 14 trucks per depot.', 'claim_not_whole_sentence'],
+      ['F17 competitor sentence', 'Northwind Freight is the market leader', 'Northwind Freight is a small carrier. Acme is the market leader in the region by revenue.', 'claim_not_whole_sentence'],
+      ['F18 subject swap', 'Northwind Freight acquired Contoso', 'Contoso acquired Northwind Freight last year in a surprise deal of 2019.', 'claim_entity_mismatch'],
+      ['only senior hires', 'Northwind Freight sponsors work visas', 'Northwind Freight sponsors work visas only for senior hires.', 'claim_negation_mismatch'],
+      ['only Germany', 'Northwind Freight offers relocation support', 'Northwind Freight offers relocation support only in Germany.', 'claim_negation_mismatch'],
+      ['next sentence restricts it', 'Northwind Freight offers visa sponsorship.', 'Northwind Freight offers visa sponsorship. This does not apply to this role.', 'claim_context_qualified'],
+      ['same-subject sentence restricts it', 'Northwind Freight offers remote work.', 'Northwind Freight offers remote work. Remote work is only possible from Utrecht.', 'claim_context_qualified'],
+      ['next sentence revises the figure', 'Northwind Freight operates 14 depots.', 'Northwind Freight operates 14 depots. Of these depots 9 will close.', 'claim_context_qualified'],
+      ['Dutch next sentence restricts it', 'Northwind Freight biedt visumsponsoring aan.', 'Northwind Freight biedt visumsponsoring aan. Dit geldt niet voor deze rol.', 'claim_context_qualified'],
+      ['attributed by a lead-in', 'Northwind Freight employs 12,000 people.', 'Acme Haulage says: Northwind Freight employs 12,000 people.', 'claim_context_qualified'],
+      ['attributed in the sentence', 'Northwind Freight employs about 450 people.', 'Analysts say Northwind Freight employs about 450 people.', 'claim_entity_mismatch'],
+      ['"we" after another organisation', 'Northwind Freight operates 14 depots.', 'Acme Haulage is a carrier from Ghent. We operate 14 depots.', 'claim_entity_mismatch'],
+      ['tense changed', 'Northwind Freight offered remote work.', 'Northwind Freight offers remote work to every engineer.', 'claim_not_in_quote'],
+      ['claim of two sentences', 'Northwind Freight operates 14 depots. It employs 450 people.', 'Northwind Freight operates 14 depots. It employs 450 people.', 'claim_not_whole_sentence'],
+      ['first person in the claim', 'We operate 14 depots across the Benelux.', 'We operate 14 depots across the Benelux.', 'claim_entity_mismatch'],
+    ];
+    for (const [label, claim, quote, reason] of refused) expect(floor(claim, quote), label).toEqual({ ok: false, reason });
+  });
+
+  it('still accepts a whole statement, with only articles, case, plural -s, number format and "we" for the name differing', () => {
+    const accepted: Array<[string, string, string]> = [
+      ['whole sentence', 'Northwind Freight operates 14 depots across the Netherlands and Belgium.', DEPOTS],
+      ['one sentence of several', 'Northwind Freight operates 14 depots across the Netherlands and Belgium.', `${DEPOTS}. We are an equal opportunity employer.`],
+      ['first person', 'Northwind Freight operates 14 depots.', 'We operate 14 depots.'],
+      ['number format', 'Northwind Freight employs 12,000 people in total.', 'Northwind Freight employs 12.000 people in total.'],
+      ['legal form and abbreviation dots', 'Northwind Freight B.V. operates 14 depots in Utrecht.', 'Northwind Freight B.V. operates 14 depots in Utrecht. It was founded in 2009.'],
+      ['Dutch whole sentence', 'Northwind Freight biedt visumsponsoring aan voor deze rol.', 'Northwind Freight biedt visumsponsoring aan voor deze rol.'],
+      ['a stated restriction kept in the claim', 'Northwind Freight offers visa sponsorship for some roles, but not for this one.', 'Northwind Freight offers visa sponsorship for some roles, but not for this one.'],
+      ['lead-in date', 'In 2019, Northwind Freight opened a depot in Ghent.', 'In 2019, Northwind Freight opened a depot in Ghent.'],
+    ];
+    for (const [label, claim, quote] of accepted) expect(floor(claim, quote), label).toEqual({ ok: true });
+  });
+
+  it('accepts a claim without the employer as subject only when the caller allows it (role scope, own source), and fails closed without names', () => {
+    expect(floor('Visa sponsorship is available for this role.', 'Visa sponsorship is available for this role')).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+    expect(floor('Visa sponsorship is available for this role.', 'Visa sponsorship is available for this role', { unnamedSubjectAllowed: true })).toEqual({ ok: true });
+    // A competitor sentence quoted in full is still not about the employer.
+    expect(floor('Acme, a competitor of Northwind Freight, employs 12,000 people.', 'Acme, a competitor of Northwind Freight, employs 12,000 people')).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+    expect(assessQuoteSupport(`${DEPOTS}.`, DEPOTS, [])).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+    // Names with digits or a legal form are matched whole, or without the trailing legal form.
+    expect(assessQuoteSupport('Emp1 Corp Group runs 3 depots in Ghent.', 'Emp1 Corp Group runs 3 depots in Ghent.', ['Emp1 Corp Group'])).toEqual({ ok: true });
+    expect(assessQuoteSupport(`${DEPOTS}.`, DEPOTS, ['Northwind Freight B.V.'])).toEqual({ ok: true });
+    expect(assessQuoteSupport('Emp1 Corp runs 3 depots in Ghent.', 'Emp1 Corp runs 3 depots in Ghent.', ['Emp1 Corp Group'])).toEqual({ ok: false, reason: 'claim_entity_mismatch' });
+  });
+
+  it('add: a quote cut short of its page sentence is checked against the page, costs its one request, and stays a lead', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    web.pages.set(NORTHWIND, '<html><body><h1>Platform Engineer</h1><p>Northwind Freight offers visa sponsorship for some roles, but not for this one.</p></body></html>');
+    const cut = await addFact(deps, t(a.id), { claim: 'Northwind Freight offers visa sponsorship.', sourceUrl: NORTHWIND, quote: 'Northwind Freight offers visa sponsorship', scope: 'role', topic: 'general' });
+    expect(cut).toMatchObject({ ok: true, stats: { requests: 1 } });
+    expect(cut.ok && cut.notice).toContain('"but not"');
+    expect(factByClaim(t(a.id), 'Northwind Freight offers visa sponsorship.')).toMatchObject({
+      topic: 'sponsorship',
+      support: 'lead',
+      verification: 'unverified',
+      lastRefreshReason: 'quote_context_unsupported',
+    });
+    // Dutch, and a restriction in the NEXT sentence of the page, behave the same.
+    web.pages.set('https://job-boards.greenhouse.io/northwind/jobs/1002', '<p>Northwind Freight biedt visumsponsoring aan. Dit geldt niet voor deze rol.</p>');
+    await addFact(deps, t(a.id), { claim: 'Northwind Freight biedt visumsponsoring aan.', sourceUrl: 'https://job-boards.greenhouse.io/northwind/jobs/1002', quote: 'Northwind Freight biedt visumsponsoring aan', scope: 'role', topic: 'general' });
+    expect(factByClaim(t(a.id), 'Northwind Freight biedt visumsponsoring aan.')).toMatchObject({ support: 'lead', lastRefreshReason: 'quote_context_unsupported' });
+    expect(proseEvidence(deps, t(a.id), 'letter')).toEqual([]);
+    expect(proseEvidence(deps, t(a.id), 'interview')).toEqual([]);
+
+  });
+
+  it('add: the same sponsorship claim as a whole page sentence on the exact tenant is usable', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    // A heading before the sentence is its own block, not the start of the sentence.
+    web.pages.set(NORTHWIND, '<html><body><h2>Visa</h2><p>Northwind Freight sponsors work visas for this role.</p></body></html>');
+    await addFact(deps, t(a.id), { claim: 'Northwind Freight sponsors work visas for this role.', sourceUrl: NORTHWIND, quote: 'Northwind Freight sponsors work visas for this role', scope: 'role', topic: 'general' });
+    expect(proseEvidence(deps, t(a.id), 'letter').map((fact) => fact.claim)).toEqual(['Northwind Freight sponsors work visas for this role.']);
+  });
+
+  it('add: a borrowed-figure claim fails the floor before any request', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    const quote = 'Northwind Freight is a logistics firm. Our competitor Acme Haulage employs 12,000 people worldwide.';
+    web.page(ABOUT, quote);
+    const result = await addFact(deps, t(a.id), { claim: 'Northwind Freight employs 12,000 people.', sourceUrl: ABOUT, quote, scope: 'company', topic: 'size' });
+    expect(result).toMatchObject({ ok: true, stats: { requests: 0 } });
+    expect(web.calls).toEqual([]);
+    expect(factByClaim(t(a.id), 'Northwind Freight employs 12,000 people.')).toMatchObject({ support: 'lead', reasons: expect.arrayContaining(['unverified', 'claim_entity_mismatch']) });
+    // A row forced to source_confirmed is re-checked on read and never reaches prose.
+    db.update(schema.companyEvidenceFacts).set({ verification: 'source_confirmed', retrievedAt: T0 }).run();
+    expect(factByClaim(t(a.id), 'Northwind Freight employs 12,000 people.')).toMatchObject({ support: 'lead', reasons: ['claim_entity_mismatch'] });
+    expect(proseEvidence(deps, t(a.id), 'interview')).toEqual([]);
+  });
+
+  it('research: no fetch for a floor failure, one fetch that shows the page sentence for a cut quote, and the whole statement confirmed', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    web.pages.set(NORTHWIND, '<p>Northwind Freight offers visa sponsorship for some roles, but not for this one.</p>');
+    const outcome: ResearchSessionOutcome = {
+      status: 'completed',
+      reason: 'completed',
+      queries: ['northwind freight'],
+      searches: 1,
+      fetches: 2,
+      candidates: [
+        { claim: 'Northwind Freight employs 12,000 people.', topic: 'size', scope: 'company', sourceUrl: ABOUT, quote: 'Northwind Freight is a logistics firm. Our competitor Acme Haulage employs 12,000 people worldwide.' },
+        { claim: 'Northwind Freight offers visa sponsorship.', topic: 'general', scope: 'role', sourceUrl: NORTHWIND, quote: 'Northwind Freight offers visa sponsorship' },
+        { claim: `${DEPOTS}.`, topic: 'general', scope: 'company', sourceUrl: ABOUT, quote: DEPOTS },
+      ],
+    };
+    const result = await researchCompany({ ...deps, runResearch: async () => outcome }, t(a.id), { topics: ['size', 'general'] }, runs);
+    expect(result).toMatchObject({ ok: true, stats: { candidates: 3, confirmed: 1, requests: 2 } });
+    expect([...web.calls].sort()).toEqual([ABOUT, NORTHWIND].sort());
+    expect(factByClaim(t(a.id), 'Northwind Freight employs 12,000 people.')).toMatchObject({ support: 'lead', lastRefreshReason: 'claim_entity_mismatch' });
+    expect(factByClaim(t(a.id), 'Northwind Freight offers visa sponsorship.')).toMatchObject({ support: 'lead', topic: 'sponsorship', lastRefreshReason: 'quote_context_unsupported' });
+    expect(proseEvidence(deps, t(a.id), 'letter').map((fact) => fact.claim)).toEqual([`${DEPOTS}.`]);
+  });
+
+  it('refresh: a page that later adds "but not" to the sentence demotes the fact instead of renewing it', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    web.pages.set(NORTHWIND, '<p>Northwind Freight sponsors work visas for this role.</p>');
+    await addFact(deps, t(a.id), { claim: 'Northwind Freight sponsors work visas for this role.', sourceUrl: NORTHWIND, quote: 'Northwind Freight sponsors work visas for this role', scope: 'role', topic: 'sponsorship' });
+    const before = factByClaim(t(a.id), 'Northwind Freight sponsors work visas for this role.')!;
+    expect(before.support).toBe('supported');
+    clock = new Date(T0.getTime() + 20 * DAY);
+    web.pages.set(NORTHWIND, '<p>Northwind Freight sponsors work visas for this role in Germany, but not in the Netherlands.</p>');
+    const refreshed = await refreshEvidence(deps, t(a.id), runs);
+    expect(refreshed).toMatchObject({ ok: true, stats: { requests: 1, renewed: 0, demoted: 1 } });
+    expect(factByClaim(t(a.id), 'Northwind Freight sponsors work visas for this role.')).toMatchObject({
+      support: 'lead',
+      verification: 'unverified',
+      lastRefreshOutcome: 'source_changed',
+      lastRefreshReason: 'quote_context_unsupported',
+      expiresAt: before.expiresAt,
+    });
+  });
+
+  it('store: a fetched check is applied only with page text that also passes (fail closed without it)', async () => {
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    const claim = 'Northwind Freight offers visa sponsorship.';
+    const quote = 'Northwind Freight offers visa sponsorship';
+    await addFact(deps, t(a.id), { claim, sourceUrl: 'https://northwind.example/v', quote, scope: 'company', topic: 'general' });
+    const id = factByClaim(t(a.id), claim)!.id;
+    const identity = getView(deps, t(a.id)).identity;
+    const check = (context: string | null) =>
+      store.confirmFactFromFetch(db, id, { retrievedAt: T0, contentHash: null, claim, quote, employerNames: names, identity, context }, T0);
+    expect(check(null)).toBe('unsupported');
+    expect(check('Northwind Freight offers visa sponsorship for some roles, but not for this one.')).toBe('unsupported');
+    expect(factByClaim(t(a.id), claim)).toMatchObject({ verification: 'unverified', lastRefreshReason: 'quote_context_unsupported' });
+    expect(check('Visa.\nNorthwind Freight offers visa sponsorship.\nApply today')).toBe('applied');
+  });
+
+  it('sponsorship wording covers immigration, residence permits, non-EU / third-country hires and the 30% ruling (EN and NL)', async () => {
+    for (const text of [
+      'Northwind Freight offers relocation support and immigration help for non-EU hires',
+      'Northwind Freight supports residence permits for new staff',
+      'Northwind Freight helps newcomers with their residence permit',
+      'Northwind Freight hires third-country nationals',
+      'Northwind Freight covers the 30% ruling',
+      'Northwind Freight applies the 30%-regeling for expats',
+      'Northwind Freight biedt hulp bij immigratie en verhuizing',
+      'Northwind Freight neemt niet-EU kandidaten aan',
+      'Northwind Freight helpt bij de verblijfsvergunning',
+      'Northwind Freight offers expat relocation services',
+      'Northwind Freight applies for a single permit (GVVA) for you',
+    ]) {
+      expect(mentionsSponsorship(text), text).toBe(true);
+    }
+    // Not over-matched on ordinary words.
+    for (const text of ['Northwind Freight works in the logistics industry', 'Northwind Freight hires individual contributors', 'Northwind Freight eats lunch at noon']) {
+      expect(mentionsSponsorship(text), text).toBe(false);
+    }
+
+    // add: a blog page, topic "general", company scope -> forced onto the sponsorship rule.
+    const a = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    const blog = 'https://random-blog.example/post';
+    for (const claim of ['Northwind Freight offers relocation support and immigration help for non-EU hires.', 'Northwind Freight biedt hulp bij immigratie en verhuizing.']) {
+      web.page(blog, claim.slice(0, -1));
+      await addFact(deps, t(a.id), { claim, sourceUrl: blog, quote: claim.slice(0, -1), scope: 'company', topic: 'general' });
+      expect(factByClaim(t(a.id), claim), claim).toMatchObject({ topic: 'sponsorship', support: 'lead', reasons: expect.arrayContaining(['sponsorship_needs_role_source']) });
+    }
+    // research: the same wording labelled "general" is read as sponsorship too.
+    const outcome: ResearchSessionOutcome = {
+      status: 'completed',
+      reason: 'completed',
+      queries: [],
+      searches: 1,
+      fetches: 1,
+      candidates: [{ claim: 'Northwind Freight covers the 30% ruling for this role.', topic: 'general', scope: 'role', sourceUrl: blog, quote: 'Northwind Freight covers the 30% ruling for this role' }],
+    };
+    web.page(blog, 'Northwind Freight covers the 30% ruling for this role');
+    await researchCompany({ ...deps, runResearch: async () => outcome }, t(a.id), { topics: ['general'] }, runs);
+    expect(factByClaim(t(a.id), 'Northwind Freight covers the 30% ruling for this role.')).toMatchObject({ topic: 'sponsorship', support: 'lead', reasons: expect.arrayContaining(['sponsorship_needs_role_source']) });
+    expect(proseEvidence(deps, t(a.id), 'interview')).toEqual([]);
   });
 });

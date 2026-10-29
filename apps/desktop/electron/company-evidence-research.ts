@@ -5,8 +5,8 @@ import { isBlockedDiscoveryDomain, isCrawlerHttpError, type AtsHttpClient } from
 import { z } from 'zod';
 import {
   COMPANY_EVIDENCE_TOPICS,
-
   MAX_QUOTE_CHARS,
+  assessQuoteSupport,
   MIN_QUOTE_CHARS,
   isHttpsSource,
   normalizeClaim,
@@ -14,6 +14,7 @@ import {
   sanitizeLabel,
   type CompanyEvidenceTopic,
   type CompanyResearchDiagnostics,
+  type QuoteSupportFailure,
 } from './company-evidence.js';
 import { domainBlockRegistry, extractFinalJsonPayload } from './vacancy-web-discovery.js';
 
@@ -144,7 +145,7 @@ ${topics}
 
 RULES
 - ${identity.preference} Do not rely on a page about a company with a merely similar name.
-- Report only what a page you actually opened states. For each fact give the claim in one plain sentence worded from the quote (keep its numbers, names and any "not"), the exact page URL, and a short VERBATIM quote of at least ${MIN_QUOTE_CHARS} characters copied from that page. If you cannot quote it, do not report it.
+- Report only what a page you actually opened states. For each fact give a short VERBATIM quote of at least ${MIN_QUOTE_CHARS} characters copied from that page (whole sentences), the exact page URL, and the claim: ONE WHOLE sentence of that quote repeated word for word, with nothing left out (keep every number, name, "not", "only", "except" and "but"); you may only write the employer's name where the page says "we". A shortened or reworded claim is not used. If you cannot quote it, do not report it.
 - Use scope "role" only for something about the role named above, otherwise "company".
 - No employee names beyond leadership the company itself publishes, no personal profiles, no reviews or sentiment, no salary guesses, no anything behind a login.
 - Do not invent, estimate or fill gaps. An empty list is a correct answer.
@@ -361,8 +362,17 @@ export async function runCompanyResearchSession(
 /* ------------------------------------------------------------ confirming a source ------------ */
 
 export type SourceCheck =
-  | { ok: true; contentHash: string; checkedAt: Date }
-  | { ok: false; reason: SourceCheckFailure };
+  | {
+      ok: true;
+      contentHash: string;
+      checkedAt: Date;
+      /**
+       * The page text around the found passage (its whole sentence(s) and neighbours, case kept, block
+       * boundaries as line breaks). Set when a claim was checked against it; the store re-checks it.
+       */
+      context?: string;
+    }
+  | { ok: false; reason: SourceCheckFailure; floor?: QuoteSupportFailure };
 export type SourceCheckFailure =
   | 'source_not_https'
   | 'cancelled'
@@ -373,7 +383,8 @@ export type SourceCheckFailure =
   | 'not_text'
   | 'quote_not_found'
   | 'quote_too_short'
-  | 'content_too_large';
+  | 'content_too_large'
+  | 'quote_context_unsupported';
 
 /* ------------------------------------------------------------ page text (linear) ------------- */
 
@@ -383,6 +394,14 @@ export type SourceCheckFailure =
  * passage). The scanner below is linear, so this bounds the main-thread work directly.
  */
 export const MAX_SOURCE_HTML_CHARS = 3_000_000;
+
+/** Elements whose start/end is a block boundary: with `blockBreaks` they become a line break. */
+const BLOCK_ELEMENTS = new Set([
+  'p', 'div', 'br', 'hr', 'li', 'ul', 'ol', 'dl', 'dt', 'dd', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section', 'article',
+  'header', 'footer', 'nav', 'main', 'aside', 'blockquote', 'pre', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+  'caption', 'figure', 'figcaption', 'form', 'fieldset', 'legend', 'details', 'summary', 'address', 'button', 'label',
+  'option', 'select',
+]);
 
 /** Elements whose content is never page text. */
 const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'noscript', 'template', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes']);
@@ -442,9 +461,16 @@ function decodeEntity(html: string, at: number): { text: string; next: number } 
  * HTML to visible-ish text in ONE forward pass. Every step either moves the cursor forward past what
  * it inspected or ends the scan (an unterminated tag, comment or raw-text element ends the page), so
  * the cost is O(length) whatever the markup: runs of `<`, thousands of unclosed `<script`, deep
- * nesting or malformed entities cannot make it quadratic. No regex runs over the page itself.
+ * nesting or malformed entities cannot make it quadratic. No backtracking regular expression runs over
+ * the page: the only expressions that touch the whole text are single character-class runs (ASCII
+ * upper-case runs here, whitespace in `squash`), which are linear. Text inside hidden elements
+ * (`hidden`, `display:none`) and attribute values containing ">" are read as page text: the scanner
+ * does not evaluate CSS or fully parse attributes.
+ *
+ * `blockBreaks`: emit a line break (instead of a space) at block-level tags, so a heading, list item
+ * or paragraph is never read as the start of the sentence that follows it.
  */
-export function htmlToText(html: string): string {
+export function htmlToText(html: string, options: { blockBreaks?: boolean } = {}): string {
   // ASCII-only lowercasing keeps every index aligned with `html` (full Unicode lowercasing can
   // change string length); it is used only to find closing raw-text tags.
   const lower = html.replace(/[A-Z]+/gu, (run) => run.toLowerCase());
@@ -493,11 +519,11 @@ export function htmlToText(html: string): string {
     flush(index);
     const tagEnd = html.indexOf('>', nameStart);
     if (tagEnd < 0) return out.join('');
-    out.push(' ');
     let nameEnd = nameStart;
     while (nameEnd < tagEnd && isAsciiLetter(lower.charCodeAt(nameEnd))) nameEnd += 1;
     while (nameEnd < tagEnd && /[0-9a-z-]/u.test(lower[nameEnd]!)) nameEnd += 1;
     const name = lower.slice(nameStart, nameEnd);
+    out.push(options.blockBreaks && BLOCK_ELEMENTS.has(name) ? '\n' : ' ');
     index = tagEnd + 1;
     if (!closing && RAW_TEXT_ELEMENTS.has(name) && html.charCodeAt(tagEnd - 1) !== 47) {
       const closeTag = lower.indexOf(`</${name}`, index);
@@ -513,14 +539,35 @@ export function htmlToText(html: string): string {
 }
 
 function squash(value: string): string {
+  return squashKeepBreaks(value).replace(/\n/gu, ' ').toLowerCase();
+}
+
+/**
+ * Like `squash` but keeping case, and turning every whitespace run that contains a line break into
+ * ONE line break (any other run into one space): character-for-character aligned with `squash`
+ * before lower-casing, because each run still becomes exactly one character.
+ */
+function squashKeepBreaks(value: string): string {
   return value
     .normalize('NFKC')
     .replace(/[‘’]/gu, "'")
     .replace(/[“”]/gu, '"')
     .replace(/[–—]/gu, '-')
-    .replace(/\s+/gu, ' ')
-    .trim()
-    .toLowerCase();
+    .replace(/\s+/gu, (run) => (run.includes('\n') ? '\n' : ' '))
+    .trim();
+}
+
+/** How much page text on each side of a found passage is read for its sentence and neighbours. */
+export const SOURCE_CONTEXT_CHARS = 300;
+
+/**
+ * The page text around a found passage (`at` in the flattened, lower-cased text): up to
+ * SOURCE_CONTEXT_CHARS before and after it, case kept when lower-casing kept every index (otherwise
+ * the lower-cased text, which only weakens the capitalised-name checks, never the sentence ones).
+ */
+function contextAround(broken: string, lowered: string, at: number, length: number): string {
+  const source = lowered.length === broken.length ? broken : lowered;
+  return source.slice(Math.max(0, at - SOURCE_CONTEXT_CHARS), Math.min(source.length, at + length + SOURCE_CONTEXT_CHARS));
 }
 
 /**
@@ -532,7 +579,16 @@ export async function confirmSourceQuote(
   http: AtsHttpClient,
   sourceUrl: string,
   quote: string,
-  options: { signal?: AbortSignal; timeoutMs?: number; now?: () => Date } = {},
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    now?: () => Date;
+    /**
+     * When set, the claim is ALSO checked against the page around the passage: the quote alone may
+     * be a cut-off sentence ("...offers visa sponsorship" of "...for some roles, but not for this one").
+     */
+    claim?: { text: string; employerNames: readonly string[]; unnamedSubjectAllowed: boolean };
+  } = {},
 ): Promise<SourceCheck> {
   if (!isHttpsSource(sourceUrl)) return { ok: false, reason: 'source_not_https' };
   const wanted = squash(quote);
@@ -568,12 +624,26 @@ export async function confirmSourceQuote(
   if (body.length === 0) return { ok: false, reason: 'not_text' };
   if (body.length > MAX_SOURCE_HTML_CHARS) return { ok: false, reason: 'content_too_large' };
   if (options.signal?.aborted) return { ok: false, reason: 'cancelled' };
-  const text = squash(htmlToText(body));
-  if (!text.includes(wanted)) return { ok: false, reason: 'quote_not_found' };
+  // One pass each: block boundaries kept as line breaks for the context, flattened for matching.
+  // `text` (and so the content hash) is exactly `squash(htmlToText(body))`: a line break is whitespace.
+  const broken = squashKeepBreaks(htmlToText(body, { blockBreaks: true }));
+  const lowered = broken.toLowerCase();
+  const text = lowered.replace(/\n/gu, ' ');
+  const at = text.indexOf(wanted);
+  if (at < 0) return { ok: false, reason: 'quote_not_found' };
+  let context: string | undefined;
+  if (options.claim) {
+    context = contextAround(broken, lowered, at, wanted.length);
+    const floor = assessQuoteSupport(options.claim.text, context, options.claim.employerNames, {
+      unnamedSubjectAllowed: options.claim.unnamedSubjectAllowed,
+    });
+    if (!floor.ok) return { ok: false, reason: 'quote_context_unsupported', floor: floor.reason };
+  }
   return {
     ok: true,
     contentHash: createHash('sha256').update(text).digest('hex'),
     checkedAt: (options.now ?? (() => new Date()))(),
+    ...(context === undefined ? {} : { context }),
   };
 }
 
@@ -588,5 +658,7 @@ export const SOURCE_FAILURE_TEXT: Record<SourceCheckFailure, string> = {
   quote_not_found: 'The quoted passage is not on the source page.',
   quote_too_short: 'Add a longer quote from the page so it can be checked.',
   content_too_large: 'The source page is too large to check safely, so it was not used.',
+  quote_context_unsupported:
+    'On the page, the passage is part of a longer sentence, or sits next to wording on the same subject (such as "only", "except" or "but not"), that the claim leaves out, so it stays a lead.',
 };
 
