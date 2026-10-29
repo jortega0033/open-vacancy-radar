@@ -172,10 +172,15 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the sixteen documented capability functions and nothing else', async () => {
+  it('exposes exactly the twenty-one documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
       [
+        'getSearchPlan',
+        'resetSearchPlan',
+        'saveSearchPlan',
+        'addSearchPlanSuggestions',
+        'dismissSearchPlanSuggestion',
         'getReport',
         'getReportSummary',
         'getStatus',
@@ -197,6 +202,22 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
     }
+  });
+
+  it('the search plan functions invoke only their own channels and forward the payload unchanged (#686)', async () => {
+    invoke.mockResolvedValue({});
+    const api = await loadPreload('vacancyRadar');
+    await (api.getSearchPlan as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenLastCalledWith('vacancy:get-search-plan');
+    const draft = { primaryFunction: 'Frontend', variants: [{ title: 'React developer' }], markets: [] };
+    await (api.saveSearchPlan as (value: unknown) => Promise<unknown>)(draft);
+    expect(invoke).toHaveBeenLastCalledWith('vacancy:save-search-plan', draft);
+    await (api.addSearchPlanSuggestions as (value: unknown) => Promise<unknown>)([{ title: 'UI engineer' }]);
+    expect(invoke).toHaveBeenLastCalledWith('vacancy:add-search-plan-suggestions', [{ title: 'UI engineer' }]);
+    await (api.resetSearchPlan as (value: unknown) => Promise<unknown>)({ confirm: true });
+    expect(invoke).toHaveBeenLastCalledWith('vacancy:reset-search-plan', { confirm: true });
+    await (api.dismissSearchPlanSuggestion as (value: unknown) => Promise<unknown>)('ui-engineer');
+    expect(invoke).toHaveBeenLastCalledWith('vacancy:dismiss-search-plan-suggestion', 'ui-engineer');
   });
 
   it('getStatus invokes only vacancy:get-status, no arguments', async () => {
@@ -722,7 +743,15 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
   // trigger (the manual "Refresh company roster" Settings action), same reasoning again.
   // `getReportSummary` is a cheap metadata read for foreground resume: Search can avoid pulling
   // a 20k-row report over IPC when the stored report has not changed.
+  // `getSearchPlan`/`saveSearchPlan`/`addSearchPlanSuggestions`/`dismissSearchPlanSuggestion`/
+  // `resetSearchPlan` added by issue #686 (the reviewed search plan), same reasoning again: a legitimate
+  // widening, not ADI-06/07.
   vacancyRadar: [
+    'getSearchPlan',
+    'resetSearchPlan',
+    'saveSearchPlan',
+    'addSearchPlanSuggestions',
+    'dismissSearchPlanSuggestion',
     'getReport',
     'getReportSummary',
     'getStatus',

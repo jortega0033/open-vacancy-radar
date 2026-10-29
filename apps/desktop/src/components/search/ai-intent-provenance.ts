@@ -1,5 +1,10 @@
-/** The only `aiSearchIntent` layout this build can describe. */
-const SUPPORTED_INTENT_VERSION = 1;
+/**
+ * The run-intent versions whose `aiSearchIntent` layout this build can describe. Version 2 (#686) added
+ * the search plan to the run intent; the AI provenance layout itself is the same as version 1, so
+ * reports from either version are described the same way.
+ */
+const SUPPORTED_INTENT_VERSIONS: readonly number[] = [1, 2];
+const SUPPORTED_RANGE = 'v1-v2';
 
 const CRITERIA = ['role', 'country', 'employment', 'salary'] as const;
 
@@ -23,27 +28,27 @@ export function describeAiIntentProvenance(
 ): string {
   if (!isRecord(provenance)) return 'AI search intent not shown (unrecognised format)';
   const { intentVersion } = provenance;
-  if (intentVersion !== SUPPORTED_INTENT_VERSION) {
+  if (typeof intentVersion !== 'number' || !SUPPORTED_INTENT_VERSIONS.includes(intentVersion)) {
     return typeof intentVersion === 'number'
-      ? `AI search intent v${intentVersion} not shown (this version of the app reads v${SUPPORTED_INTENT_VERSION})`
+      ? `AI search intent v${intentVersion} not shown (this version of the app reads ${SUPPORTED_RANGE})`
       : 'AI search intent not shown (unrecognised format)';
   }
   const { criteria, candidateContext, scanId, mode } = provenance;
   if (!isRecord(criteria) || !isRecord(candidateContext) || typeof scanId !== 'string') {
-    return `AI search intent v${SUPPORTED_INTENT_VERSION} not shown (incomplete record)`;
+    return `AI search intent v${intentVersion} not shown (incomplete record)`;
   }
   const parts: string[] = [];
   for (const name of CRITERIA) {
     const entry = criteria[name];
-    if (!isRecord(entry)) return `AI search intent v${SUPPORTED_INTENT_VERSION} not shown (incomplete record)`;
+    if (!isRecord(entry)) return `AI search intent v${intentVersion} not shown (incomplete record)`;
     if (entry.requested !== true) continue;
     if (typeof entry.value !== 'string') {
-      return `AI search intent v${SUPPORTED_INTENT_VERSION} not shown (incomplete record)`;
+      return `AI search intent v${intentVersion} not shown (incomplete record)`;
     }
     const route = entry.pushdown === 'prompt_guidance' ? 'sent to AI as guidance' : 'not searchable, applied locally';
     parts.push(`${name} "${redact(entry.value)}" (${route})`);
   }
   const criteriaText = mode === 'browse_all' ? 'browse all, no criteria' : parts.join(', ') || 'no criteria';
   const skills = typeof candidateContext.skillCount === 'number' ? candidateContext.skillCount : 0;
-  return `AI search intent v${SUPPORTED_INTENT_VERSION}, run ${scanId}: ${criteriaText}; ${skills} saved skill(s) as background, saved target roles not searched`;
+  return `AI search intent v${intentVersion}, run ${scanId}: ${criteriaText}; ${skills} saved skill(s) as background, saved target roles not searched`;
 }

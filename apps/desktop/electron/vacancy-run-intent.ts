@@ -2,6 +2,8 @@ import {
   isUnspecifiedCountry,
   type AiSearchIntentProvenance,
   type SalaryFilterCriteria,
+  type SearchPlanRunStatus,
+  type SearchPlanSnapshot,
 } from '@open-vacancy-radar/vacancy-engine';
 import type { ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 
@@ -13,7 +15,11 @@ import type { ParsedVacancyScanRequest } from './vacancy-scan-query.js';
  * object, never from the saved search profile, which a person may edit while the run is active.
  * The saved profile can add background context to the AI prompt; it can never change a criterion.
  */
-export const VACANCY_RUN_INTENT_VERSION = 1;
+/**
+ * Version 2 (#686) added `searchPlan` and `searchPlanStatus`. The intent is in-memory only (never
+ * persisted), so nothing reads a version-1 intent; diagnostics print whatever version they are given.
+ */
+export const VACANCY_RUN_INTENT_VERSION = 2;
 
 /** The engine caps the role phrase it matches locally at this length (`resolveRoleQuery`); capturing
  * it here keeps both branches on the same text. */
@@ -30,12 +36,26 @@ export interface VacancyRunIntent {
   readonly employment: string | null;
   readonly salary: Readonly<SalaryFilterCriteria> | null;
   readonly aiWebDiscovery: boolean;
+  /**
+   * Issue #686: the reviewed search plan this run searches besides the typed query, as the frozen copy
+   * taken when the run started; null for a literal single-query run. Editing or removing a title in the
+   * saved plan afterwards changes the next run, never this one.
+   */
+  readonly searchPlan: SearchPlanSnapshot | null;
+  /**
+   * Issue #686: set when the run asked for the plan but started without one -- no approved title at
+   * start, or a saved plan that could not be read (background runs then search the saved role). The
+   * report repeats it so the person sees why only one query was searched. Null otherwise.
+   */
+  readonly searchPlanStatus: SearchPlanRunStatus | null;
 }
 
 export function captureVacancyRunIntent(
   scanId: string,
   request: ParsedVacancyScanRequest,
   capturedAt: Date = new Date(),
+  searchPlan: SearchPlanSnapshot | null = null,
+  searchPlanStatus: SearchPlanRunStatus | null = null,
 ): VacancyRunIntent {
   const base = {
     version: VACANCY_RUN_INTENT_VERSION,
@@ -51,6 +71,8 @@ export function captureVacancyRunIntent(
       country: null,
       employment: null,
       salary: null,
+      searchPlan: null,
+      searchPlanStatus: null,
     });
   }
   return Object.freeze({
@@ -60,6 +82,12 @@ export function captureVacancyRunIntent(
     country: request.country ?? null,
     employment: request.employment ?? null,
     salary: request.salary ? Object.freeze({ ...request.salary }) : null,
+    // Only a run that asked for the plan carries one, and only the already-frozen snapshot is kept.
+    searchPlan: request.useSearchPlan === true ? searchPlan : null,
+    searchPlanStatus:
+      request.useSearchPlan === true && searchPlan === null && searchPlanStatus !== null
+        ? Object.freeze({ ...searchPlanStatus })
+        : null,
   });
 }
 
@@ -68,11 +96,20 @@ export function deterministicScanCriteria(
   intent: VacancyRunIntent,
   browseAllResultCap: number,
 ):
-  | { query: string; country?: string; employment?: string; salary?: SalaryFilterCriteria }
+  | {
+      query: string;
+      country?: string;
+      employment?: string;
+      salary?: SalaryFilterCriteria;
+      searchPlan?: SearchPlanSnapshot;
+      searchPlanStatus?: SearchPlanRunStatus;
+    }
   | { query: ''; browseAll: true; browseAllResultCap: number } {
   if (intent.mode === 'browse_all') return { query: '', browseAll: true, browseAllResultCap };
   return {
     query: intent.query ?? '',
+    ...(intent.searchPlan ? { searchPlan: intent.searchPlan } : {}),
+    ...(intent.searchPlanStatus ? { searchPlanStatus: { ...intent.searchPlanStatus } } : {}),
     ...(intent.country ? { country: intent.country } : {}),
     ...(intent.employment ? { employment: intent.employment } : {}),
     ...(intent.salary ? { salary: { ...intent.salary } } : {}),
@@ -94,6 +131,10 @@ export function describeVacancyRunIntentParts(intent: VacancyRunIntent): string[
     ...(intent.salary
       ? [`Minimum salary: ${formatSalary(intent.salary)} a year${intent.salary.includeUnknown ? '' : ', unknown salaries hidden'}`]
       : []),
+    ...(intent.searchPlan
+      ? [`Search plan: ${intent.searchPlan.variants.length} approved ${intent.searchPlan.variants.length === 1 ? 'title' : 'titles'} (revision ${intent.searchPlan.revision})`]
+      : []),
+    ...(intent.searchPlanStatus ? ['Search plan: not used (see the notice on the results)'] : []),
   ];
 }
 

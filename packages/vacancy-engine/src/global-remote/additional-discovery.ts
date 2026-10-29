@@ -265,14 +265,17 @@ async function discoverTheMuse(
   };
 }
 
+/** @param only When given, runs just these providers (#686 variant passes); omitted = all, as before. */
 export async function runAdditionalDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
+  only?: ReadonlySet<string>,
 ): Promise<DiscoveryRun> {
+  const wants = (provider: string) => only === undefined || only.has(provider);
   const runs = await Promise.all([
-    discoverDice(http, config),
-    discoverRemoote(http, config),
-    ...(config.discovery.museEnabled ? [discoverTheMuse(http, config)] : []),
+    ...(wants('dice') ? [discoverDice(http, config)] : []),
+    ...(wants('remoote') ? [discoverRemoote(http, config)] : []),
+    ...(wants('the_muse') && config.discovery.museEnabled ? [discoverTheMuse(http, config)] : []),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

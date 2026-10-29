@@ -3,6 +3,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  approveSearchPlanDraft,
+  captureSearchPlanSnapshot,
+  EMPTY_SEARCH_PLAN,
+  searchPlanDraftSchema,
+} from '@open-vacancy-radar/vacancy-engine';
+import {
   VACANCY_RUN_INTENT_VERSION,
   buildAiIntentProvenance,
   captureVacancyRunIntent,
@@ -39,7 +45,54 @@ describe('captureVacancyRunIntent', () => {
       employment: 'full_time',
       salary: { minimumAnnual: 65_000, currency: 'EUR', includeUnknown: false },
       aiWebDiscovery: true,
+      searchPlan: null,
+      searchPlanStatus: null,
     });
+    // Version 2: the intent shape gained the plan and its status (#686).
+    expect(intent.version).toBe(2);
+  });
+
+  it('records why a run that asked for the plan ran without one, and passes it to the engine (#686)', () => {
+    const status = { state: 'empty_at_start' as const, message: 'Your search plan had no approved titles when this search started.' };
+    const asked = captureVacancyRunIntent(
+      'scan-empty',
+      parseVacancyScanRequest({ mode: 'query', query: 'React developer', useSearchPlan: true }),
+      CAPTURED_AT,
+      null,
+      status,
+    );
+    expect(asked.searchPlanStatus).toEqual(status);
+    expect(Object.isFrozen(asked.searchPlanStatus)).toBe(true);
+    expect(deterministicScanCriteria(asked, 5_000)).toEqual({ query: 'React developer', searchPlanStatus: status });
+    expect(describeVacancyRunIntent(asked)).toBe('Role: React developer · Search plan: not used (see the notice on the results)');
+    // A run that never asked for the plan never carries a plan status.
+    const literal = captureVacancyRunIntent('scan-lit', parseVacancyScanRequest({ mode: 'query', query: 'React developer' }), CAPTURED_AT, null, status);
+    expect(literal.searchPlanStatus).toBeNull();
+  });
+
+  it('carries the search plan only for a run that asked for it, and the plan is frozen with the intent (#686)', () => {
+    const snapshot = captureSearchPlanSnapshot(
+      approveSearchPlanDraft(
+        EMPTY_SEARCH_PLAN,
+        searchPlanDraftSchema.parse({ variants: [{ title: 'React developer' }, { title: 'UI engineer' }] }),
+        CAPTURED_AT,
+      ),
+    );
+    const asked = captureVacancyRunIntent(
+      'scan-plan',
+      parseVacancyScanRequest({ mode: 'query', query: 'React developer', useSearchPlan: true }),
+      CAPTURED_AT,
+      snapshot,
+    );
+    expect(asked.searchPlan).toBe(snapshot);
+    expect(describeVacancyRunIntent(asked)).toBe('Role: React developer · Search plan: 2 approved titles (revision 1)');
+    expect(deterministicScanCriteria(asked, 5_000)).toMatchObject({ query: 'React developer', searchPlan: snapshot });
+
+    // A literal run never picks up a plan, even if one is passed in; browse-all never has one.
+    const literal = captureVacancyRunIntent('scan-literal', parseVacancyScanRequest({ mode: 'query', query: 'React developer' }), CAPTURED_AT, snapshot);
+    expect(literal.searchPlan).toBeNull();
+    expect(Object.keys(deterministicScanCriteria(literal, 5_000))).not.toContain('searchPlan');
+    expect(captureVacancyRunIntent('scan-all', parseVacancyScanRequest({ mode: 'browse_all' }), CAPTURED_AT, snapshot).searchPlan).toBeNull();
   });
 
   it('keeps unsupplied criteria unknown instead of filling them in', () => {

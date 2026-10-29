@@ -742,7 +742,7 @@ describe('runAiWebDiscovery uses the submitted run intent (#684)', () => {
     });
     expect(outcome.sourceAudit.aiSearchIntent).toEqual(outcome.intentProvenance);
     expect(outcome.intentProvenance).toMatchObject({
-      intentVersion: 1,
+      intentVersion: 2,
       scanId: 'scan-684',
       mode: 'query',
       candidateContext: { skillCount: 2, experienceYearsIncluded: true, homeCountryIncluded: false, savedTargetRolesSearched: false },

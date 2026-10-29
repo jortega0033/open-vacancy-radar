@@ -64,6 +64,58 @@ panel shows what the run is searching for, and "Copy diagnostics" lists how each
 the AI step, using search terms and counts only, never CV text or the prompt. The local filter
 still decides what is kept.
 
+**Search plan.** Under "What you are looking for" you can approve a search plan: a primary function,
+an ordered list of equivalent titles (for example React developer, Frontend engineer, UI engineer),
+the working language each title is written in, and the markets you care about. It describes the work
+you want, not facts about you, and it works by hand with no AI. Titles suggested by the
+CV tools ("Best-fit roles") or an AI answer wait in a separate list and are searched only after you add
+them. When a plan has titles, the Search page offers "Also search my N approved titles"; it starts off,
+shows the titles it adds, and remembers your choice. The title you type is searched first, exactly as
+before; then each approved title is asked only of the job sources that can filter by title (the others
+return one feed whatever the title, so they are not asked again and the title is matched locally).
+
+The whole plan -- the typed query's discovery pass, including fixed feeds and the company-roster batch,
+and every approved title -- runs inside ONE declared allowance: a number of network requests counted at
+the HTTP client before each request is made (every retry and redirect counts), one deadline that also
+cuts a request still in flight, and one limit on matching rows. The allowance covers the search stage
+only, and the limit applies to the rows that stage returns. These run the same with or without a plan
+and are outside it: the Workable and MPSV bulk snapshots (their attempts are reported as
+`usage.outsideEnvelopeAttempts`), official employer checks (counted in the run statistics) and sponsor
+lookups (reported as sponsor counts). Rows from those snapshots, and from the AI web search, that match
+an approved title are kept but are not counted against the result limit, and the run's wall time is the
+search stage plus those fixed stages, not the allowance alone. Titles the allowance did not reach are
+listed as deferred, and each source row says whether that title really reached it, was only partly
+asked, or was not asked, with the reason, in the results notice and in "Copy diagnostics". A call that
+reached a source and was then stopped (a retry the allowance refused, or a request cut by the deadline)
+is counted as a request and said to have been "stopped after asking"; only a call refused before any
+network contact is "not asked" and counts as zero. A row is kept when the typed query matches
+it as before, or when an approved title appears in its title (a title only mentioned in a description
+does not count); each job says which query found it and whether the typed query matched only its
+description. Most of what extra titles add comes from that local matching: a source with no title
+filter returns one feed whatever it is asked, so the feed the typed query already fetched is matched
+against every approved title for free, and an extra title request helps only at sources that filter by
+title and only when the allowance reaches it. In the repository's synthetic, author-labelled
+measurement the extra jobs at the tight and moderate allowances all came from that local matching and
+no extra title request fetched one; title requests added jobs only at a generous allowance. Markets and the primary function are
+kept with the plan but do not filter searches (use Country for that); the report and diagnostics say
+so per source. The language you pick for a title is a label kept for provenance and display only: no
+source is filtered or queried by language, and it never makes a job count as requiring that language,
+which only an explicit statement in the advert does. A job whose title matches an approved title is
+treated as in scope by the engine's pre-classification, so the usual language, location and salary
+checks apply to it -- but only when its title carries none of the role families the product always
+excludes (full-stack, back-end, manager, director, mobile, QA and the like): "Frontend Engineering
+Manager" stays a role mismatch. A run takes a frozen copy of the plan when it starts, so editing or
+removing a title changes the next search only, and finished reports keep their own copy. If the plan
+was empty or could not be read when a run started, the results say so. A damaged plan file, or one
+written by a newer version, is never overwritten by an ordinary save: the editor says which it is and
+offers "Start a new plan", which first keeps the file's exact bytes as a timestamped backup next to
+it. The unattended background scan uses the same plan and allowance in one run instead of scanning each
+saved role (falling back to the first saved role, and saying so, when the plan cannot be used); the
+background company-board scout checks only the first approved title, with no plan allowance of its own.
+Without approved titles, or with the switch off, a search is the single typed query it always was.
+Same-requisition duplicates are merged by the existing identity rules; different requisitions with the
+same company and title stay separate.
+
 Vacancy coverage is a product requirement: a lawful public source is integrated by default in the
 broadest mode its evidence supports. Sources that take longer to implement remain planned.
 Unclear republication rights use a factual linked index; explicit prohibitions, authentication or

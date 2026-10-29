@@ -89,6 +89,15 @@ export interface SearchFilterBarProps {
   onOpenSearchProfile?: () => void;
   /** The vacancy engine cannot run (#441): scanning and browsing are disabled, not merely failing. */
   scanUnavailable?: boolean;
+  /**
+   * Issue #686: how many titles the person has approved in their search plan. The switch below is
+   * shown only when there is at least one, so a person with no plan sees the page exactly as before.
+   */
+  searchPlanTitleCount?: number;
+  /** The approved titles the switch would add, shown next to it so the person sees what widens the search. */
+  searchPlanTitles?: readonly string[];
+  useSearchPlan?: boolean;
+  onUseSearchPlanChange?: (value: boolean) => void;
 }
 
 /**
@@ -117,6 +126,10 @@ export function SearchFilterBar({
   aiWebDiscoveryAvailable,
   onOpenSearchProfile,
   scanUnavailable = false,
+  searchPlanTitleCount = 0,
+  searchPlanTitles = [],
+  useSearchPlan = false,
+  onUseSearchPlanChange,
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
   const draftQuery = filters.query.trim();
@@ -362,6 +375,25 @@ export function SearchFilterBar({
           />
           Also search the web with AI
         </label>
+
+        {searchPlanTitleCount > 0 && onUseSearchPlanChange && (
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
+            <input
+              className="checkbox checkbox-sm"
+              type="checkbox"
+              aria-label={`Also search my ${searchPlanTitleCount} approved ${searchPlanTitleCount === 1 ? 'title' : 'titles'}`}
+              checked={useSearchPlan}
+              onChange={(event) => onUseSearchPlanChange(event.target.checked)}
+              disabled={busy}
+            />
+            Also search my {searchPlanTitleCount} approved {searchPlanTitleCount === 1 ? 'title' : 'titles'}
+            {useSearchPlan && searchPlanTitles.length > 0 && (
+              <span className="text-xs text-base-content/60" data-testid="search-plan-titles">
+                ({searchPlanTitles.join(', ')})
+              </span>
+            )}
+          </label>
+        )}
 
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || scanUnavailable || !hasQuery}>
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}

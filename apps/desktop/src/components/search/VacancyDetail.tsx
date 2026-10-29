@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { FileDashed, Info } from '@phosphor-icons/react';
+import { describeLeadQueries } from './search-plan-view.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
 import { ErrorBanner, Eyebrow } from '../shell/index.js';
@@ -167,6 +168,7 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
     { k: 'Company', v: result.company },
     { k: 'Location', v: orNotStated(result.location) },
     { k: 'Source', v: discoveryProviderLabel(result.provider) },
+    ...(describeLeadQueries(vacancy) ? [{ k: 'Found with', v: describeLeadQueries(vacancy)! }] : []),
     { k: 'Employment type', v: orNotStated(vacancy.employmentType) },
     ...arrangementPairs(result),
     { k: 'Advertised salary', v: result.salary ?? 'Not disclosed' },

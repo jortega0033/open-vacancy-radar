@@ -1,7 +1,9 @@
 import {
+  isSearchPlanUsable,
   parseMinimumAnnualSalary,
   type CandidateProfile,
   type SalaryFilterCriteria,
+  type SearchPlan,
 } from '@open-vacancy-radar/vacancy-engine';
 
 export type VacancyScanRequest =
@@ -15,6 +17,9 @@ export type VacancyScanRequest =
        * this run only. Omitted/false is a true no-op -- see `runVacancyScan` in `main.ts`, which
        * never even looks at this field's absence differently from `false`. */
       aiWebDiscovery?: boolean;
+      /** Issue #686: also search the person's approved search-plan titles in this run. The plan itself
+       * is never sent from the page: the main process reads the saved one when the run starts. */
+      useSearchPlan?: boolean;
     }
   | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
@@ -26,6 +31,14 @@ export type ParsedVacancyScanRequest =
       employment?: string;
       salary?: SalaryFilterCriteria;
       aiWebDiscovery?: boolean;
+      useSearchPlan?: boolean;
+      /**
+       * Issue #686, main process only (the IPC parser below never sets it): a background run takes its
+       * query from the plan snapshot the run itself captures -- the first approved title -- so the plan
+       * is read once per run. `query` is then only the fallback (the saved role or skill) used when the
+       * plan turns out empty or unreadable at start, which the run reports.
+       */
+      queryFromSearchPlan?: boolean;
     }
   | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
@@ -84,12 +97,14 @@ export function parseVacancyScanRequest(value: unknown): ParsedVacancyScanReques
       employment?: unknown;
       salary?: unknown;
       aiWebDiscovery?: unknown;
+      useSearchPlan?: unknown;
     };
     if (request.mode === 'query') {
       const country = optionalFocusedCriterion(request.country, 'Country');
       const employment = optionalFocusedCriterion(request.employment, 'Employment type');
       const salary = parseSalaryFilter(request.salary);
       const aiWebDiscovery = optionalBoolean(request.aiWebDiscovery, 'AI web discovery');
+      const useSearchPlan = optionalBoolean(request.useSearchPlan, 'Search plan');
       return {
         mode: 'query',
         query: requiredScanQuery(request.query),
@@ -97,6 +112,8 @@ export function parseVacancyScanRequest(value: unknown): ParsedVacancyScanReques
         ...(employment ? { employment } : {}),
         ...(salary ? { salary } : {}),
         ...(aiWebDiscovery !== undefined ? { aiWebDiscovery } : {}),
+        // Only an explicit true is kept, so a literal request stays byte-identical to before #686.
+        ...(useSearchPlan === true ? { useSearchPlan } : {}),
       };
     }
     if (request.mode === 'browse_all') {
@@ -117,4 +134,32 @@ function firstNonBlank(values: readonly string[]): string | null {
 
 export function scheduledScanQueryFromProfile(profile: CandidateProfile): string | null {
   return firstNonBlank(profile.targetRoles) ?? firstNonBlank(profile.strongestSkills);
+}
+
+/**
+ * What the unattended scan and the background source scout search for (#686).
+ *
+ * With an approved search plan the answer is ONE scan carrying the plan, so the run uses the person's
+ * reviewed titles under one shared allowance instead of scanning each saved role on its own. The run
+ * itself takes its query from the plan snapshot it captures (`queryFromSearchPlan`); `fallbackQuery` is
+ * what it searches if the plan is empty or unreadable by then. An unreadable plan still asks for the
+ * plan, so the run records and reports why it fell back instead of silently searching the role.
+ * Without a plan it is the first saved role or skill, as before. Suggestions are never part of a plan.
+ *
+ * `query` is the first approved title when there is one (the source scout, which has no plan budget,
+ * searches that one title literally), else the saved role or skill.
+ */
+export function selectBackgroundScan(
+  profile: CandidateProfile,
+  plan: Pick<SearchPlan, 'variants'> | 'unreadable' | null,
+): { query: string; fallbackQuery: string; useSearchPlan: boolean } | null {
+  const legacy = scheduledScanQueryFromProfile(profile);
+  if (plan === 'unreadable') {
+    return legacy === null ? null : { query: legacy, fallbackQuery: legacy, useSearchPlan: true };
+  }
+  if (plan !== null && isSearchPlanUsable(plan)) {
+    const first = plan.variants.map((variant) => variant.title.trim()).find((title) => title.length > 0);
+    if (first) return { query: first, fallbackQuery: legacy ?? first, useSearchPlan: true };
+  }
+  return legacy === null ? null : { query: legacy, fallbackQuery: legacy, useSearchPlan: false };
 }

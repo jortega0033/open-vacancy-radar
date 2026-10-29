@@ -4,6 +4,7 @@ import {
   annualizedMinimumUsd,
   classifyDiscoveryVacancy,
   evaluateOfficialReview,
+  hasExcludedRoleFamily,
   isFrontendOnlyTitle,
 } from '../../src/global-remote/evaluation.js';
 import type { GlobalRemoteSource } from '../../src/global-remote/models.js';
@@ -189,6 +190,67 @@ describe('mandatory-language enforcement in the discovery classifier', () => {
         candidateLanguages: ['English'],
       }),
     ).toMatchObject({ decision: 'role_mismatch' });
+  });
+});
+
+describe('approved search-plan titles in the discovery classifier (#686)', () => {
+  const base = { location: 'Worldwide', annualizedMinimumUsd: 150_000, minimumAnnualBaseUsd: 100_000 };
+
+  it('lets an approved title stand in for the positive title check only', () => {
+    for (const [title, approvedTitle] of [
+      ['React Developer', 'React developer'],
+      ['Senior Frontend ontwikkelaar', 'Frontend ontwikkelaar'],
+      ['Frontend Engineer (Remote)', 'Frontend engineer'],
+      ['Angular Developer', 'React developer'],
+    ] as const) {
+      const result = classifyDiscoveryVacancy({ ...base, title, approvedTitle });
+      expect(result.decision, title).toBe('official_review_candidate');
+      expect(result.reasons[0]).toBe(`The title matches "${approvedTitle}", a title approved in the search plan.`);
+    }
+    // Without the approval the same English-only check still rejects the listings it always rejected.
+    expect(classifyDiscoveryVacancy({ ...base, title: 'React Developer' }).decision).toBe('role_mismatch');
+    expect(classifyDiscoveryVacancy({ ...base, title: 'Senior Frontend ontwikkelaar' }).decision).toBe('role_mismatch');
+  });
+
+  it('keeps every excluded role family out, even when the title contains an approved title', () => {
+    const embedded: [string, string][] = [
+      ['Frontend Engineering Manager', 'Frontend engineer'],
+      ['Engineering Manager, Frontend Engineering', 'Frontend engineer'],
+      ['Full Stack Frontend Engineer', 'Frontend engineer'],
+      ['Full-Stack React Developer', 'React developer'],
+      ['Frontend Engineer (Mobile)', 'Frontend engineer'],
+      ['Frontend Engineer, Android', 'Frontend engineer'],
+      ['iOS React Developer', 'React developer'],
+      ['Head of Frontend Engineering', 'Frontend engineer'],
+      ['Director, Frontend Engineering', 'Frontend engineer'],
+      ['Backend and Frontend Engineer', 'Frontend engineer'],
+      ['Frontend QA Engineer', 'Frontend engineer'],
+      ['Senior UI Engineer, Salesforce', 'UI engineer'],
+    ];
+    for (const [title, approvedTitle] of embedded) {
+      expect(hasExcludedRoleFamily(title), title).toBe(true);
+      // The very same decision and reason as the listing gets with no plan at all.
+      const without = classifyDiscoveryVacancy({ ...base, title });
+      const withApproval = classifyDiscoveryVacancy({ ...base, title, approvedTitle });
+      expect(without, title).toEqual({ decision: 'role_mismatch', reasons: ['Title is not explicitly frontend-only.'] });
+      expect(withApproval, title).toEqual(without);
+    }
+    // An approved title that is itself an excluded family does not widen the product's role scope.
+    expect(classifyDiscoveryVacancy({ ...base, title: 'Full Stack Developer', approvedTitle: 'Full Stack Developer' }).decision).toBe('role_mismatch');
+    expect(hasExcludedRoleFamily('React Developer')).toBe(false);
+    expect(isFrontendOnlyTitle('Frontend Engineering Manager')).toBe(false);
+  });
+
+  it('applies the unchanged language, location and salary gates behind an approved title', () => {
+    const dutch = 'Fluent Dutch is required. Je werkt met klanten in het Nederlands.';
+    const common = { ...base, title: 'Frontend ontwikkelaar', approvedTitle: 'Frontend ontwikkelaar', candidateLanguages: ['English'] };
+    expect(classifyDiscoveryVacancy({ ...common, description: dutch }).decision).toBe('language_mismatch');
+    expect(classifyDiscoveryVacancy({ ...common, description: 'Wij zoeken een ontwikkelaar.' }).decision).toBe('official_review_candidate');
+    expect(classifyDiscoveryVacancy({ ...common, location: 'United States only' }).decision).toBe('location_restricted');
+    expect(classifyDiscoveryVacancy({ ...common, annualizedMinimumUsd: null }).decision).toBe('salary_unverified');
+    expect(classifyDiscoveryVacancy({ ...common, annualizedMinimumUsd: 50_000 }).decision).toBe('salary_below_threshold');
+    // A talent pool is still not a vacancy, whatever it is called.
+    expect(classifyDiscoveryVacancy({ ...common, description: 'Join our talent pool for future opportunities.' }).decision).toBe('non_vacancy');
   });
 });
 

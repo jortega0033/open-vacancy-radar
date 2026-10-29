@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ResumeToolkit } from '../src/components/cv/ResumeToolkit.js';
 import type { CvDocument } from '../src/components/cv/types.js';
 import { CLAUDE_INSTALLED, installBridges } from './cv-bridges.js';
+import { installVacancyRadarBridge } from './workspace-bridge.js';
 import { resetProviderLimitsForTest, setProviderOverride } from '../src/provider-limits.js';
 
 const CV: CvDocument = { fileName: 'cv.pdf', text: 'Angular architect. 8 years of frontend work.' };
@@ -173,4 +174,39 @@ describe('ResumeToolkit', () => {
     setProviderOverride(null);
   });
 
+});
+
+describe('ResumeToolkit search-title suggestions (#686)', () => {
+  it('offers best-fit titles for review and sends them as suggestions only', async () => {
+    const bridges = installBridges();
+    const addSearchPlanSuggestions = vi.fn().mockResolvedValue({});
+    const saveSearchPlan = vi.fn();
+    const saveSearchProfile = vi.fn();
+    installVacancyRadarBridge({ addSearchPlanSuggestions, saveSearchPlan, saveSearchProfile });
+    render(<ResumeToolkit cv={CV} />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Best-fit roles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Find best-fit roles' }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    bridges.emit('sess-cv-1', {
+      type: 'assistant.message',
+      text: '## Best-fit role directions\n- Frontend engineer\n## Suggested search titles\n- React developer\n- Frontend ontwikkelaar | Dutch\n',
+    });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    const panel = await screen.findByTestId('title-suggestions');
+    expect(panel).toHaveTextContent('React developer, Frontend ontwikkelaar (Dutch)');
+    expect(addSearchPlanSuggestions).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Send to my search plan for review' }));
+    await waitFor(() =>
+      expect(addSearchPlanSuggestions).toHaveBeenCalledWith([
+        { title: 'React developer', language: '' },
+        { title: 'Frontend ontwikkelaar', language: 'Dutch' },
+      ]),
+    );
+    expect(await screen.findByText('Sent for review')).toBeInTheDocument();
+    // Sending suggestions never approves a title or edits the profile.
+    expect(saveSearchPlan).not.toHaveBeenCalled();
+    expect(saveSearchProfile).not.toHaveBeenCalled();
+  });
 });

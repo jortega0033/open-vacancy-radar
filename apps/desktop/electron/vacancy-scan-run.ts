@@ -1,4 +1,9 @@
-import type { GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  GlobalRemoteReport,
+  ScanProgressEvent,
+  SearchPlanRunStatus,
+  SearchPlanSnapshot,
+} from '@open-vacancy-radar/vacancy-engine';
 import { describeVacancyRunIntent, captureVacancyRunIntent, type VacancyRunIntent } from './vacancy-run-intent.js';
 import { runVacancyScanBranches, type VacancyScanBranchesDeps } from './vacancy-scan-orchestration.js';
 import type { ParsedVacancyScanRequest } from './vacancy-scan-query.js';
@@ -44,6 +49,12 @@ export interface VacancyScanRunnerDeps {
   runExclusiveScan<T>(run: () => Promise<T>): Promise<T>;
   /** Called once per run, inside the exclusive scan. */
   prepareRun(): Promise<VacancyScanRunBranchDeps>;
+  /**
+   * The saved search plan as a frozen copy, or null when there is no usable plan (#686). Read only for a
+   * run that asked for the plan, at the moment the run's intent is captured, so what the run searches is
+   * fixed here and a later save of the plan cannot reach it. A plan file that cannot be read rejects.
+   */
+  loadSearchPlanSnapshot(): Promise<SearchPlanSnapshot | null>;
   newScanId(): string;
   now(): number;
   /** How many progress groups a run reports (`SCAN_PROGRESS_SOURCE_IDS.length`). */
@@ -67,6 +78,56 @@ export interface VacancyScanRunner {
   cancel(scanId: unknown): VacancyScanCancelResult;
 }
 
+function readableReason(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'Your search plan could not be read.';
+}
+
+/**
+ * Issue #686: the plan this run uses, read exactly once, at intent capture. A run that asked for the
+ * plan and finds none (no approved title, or a file that cannot be read) says so on its report instead
+ * of quietly searching one query. A person's own search with an unreadable plan fails clearly before
+ * any source is asked; a background run falls back to its saved role and reports why.
+ */
+async function resolveSearchPlan(
+  request: ParsedVacancyScanRequest,
+  deps: Pick<VacancyScanRunnerDeps, 'loadSearchPlanSnapshot'>,
+): Promise<{ request: ParsedVacancyScanRequest; searchPlan: SearchPlanSnapshot | null; status: SearchPlanRunStatus | null }> {
+  if (request.mode !== 'query' || request.useSearchPlan !== true) return { request, searchPlan: null, status: null };
+  const background = request.queryFromSearchPlan === true;
+  let snapshot: SearchPlanSnapshot | null;
+  try {
+    snapshot = await deps.loadSearchPlanSnapshot();
+  } catch (error) {
+    if (!background) throw error;
+    return {
+      request,
+      searchPlan: null,
+      status: {
+        state: 'unreadable',
+        message: `${readableReason(error)} This background search used your saved role or skill "${request.query}" instead.`,
+      },
+    };
+  }
+  if (snapshot === null) {
+    return {
+      request,
+      searchPlan: null,
+      status: {
+        state: 'empty_at_start',
+        message: background
+          ? `Your search plan had no approved titles when this background search started, so it searched your saved role or skill "${request.query}" only.`
+          : 'Your search plan had no approved titles when this search started, so only the typed query was searched.',
+      },
+    };
+  }
+  const first = snapshot.variants[0]?.title;
+  return {
+    request: background && first ? { ...request, query: first } : request,
+    searchPlan: snapshot,
+    status: null,
+  };
+}
+
 export function createVacancyScanRunner(deps: VacancyScanRunnerDeps): VacancyScanRunner {
   let active: ActiveVacancyScan | undefined;
 
@@ -78,7 +139,8 @@ export function createVacancyScanRunner(deps: VacancyScanRunnerDeps): VacancySca
         const scanId = deps.newScanId();
         // Fixed here, from the validated request, before any saved profile is read: the AI branch and
         // the deterministic branch both take their criteria from this snapshot (#684).
-        const intent = captureVacancyRunIntent(scanId, request);
+        const planned = await resolveSearchPlan(request, deps);
+        const intent = captureVacancyRunIntent(scanId, planned.request, new Date(), planned.searchPlan, planned.status);
         const scan: ActiveVacancyScan = {
           id: scanId,
           startedAt: deps.now(),

@@ -248,6 +248,7 @@ function harness(runs: Array<{ engine: Engine; daemon?: Daemon }>, options: { gr
   const runner = createVacancyScanRunner({
     beforeScan: async () => {},
     runExclusiveScan: (run) => guard.runExclusiveScan(run, { takeAdvisoryLock: false }),
+    loadSearchPlanSnapshot: async () => null,
     prepareRun: async () => {
       const current = runs[runIndex++]!;
       const daemon = current.daemon ?? aiDaemon();

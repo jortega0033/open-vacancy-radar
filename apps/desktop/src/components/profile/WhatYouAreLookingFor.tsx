@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { ProfileEditDialog } from './ProfileEditDialog.js';
 import { RoleQuickInput } from './RoleQuickInput.js';
+import { SearchPlanEditor } from './SearchPlanEditor.js';
 import { summarizeProfile } from './profile-summary.js';
 
 /** Loads the saved search profile; `reload` re-reads it after an edit. Null while loading or when
@@ -103,6 +104,9 @@ export function WhatYouAreLookingFor({ refreshKey = 0 }: WhatYouAreLookingForPro
           ))}
         </dl>
       )}
+
+      {/* Desired work, kept apart from the facts above: titles to search, approved by the person (#686). */}
+      <SearchPlanEditor />
 
       {editing && <ProfileEditDialog onClose={() => setEditing(false)} onChanged={reload} />}
     </section>

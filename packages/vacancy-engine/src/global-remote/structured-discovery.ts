@@ -673,15 +673,22 @@ export async function fetchWorkableJobDetail(
   return { description: sections.length > 0 ? sections.join('\n\n') : null };
 }
 
+/**
+ * @param only When given, runs just these providers (#686: a search-plan variant pass repeats only the
+ *   sources that take a role query upstream). Omitted = every provider, exactly as before.
+ */
 export async function runStructuredDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
+  only?: ReadonlySet<string>,
 ): Promise<DiscoveryRun> {
+  const wants = (provider: string) => only === undefined || only.has(provider);
+  const none: DiscoveryRun = { sources: [], vacancies: [] };
   const runs = await Promise.all([
-    discoverFreehire(http, config),
-    discoverJobOpportunities(http, config),
-    discoverRemoteLanders(http, config),
-    discoverJobgether(http, config),
+    wants('freehire') ? discoverFreehire(http, config) : none,
+    wants('job_opportunities') ? discoverJobOpportunities(http, config) : none,
+    wants('remote_landers') ? discoverRemoteLanders(http, config) : none,
+    wants('jobgether') ? discoverJobgether(http, config) : none,
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

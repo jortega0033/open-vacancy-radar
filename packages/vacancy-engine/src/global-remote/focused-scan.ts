@@ -6,6 +6,14 @@ export type FocusedCriterion = 'role' | 'country' | 'employment' | 'salary';
 
 export type FocusedScanCriteria = {
   role: string;
+  /**
+   * Issue #686: further approved titles that are equally acceptable. A vacancy passes the role check
+   * when `role` appears in its text (the long-standing rule) OR any of these appears in its TITLE, so
+   * the literal query cannot discard a valid result found under another approved title, and an approved
+   * title merely mentioned in a description (a manager of frontend engineers, a recruiter hiring one)
+   * does not widen the search. Absent = the single-query behaviour, unchanged.
+   */
+  roleAlternatives?: readonly string[];
   country: string | null;
   employment: string | null;
   salary?: SalaryFilterCriteria | null;
@@ -268,6 +276,34 @@ function countryMatches(locations: readonly string[], requested: string): boolea
   return canonical !== null && locations.some((location) => normalizeCountry(location) === canonical);
 }
 
+/** The role rule the shared filter applies: the normalized query is a substring of any searchable text. */
+export function vacancyMatchesRole(vacancy: DiscoveryVacancyAudit, query: string): boolean {
+  const wanted = normalized(query);
+  if (!wanted) return false;
+  const searchableText = vacancy.searchableText ?? [`${vacancy.title} ${vacancy.description ?? ''}`];
+  return searchableText.some((text) => normalized(text).includes(wanted));
+}
+
+/** Issue #686: an approved alternative title matches the vacancy title only (see `roleAlternatives`). */
+export function vacancyTitleMatches(vacancy: Pick<DiscoveryVacancyAudit, 'title'>, query: string): boolean {
+  const wanted = normalized(query);
+  return wanted.length > 0 && normalized(vacancy.title).includes(wanted);
+}
+
+/**
+ * Where a plan query matched a vacancy (#686): in the title, or -- for the typed query only, which keeps
+ * the title-and-description rule -- only in the description. Null when it does not match.
+ */
+export function planQueryMatchField(
+  vacancy: DiscoveryVacancyAudit,
+  query: string,
+  isTypedQuery: boolean,
+): 'title' | 'description' | null {
+  if (vacancyTitleMatches(vacancy, query)) return 'title';
+  if (isTypedQuery && vacancyMatchesRole(vacancy, query)) return 'description';
+  return null;
+}
+
 /** The final filter is shared by every adapter, so upstream support can only reduce fetching. */
 export function applyFocusedScanCriteria(
   vacancies: readonly DiscoveryVacancyAudit[],
@@ -286,11 +322,16 @@ export function applyFocusedScanCriteria(
   let salaryUnknown = 0;
   let salaryBelowMinimum = 0;
   const role = normalized(criteria.role);
+  const alternatives = (criteria.roleAlternatives ?? []).filter((entry) => normalized(entry).length > 0);
   const employment = criteria.employment ? canonicalEmployment(criteria.employment) : null;
   return {
     vacancies: vacancies.filter((vacancy) => {
       const searchableText = vacancy.searchableText ?? [`${vacancy.title} ${vacancy.description ?? ''}`];
-      if (role && !searchableText.some((text) => normalized(text).includes(role)))
+      if (
+        (role.length > 0 || alternatives.length > 0) &&
+        !(role.length > 0 && searchableText.some((text) => normalized(text).includes(role))) &&
+        !alternatives.some((alternative) => vacancyTitleMatches(vacancy, alternative))
+      )
         return false;
       if (
         criteria.country &&

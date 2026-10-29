@@ -4,7 +4,10 @@ import type {
   AtsRosterStatus,
   CandidateProfile,
   GlobalRemoteReport,
+  SearchPlan,
+  SearchPlanDraft,
 } from '@open-vacancy-radar/vacancy-engine';
+import type { SearchPlanLoadResult, SearchPlanResetResult } from '../electron/search-plan-store.js';
 import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 
 export type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'unavailable'; error: string };
@@ -60,6 +63,8 @@ export type VacancyScanRequest =
       salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean };
       /** Issue #398 Phase 1: opt in to an on-demand AI-web-search discovery pass for this run only. */
       aiWebDiscovery?: boolean;
+      /** Issue #686: also search the approved titles of the saved search plan in this run (read by the main process). */
+      useSearchPlan?: boolean;
     }
   | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
@@ -90,6 +95,21 @@ export interface VacancyRadarBridge {
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
+  /**
+   * The saved search plan (#686): approved titles plus suggestions still waiting for review -- or, when
+   * the file cannot be used, why (damaged, written by a newer version, unopenable). Never rejects for those.
+   */
+  getSearchPlan(): Promise<SearchPlanLoadResult>;
+  /**
+   * Starts a new, empty plan after the saved one could not be read. `confirm` must be true (the page asks
+   * first); the unreadable file's exact bytes are kept next to it as a timestamped backup.
+   */
+  resetSearchPlan(confirmation: { confirm: true }): Promise<SearchPlanResetResult>;
+  /** Approves the plan as written; only this call changes which titles a search uses. */
+  saveSearchPlan(draft: SearchPlanDraft): Promise<SearchPlan>;
+  /** Stores titles to review. They are never searched until approved with `saveSearchPlan`. */
+  addSearchPlanSuggestions(titles: { title: string; language?: string }[]): Promise<SearchPlan>;
+  dismissSearchPlanSuggestion(id: string): Promise<SearchPlan>;
   /** Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
    * `null` when the import has never run yet against this data directory. */
   getAtsRosterStatus(): Promise<AtsRosterStatus>;

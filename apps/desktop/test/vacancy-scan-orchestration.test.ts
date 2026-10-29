@@ -221,7 +221,7 @@ describe('runVacancyScanBranches: one submitted snapshot feeds both branches (#6
       id: 'ai_web_search',
       status: 'success',
       aiSearchIntent: {
-        intentVersion: 1,
+        intentVersion: 2,
         scanId: 'scan-684-run',
         mode: 'query',
         criteria: {

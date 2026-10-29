@@ -414,6 +414,13 @@ export function workArrangementOf(result: SearchResult): WorkArrangementDetectio
 export interface SearchFilters {
   /** Role or keyword, matched against title and company. */
   query: string;
+  /**
+   * Issue #686: further approved titles that are equally good matches. A row passes when `query` matches
+   * it as before OR one of these appears in its TITLE (the engine's rule: an approved title merely
+   * mentioned in a description does not make a match), so the typed query cannot hide a result found
+   * under another approved title. Absent = the single-query behaviour, unchanged.
+   */
+  queryAlternatives?: readonly string[];
   /** City or region, matched against the row's location. */
   location: string;
   /** Keep only rows with a possible IND sponsor match (best-effort; see `worldwideVerification`). */
@@ -466,6 +473,8 @@ export interface ReportSearchContext {
   mode: 'focused' | 'browse_all' | 'unknown';
   role: string | null;
   country: string | null;
+  /** The other approved titles the run searched besides `role` (#686); empty for a single-query report. */
+  alternatives: string[];
 }
 
 /**
@@ -477,11 +486,39 @@ export function reportSearchContext(report: GlobalRemoteReport): ReportSearchCon
   const requested = report.discoverySources
     .map((source) => source.focusedScan?.requested)
     .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  if (report.scanBounds?.mode === 'browse_all') return { mode: 'browse_all', role: null, country: null };
+  if (report.scanBounds?.mode === 'browse_all') return { mode: 'browse_all', role: null, country: null, alternatives: [] };
   const role = requested.find((entry) => entry.role?.trim())?.role?.trim() ?? null;
   const country = requested.find((entry) => entry.country?.trim())?.country?.trim() ?? null;
-  if (report.scanBounds?.mode === 'focused' || requested.length > 0) return { mode: 'focused', role, country };
-  return { mode: 'unknown', role: null, country: null };
+  const alternatives = report.searchPlan?.queries.slice(1).map((query) => query.query) ?? [];
+  if (report.scanBounds?.mode === 'focused' || requested.length > 0) return { mode: 'focused', role, country, alternatives };
+  return { mode: 'unknown', role: null, country: null, alternatives: [] };
+}
+
+interface NormalizedQueries {
+  literal: string;
+  alternatives: string[];
+}
+
+function normalizedQueries(query: string, alternatives: readonly string[] | undefined): NormalizedQueries {
+  return {
+    literal: query.trim().toLowerCase(),
+    alternatives: (alternatives ?? []).map((value) => value.trim().toLowerCase()).filter((value) => value.length > 0),
+  };
+}
+
+function hasAnyQuery(queries: NormalizedQueries): boolean {
+  return queries.literal.length > 0 || queries.alternatives.length > 0;
+}
+
+/**
+ * The filters to use for a finished report: the report's own OR set (#686) is added when the applied
+ * query is the one the report was run with, so the second, local filter agrees with the one the scan used.
+ */
+export function withReportQueryAlternatives(filters: SearchFilters, report: GlobalRemoteReport | null): SearchFilters {
+  if (!report?.searchPlan || report.searchPlan.queries.length < 2) return filters;
+  const literal = report.searchPlan.queries[0]!.query.trim().toLowerCase();
+  if (filters.query.trim().toLowerCase() !== literal) return filters;
+  return { ...filters, queryAlternatives: report.searchPlan.queries.slice(1).map((query) => query.query) };
 }
 
 /** Local "2 Oct, 00:23" style stamp for when a report was generated. */
@@ -597,14 +634,14 @@ export function filterSearchResultIndex(
   filters: SearchFilters,
   now: Date = new Date(),
 ): SearchResultIndexEntry[] {
-  const query = filters.query.trim().toLowerCase();
+  const queries = normalizedQueries(filters.query, filters.queryAlternatives);
   const location = filters.location.trim().toLowerCase();
   const maximumAgeMs = filters.postedWithin === 'any' ? null : Number(filters.postedWithin) * MILLISECONDS_PER_DAY;
   const nowMs = now.getTime();
   const salary = salaryCriteriaFromFilters(filters);
 
   return index.filter((entry) => {
-    if (query && queryMatchTier(entry, query) === 0) return false;
+    if (hasAnyQuery(queries) && bestQueryMatchTier(entry, queries) === 0) return false;
 
     if (location && !entry.locationLower.includes(location)) return false;
 
@@ -651,6 +688,15 @@ function postedAtTimestamp(value: string | null): number | null {
  * theory that a query landing on the role or employer itself is a much stronger relevance signal
  * than one that only happens to appear somewhere in free-text copy.
  */
+function bestQueryMatchTier(entry: SearchResultIndexEntry, queries: NormalizedQueries): number {
+  return Math.max(
+    queries.literal ? queryMatchTier(entry, queries.literal) : 0,
+    ...queries.alternatives.map((alternative) =>
+      entry.titleLower === alternative ? 4 : entry.titleLower.includes(alternative) ? 3 : 0,
+    ),
+  );
+}
+
 function queryMatchTier(entry: SearchResultIndexEntry, normalizedQuery: string): number {
   if (entry.titleLower === normalizedQuery || entry.companyLower === normalizedQuery) return 4;
   if (entry.titleLower.includes(normalizedQuery)) return 3;
@@ -674,8 +720,13 @@ export function sortResults(results: SearchResult[], query = ''): SearchResult[]
   return sortSearchResultIndex(buildSearchResultIndex(results), query);
 }
 
-export function sortSearchResultIndex(index: SearchResultIndexEntry[], query = ''): SearchResult[] {
-  const normalizedQuery = query.trim().toLowerCase();
+export function sortSearchResultIndex(
+  index: SearchResultIndexEntry[],
+  query = '',
+  alternatives?: readonly string[],
+): SearchResult[] {
+  const queries = normalizedQueries(query, alternatives);
+  const hasQuery = hasAnyQuery(queries);
   return [...index].sort((left, right) => {
     const leftResult = left.result;
     const rightResult = right.result;
@@ -683,8 +734,8 @@ export function sortSearchResultIndex(index: SearchResultIndexEntry[], query = '
     const rightScore = rightResult.profileScore;
     if ((leftScore == null) !== (rightScore == null)) return leftScore == null ? 1 : -1;
     if (leftScore != null && rightScore != null && leftScore !== rightScore) return rightScore - leftScore;
-    if (leftScore == null && rightScore == null && normalizedQuery) {
-      const tierDiff = queryMatchTier(right, normalizedQuery) - queryMatchTier(left, normalizedQuery);
+    if (leftScore == null && rightScore == null && hasQuery) {
+      const tierDiff = bestQueryMatchTier(right, queries) - bestQueryMatchTier(left, queries);
       if (tierDiff !== 0) return tierDiff;
     }
     const leftPosted = left.postedAtMs;
