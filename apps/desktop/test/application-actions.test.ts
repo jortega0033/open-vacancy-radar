@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApplicationActionsHandlers } from '../electron/application-actions-ipc.js';
+import { actionsDeps, modelStub, type ModelStub } from './application-actions-harness.js';
 import { parseActionsResult, parseOverviewResult, type ActionsResult, type ActionsView } from '../electron/application-actions-types.js';
 import { ApplicationDataResetGate } from '../electron/application-data-reset-gate.js';
 import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/client.js';
@@ -21,6 +22,7 @@ let dir: string;
 let db: WorkspaceDb;
 let closeDb: () => void;
 let nowMs: number;
+let model: ModelStub;
 const gate = new ApplicationDataResetGate();
 let n = 0;
 const rid = (): string => `request-${String(++n).padStart(6, '0')}`;
@@ -30,7 +32,7 @@ function open(): void {
 }
 
 function handlers() {
-  return createApplicationActionsHandlers(async () => ({ db, now: () => new Date(nowMs), mutate: (task) => gate.runMutation(task) }));
+  return createApplicationActionsHandlers(async () => actionsDeps({ db, gate, now: () => new Date(nowMs), model }));
 }
 
 /** Runs a channel exactly as the renderer does: JSON in, the preload's rebuild out. */
@@ -90,6 +92,7 @@ const rawRow = (id: string) => db.select().from(applications).all().find((row) =
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'ovr-application-actions-'));
   nowMs = Date.parse('2026-11-02T10:00:00Z');
+  model = modelStub();
   open();
 });
 

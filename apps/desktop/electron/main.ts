@@ -66,6 +66,7 @@ import { runFieldMapGeneration, runTextGeneration } from './application-generati
 import { createApplicationCritiqueHandlers } from './application-critique-ipc.js';
 import { createInterviewContextHandlers } from './interview-context-ipc.js';
 import { createApplicationActionsHandlers } from './application-actions-ipc.js';
+import { cancelAllFollowUps } from './follow-up-runs.js';
 import { cancelAllCritiques, type CritiqueDeps } from './application-critique-service.js';
 import { readPostingVerification } from './application-posting-verification.js';
 import { runCompanyResearchSession } from './company-evidence-research.js';
@@ -2487,6 +2488,14 @@ const applicationActionsHandlers = createApplicationActionsHandlers(async () => 
   db: await ensureWorkspaceDb(),
   now: () => new Date(),
   mutate: (task) => applicationDataResetGate.runMutation(task),
+  // The follow-up draft runs in the SAME closed-tool, no-network text session profile as the independent
+  // review (Claude's hardened profile). Only an explicit draft-generate press reaches it.
+  async generate(prompt, signal) {
+    if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+    return runTextGeneration(client, { provider: 'claude', cwd: await ensureAiWorkspaceDir(), prompt }, { signal });
+  },
+  provider: 'claude',
+  log: (message, meta) => console.warn(`[application-follow-up] ${message}`, meta ?? {}),
 }));
 // Literal channel names on purpose: the sender-guard test reads this file to prove every channel is guarded.
 guardedIpc.handle('application-actions:get', (_event, input: unknown) => applicationActionsHandlers['application-actions:get']!(input));
@@ -2497,6 +2506,12 @@ guardedIpc.handle('application-actions:reschedule', (_event, input: unknown) => 
 guardedIpc.handle('application-actions:complete', (_event, input: unknown) => applicationActionsHandlers['application-actions:complete']!(input));
 guardedIpc.handle('application-actions:dismiss', (_event, input: unknown) => applicationActionsHandlers['application-actions:dismiss']!(input));
 guardedIpc.handle('application-actions:set-suppressed', (_event, input: unknown) => applicationActionsHandlers['application-actions:set-suppressed']!(input));
+guardedIpc.handle('application-actions:draft-generate', (_event, input: unknown) => applicationActionsHandlers['application-actions:draft-generate']!(input));
+guardedIpc.handle('application-actions:draft-cancel', (_event, input: unknown) => applicationActionsHandlers['application-actions:draft-cancel']!(input));
+guardedIpc.handle('application-actions:draft-edit', (_event, input: unknown) => applicationActionsHandlers['application-actions:draft-edit']!(input));
+guardedIpc.handle('application-actions:draft-approve', (_event, input: unknown) => applicationActionsHandlers['application-actions:draft-approve']!(input));
+guardedIpc.handle('application-actions:draft-discard', (_event, input: unknown) => applicationActionsHandlers['application-actions:draft-discard']!(input));
+guardedIpc.handle('application-actions:draft-report-sent', (_event, input: unknown) => applicationActionsHandlers['application-actions:draft-report-sent']!(input));
 
 guardedIpc.handle('application-pipeline:attach-letter', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
@@ -3409,6 +3424,7 @@ guardedIpc.handle('workspace:data:reset', async () => {
     companyEvidenceRuns.cancelAll();
     // #690: a running review would otherwise finish after the data it describes is gone.
     cancelAllCritiques();
+    cancelAllFollowUps();
     closeAllApplicationReviews();
     const queueStatus = await daemonGetJson('/v2/applications');
     const lease = queueStatus?.lease;

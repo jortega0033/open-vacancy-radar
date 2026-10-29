@@ -62,6 +62,42 @@ const SuggestionSchema = z.object({
 });
 export type SuggestionView = z.infer<typeof SuggestionSchema>;
 
+const DraftBasisSchema = z.object({
+  mode: z.enum(['submitted_package', 'current_context']),
+  label: z.string().max(400),
+  submissionClass: z.enum(SUBMISSION_CLASSES),
+  packageVersion: z.number().int().min(1).nullable(),
+  /** First characters of the package fingerprint, so the label can say which record it used. */
+  manifestHash: z.string().max(20).nullable(),
+  documents: z
+    .array(z.object({ slot: z.enum(['cv', 'letter']), provenance: z.string().max(40), version: z.number().int().min(0).nullable() }))
+    .max(4),
+});
+
+export const DraftViewSchema = z.object({
+  id,
+  applicationId: id,
+  actionId: id.nullable(),
+  kind,
+  subject: z.string().max(ACTION_LIMITS.draftSubjectChars),
+  body: z.string().max(ACTION_LIMITS.draftBodyChars),
+  /** True once the person changed the model's text. */
+  edited: z.boolean(),
+  /** Preparation only: the person's review of the text. It says nothing about sending. */
+  status: z.enum(['prepared', 'approved', 'discarded']),
+  approvedAt: iso.nullable(),
+  /** Sending is only ever the person's own report. This app sends nothing. */
+  sendState: z.enum(['not_sent', 'user_reported_sent']),
+  sentReportedAt: iso.nullable(),
+  sentOn: z.string().max(10).nullable(),
+  basis: DraftBasisSchema,
+  provider: z.string().max(40),
+  version: z.number().int().min(1),
+  createdAt: iso,
+  updatedAt: iso,
+});
+export type DraftView = z.infer<typeof DraftViewSchema>;
+
 export const ActionsViewSchema = z.object({
   applicationId: id,
   /** When the main process read this, ISO-8601. The renderer judges overdue against its own clock. */
@@ -78,6 +114,11 @@ export const ActionsViewSchema = z.object({
   actions: z.array(ActionViewSchema).max(ACTION_LIMITS.perApplication),
   suggestion: SuggestionSchema,
   suppressed: z.boolean(),
+  drafts: z.array(DraftViewSchema).max(50),
+  /** Whether a draft can be asked for now, and why not. Drafting is always an explicit button press. */
+  draft: z.object({ available: z.boolean(), reason: z.string().max(300).nullable(), provider: z.string().max(40) }),
+  /** A draft for this application is being written right now. */
+  running: z.boolean(),
 });
 export type ActionsView = z.infer<typeof ActionsViewSchema>;
 
@@ -100,6 +141,16 @@ export const ACTION_CODES = [
   'not_open',
   'limit',
   'invalid_due',
+  'invalid_date',
+  'not_submitted',
+  'already_running',
+  'cancelled',
+  'timed_out',
+  'provider_limit',
+  'invalid_output',
+  'ungrounded',
+  'discarded',
+  'frozen',
   'failed',
 ] as const;
 
@@ -115,6 +166,8 @@ const ResultSchema = z.discriminatedUnion('ok', [
     view: ActionsViewSchema,
     /** The action this request created/changed, when it was one. */
     actionId: id.nullable(),
+    /** The draft this request created/changed, when it was one. */
+    draftId: id.nullable(),
     /** True when the request had already been applied (a retry): nothing new was written. */
     unchanged: z.boolean(),
   }),
@@ -202,6 +255,33 @@ export const TransitionActionInput = z
   .strict();
 export const SetSuppressedInput = z.object({ applicationId: Id, suppressed: z.boolean() }).strict();
 
+export const GenerateDraftInput = z.object({ applicationId: Id, actionId: Id.nullable(), requestId: RequestId }).strict();
+export const CancelDraftInput = z.object({ applicationId: Id }).strict();
+export const EditDraftInput = z
+  .object({
+    applicationId: Id,
+    draftId: Id,
+    expectedVersion: z.number().int().min(1),
+    subject: z.string().max(ACTION_LIMITS.draftSubjectChars),
+    body: z.string().trim().min(1).max(ACTION_LIMITS.draftBodyChars),
+  })
+  .strict();
+export const DraftDecisionInput = z.object({ applicationId: Id, draftId: Id, expectedVersion: z.number().int().min(1) }).strict();
+export const ReportSentInput = z
+  .object({
+    applicationId: Id,
+    draftId: Id,
+    expectedVersion: z.number().int().min(1),
+    sentOn: z.string().max(10).nullable(),
+    /** The person's explicit confirmation that they sent it themselves. Must be exactly true. */
+    confirmed: z.literal(true),
+  })
+  .strict();
+
+export type GenerateDraftRequest = z.infer<typeof GenerateDraftInput>;
+export type EditDraftRequest = z.infer<typeof EditDraftInput>;
+export type DraftDecisionRequest = z.infer<typeof DraftDecisionInput>;
+export type ReportSentRequest = z.infer<typeof ReportSentInput>;
 export type CreateActionRequest = z.infer<typeof CreateActionInput>;
 export type UpdateActionRequest = z.infer<typeof UpdateActionInput>;
 export type RescheduleActionRequest = z.infer<typeof RescheduleActionInput>;
@@ -218,4 +298,12 @@ export interface ApplicationActionsBridge {
   complete(input: TransitionActionRequest): Promise<ActionsResult>;
   dismiss(input: TransitionActionRequest): Promise<ActionsResult>;
   setSuppressed(input: SetSuppressedRequest): Promise<ActionsResult>;
+  /** Asks for ONE draft message. The only call here that can reach a model; it is the explicit button. */
+  generateDraft(input: GenerateDraftRequest): Promise<ActionsResult>;
+  cancelDraft(applicationId: string): Promise<ActionsResult>;
+  editDraft(input: EditDraftRequest): Promise<ActionsResult>;
+  approveDraft(input: DraftDecisionRequest): Promise<ActionsResult>;
+  discardDraft(input: DraftDecisionRequest): Promise<ActionsResult>;
+  /** Records the person's own statement that they sent the message. This app never sends one. */
+  reportDraftSent(input: ReportSentRequest): Promise<ActionsResult>;
 }

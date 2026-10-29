@@ -12,6 +12,7 @@ import type { ActionsResult, ActionsView, ActionView } from '../../../electron/a
 import type { ApplicationRecord } from '../../window.js';
 import { Dialog } from '../shell/Dialog.js';
 import { ErrorBanner } from '../shell/index.js';
+import { FollowUpDraftCard } from './FollowUpDraftCard.js';
 import {
   CHANNEL_OPTIONS,
   KIND_OPTIONS,
@@ -67,10 +68,26 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
   const [editing, setEditing] = useState<Editing | null>(null);
   const [confirmDismiss, setConfirmDismiss] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // A draft is being written for the step it names (null = a general follow-up). Only an explicit press sets this.
+  const [drafting, setDrafting] = useState<{ actionId: string | null } | null>(null);
+  // One request id per intent: pressing again after a failure or a cancel reuses it (nothing was saved, so a
+  // retry cannot duplicate), and a success clears it so the next press is a new intent.
+  const draftRequest = useRef<{ actionId: string | null; requestId: string } | null>(null);
   const currentId = useRef(application.id);
   currentId.current = application.id;
   const loadSeq = useRef(0);
   const viewerZone = useMemo(() => systemZone(), []);
+
+  // Closing the drawer while a draft is being written cancels it: the person left, so nothing should be
+  // saved behind their back into a list they are no longer looking at.
+  const draftingRef = useRef(false);
+  draftingRef.current = drafting !== null;
+  useEffect(
+    () => () => {
+      if (draftingRef.current) void window.applicationActions.cancelDraft(currentId.current).catch(() => {});
+    },
+    [],
+  );
 
   // The page is open, so a minute tick is only a re-render: it changes which label an action shows.
   useEffect(() => {
@@ -132,6 +149,27 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
     const worked = land(result);
     if (worked && done) setNotice(done);
     return worked;
+  }
+
+  async function draftMessage(actionId: string | null): Promise<void> {
+    if (!view || drafting) return;
+    if (draftRequest.current?.actionId !== actionId) draftRequest.current = { actionId, requestId: requestId() };
+    const request = draftRequest.current;
+    setDrafting({ actionId });
+    setBusy(true);
+    setNotice(undefined);
+    let result: ActionsResult;
+    try {
+      result = await window.applicationActions.generateDraft({ applicationId: view.applicationId, actionId, requestId: request.requestId });
+    } catch {
+      result = { ok: false, code: 'failed', message: 'Something went wrong. Nothing was saved.', view: null, dueIssue: null, dueOptions: [] };
+    }
+    setBusy(false);
+    setDrafting(null);
+    if (land(result)) {
+      draftRequest.current = null;
+      setNotice('Draft ready to review. Nothing was sent.');
+    }
   }
 
   function startCreate(origin: 'user' | 'suggestion_accepted'): void {
@@ -236,6 +274,9 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
             </button>
             <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Reschedule: ${label}`} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'reschedule', action, form: formFromAction(action) }); }}>
               Reschedule
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !view?.draft.available} aria-label={`Draft a message: ${label}`} title={view?.draft.reason ?? undefined} onClick={() => void draftMessage(action.id)}>
+              Draft a message
             </button>
             <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Edit: ${label}`} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'edit', action, form: formFromAction(action) }); }}>
               Edit
@@ -448,6 +489,41 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
                 </p>
               ) : (
                 <ul className="space-y-2">{open.map(renderAction)}</ul>
+              )}
+            </section>
+
+            <section aria-label="Drafts" className="space-y-2">
+              <h3 className="text-sm font-semibold">Drafts</h3>
+              <p className="text-xs text-base-content/70">
+                A draft is text for you to review and send yourself. It is written only when you press Draft a message, with{' '}
+                {view.draft.provider === 'claude' ? 'Claude' : view.draft.provider} on this computer, from facts this app holds about this application. Nothing is sent, and
+                nothing is marked as sent unless you say so.
+              </p>
+              {!view.draft.available && view.draft.reason && <p className="text-xs" data-testid="draft-unavailable">{view.draft.reason}</p>}
+              {(drafting || view.running) && (
+                <div className="flex items-center gap-2 text-xs" role="status">
+                  <span>Writing a draft. This can take a minute.</span>
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={() => void window.applicationActions.cancelDraft(view.applicationId)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || !view.draft.available || view.running || drafting !== null}
+                onClick={() => void draftMessage(null)}
+              >
+                Draft a message
+              </button>
+              {view.drafts.length === 0 ? (
+                <p className="text-xs text-base-content/70" data-testid="drafts-empty">No drafts yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {view.drafts.map((draft) => (
+                    <FollowUpDraftCard key={draft.id} draft={draft} busy={busy} run={run} />
+                  ))}
+                </ul>
               )}
             </section>
 

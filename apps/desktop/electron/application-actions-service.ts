@@ -22,6 +22,8 @@ import type {
   TransitionActionRequest,
   UpdateActionRequest,
 } from './application-actions-types.js';
+import { isFollowUpRunning } from './follow-up-runs.js';
+import { listDrafts } from './workspace/follow-up-draft-store.js';
 import {
   changeAction,
   createAction,
@@ -54,9 +56,10 @@ export interface ActionsDeps {
   mutate<T>(task: () => T | Promise<T>): Promise<T>;
 }
 
-type FailureCode = Extract<ActionsResult, { ok: false }>['code'];
+export type FailureCode = Extract<ActionsResult, { ok: false }>['code'];
 
-const MESSAGES: Record<Exclude<FailureCode, 'invalid_due' | 'invalid_request'>, string> = {
+type BasicCode = 'not_found' | 'outdated' | 'not_open' | 'limit' | 'failed';
+const MESSAGES: Record<BasicCode, string> = {
   not_found: 'That application or action is no longer available.',
   outdated: 'This changed since you opened it. Check the details and try again.',
   not_open: 'That follow-up was already completed or dismissed.',
@@ -90,7 +93,13 @@ function suggestionOf(record: ApplicationRecord, suppressed: boolean, openAction
 
 const view = (action: ActionRecord): ActionView => action;
 
-export function getActionsView(deps: Pick<ActionsDeps, 'db' | 'now'>, applicationId: string): ActionsView {
+/** Submission classes for which a follow-up message is worth drafting: something is recorded as sent. */
+export const DRAFTABLE_CLASSES: ReadonlySet<string> = new Set(['receipt_backed', 'user_reported', 'user_stated']);
+
+export const NOT_SUBMITTED_MESSAGE =
+  'Nothing here confirms this application was sent, so there is nothing to follow up on yet. Mark it applied first if you did apply.';
+
+export function getActionsView(deps: Pick<ActionsDeps, 'db' | 'now'> & { provider?: string }, applicationId: string): ActionsView {
   const record = rowOf(deps.db, applicationId);
   const actions = listActions(deps.db, applicationId);
   const suppressed = isSuppressed(deps.db, applicationId);
@@ -111,6 +120,16 @@ export function getActionsView(deps: Pick<ActionsDeps, 'db' | 'now'>, applicatio
     actions: actions.map(view),
     suggestion: suggestionOf(record, suppressed, actions.filter((action) => action.state === 'open').length),
     suppressed,
+    drafts: listDrafts(deps.db, applicationId).map((draft) => ({
+      ...draft,
+      basis: { ...draft.basis, manifestHash: draft.basis.manifestHash ? draft.basis.manifestHash.slice(0, 12) : null },
+    })),
+    draft: {
+      available: DRAFTABLE_CLASSES.has(submissionClass),
+      reason: DRAFTABLE_CLASSES.has(submissionClass) ? null : NOT_SUBMITTED_MESSAGE,
+      provider: deps.provider ?? 'claude',
+    },
+    running: isFollowUpRunning(applicationId),
   };
 }
 
@@ -140,12 +159,19 @@ export function getOverview(deps: Pick<ActionsDeps, 'db' | 'now'>): OverviewResu
 
 /* -------------------------------------------------------------------------------- results ----- */
 
-function ok(deps: ActionsDeps, applicationId: string, actionId: string | null, unchanged: boolean): ActionsResult {
-  return { ok: true, view: getActionsView(deps, applicationId), actionId, unchanged };
+export function okResult(
+  deps: ActionsDeps & { provider?: string },
+  applicationId: string,
+  actionId: string | null,
+  unchanged: boolean,
+  draftId: string | null = null,
+): ActionsResult {
+  return { ok: true, view: getActionsView(deps, applicationId), actionId, draftId, unchanged };
 }
+const ok = okResult;
 
-function failure(
-  deps: ActionsDeps,
+export function failureResult(
+  deps: ActionsDeps & { provider?: string },
   applicationId: string,
   code: FailureCode,
   message: string,
@@ -159,6 +185,7 @@ function failure(
   }
   return { ok: false, code, message, view: current, dueIssue: extra.dueIssue ?? null, dueOptions: extra.dueOptions ?? [] };
 }
+const failure = failureResult;
 
 type DueOutcome = { due: ResolvedDue } | { failed: ActionsResult };
 

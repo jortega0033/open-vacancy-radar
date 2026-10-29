@@ -2240,7 +2240,8 @@ contextBridge.exposeInMainWorld('interviewContext', interviewContextApi);
  * #692. The fifteenth namespace: local due actions on an application. Every result is REBUILT from known
  * fields (parseActionsResult, fail closed). Arguments are ids, the version the page was showing and what
  * the person typed (a due date or time WITH an explicit time zone); never a basis, a provider or a path.
- * Nothing here starts a model session, a request, a notification or a timer.
+ * Only generateDraft can start a model session, and only from the person's explicit button; no call here
+ * sends a message, makes a request, shows a notification or starts a timer.
  */
 const applicationActionsApi: ApplicationActionsBridge = {
   async get(applicationId) {
@@ -2266,6 +2267,24 @@ const applicationActionsApi: ApplicationActionsBridge = {
   },
   async setSuppressed(input) {
     return parseActionsResult(await ipcRenderer.invoke('application-actions:set-suppressed', { ...input }));
+  },
+  async generateDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-generate', { ...input }));
+  },
+  async cancelDraft(applicationId) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-cancel', { applicationId }));
+  },
+  async editDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-edit', { ...input }));
+  },
+  async approveDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-approve', { ...input }));
+  },
+  async discardDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-discard', { ...input }));
+  },
+  async reportDraftSent(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-report-sent', { ...input }));
   },
 };
 

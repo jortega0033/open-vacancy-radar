@@ -25,6 +25,9 @@ const { createWorkspaceDb } = await import('../../../electron/workspace/client.j
 const workspace = await import('../../../electron/workspace/repository.js');
 const { ApplicationDataResetGate } = await import('../../../electron/application-data-reset-gate.js');
 const { createApplicationActionsHandlers } = await import('../../../electron/application-actions-ipc.js');
+const { actionsDeps, modelStub } = await import('../../application-actions-harness.js');
+const schemaTables = await import('../../../electron/workspace/schema.js');
+import type { ModelStub } from '../../application-actions-harness.js';
 const { ApplicationsPage } = await import('../../../src/components/applications/index.js');
 const { installWorkspaceBridge } = await import('../../workspace-bridge.js');
 import type { WorkspaceDb } from '../../../electron/workspace/client.js';
@@ -36,12 +39,14 @@ const gate = new ApplicationDataResetGate();
 const createSession = vi.fn();
 const fetchSpy = vi.fn();
 let channelsSeen: string[];
+let model: ModelStub;
+const draftCount = (): number => db.select().from(schemaTables.applicationFollowUpDrafts).all().length;
 
 const NEXT_STEP = 'Call Priya on Tuesday';
 const NOTES = 'Line one\nLine two  \n';
 
 async function installBridge(): Promise<ApplicationActionsBridge> {
-  const handlers = createApplicationActionsHandlers(async () => ({ db, now: () => new Date(), mutate: (task) => gate.runMutation(task) }));
+  const handlers = createApplicationActionsHandlers(async () => actionsDeps({ db, gate, model }));
   invoke.mockImplementation(async (channel: string, payload: unknown) => {
     channelsSeen.push(channel);
     const handler = handlers[channel];
@@ -99,6 +104,17 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'ovr-follow-ups-ui-'));
   ({ db, close: closeDb } = createWorkspaceDb(dir));
   channelsSeen = [];
+  model = modelStub();
+  model.reply = (prompt) => {
+    const day = /Applied date: (\d{4}-\d{2}-\d{2})/u.exec(prompt)?.[1];
+    return { ok: true, text: `Subject: Checking in
+
+Hello [Recipient],
+
+I wanted to check in on my application.${day ? ` I applied on ${day}.` : ''} Thank you.
+
+[Your name]` };
+  };
   createSession.mockReset();
   fetchSpy.mockReset();
   vi.stubGlobal('fetch', fetchSpy);
@@ -153,7 +169,7 @@ describe('the Applications page shows follow-ups beside, never instead of, the p
 
   it('shows an overdue follow-up in the row and the page banner without changing the application status', async () => {
     const id = row();
-    const handlers = createApplicationActionsHandlers(async () => ({ db, now: () => new Date(), mutate: (task) => gate.runMutation(task) }));
+    const handlers = createApplicationActionsHandlers(async () => actionsDeps({ db, gate }));
     await handlers['application-actions:create']!({
       applicationId: id,
       requestId: 'request-overdue-1',
@@ -251,7 +267,7 @@ describe('the Applications page shows follow-ups beside, never instead of, the p
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit: Follow up: Original' }));
     // The same action is changed elsewhere (another window) while this form is open.
-    const handlers = createApplicationActionsHandlers(async () => ({ db, now: () => new Date(), mutate: (task) => gate.runMutation(task) }));
+    const handlers = createApplicationActionsHandlers(async () => actionsDeps({ db, gate }));
     const current = (await handlers['application-actions:get']!({ applicationId: id })) as { view: { actions: Array<{ id: string; version: number }> } };
     await handlers['application-actions:complete']!({ applicationId: id, actionId: current.view.actions[0]!.id, expectedVersion: 1 });
     fireEvent.change(within(dialog).getByLabelText('Short title'), { target: { value: 'Stale edit' } });
@@ -290,6 +306,135 @@ describe('the Applications page shows follow-ups beside, never instead of, the p
   });
 });
 
+describe('reviewed follow-up drafts as a person meets them', () => {
+  async function openSent(): Promise<{ id: string; dialog: HTMLElement }> {
+    const id = row();
+    renderPage();
+    return { id, dialog: await openDrawer('Fabrikam') };
+  }
+  const press = (dialog: HTMLElement) => fireEvent.click(within(dialog).getAllByRole('button', { name: 'Draft a message' }).at(-1)!);
+
+  it('does nothing on its own: opening, adding a step and editing it never call the model', async () => {
+    const { dialog } = await openSent();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add a follow-up' }));
+    fillWhen(dialog, { date: '2030-11-06', zone: 'UTC' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add follow-up' }));
+    await within(dialog).findByTestId('follow-up-action');
+    expect(model.calls).toHaveLength(0);
+    expect(within(dialog).getByTestId('drafts-empty')).toHaveTextContent('No drafts yet.');
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('writes ONE draft on the press, shows its basis, and keeps "reviewed" and "sent" apart', async () => {
+    const { id, dialog } = await openSent();
+    const before = workspace.listApplications(db, 'all').find((r) => r.id === id)!;
+    press(dialog);
+    const card = await within(dialog).findByTestId('follow-up-draft');
+    expect(model.calls).toHaveLength(1);
+    expect(within(card).getByTestId('draft-review-state')).toHaveTextContent('Not reviewed yet');
+    expect(within(card).getByTestId('draft-send-state')).toHaveTextContent('Not sent');
+    expect(within(card).getByTestId('draft-basis')).toHaveTextContent('No recorded submission package');
+    expect((within(card).getByLabelText('Message') as HTMLTextAreaElement).value).toContain('I applied on 2026-10-12.');
+    expect(within(card).getByText(/This app has not sent this message and cannot/)).toBeInTheDocument();
+
+    // Approving the text is still not sending it.
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve this text' }));
+    await waitFor(() => expect(within(dialog).getByTestId('draft-review-state')).toHaveTextContent('Text approved by you'));
+    expect(within(dialog).getByTestId('draft-send-state')).toHaveTextContent('Not sent');
+    // Copying is not sending either.
+    Object.assign(navigator, { clipboard: { writeText: vi.fn(async () => undefined) } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Copy' }));
+    await waitFor(() => expect(within(dialog).getByText('Copied. Nothing was sent.')).toBeInTheDocument());
+    expect(within(dialog).getByTestId('draft-send-state')).toHaveTextContent('Not sent');
+    expect(workspace.listApplications(db, 'all').find((r) => r.id === id)).toEqual(before);
+  });
+
+  it('records "sent" only after the person confirms they sent it, then freezes the text and leaves the step open', async () => {
+    const { id, dialog } = await openSent();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add a follow-up' }));
+    fireEvent.change(within(dialog).getByLabelText('Short title'), { target: { value: 'Chase' } });
+    fillWhen(dialog, { date: '2030-11-06', zone: 'UTC' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add follow-up' }));
+    await within(dialog).findByTestId('follow-up-action');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Draft a message: Follow up: Chase' }));
+    const card = await within(dialog).findByTestId('follow-up-draft');
+
+    fireEvent.click(within(card).getByRole('button', { name: 'I sent this' }));
+    const record = within(card).getByRole('button', { name: 'Record that I sent it' });
+    expect(record).toBeDisabled();
+    fireEvent.click(within(card).getByLabelText('I sent this message myself'));
+    expect(record).toBeEnabled();
+    fireEvent.change(within(card).getByLabelText('Date sent'), { target: { value: '2026-01-05' } });
+    fireEvent.click(record);
+    await waitFor(() => expect(within(dialog).getByTestId('draft-send-state')).toHaveTextContent('You reported sending this on 2026-01-05'));
+    expect(within(dialog).getByLabelText('Message')).toHaveAttribute('readonly');
+    expect(within(dialog).queryByRole('button', { name: 'Discard' })).toBeNull();
+    // The planned step is still open: marking it done is the person's separate decision.
+    expect(within(dialog).getByRole('button', { name: 'Mark done: Follow up: Chase' })).toBeInTheDocument();
+    expect(workspace.listApplications(db, 'all').find((r) => r.id === id)).toMatchObject({ status: 'applied', nextStep: NEXT_STEP, notes: NOTES });
+  });
+
+  it('editing the text clears approval and needs a save first', async () => {
+    const { dialog } = await openSent();
+    press(dialog);
+    const card = await within(dialog).findByTestId('follow-up-draft');
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve this text' }));
+    await waitFor(() => expect(within(dialog).getByTestId('draft-review-state')).toHaveTextContent('Text approved by you'));
+    fireEvent.change(within(dialog).getByLabelText('Message'), { target: { value: 'My own rewritten message that is long enough to keep.' } });
+    expect(within(dialog).queryByRole('button', { name: 'Approve this text' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(within(dialog).getByTestId('draft-review-state')).toHaveTextContent('Not reviewed yet'));
+    expect(within(dialog).getByText('Edited by you')).toBeInTheDocument();
+    expect(within(dialog).getByTestId('draft-send-state')).toHaveTextContent('Not sent');
+  });
+
+  it('a failed run shows why, saves nothing and keeps the earlier draft; Cancel stops a run honestly', async () => {
+    const { dialog } = await openSent();
+    press(dialog);
+    await within(dialog).findByTestId('follow-up-draft');
+
+    model.reply = () => ({ ok: false, text: '', error: 'the agent session failed' });
+    press(dialog);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Nothing was saved and your earlier drafts are unchanged.');
+    expect(within(dialog).getAllByTestId('follow-up-draft')).toHaveLength(1);
+
+    model.reply = (_prompt, signal) =>
+      new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, text: '', error: 'the session was cancelled' })));
+    press(dialog);
+    const status = await within(dialog).findByText('Writing a draft. This can take a minute.');
+    expect(status).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('The draft was cancelled.'));
+    expect(within(dialog).getAllByTestId('follow-up-draft')).toHaveLength(1);
+    expect(draftCount()).toBe(1);
+  });
+
+  it('closing the drawer while a draft is being written cancels it', async () => {
+    const { dialog } = await openSent();
+    let aborted = false;
+    model.reply = (_prompt, signal) =>
+      new Promise((resolve) =>
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          resolve({ ok: false, text: '', error: 'the session was cancelled' });
+        }),
+      );
+    press(dialog);
+    await waitFor(() => expect(model.calls).toHaveLength(1));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(aborted).toBe(true));
+    expect(draftCount()).toBe(0);
+  });
+
+  it('refuses a draft for an application that is not recorded as sent, and says why', async () => {
+    row({ company: 'Draft Co', status: 'preparing', appliedAt: null });
+    renderPage();
+    const dialog = await openDrawer('Draft Co');
+    expect(within(dialog).getByTestId('draft-unavailable')).toHaveTextContent('Nothing here confirms this application was sent');
+    for (const button of within(dialog).getAllByRole('button', { name: 'Draft a message' })) expect(button).toBeDisabled();
+    expect(model.calls).toHaveLength(0);
+  });
+});
 describe('a build without the bridge keeps the page as it was', () => {
   it('shows no follow-up summary and the drawer says it is unavailable', async () => {
     row();

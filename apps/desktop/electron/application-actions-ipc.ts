@@ -1,6 +1,11 @@
 import {
+  CancelDraftInput,
   CreateActionInput,
+  DraftDecisionInput,
+  EditDraftInput,
+  GenerateDraftInput,
   GetActionsInput,
+  ReportSentInput,
   RescheduleActionInput,
   SetSuppressedInput,
   TransitionActionInput,
@@ -17,8 +22,16 @@ import {
   rescheduleActionRequest,
   setSuppressedRequest,
   updateActionRequest,
-  type ActionsDeps,
 } from './application-actions-service.js';
+import {
+  approveDraftRequest,
+  cancelDraftRequest,
+  discardDraftRequest,
+  editDraftRequest,
+  generateDraftRequest,
+  reportDraftSentRequest,
+  type FollowUpDeps,
+} from './application-follow-up-service.js';
 import { WorkspaceNotFoundError } from './workspace/repository.js';
 
 /**
@@ -61,14 +74,14 @@ function settle(error: unknown): ActionsResult {
   return error instanceof WorkspaceNotFoundError ? GONE : FAILED;
 }
 
-export function createApplicationActionsHandlers(service: () => Promise<ActionsDeps>): Record<string, Handler> {
+export function createApplicationActionsHandlers(service: () => Promise<FollowUpDeps>): Record<string, Handler> {
   return {
     'application-actions:get': async (input) => {
       const parsed = GetActionsInput.safeParse(input);
       if (!parsed.success) return INVALID;
       try {
         const deps = await service();
-        return { ok: true, view: getActionsView(deps, parsed.data.applicationId), actionId: null, unchanged: false };
+        return { ok: true, view: getActionsView(deps, parsed.data.applicationId), actionId: null, draftId: null, unchanged: false };
       } catch (error) {
         return settle(error);
       }
@@ -125,6 +138,61 @@ export function createApplicationActionsHandlers(service: () => Promise<ActionsD
         return settle(error);
       }
     },
+    // The only channel that can reach a model, and only when the person presses "Draft a message".
+    'application-actions:draft-generate': async (input) => {
+      const parsed = GenerateDraftInput.safeParse(input);
+      if (!parsed.success) return INVALID;
+      try {
+        return await generateDraftRequest(await service(), parsed.data);
+      } catch (error) {
+        return settle(error);
+      }
+    },
+    'application-actions:draft-cancel': async (input) => {
+      const parsed = CancelDraftInput.safeParse(input);
+      if (!parsed.success) return INVALID;
+      try {
+        return cancelDraftRequest(await service(), parsed.data.applicationId);
+      } catch (error) {
+        return settle(error);
+      }
+    },
+    'application-actions:draft-edit': async (input) => {
+      const parsed = EditDraftInput.safeParse(input);
+      if (!parsed.success) return INVALID;
+      try {
+        return await editDraftRequest(await service(), parsed.data);
+      } catch (error) {
+        return settle(error);
+      }
+    },
+    'application-actions:draft-approve': async (input) => {
+      const parsed = DraftDecisionInput.safeParse(input);
+      if (!parsed.success) return INVALID;
+      try {
+        return await approveDraftRequest(await service(), parsed.data);
+      } catch (error) {
+        return settle(error);
+      }
+    },
+    'application-actions:draft-discard': async (input) => {
+      const parsed = DraftDecisionInput.safeParse(input);
+      if (!parsed.success) return INVALID;
+      try {
+        return await discardDraftRequest(await service(), parsed.data);
+      } catch (error) {
+        return settle(error);
+      }
+    },
+    'application-actions:draft-report-sent': async (input) => {
+      const parsed = ReportSentInput.safeParse(input);
+      if (!parsed.success) return INVALID;
+      try {
+        return await reportDraftSentRequest(await service(), parsed.data);
+      } catch (error) {
+        return settle(error);
+      }
+    },
     'application-actions:set-suppressed': async (input) => {
       const parsed = SetSuppressedInput.safeParse(input);
       if (!parsed.success) return INVALID;
@@ -146,4 +214,10 @@ export const APPLICATION_ACTIONS_CHANNELS = [
   'application-actions:complete',
   'application-actions:dismiss',
   'application-actions:set-suppressed',
+  'application-actions:draft-generate',
+  'application-actions:draft-cancel',
+  'application-actions:draft-edit',
+  'application-actions:draft-approve',
+  'application-actions:draft-discard',
+  'application-actions:draft-report-sent',
 ] as const;
