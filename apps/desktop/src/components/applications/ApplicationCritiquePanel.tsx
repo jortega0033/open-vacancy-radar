@@ -279,7 +279,7 @@ export function ApplicationCritiquePanel({ attemptId, checkpoint, reloadKey, onR
         {notice && <p className="text-sm text-base-content/80">{notice}</p>}
         {lastRunAfterReview && !notice && (
           <p className={`text-sm ${LAST_RUN_TONE[lastRunAfterReview.outcome] === 'error' ? 'text-error' : 'text-base-content/80'}`}>
-            The last review attempt ({formatDateTime(lastRunAfterReview.at)}): {lastRunAfterReview.detail}
+            The last review ({formatDateTime(lastRunAfterReview.at)}): {lastRunAfterReview.detail}
           </p>
         )}
       </div>
@@ -360,7 +360,7 @@ export function ApplicationCritiquePanel({ attemptId, checkpoint, reloadKey, onR
               <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-base-content/70">
                 {review.refused.map((entry, index) => (
                   <li key={index}>
-                    {entry.summary ? `“${entry.summary}” — ` : ''}
+                    {entry.summary ? `“${entry.summary}”: ` : ''}
                     {entry.reason}.
                   </li>
                 ))}
