@@ -1,9 +1,10 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { jsPDF } from 'jspdf';
+import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CdpDomNode } from '@agent-dock/application-executor';
 import { classifyProviderError } from '../src/provider-error.js';
@@ -84,7 +85,13 @@ const workspace = await import('../electron/workspace/repository.js');
 const { FIXTURE_FORM_URLS, setAutoApplyEnabled } = await import('../electron/application-target-policies.js');
 const pipeline = await import('../electron/application-pipeline.js');
 const { closeAllApplicationReviews } = await import('../electron/application-review-session.js');
-const { fetchWorkableJobDetail, workableJobReferenceFromUrl } = await import('@open-vacancy-radar/vacancy-engine');
+const { fetchWorkableJobDetail, workableJobReferenceFromUrl, createPostingVerifier, CrawlerHttpError } = await import(
+  '@open-vacancy-radar/vacancy-engine'
+);
+const verification = await import('../electron/application-posting-verification.js');
+const engineModule = await import('@open-vacancy-radar/vacancy-engine');
+const store = await import('../electron/workspace/posting-verification-store.js');
+import type { AtsHttpClient, AtsHttpRequestOptions, AtsHttpResponse } from '@open-vacancy-radar/vacancy-engine';
 import type { WorkspaceDb } from '../electron/workspace/client.js';
 import type {
   ApplicationPipelineDeps,
@@ -1862,4 +1869,1719 @@ describe('start refusals', () => {
     expect(result).toMatchObject({ ok: false, reason: 'no_cv_available' });
     expect(queue.enqueued).toEqual([]);
   });
+});
+
+// =================================================================================================
+// #687: verify the live posting before preparing or resuming an application.
+//
+// What is real: `startApplicationAttempt` / `runNextApplicationAttempt` / `resumeApplicationAttempt` /
+// `verifyPreparedApplicationAttempt` / `refreshApplicationFromPosting` themselves, the real SQLite
+// workspace (migration 0034 included), the real store guards, and the real vacancy-engine verifier
+// (probe recognition, authoritative-payload parsing, closure/inability classification, comparison,
+// deadline parsing). What is stood in for: only the network, by an `AtsHttpClient` fixture that
+// answers synthetic Greenhouse / Lever / Workable / Jobgether shapes (and throws the same
+// `CrawlerHttpError` shapes the real SafeHttpClient throws). No live job site is contacted.
+// =================================================================================================
+
+type PostingStep = AtsHttpResponse | Error | (() => Promise<AtsHttpResponse | Error>);
+
+/** Scripted per-URL responses; each URL plays its steps in order and then repeats the last one. */
+class PostingHttp implements AtsHttpClient {
+  readonly calls: Array<{ url: string; headers: Headers }> = [];
+  readonly #routes = new Map<string, PostingStep[]>();
+
+  route(url: string, ...steps: PostingStep[]): this {
+    this.#routes.set(url, steps);
+    return this;
+  }
+
+  async get(url: string, options?: AtsHttpRequestOptions): Promise<AtsHttpResponse> {
+    this.calls.push({ url, headers: new Headers(options?.headers) });
+    const steps = this.#routes.get(url);
+    if (!steps || steps.length === 0) throw new Error(`unexpected request in test: ${url}`);
+    const step = steps.length > 1 ? steps.shift()! : steps[0]!;
+    const resolved = typeof step === 'function' ? await step() : step;
+    if (resolved instanceof Error) throw resolved;
+    return resolved;
+  }
+
+  async postJson(): Promise<AtsHttpResponse> {
+    throw new Error('posting verification never POSTs');
+  }
+}
+
+const GH_URL = 'https://boards.greenhouse.io/northwind/jobs/4012345';
+const GH_API = 'https://boards-api.greenhouse.io/v1/boards/northwind/jobs/4012345';
+const WORKABLE_URL_687 = 'https://apply.workable.com/northwind/j/F587C0434B/';
+const WORKABLE_API_687 = 'https://apply.workable.com/api/v2/accounts/northwind/jobs/F587C0434B';
+
+const SNAPSHOT_687 = [
+  'Northwind Freight is hiring a Logistics Platform Engineer to work on our routing platform.',
+  'Five years of TypeScript experience is required.',
+  'Hybrid in Utrecht.',
+  'Apply by 15 November 2026.',
+].join('\n');
+
+/** The same posting as the authority serves it: markup and entity-escaping instead of plain lines. */
+const LIVE_SAME_687 =
+  '&lt;p&gt;Northwind Freight is hiring a Logistics Platform Engineer to work on our routing platform.&lt;/p&gt;' +
+  '&lt;ul&gt;&lt;li&gt;Five years of TypeScript experience is required.&lt;/li&gt;&lt;/ul&gt;' +
+  '&lt;p&gt;Hybrid in Utrecht.&lt;/p&gt;&lt;p&gt;Apply by 15 November 2026.&lt;/p&gt;';
+const LIVE_CHANGED_687 =
+  '&lt;p&gt;Northwind Freight is hiring a Logistics Platform Engineer to work on our routing platform.&lt;/p&gt;' +
+  '&lt;ul&gt;&lt;li&gt;Eight years of TypeScript experience is required.&lt;/li&gt;&lt;li&gt;Fluent Dutch is required.&lt;/li&gt;&lt;/ul&gt;' +
+  '&lt;p&gt;Onsite in Eindhoven.&lt;/p&gt;&lt;p&gt;Apply by 15 November 2026.&lt;/p&gt;';
+
+function greenhouseOk(content: string, headers: Record<string, string> = {}): AtsHttpResponse {
+  return { status: 200, finalUrl: GH_API, headers, body: JSON.stringify({ id: 4012345, title: 'Engineer', content }) };
+}
+
+function httpError(category: 'timeout' | 'blocked' | 'rate_limited' | 'http_error' | 'network_error', status?: number): Error {
+  const code =
+    category === 'timeout'
+      ? 'request_timeout'
+      : category === 'blocked'
+        ? 'blocked_status'
+        : category === 'rate_limited'
+          ? 'rate_limited_status'
+          : category === 'http_error'
+            ? 'http_status'
+            : 'request_failed';
+  return new CrawlerHttpError({ category, code, url: GH_API, detail: `synthetic ${category}`, ...(status === undefined ? {} : { status }) });
+}
+
+describe('#687 posting verification before preparation and on resumption', () => {
+  const T0 = new Date('2026-09-11T12:00:00.000Z');
+  let clock: Date;
+  let http: PostingHttp;
+
+  beforeEach(() => {
+    clock = new Date(T0);
+    http = new PostingHttp();
+  });
+
+  function verifyingDeps(client: PostingHttp = http): ApplicationPipelineDeps {
+    return {
+      ...deps,
+      now: () => clock,
+      verifyPosting: createPostingVerifier(client, { now: () => clock }).verify,
+    };
+  }
+
+  const posting = (overrides: Partial<PipelineVacancy> = {}): PipelineVacancy => ({
+    ...VACANCY,
+    vacancyKey: 'vac-posting',
+    applyUrl: GH_URL,
+    description: SNAPSHOT_687,
+    descriptionComplete: true,
+    ...overrides,
+  });
+
+  async function startAndRun(vacancy: PipelineVacancy = posting(), runDeps: ApplicationPipelineDeps = verifyingDeps()) {
+    const started = await pipeline.startApplicationAttempt(runDeps, { vacancy });
+    queueApplicationDocumentRenders();
+    const ticked = await pipeline.runNextApplicationAttempt(runDeps);
+    return { attemptId: started.attemptId!, ticked };
+  }
+
+  const MANUAL_HANDOFF = 'apply on the site yourself';
+  const latest = (attemptId: string) => store.getLatestPostingVerification(db, attemptId);
+
+  describe('what a stored snapshot meets at preparation', () => {
+    it('open and unchanged: one authoritative request, snapshot kept, preparation proceeds with all work', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687, { etag: '"v1"' }));
+
+      const { attemptId, ticked } = await startAndRun();
+
+      expect(http.calls.map((call) => call.url)).toEqual([GH_API]);
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.jdSnapshot).toBe(SNAPSHOT_687);
+      const row = latest(attemptId)!;
+      expect(row).toMatchObject({
+        result: 'confirmed_open',
+        outcome: 'open',
+        reason: 'verified_open',
+        source: 'greenhouse',
+        sourceRef: 'boards-api.greenhouse.io/v1/boards/{board}/jobs/{id}',
+        observedAt: T0.toISOString(),
+        contentVersion: 1,
+        etag: '"v1"',
+        deadline: '2026-11-15',
+      });
+      expect(row.deadlineProvenance?.excerpt).toContain('Apply by 15 November 2026');
+      expect(row.baselineHash).toBe(row.contentHash);
+      // Nothing about the displayed state asks the person for anything.
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view).toMatchObject({ status: 'confirmed_open', checkedAt: T0.toISOString(), reused: false, stale: false });
+      expect(view.actions).toEqual(['check_again']);
+    });
+
+    it('explicit closure: no AI work is spent, the warning explains why, and a person can prepare anyway', async () => {
+      http.route(GH_API, httpError('http_error', 404));
+
+      const { attemptId, ticked } = await startAndRun();
+
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(generateCoverLetter).not.toHaveBeenCalled();
+      expect(printToPDF).not.toHaveBeenCalled();
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual([]);
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.checkpointDetail).toBe(verification.POSTING_CLOSED_DETAIL);
+      expect(latest(attemptId)).toMatchObject({ result: 'confirmed_closed', reason: 'not_found', httpStatus: 404 });
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view.status).toBe('confirmed_closed');
+      expect(view.actions).toEqual(['open_posting', 'prepare_anyway', 'check_again']);
+
+      // The person decides: prepare anyway (a false closure is recoverable). No second request.
+      const resumed = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'prepare_anyway' });
+      expect(resumed.ok).toBe(true);
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(http.calls).toHaveLength(1);
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+      expect(latest(attemptId)).toMatchObject({ result: 'confirmed_closed', resolution: 'prepare_anyway' });
+    });
+
+    it('changed requirements are shown BEFORE regeneration; nothing is overwritten until the person refreshes', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_CHANGED_687));
+
+      const { attemptId, ticked } = await startAndRun();
+
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(printToPDF).not.toHaveBeenCalled();
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.checkpointDetail).toBe(verification.POSTING_CHANGED_DETAIL);
+      // The stored snapshot, and so everything derived from it, is untouched.
+      expect(attempt.jdSnapshot).toBe(SNAPSHOT_687);
+      expect(attempt.jdSnapshotHash).toBe(createHash('sha256').update(SNAPSHOT_687).digest('hex'));
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view.status).toBe('materially_changed');
+      expect(view.change?.removed).toContain('Five years of TypeScript experience is required.');
+      expect(view.change?.added).toEqual(
+        expect.arrayContaining(['Eight years of TypeScript experience is required.', 'Fluent Dutch is required.']),
+      );
+      expect(view.actions).toEqual(['refresh', 'keep_current', 'open_posting', 'check_again']);
+      expect(view.changeKind).toBe('requirements');
+      expect(latest(attemptId)).toMatchObject({ result: 'materially_changed', contentVersion: 2 });
+
+      // Refresh goes through the existing restart flow: new text adopted, old package deleted, queued again.
+      const refreshed = await pipeline.refreshApplicationFromPosting(verifyingDeps(), attemptId);
+      expect(refreshed.ok).toBe(true);
+      const requeued = workspace.getApplicationAttempt(db, attemptId);
+      expect(requeued.checkpoint).toBe('queued');
+      expect(requeued.jdSnapshot).toContain('Eight years of TypeScript experience is required.');
+      expect(requeued.jdComplete).toBe(true);
+      expect(requeued.jdSnapshotHash).toBe(createHash('sha256').update(requeued.jdSnapshot).digest('hex'));
+      expect(queue.enqueued.filter((id) => id === attemptId)).toHaveLength(2);
+
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      // The re-run reuses the finding it just acted on: still ONE request in total.
+      expect(http.calls).toHaveLength(1);
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(verification.readPostingVerification({ db, now: () => clock }, attemptId)).toMatchObject({
+        status: 'confirmed_open',
+        resolution: 'refreshed',
+      });
+    });
+
+    it('keep current: the person may continue with what they have; the finding stays on record', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_CHANGED_687));
+      const { attemptId } = await startAndRun();
+
+      const resumed = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'keep_current' });
+      expect(resumed.ok).toBe(true);
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(workspace.getApplicationAttempt(db, attemptId).jdSnapshot).toBe(SNAPSHOT_687);
+      expect(latest(attemptId)).toMatchObject({ result: 'materially_changed', resolution: 'keep_current' });
+      // A stale decision about a finding that is no longer current decides nothing.
+      expect(store.resolvePostingVerification(db, attemptId, 'prepare_anyway')).toBeNull();
+    });
+
+    it.each([
+      ['a timeout', httpError('timeout'), 'timeout'],
+      ['a 403', httpError('blocked', 403), 'denied'],
+      ['a 401', httpError('blocked', 401), 'denied'],
+      ['a rate limit', httpError('rate_limited', 429), 'rate_limited'],
+      ['a server error', httpError('http_error', 503), 'server_error'],
+      ['a network failure', httpError('network_error'), 'network_error'],
+    ] as Array<[string, Error, string]>)('%s is unable to verify, never closure: preparation proceeds on the stored snapshot', async (_label, error, reason) => {
+      http.route(GH_API, error);
+
+      const { attemptId, ticked } = await startAndRun();
+
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      // One bounded request: no retry ladder, no second route around the denial.
+      expect(http.calls).toHaveLength(1);
+      expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', outcome: 'unable', reason, contentHash: null });
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view.status).toBe('unable_to_verify');
+      expect(view.status).not.toBe('confirmed_closed');
+      expect(view.actions).toEqual(['open_posting', 'check_again']);
+    });
+
+    it('a login wall is unable to verify, not closed', async () => {
+      http.route(GH_API, { status: 200, finalUrl: 'https://boards-api.greenhouse.io/users/sign_in', headers: {}, body: '<html>Sign in</html>' });
+      const { attemptId } = await startAndRun();
+      expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', reason: 'login_wall' });
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('a source with no authoritative route costs no request and says so', async () => {
+      const { attemptId, ticked } = await startAndRun(posting({ applyUrl: 'https://careers.example.org/jobs/42' }));
+      expect(http.calls).toHaveLength(0);
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', reason: 'no_authoritative_source', source: 'none' });
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view.source).toBeNull();
+    });
+
+    it('unknown deadline stays unknown: shown as "none stated", never derived from when it was first seen', async () => {
+      const noDeadline = SNAPSHOT_687.replace('\nApply by 15 November 2026.', '');
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687.replace('&lt;p&gt;Apply by 15 November 2026.&lt;/p&gt;', '')));
+
+      const { attemptId } = await startAndRun(posting({ description: noDeadline }));
+
+      const row = latest(attemptId)!;
+      expect(row.result).toBe('confirmed_open');
+      expect(row.deadline).toBeNull();
+      expect(row.deadlineProvenance).toBeNull();
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view).toMatchObject({ deadline: null, noDeadlineStated: true });
+    });
+
+    it('fills a missing description from the verification request itself instead of a second fetch', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687));
+      const fetchMissing = vi.fn(async () => ({ description: 'must not be used', complete: true }));
+
+      const runDeps = { ...verifyingDeps(), fetchMissingJobDescription: fetchMissing };
+      const { attemptId } = await startAndRun(posting({ description: null, descriptionComplete: false }), runDeps);
+
+      expect(fetchMissing).not.toHaveBeenCalled();
+      expect(http.calls).toHaveLength(1);
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.jdSnapshot).toContain('Five years of TypeScript experience is required.');
+      expect(attempt.jdComplete).toBe(true);
+      expect(latest(attemptId)).toMatchObject({ result: 'confirmed_open' });
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      // The filled text is now the snapshot, and the finding is recorded against it: still a fresh,
+      // open check (not "not checked"), so the next prepare or resume costs no second request.
+      expect(verification.readPostingVerification({ db, now: () => clock }, attemptId)).toMatchObject({
+        status: 'confirmed_open',
+        stale: false,
+      });
+      clock = new Date(T0.getTime() + 60 * 60 * 1000);
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(http.calls).toHaveLength(1);
+    });
+
+    it('an incomplete stored description is compared like any other, never silently replaced', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687));
+      const truncated = SNAPSHOT_687.split('\n').slice(0, 2).join('\n');
+      const { attemptId } = await startAndRun(posting({ description: truncated, descriptionComplete: false }));
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.jdSnapshot).toBe(truncated);
+      expect(attempt.jdComplete).toBe(false);
+      expect(latest(attemptId)).toMatchObject({ result: 'materially_changed' });
+      expect(attempt.checkpointDetail).toBe(verification.POSTING_CHANGED_DETAIL);
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+    });
+
+    it('with no verifier configured nothing about preparation changes', async () => {
+      const { attemptId, ticked } = await startAndRun(posting(), deps);
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(latest(attemptId)).toBeNull();
+    });
+  });
+
+  describe('freshness window, cached observation time and validators', () => {
+    it('reuses a young finding with its ORIGINAL observation time and makes no request', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687));
+      const { attemptId } = await startAndRun();
+      expect(http.calls).toHaveLength(1);
+
+      clock = new Date(T0.getTime() + 60 * 60 * 1000); // one hour later
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+
+      expect(http.calls).toHaveLength(1);
+      expect(view).toMatchObject({ status: 'confirmed_open', reused: true, stale: false, checkedAt: T0.toISOString() });
+      expect(latest(attemptId)?.observedAt).toBe(T0.toISOString());
+    });
+
+    it('past the window it asks again, and a changed posting takes a prepared package out of review without deleting it', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), greenhouseOk(LIVE_CHANGED_687));
+      const { attemptId } = await startAndRun();
+      const artifactsBefore = workspace.listApplicationArtifacts(db, attemptId);
+      expect(artifactsBefore.length).toBeGreaterThan(0);
+      // Stand-in for an attempt a person left prepared: ready, with committed answers.
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'ready', checkpointDetail: '' });
+      workspace.recordPreparedApplicationFields(db, attemptId, {
+        generation: 1,
+        fields: [],
+      } as unknown as Parameters<typeof workspace.recordPreparedApplicationFields>[2]);
+
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+
+      expect(http.calls).toHaveLength(2);
+      expect(view).toMatchObject({ status: 'materially_changed', invalidated: true, reused: false, checkedAt: clock.toISOString() });
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.checkpoint).toBe('needs_user');
+      expect(attempt.checkpointDetail).toBe(verification.POSTING_CHANGED_DETAIL);
+      expect(attempt.preparedFields).toBeNull();
+      // The stale package is kept as evidence until the person explicitly refreshes.
+      expect(workspace.listApplicationArtifacts(db, attemptId).map((a) => a.id)).toEqual(artifactsBefore.map((a) => a.id));
+      expect(attempt.jdSnapshot).toBe(SNAPSHOT_687);
+    });
+
+    it('unchanged valid work is reused: a later unchanged check leaves the package, the attempt and the queue alone', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687, { etag: '"v1"' }), greenhouseOk(LIVE_SAME_687, { etag: '"v1"' }));
+      const { attemptId } = await startAndRun();
+      const before = workspace.getApplicationAttempt(db, attemptId);
+      const artifactsBefore = workspace.listApplicationArtifacts(db, attemptId);
+      const enqueuedBefore = queue.enqueued.length;
+
+      clock = new Date(T0.getTime() + 30 * 60 * 60 * 1000);
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+
+      expect(http.calls).toHaveLength(2);
+      expect(view).toMatchObject({ status: 'confirmed_open', invalidated: false, checkedAt: clock.toISOString() });
+      const after = workspace.getApplicationAttempt(db, attemptId);
+      expect({ ...after, updatedAt: '' }).toEqual({ ...before, updatedAt: '' });
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(artifactsBefore);
+      expect(queue.enqueued.length).toBe(enqueuedBefore);
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      // Same state: one row refreshed in place, not a growing log.
+      expect(store.listPostingVerifications(db, attemptId)).toHaveLength(1);
+    });
+
+    it('sends the stored validators for a no-store source and treats 304 as unchanged since the stored read', async () => {
+      http.route(
+        WORKABLE_API_687,
+        {
+          status: 200,
+          finalUrl: WORKABLE_API_687,
+          headers: { etag: '"w1"', 'last-modified': 'Fri, 11 Sep 2026 10:00:00 GMT' },
+          body: JSON.stringify({ description: `<p>${SNAPSHOT_687.replace(/\n/gu, '</p><p>')}</p>` }),
+        },
+        { status: 304, finalUrl: WORKABLE_API_687, headers: {}, body: '' },
+      );
+      const { attemptId } = await startAndRun(posting({ applyUrl: WORKABLE_URL_687 }));
+      expect(latest(attemptId)).toMatchObject({ etag: '"w1"', lastModified: 'Fri, 11 Sep 2026 10:00:00 GMT', result: 'confirmed_open' });
+
+      clock = new Date(T0.getTime() + 26 * 60 * 60 * 1000);
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+
+      expect(http.calls).toHaveLength(2);
+      expect(http.calls[1]!.headers.get('if-none-match')).toBe('"w1"');
+      expect(http.calls[1]!.headers.get('if-modified-since')).toBe('Fri, 11 Sep 2026 10:00:00 GMT');
+      expect(view).toMatchObject({ status: 'confirmed_open', checkedAt: clock.toISOString() });
+      // The origin's 304 is recorded as such (a distinct state), and the content hash carries over.
+      expect(latest(attemptId)).toMatchObject({ reason: 'not_modified', contentHash: expect.any(String) });
+      expect(store.listPostingVerifications(db, attemptId)).toHaveLength(2);
+    });
+
+    it('does not trust inability as fresh proof: a timeout is retried after the short window, not the day', async () => {
+      http.route(GH_API, httpError('timeout'), greenhouseOk(LIVE_SAME_687));
+      const { attemptId } = await startAndRun();
+      expect(latest(attemptId)?.result).toBe('unable_to_verify');
+
+      clock = new Date(T0.getTime() + 5 * 60 * 1000);
+      const tooSoon = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(http.calls).toHaveLength(1);
+      expect(tooSoon).toMatchObject({ status: 'unable_to_verify', reused: true });
+
+      clock = new Date(T0.getTime() + 20 * 60 * 1000);
+      const later = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(http.calls).toHaveLength(2);
+      expect(later).toMatchObject({ status: 'confirmed_open', reused: false });
+    });
+
+    it('"Check again" forces a request even inside the window', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687));
+      const { attemptId } = await startAndRun();
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(http.calls).toHaveLength(2);
+    });
+
+    it('a resumed failed attempt rechecks only when its finding is stale', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687));
+      const { attemptId } = await startAndRun();
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'failed', checkpointDetail: 'synthetic failure' });
+
+      clock = new Date(T0.getTime() + 2 * 60 * 60 * 1000);
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(http.calls).toHaveLength(1); // young finding reused
+
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'failed', checkpointDetail: 'synthetic failure' });
+      clock = new Date(T0.getTime() + 49 * 60 * 60 * 1000);
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(http.calls).toHaveLength(2); // stale finding checked once
+    });
+  });
+
+  // -----------------------------------------------------------------------------------------------
+  // #687 fix round 1 (review-687-1 P1-P5): a prepared package is held, never deleted, by a finding;
+  // Keep / Get ready anyway put it back unchanged; other blockers are never overwritten; a failing
+  // port and an overlapping check cannot stall or rob a preparation run.
+  // -----------------------------------------------------------------------------------------------
+  describe('held packages, decisions and overlapping callers (fix round 1)', () => {
+    const PREPARED_FIELDS = {
+      generation: 1,
+      fields: [{ key: 'why_us', label: 'Why us?', value: 'Because routing matters.' }],
+    } as unknown as Parameters<typeof workspace.recordPreparedApplicationFields>[2];
+
+    /** A prepared package a person left in review: `ready`, with committed answers and staged files. */
+    async function preparedPackage(...steps: PostingStep[]) {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), ...steps);
+      const { attemptId } = await startAndRun();
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'ready', checkpointDetail: 'Ready for your review.' });
+      workspace.recordPreparedApplicationFields(db, attemptId, PREPARED_FIELDS);
+      const before = workspace.getApplicationAttempt(db, attemptId);
+      const artifacts = workspace.listApplicationArtifacts(db, attemptId);
+      expect(artifacts.length).toBeGreaterThan(0);
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      return { attemptId, before, artifacts };
+    }
+
+    it('the pipeline hand-off sentence is the one the hold recognises as a prepared package', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687));
+      const { attemptId } = await startAndRun();
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.checkpointDetail).toContain(verification.PREPARED_HANDOFF_PHRASE);
+      expect(verification.isPreparedPackage(attempt)).toBe(true);
+      expect(verification.isPreparedPackage({ checkpoint: 'needs_user', checkpointDetail: 'Question 7 needs your own answer.' })).toBe(false);
+    });
+
+    it('P1: Keep my application puts a held READY package back exactly as it was, with no AI work', async () => {
+      const { attemptId, before, artifacts } = await preparedPackage(greenhouseOk(LIVE_CHANGED_687));
+      const generations = generateTailoredResume.mock.calls.length;
+      const enqueued = queue.enqueued.length;
+
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(view).toMatchObject({ status: 'materially_changed', invalidated: true, held: true, changeKind: 'requirements' });
+      expect(view.actions).toEqual(['refresh', 'keep_current', 'open_posting', 'check_again']);
+      const held = workspace.getApplicationAttempt(db, attemptId);
+      expect(held).toMatchObject({ checkpoint: 'needs_user', checkpointDetail: verification.POSTING_CHANGED_DETAIL, preparedFields: null });
+      // Out of review, but nothing is deleted.
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(artifacts);
+
+      const kept = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'keep_current' });
+      expect(kept).toMatchObject({ ok: true, continued: 'restored' });
+      const after = workspace.getApplicationAttempt(db, attemptId);
+      expect(after.checkpoint).toBe('ready');
+      expect(after.checkpointDetail).toBe(before.checkpointDetail);
+      expect(after.preparedFields).toEqual(before.preparedFields);
+      expect(after.jdSnapshot).toBe(before.jdSnapshot);
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(artifacts);
+      expect(queue.enqueued.length).toBe(enqueued);
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(generateTailoredResume.mock.calls.length).toBe(generations);
+      expect(latest(attemptId)).toMatchObject({ result: 'materially_changed', resolution: 'keep_current', held: false, hasObservedText: false });
+      // The decision is final for that text: the same change found again does not ask again.
+      clock = new Date(clock.getTime() + 26 * 60 * 60 * 1000);
+      const again = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(again).toMatchObject({ status: 'materially_changed', resolution: 'keep_current', invalidated: false });
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpoint).toBe('ready');
+    });
+
+    it('P2: a closed posting holds a prepared package too; Get ready anyway restores it unchanged', async () => {
+      const { attemptId, before, artifacts } = await preparedPackage(httpError('http_error', 404));
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(view).toMatchObject({ status: 'confirmed_closed', invalidated: true, held: true });
+      expect(view.actions).toEqual(['open_posting', 'prepare_anyway', 'check_again']);
+      expect(workspace.getApplicationAttempt(db, attemptId)).toMatchObject({
+        checkpoint: 'needs_user',
+        checkpointDetail: verification.POSTING_CLOSED_DETAIL,
+      });
+
+      const anyway = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'prepare_anyway' });
+      expect(anyway).toMatchObject({ ok: true, continued: 'restored' });
+      const after = workspace.getApplicationAttempt(db, attemptId);
+      expect({ checkpoint: after.checkpoint, detail: after.checkpointDetail, fields: after.preparedFields }).toEqual({
+        checkpoint: 'ready',
+        detail: before.checkpointDetail,
+        fields: before.preparedFields,
+      });
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(artifacts);
+      expect(verification.readPostingVerification({ db, now: () => clock }, attemptId)).toMatchObject({
+        status: 'confirmed_closed',
+        resolution: 'prepare_anyway',
+        held: false,
+      });
+    });
+
+    it('the manual hand-off (documents ready, apply yourself) is held and restored the same way', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), greenhouseOk(LIVE_CHANGED_687));
+      const { attemptId } = await startAndRun();
+      const before = workspace.getApplicationAttempt(db, attemptId);
+      expect(before.checkpointDetail).toContain(MANUAL_HANDOFF);
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      expect((await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId)).held).toBe(true);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_CHANGED_DETAIL);
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'keep_current' });
+      expect(workspace.getApplicationAttempt(db, attemptId)).toMatchObject({
+        checkpoint: before.checkpoint,
+        checkpointDetail: before.checkpointDetail,
+      });
+    });
+
+    it.each([
+      ['a changed posting', () => greenhouseOk(LIVE_CHANGED_687), 'materially_changed', 'keep_current'],
+      ['a closed posting', () => httpError('http_error', 404), 'confirmed_closed', 'prepare_anyway'],
+    ] as const)('P3: %s never overwrites another blocker, its detail or its prepared answers', async (_label, next, status, decision) => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), next());
+      const { attemptId } = await startAndRun();
+      const blocker = 'Question 7 needs your own answer: Why us?';
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: blocker });
+      workspace.recordPreparedApplicationFields(db, attemptId, PREPARED_FIELDS);
+      const before = workspace.getApplicationAttempt(db, attemptId);
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(view).toMatchObject({ status, invalidated: false, held: false });
+      const after = workspace.getApplicationAttempt(db, attemptId);
+      expect(after.checkpointDetail).toBe(blocker);
+      expect(after.preparedFields).toEqual(before.preparedFields);
+      expect(after.checkpoint).toBe('needs_user');
+
+      // Deciding about the posting records the decision; the person's own blocker still stands.
+      const enqueued = queue.enqueued.length;
+      const decided = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: decision });
+      expect(decided).toMatchObject({ ok: true, continued: 'recorded' });
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(blocker);
+      expect(queue.enqueued.length).toBe(enqueued);
+    });
+
+    it('a failed preparation keeps its failure detail when a check finds the posting changed', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), greenhouseOk(LIVE_CHANGED_687));
+      const { attemptId } = await startAndRun();
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'failed', checkpointDetail: 'synthetic failure' });
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(workspace.getApplicationAttempt(db, attemptId)).toMatchObject({ checkpoint: 'failed', checkpointDetail: 'synthetic failure' });
+    });
+
+    it('Check again that finds the posting open and unchanged puts a held package back by itself', async () => {
+      const { attemptId, before, artifacts } = await preparedPackage(greenhouseOk(LIVE_CHANGED_687), greenhouseOk(LIVE_SAME_687));
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpoint).toBe('needs_user');
+
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(view).toMatchObject({ status: 'confirmed_open', released: true, held: false });
+      const after = workspace.getApplicationAttempt(db, attemptId);
+      expect({ checkpoint: after.checkpoint, detail: after.checkpointDetail, fields: after.preparedFields }).toEqual({
+        checkpoint: 'ready',
+        detail: before.checkpointDetail,
+        fields: before.preparedFields,
+      });
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(artifacts);
+      // The superseded finding no longer keeps the changed text.
+      expect(store.listPostingVerifications(db, attemptId).every((row) => !row.hasObservedText)).toBe(true);
+    });
+
+    it('a later check that cannot reach the posting does not hide the open finding or release the hold', async () => {
+      const { attemptId, before } = await preparedPackage(greenhouseOk(LIVE_CHANGED_687), httpError('timeout'));
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(view).toMatchObject({ status: 'materially_changed', held: true, recheck: { reason: 'timeout' } });
+      expect(view.actions).toContain('keep_current');
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpoint).toBe('needs_user');
+      const kept = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'keep_current' });
+      expect(kept.continued).toBe('restored');
+      expect(workspace.getApplicationAttempt(db, attemptId).preparedFields).toEqual(before.preparedFields);
+    });
+
+    it('only the explicit Refresh replaces a held package, and the adopted text leaves the finding row', async () => {
+      const { attemptId } = await preparedPackage(greenhouseOk(LIVE_CHANGED_687));
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      const generations = generateTailoredResume.mock.calls.length;
+      const refreshed = await pipeline.refreshApplicationFromPosting(verifyingDeps(), attemptId);
+      expect(refreshed).toMatchObject({ ok: true, continued: 'queued' });
+      expect(workspace.getApplicationAttempt(db, attemptId).jdSnapshot).toContain('Eight years of TypeScript experience is required.');
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(generateTailoredResume.mock.calls.length).toBe(generations + 1);
+      const row = store.listPostingVerifications(db, attemptId).find((entry) => entry.resolution === 'refreshed');
+      expect(row).toMatchObject({ hasObservedText: false, held: false, contentVersion: 2 });
+      expect(row?.contentHash).toEqual(expect.any(String));
+    });
+
+    it('a plain resume of a held package prepares again and never restores the old package later', async () => {
+      const { attemptId } = await preparedPackage(greenhouseOk(LIVE_CHANGED_687));
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+      expect(store.listPostingVerifications(db, attemptId).some((row) => row.held)).toBe(false);
+    });
+
+    it('P5: a verifier port that rejects is "could not check" and preparation continues on the stored text', async () => {
+      const failing: ApplicationPipelineDeps = {
+        ...deps,
+        now: () => clock,
+        verifyPosting: async () => {
+          throw new Error('engine database unavailable');
+        },
+      };
+      const { attemptId, ticked } = await startAndRun(posting(), failing);
+      expect(ticked.result?.outcome).toBe('needs_user');
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.checkpoint).toBe('needs_user');
+      expect(attempt.checkpointDetail).toContain(MANUAL_HANDOFF);
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', reason: 'check_failed' });
+      expect(verification.readPostingVerification({ db, now: () => clock }, attemptId).status).toBe('unable_to_verify');
+    });
+
+    it('P4: a renderer check in flight, then Resume: one request, the run proceeds in the same tick and records it', async () => {
+      const held = (() => {
+        let open!: (step: AtsHttpResponse) => void;
+        let markEntered!: () => void;
+        const entered = new Promise<void>((resolve) => {
+          markEntered = resolve;
+        });
+        const pending = new Promise<AtsHttpResponse>((resolve) => {
+          open = resolve;
+        });
+        return { open, entered, step: async () => (markEntered(), pending) };
+      })();
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), held.step);
+      const { attemptId } = await startAndRun();
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: 'synthetic blocker' });
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      const generations = generateTailoredResume.mock.calls.length;
+
+      const manual = pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      await held.entered;
+      const resumed = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+      expect(resumed.ok).toBe(true);
+      queueApplicationDocumentRenders();
+      const ticking = pipeline.runNextApplicationAttempt(verifyingDeps());
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      held.open(greenhouseOk(LIVE_SAME_687));
+      const [ticked] = await Promise.all([ticking, manual]);
+
+      expect(http.calls).toHaveLength(2); // the original preparation + ONE shared live check
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+      expect(generateTailoredResume.mock.calls.length).toBe(generations + 1);
+      expect(latest(attemptId)).toMatchObject({ result: 'confirmed_open', observedAt: clock.toISOString() });
+      expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+    });
+
+    it('a forced check that joins a request in flight gets that live answer, never a stored reuse', async () => {
+      const gateParts = (() => {
+        let open!: (step: AtsHttpResponse) => void;
+        let markEntered!: () => void;
+        const entered = new Promise<void>((resolve) => {
+          markEntered = resolve;
+        });
+        const pending = new Promise<AtsHttpResponse>((resolve) => {
+          open = resolve;
+        });
+        return { open, entered, step: async () => (markEntered(), pending) };
+      })();
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), gateParts.step);
+      const { attemptId } = await startAndRun();
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      const first = verification.verifyAttemptPosting(verifyingDeps(), attemptId, { trigger: 'manual' });
+      await gateParts.entered;
+      const forced = verification.verifyAttemptPosting(verifyingDeps(), attemptId, { trigger: 'manual', force: true });
+      gateParts.open(greenhouseOk(LIVE_SAME_687));
+      const [a, b] = await Promise.all([first, forced]);
+      expect(a).toMatchObject({ kind: 'verified', requested: true, joined: false });
+      expect(b).toMatchObject({ kind: 'verified', requested: true, joined: true });
+      expect(http.calls).toHaveLength(2);
+      expect(store.listPostingVerifications(db, attemptId)).toHaveLength(1);
+    });
+
+    it('a stale result for a caller that lost its claim is fenced: nothing is written for it', async () => {
+      const gateParts = (() => {
+        let open!: (step: AtsHttpResponse) => void;
+        let markEntered!: () => void;
+        const entered = new Promise<void>((resolve) => {
+          markEntered = resolve;
+        });
+        const pending = new Promise<AtsHttpResponse>((resolve) => {
+          open = resolve;
+        });
+        return { open, entered, step: async () => (markEntered(), pending) };
+      })();
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), gateParts.step);
+      const { attemptId } = await startAndRun();
+      const rows = store.listPostingVerifications(db, attemptId);
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      let live = true;
+      const fenced = verification.verifyAttemptPosting(verifyingDeps(), attemptId, { trigger: 'manual', isLive: () => live });
+      await gateParts.entered;
+      live = false;
+      gateParts.open(greenhouseOk(LIVE_CHANGED_687));
+      expect((await fenced).kind).toBe('dropped');
+      expect(store.listPostingVerifications(db, attemptId)).toEqual(rows);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+    });
+  });
+
+  describe('materiality and closure on the real pipeline (fix round 1)', () => {
+    const LONG_SNAPSHOT = [
+      'About us',
+      'Northwind Freight builds routing software for logistics teams across Europe.',
+      'We are a friendly team of forty people.',
+      'Requirements',
+      'Five years of TypeScript experience is required.',
+      'Fluent English.',
+      'Experience with PostgreSQL.',
+      'Responsibilities',
+      'Design and run the routing platform.',
+      'Review code with your colleagues.',
+      'Benefits',
+      'Pension plan.',
+      'Free lunch on Fridays.',
+      'Apply by 15 November 2026.',
+    ].join('\n');
+    const asLive = (text: string) =>
+      text
+        .split('\n')
+        .map((line) => `&lt;p&gt;${line}&lt;/p&gt;`)
+        .join('');
+
+    it.each([
+      ['a company blurb that now says "lead"', LONG_SNAPSHOT.replace('Northwind Freight builds routing', 'Northwind Freight leads the market in routing')],
+      ['"founded 12 years ago" in the blurb', LONG_SNAPSHOT.replace('We are a friendly team of forty people.', 'Founded 12 years ago, we are a friendly team of forty people.')],
+      ['a rooftop office perk', LONG_SNAPSHOT.replace('Free lunch on Fridays.', 'Free lunch on Fridays.\nOur new office has a rooftop terrace.')],
+    ])('%s is not a requirement change: preparation proceeds with all work', async (_label, live) => {
+      http.route(GH_API, greenhouseOk(asLive(live)));
+      const { attemptId, ticked } = await startAndRun(posting({ description: LONG_SNAPSHOT }));
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+      expect(latest(attemptId)?.result).toBe('confirmed_open');
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['visa sponsorship withdrawn', LONG_SNAPSHOT.replace('Fluent English.', 'Fluent English.\nWe cannot offer visa sponsorship.')],
+      ['a new required skill', LONG_SNAPSHOT.replace('Experience with PostgreSQL.', 'Experience with PostgreSQL.\nKubernetes in production.')],
+      ['onsite instead of remote-friendly', LONG_SNAPSHOT.replace('Review code with your colleagues.', 'Review code with your colleagues.\nThis role is onsite in Eindhoven.')],
+    ])('%s stops before regeneration as a requirement change', async (_label, live) => {
+      http.route(GH_API, greenhouseOk(asLive(live)));
+      const { attemptId } = await startAndRun(posting({ description: LONG_SNAPSHOT }));
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_CHANGED_DETAIL);
+      expect(verification.readPostingVerification({ db, now: () => clock }, attemptId).changeKind).toBe('requirements');
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+    });
+
+    it('an open posting whose first line says it is "closed to applicants without EU work authorisation" is open', async () => {
+      const text = `The job is closed to applicants without EU work authorisation. Apply if eligible.\n${LONG_SNAPSHOT}`;
+      http.route(GH_API, greenhouseOk(asLive(text)));
+      const { attemptId } = await startAndRun(posting({ description: text }));
+      expect(latest(attemptId)?.result).toBe('confirmed_open');
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('a check on a source with no authoritative route offers no useless "Check again"', async () => {
+      const { attemptId } = await startAndRun(posting({ applyUrl: 'https://careers.example.org/jobs/42' }));
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view.status).toBe('unable_to_verify');
+      expect(view.actions).toEqual(['open_posting']);
+    });
+  });
+
+  describe('retention and lookup (fix round 1)', () => {
+    it('the table is indexed by attempt and observation time', () => {
+      const indexes = db.all<{ name: string }>(
+        sql`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'application_posting_verifications'`,
+      );
+      expect(indexes.map((index) => index.name)).toContain('application_posting_verifications_attempt_observed_idx');
+    });
+
+    it('flapping "could not check" reasons stay bounded and decisions are never pruned', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_CHANGED_687));
+      const { attemptId } = await startAndRun();
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'keep_current' });
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: 'synthetic blocker' });
+      const reasons = ['timeout', 'denied', 'server_error'];
+      for (let i = 0; i < 30; i += 1) {
+        store.recordPostingVerification(db, {
+          attemptId,
+          allowedCheckpoints: ['needs_user'],
+          observedAt: new Date(T0.getTime() + (i + 1) * 60_000),
+          source: 'greenhouse',
+          sourceRef: 'x',
+          outcome: 'unable',
+          result: 'unable_to_verify',
+          reason: reasons[i % reasons.length]!,
+          httpStatus: null,
+          contentHash: null,
+          baselineHash: latest(attemptId)!.baselineHash,
+          deadline: null,
+          deadlineProvenance: null,
+          etag: null,
+          lastModified: null,
+          changeSummary: null,
+          observedText: null,
+        });
+      }
+      const rows = store.listPostingVerifications(db, attemptId);
+      expect(rows.length).toBeLessThanOrEqual(store.POSTING_VERIFICATION_ROWS_PER_ATTEMPT + 1);
+      expect(rows.some((row) => row.resolution === 'keep_current')).toBe(true);
+      expect(rows.filter((row) => row.hasObservedText)).toEqual([]);
+    });
+  });
+
+  describe('a preparation that stopped on a finding which a later answer settled (fix round 2)', () => {
+    const DAY_25H = 25 * 60 * 60 * 1000;
+    const TYPO_OF_SNAPSHOT = LIVE_SAME_687.replace('routing platform', 'routing platfrom');
+
+    /** Prepare against `stop`: needs_user at the finding sentence, nothing generated, nothing held. */
+    async function stoppedAt(stop: AtsHttpResponse | Error, ...later: PostingStep[]) {
+      http.route(GH_API, stop, ...later);
+      const { attemptId, ticked } = await startAndRun();
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(ticked.result?.outcome).toBe('needs_user');
+      expect(verification.isPostingFindingDetail(attempt.checkpointDetail)).toBe(true);
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual([]);
+      expect(store.listPostingVerifications(db, attemptId).some((row) => row.held)).toBe(false);
+      clock = new Date(T0.getTime() + DAY_25H);
+      return { attemptId, stopped: attempt };
+    }
+
+    const view = (attemptId: string) => verification.readPostingVerification({ db, now: () => clock }, attemptId);
+
+    it.each([
+      ['closed (404)', () => httpError('http_error', 404), 'dialog open (not forced)', false],
+      ['closed (404)', () => httpError('http_error', 404), 'Check again (forced)', true],
+      ['changed requirements', () => greenhouseOk(LIVE_CHANGED_687), 'dialog open (not forced)', false],
+      ['changed requirements', () => greenhouseOk(LIVE_CHANGED_687), 'Check again (forced)', true],
+    ] as const)(
+      'stopped on %s, then %s finds it open and unchanged: the person can prepare it, once',
+      async (_stop, stop, _path, force) => {
+        const { attemptId, stopped } = await stoppedAt(stop(), greenhouseOk(LIVE_SAME_687));
+        const enqueued = queue.enqueued.length;
+
+        const checked = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, force ? { force: true } : {});
+        expect(checked).toMatchObject({ status: 'confirmed_open', held: false, invalidated: false });
+        expect(checked.actions).toEqual(['prepare_now', 'check_again']);
+
+        // The stale sentence is gone, and nothing else about the application moved or started.
+        const waiting = workspace.getApplicationAttempt(db, attemptId);
+        expect(waiting).toMatchObject({
+          checkpoint: 'needs_user',
+          checkpointDetail: verification.POSTING_REOPENED_DETAIL,
+          jdSnapshot: stopped.jdSnapshot,
+          preparedFields: null,
+        });
+        expect(verification.isPostingFindingDetail(waiting.checkpointDetail)).toBe(false);
+        expect(verification.isPreparedPackage(waiting)).toBe(false);
+        expect(view(attemptId)).toMatchObject({ status: 'confirmed_open', actions: ['prepare_now', 'check_again'] });
+        expect(queue.enqueued.length).toBe(enqueued);
+        expect(generateTailoredResume).not.toHaveBeenCalled();
+        expect(store.listPostingVerifications(db, attemptId).every((row) => !row.hasObservedText)).toBe(true);
+
+        // The actual action ("Prepare now" = the ordinary resume, no decision to record).
+        const resumed = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+        expect(resumed).toMatchObject({ ok: true, continued: 'queued' });
+        expect(queue.enqueued.length).toBe(enqueued + 1);
+        queueApplicationDocumentRenders();
+        await pipeline.runNextApplicationAttempt(verifyingDeps());
+        expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+        expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+        expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+        // The open answer was still fresh for the preparation run: no extra request beyond the two checks.
+        expect(http.calls).toHaveLength(2);
+      },
+    );
+
+    it('a posting that reverted to the prepared text, or only gained a typo fix, is open too', async () => {
+      const { attemptId } = await stoppedAt(greenhouseOk(LIVE_CHANGED_687), greenhouseOk(TYPO_OF_SNAPSHOT));
+      const checked = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(checked).toMatchObject({ status: 'confirmed_open' });
+      expect(checked.actions).toEqual(['prepare_now', 'check_again']);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_REOPENED_DETAIL);
+      expect((await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId)).continued).toBe('queued');
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('still closed or still changed: the finding stands, no prepare action, and a stray resume stops again with no AI work', async () => {
+      const { attemptId, stopped } = await stoppedAt(httpError('http_error', 404), httpError('http_error', 404));
+      const view1 = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(view1).toMatchObject({ status: 'confirmed_closed', resolution: null });
+      expect(view1.actions).toEqual(['open_posting', 'prepare_anyway', 'check_again']);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(stopped.checkpointDetail);
+
+      // Even a resume that bypasses the UI cannot prepare against an undecided closure.
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+      clock = new Date(clock.getTime() + 60_000);
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(workspace.getApplicationAttempt(db, attemptId)).toMatchObject({
+        checkpoint: 'needs_user',
+        checkpointDetail: verification.POSTING_CLOSED_DETAIL,
+      });
+    });
+
+    it('a check that cannot reach the posting never releases the finding', async () => {
+      const { attemptId, stopped } = await stoppedAt(httpError('http_error', 404), httpError('timeout'));
+      const checked = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(checked).toMatchObject({ status: 'confirmed_closed', recheck: { reason: 'timeout' } });
+      expect(checked.actions).not.toContain('prepare_now');
+      expect(checked.actions).toContain('prepare_anyway');
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(stopped.checkpointDetail);
+    });
+
+    it('an earlier open answer still stands after a later "could not check": the person is not stranded', async () => {
+      const { attemptId } = await stoppedAt(httpError('http_error', 404), greenhouseOk(LIVE_SAME_687), httpError('timeout'));
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      clock = new Date(clock.getTime() + 60 * 60 * 1000);
+      const later = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(later).toMatchObject({ status: 'unable_to_verify', reason: 'timeout' });
+      expect(later.actions).toEqual(['prepare_now', 'open_posting', 'check_again']);
+      expect((await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId)).continued).toBe('queued');
+    });
+
+    it('open, then closed again: the sentence follows the newest finding and the person must decide again', async () => {
+      const { attemptId } = await stoppedAt(httpError('http_error', 404), greenhouseOk(LIVE_SAME_687), httpError('http_error', 404));
+      await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_REOPENED_DETAIL);
+      clock = new Date(clock.getTime() + 60_000);
+      const again = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(again.actions).toEqual(['open_posting', 'prepare_anyway', 'check_again']);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_CLOSED_DETAIL);
+
+      // And that decision still prepares exactly once.
+      const decided = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'prepare_anyway' });
+      expect(decided).toMatchObject({ ok: true, continued: 'queued' });
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('closed, then changed: the stored sentence describes the changed finding and Keep still prepares once', async () => {
+      const { attemptId } = await stoppedAt(httpError('http_error', 404), greenhouseOk(LIVE_CHANGED_687));
+      const changed = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(changed.actions).toEqual(['refresh', 'keep_current', 'open_posting', 'check_again']);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_CHANGED_DETAIL);
+      const kept = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'keep_current' });
+      expect(kept).toMatchObject({ ok: true, continued: 'queued' });
+    });
+
+    it('a stop that the person already resolved is unaffected: Get ready anyway prepares and a later open check changes nothing', async () => {
+      const { attemptId } = await stoppedAt(httpError('http_error', 404), greenhouseOk(LIVE_SAME_687));
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'prepare_anyway' });
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      const prepared = workspace.getApplicationAttempt(db, attemptId);
+      expect(prepared.checkpointDetail).toContain(MANUAL_HANDOFF);
+      const generations = generateTailoredResume.mock.calls.length;
+
+      clock = new Date(clock.getTime() + DAY_25H);
+      const later = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(later.actions).toEqual(['check_again']);
+      expect(workspace.getApplicationAttempt(db, attemptId)).toMatchObject({
+        checkpoint: prepared.checkpoint,
+        checkpointDetail: prepared.checkpointDetail,
+      });
+      expect(generateTailoredResume.mock.calls.length).toBe(generations);
+    });
+
+    it('another blocker is never rewritten or offered a prepare action by an open answer', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687), greenhouseOk(LIVE_SAME_687));
+      const { attemptId } = await startAndRun();
+      const blocker = 'Question 7 needs your own answer: Why us?';
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: blocker });
+      clock = new Date(T0.getTime() + DAY_25H);
+      const checked = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      expect(checked.actions).toEqual(['check_again']);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(blocker);
+    });
+  });
+
+  describe('historical submitted packages are immutable', () => {
+    it.each(['submitted', 'user_reported'] as const)('a %s attempt is never consulted, changed or refreshed', async (checkpoint) => {
+      http.route(GH_API, greenhouseOk(LIVE_CHANGED_687));
+      const { attemptId } = await startAndRun(posting(), verifyingDeps(new PostingHttp().route(GH_API, greenhouseOk(LIVE_SAME_687))));
+      const sentAt = '2026-09-11T12:30:00.000Z';
+      workspace.updateApplicationAttempt(db, attemptId, {
+        checkpoint,
+        checkpointDetail: 'sent',
+        submittedAt: sentAt,
+      });
+      const frozen = workspace.getApplicationAttempt(db, attemptId);
+      const frozenArtifacts = workspace.listApplicationArtifacts(db, attemptId);
+      const rowsBefore = store.listPostingVerifications(db, attemptId);
+
+      // The live posting changed AND closed since; the package that was sent does not move.
+      clock = new Date(T0.getTime() + 72 * 60 * 60 * 1000);
+      const view = await pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      const refreshed = await pipeline.refreshApplicationFromPosting(verifyingDeps(), attemptId);
+      const resumed = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+
+      expect(http.calls).toHaveLength(0);
+      expect(view).toMatchObject({ status: 'not_applicable', actions: [], checkedAt: null });
+      expect(refreshed.ok).toBe(false);
+      expect(resumed.ok).toBe(false);
+      expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(frozen);
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(frozenArtifacts);
+      expect(store.listPostingVerifications(db, attemptId)).toEqual(rowsBefore);
+      // And the store refuses to write for it even if a late check somehow landed.
+      expect(
+        store.recordPostingVerification(db, {
+          attemptId,
+          allowedCheckpoints: [checkpoint],
+          observedAt: clock,
+          source: 'greenhouse',
+          sourceRef: 'x',
+          outcome: 'closed',
+          result: 'confirmed_closed',
+          reason: 'not_found',
+          httpStatus: 404,
+          contentHash: null,
+          baselineHash: '',
+          deadline: null,
+          deadlineProvenance: null,
+          etag: null,
+          lastModified: null,
+          changeSummary: null,
+          observedText: null,
+        }).written,
+      ).toBe('refused');
+    });
+
+    it('a pending change cannot be adopted once the attempt was sent', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_CHANGED_687));
+      const { attemptId } = await startAndRun();
+      expect(latest(attemptId)?.result).toBe('materially_changed');
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'user_reported', checkpointDetail: 'I applied myself' });
+      const frozen = workspace.getApplicationAttempt(db, attemptId);
+
+      expect(store.adoptPostingChange(db, attemptId)).toEqual({ ok: false, reason: 'historical' });
+      expect((await pipeline.refreshApplicationFromPosting(verifyingDeps(), attemptId)).ok).toBe(false);
+      expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(frozen);
+    });
+  });
+
+  describe('interruption, cancellation and overlapping requests', () => {
+    function gate(): { open: (step: AtsHttpResponse | Error) => void; step: PostingStep; entered: Promise<void> } {
+      let open!: (step: AtsHttpResponse | Error) => void;
+      let markEntered!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        markEntered = resolve;
+      });
+      const pending = new Promise<AtsHttpResponse | Error>((resolve) => {
+        open = resolve;
+      });
+      return {
+        open,
+        entered,
+        step: async () => {
+          markEntered();
+          return pending;
+        },
+      };
+    }
+
+    it('a check cancelled while in flight leaves no half-written state and spends no AI work', async () => {
+      const held = gate();
+      http.route(GH_API, held.step);
+      const runDeps = verifyingDeps();
+      const started = await pipeline.startApplicationAttempt(runDeps, { vacancy: posting() });
+      const attemptId = started.attemptId!;
+      queueApplicationDocumentRenders();
+
+      const ticking = pipeline.runNextApplicationAttempt(runDeps);
+      await held.entered;
+      queue.cancel(attemptId); // the person cancels while the posting is being checked
+      held.open(greenhouseOk(LIVE_CHANGED_687));
+      const ticked = await ticking;
+
+      expect(ticked.result?.outcome).toBe('halted');
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(printToPDF).not.toHaveBeenCalled();
+      expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual([]);
+      const attempt = workspace.getApplicationAttempt(db, attemptId);
+      expect(attempt.jdSnapshot).toBe(SNAPSHOT_687);
+      expect(store.listPostingVerifications(db, attemptId).length).toBeLessThanOrEqual(1);
+    });
+
+    it('an attempt that moved on during the request records nothing and is not touched', async () => {
+      const held = gate();
+      http.route(GH_API, held.step);
+      const runDeps = verifyingDeps();
+      const started = await pipeline.startApplicationAttempt(runDeps, { vacancy: posting() });
+      const attemptId = started.attemptId!;
+
+      const ticking = pipeline.runNextApplicationAttempt(runDeps);
+      await held.entered;
+      // Reset/skipped from elsewhere while the request is out.
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'skipped', checkpointDetail: 'skipped by the person' });
+      held.open(greenhouseOk(LIVE_CHANGED_687));
+      const ticked = await ticking;
+
+      expect(ticked.result?.outcome).toBe('halted');
+      expect(store.listPostingVerifications(db, attemptId)).toEqual([]);
+      expect(workspace.getApplicationAttempt(db, attemptId)).toMatchObject({
+        checkpoint: 'skipped',
+        checkpointDetail: 'skipped by the person',
+        jdSnapshot: SNAPSHOT_687,
+      });
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+    });
+
+    it('an abandoned (fenced-out) preparation writes nothing when its slow check finally answers', async () => {
+      const { log, stopped } = watchForAbandonedRun();
+      const held = gate();
+      http.route(GH_API, held.step);
+      const runDeps = { ...verifyingDeps(), abandonPreparationAfterMs: 20, log };
+      const started = await pipeline.startApplicationAttempt(runDeps, { vacancy: posting() });
+      const attemptId = started.attemptId!;
+      queueApplicationDocumentRenders();
+
+      const ticked = await pipeline.runNextApplicationAttempt(runDeps);
+      expect(ticked.abandoned).toBe(true);
+      const frozen = workspace.getApplicationAttempt(db, attemptId);
+
+      held.open(greenhouseOk(LIVE_CHANGED_687));
+      await abandonedRunSettled(stopped);
+
+      expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(frozen);
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(printToPDF).not.toHaveBeenCalled();
+    });
+
+    it('overlapping checks for one attempt share ONE request and ONE stored row', async () => {
+      http.route(GH_API, greenhouseOk(LIVE_SAME_687));
+      const { attemptId } = await startAndRun();
+      const held = gate();
+      http.route(GH_API, held.step);
+      clock = new Date(T0.getTime() + 40 * 60 * 60 * 1000);
+
+      const first = pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      await held.entered;
+      const second = pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId, { force: true });
+      const third = pipeline.verifyPreparedApplicationAttempt(verifyingDeps(), attemptId);
+      held.open(greenhouseOk(LIVE_SAME_687));
+      const views = await Promise.all([first, second, third]);
+
+      expect(http.calls).toHaveLength(2); // the original preparation + exactly one shared recheck
+      expect(new Set(views.map((view) => view.checkedAt)).size).toBe(1);
+      expect(store.listPostingVerifications(db, attemptId)).toHaveLength(1);
+    });
+
+    it('a prepare run and a renderer-triggered check overlap without a second request or a second attempt', async () => {
+      const held = gate();
+      http.route(GH_API, held.step);
+      const runDeps = verifyingDeps();
+      const started = await pipeline.startApplicationAttempt(runDeps, { vacancy: posting() });
+      const attemptId = started.attemptId!;
+      queueApplicationDocumentRenders();
+
+      const ticking = pipeline.runNextApplicationAttempt(runDeps);
+      await held.entered;
+      const overlapping = pipeline.verifyPreparedApplicationAttempt(runDeps, attemptId, { force: true });
+      held.open(greenhouseOk(LIVE_SAME_687));
+      await Promise.all([ticking, overlapping]);
+
+      expect(http.calls).toHaveLength(1);
+      expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+      expect(store.listPostingVerifications(db, attemptId)).toHaveLength(1);
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    });
+
+    it('never overwrites a newer observation with an older one', () => {
+      const started = workspace.createApplicationAttempt(db, {
+        vacancyKey: 'vac-order',
+        canonicalUrl: GH_URL,
+        company: 'Northwind Freight',
+        role: 'Engineer',
+        sourceCvId: workspace.listCvDocuments(db)[0]!.id,
+        sourceCvContentHash: 'x',
+        jdSnapshot: SNAPSHOT_687,
+        jdSnapshotHash: 'y',
+        jdComplete: true,
+        workflowVersion: pipeline.APPLICATION_PIPELINE_WORKFLOW_VERSION,
+        checkpoint: 'needs_user',
+      });
+      const base = {
+        attemptId: started.id,
+        allowedCheckpoints: ['needs_user'] as const,
+        source: 'greenhouse',
+        sourceRef: 'x',
+        reason: 'verified_open',
+        httpStatus: 200,
+        contentHash: 'h1',
+        baselineHash: 'h1',
+        deadline: null,
+        deadlineProvenance: null,
+        etag: null,
+        lastModified: null,
+        changeSummary: null,
+        observedText: null,
+        outcome: 'open' as const,
+        result: 'confirmed_open' as const,
+      };
+      const newer = store.recordPostingVerification(db, { ...base, observedAt: new Date(T0.getTime() + 1000) });
+      const older = store.recordPostingVerification(db, { ...base, reason: 'not_modified', observedAt: T0 });
+      expect(newer.written).toBe('inserted');
+      expect(older.written).toBe('dropped_older');
+      expect(store.listPostingVerifications(db, started.id)).toHaveLength(1);
+      expect(store.getLatestPostingVerification(db, started.id)?.reason).toBe('verified_open');
+    });
+  });
+});
+
+// -------------------------------------------------------------------------------------------------
+// #687 measurement (fix round 1): one fixed synthetic fixture set, the SAME real pipeline run twice --
+// once as it behaved before (no verifier: a stored snapshot goes straight to preparation) and once
+// with the live posting check. The "after" network is the PRODUCTION composition
+// (`createDatabaseBackedAtsHttpClient`: real SafeHttpClient, real DatabaseHttpCache on a migrated
+// in-memory engine database) with only `fetch` and DNS stubbed, so PHYSICAL requests (every redirect
+// hop, counted at the client's own `onNetworkRequest`) are reported separately from LOGICAL client calls.
+//
+// The corpus deliberately contains hard negatives: open postings whose text sounds closed, ordinary
+// employer-copy edits that are not requirement changes, a 600-line full rewrite, an adversarial
+// deadline whitespace run, a same-origin redirect loop and an account-less Workable short link.
+// "Truth" is the fixture AUTHOR's label; nothing here says how often real postings close, fail to
+// answer or change. Latency is the in-process cost on this machine with an instant fixture network
+// (timeouts use a 50 ms deadline instead of the production 20 s); real round trips are not measured.
+// -------------------------------------------------------------------------------------------------
+describe('#687 measurement on a fixed synthetic fixture set', () => {
+  type Kind =
+    | 'unchanged'
+    | 'closed'
+    | 'changed'
+    | 'timeout'
+    | 'denied'
+    | 'login_wall'
+    | 'unsupported'
+    | 'closure_like_open'
+    | 'employer_copy_edit'
+    | 'requirement_edit'
+    | 'full_rewrite_600_lines'
+    | 'adversarial_deadline_text'
+    | 'redirect_loop'
+    | 'workable_short_link'
+    | 'markup_bomb';
+  interface Lead {
+    n: number;
+    kind: Kind;
+    truth: 'open' | 'closed';
+    source: 'greenhouse' | 'lever' | 'workable' | 'jobgether' | 'unsupported';
+    url: string;
+    api: string | null;
+    snapshot: string;
+    live: string;
+    /** Expected to stop before AI work because the posting materially changed. */
+    expectChangeStop: boolean;
+  }
+
+  const textFor = (n: number, changed: boolean) =>
+    [
+      `Lead ${n}: build and run the routing platform for customer ${n}.`,
+      changed ? 'Eight years of experience is required.' : 'Five years of experience is required.',
+      ...(changed ? ['Fluent Dutch is required.'] : []),
+      changed ? 'Onsite in Eindhoven.' : 'Hybrid in Utrecht.',
+    ].join('\n');
+  const longText = (n: number) =>
+    [
+      'About us',
+      `Customer ${n} builds routing software for logistics teams across Europe.`,
+      'We are a friendly team of forty people.',
+      'Requirements',
+      'Five years of TypeScript experience is required.',
+      'Fluent English.',
+      'Experience with PostgreSQL.',
+      'Responsibilities',
+      'Design and run the routing platform.',
+      'Review code with your colleagues.',
+      'Benefits',
+      'Pension plan.',
+      'Free lunch on Fridays.',
+    ].join('\n');
+  const CLOSURE_LIKE = [
+    'The job is closed to applicants without EU work authorisation. Apply if eligible.',
+    'Hiring is closed in the US for this role but open in Canada.',
+    'Applications for this role are closed to external candidates until Friday.',
+    'This position has been filled internally in the past; we are hiring again.',
+    'Applications for the 2025 intake are closed; this 2026 role is open.',
+    'We are no longer accepting applications from recruitment agencies.',
+  ];
+  const EMPLOYER_EDITS: Array<(text: string) => string> = [
+    (text) => text.replace('builds routing software', 'leads the market in routing software'),
+    (text) => text.replace('We are a friendly team of forty people.', 'Founded 12 years ago, we are a friendly team of forty people.'),
+    (text) => text.replace('Free lunch on Fridays.', 'Free lunch on Fridays.\nOur new office has a rooftop terrace.'),
+  ];
+  const REQUIREMENT_EDITS: Array<(text: string) => string> = [
+    (text) => text.replace('Fluent English.', 'Fluent English.\nWe cannot offer visa sponsorship.'),
+    (text) => text.replace('Experience with PostgreSQL.', 'Experience with PostgreSQL.\nKubernetes in production.'),
+    (text) => text.replace('Review code with your colleagues.', 'Review code with your colleagues.\nThis role is onsite in Eindhoven.'),
+  ];
+  const rewriteLine = (prefix: string, i: number) =>
+    `${prefix} paragraph id${i} describing the platform, the team rituals and the way we ship software every week.`;
+  const html = (text: string) => `<p>${text.replace(/\n/gu, '</p><p>')}</p>`;
+  const escaped = (text: string) => html(text).replace(/</gu, '&lt;').replace(/>/gu, '&gt;');
+
+  function lead(n: number, source: Lead['source'], kind: Kind, truth: Lead['truth'], variant = 0): Lead {
+    const code = `F5${n.toString(16).padStart(8, '0')}`.toUpperCase();
+    const hex24 = `6a61448${n.toString(16).padStart(17, '0')}`;
+    const uuid = `0a1b2c3d-1111-4222-8333-${n.toString(16).padStart(12, '0')}`;
+    let snapshot = textFor(n, false);
+    let live = textFor(n, kind === 'changed');
+    let expectChangeStop = kind === 'changed';
+    if (kind === 'closure_like_open') {
+      snapshot = `${CLOSURE_LIKE[variant]!}\n${longText(n)}`;
+      live = snapshot;
+    } else if (kind === 'employer_copy_edit') {
+      snapshot = longText(n);
+      live = EMPLOYER_EDITS[variant]!(snapshot);
+    } else if (kind === 'requirement_edit') {
+      snapshot = longText(n);
+      live = REQUIREMENT_EDITS[variant]!(snapshot);
+      expectChangeStop = true;
+    } else if (kind === 'full_rewrite_600_lines') {
+      snapshot = Array.from({ length: 600 }, (_, i) => rewriteLine('Original', i)).join('\n');
+      live = Array.from({ length: 600 }, (_, i) => rewriteLine('Rewritten', i)).join('\n');
+      expectChangeStop = true;
+    } else if (kind === 'adversarial_deadline_text') {
+      snapshot = `${textFor(n, false)}\ndeadline${' \n'.repeat(20_000)}`;
+      live = snapshot;
+    }
+    const base = { n, kind, truth, snapshot, live, expectChangeStop };
+    switch (source) {
+      case 'greenhouse':
+        return { ...base, source, url: `https://boards.greenhouse.io/b${n}/jobs/${4_012_300 + n}`, api: `https://boards-api.greenhouse.io/v1/boards/b${n}/jobs/${4_012_300 + n}` };
+      case 'lever':
+        return { ...base, source, url: `https://jobs.lever.co/s${n}/${uuid}`, api: `https://api.lever.co/v0/postings/s${n}/${uuid}` };
+      case 'workable':
+        return kind === 'workable_short_link'
+          ? { ...base, source, url: `https://apply.workable.com/j/${code}`, api: `https://apply.workable.com/api/v2/accounts/a${n}/jobs/${code}` }
+          : { ...base, source, url: `https://apply.workable.com/a${n}/j/${code}/`, api: `https://apply.workable.com/api/v2/accounts/a${n}/jobs/${code}` };
+      case 'jobgether':
+        return { ...base, source, url: `https://jobgether.com/offer/${hex24}-role-${n}`, api: `https://jobgether.com/astroapi/offer/${hex24}.json` };
+      case 'unsupported':
+        return { ...base, source, url: `https://careers.example.org/jobs/${n}`, api: null };
+    }
+  }
+
+  const LEADS: Lead[] = [
+    lead(1, 'greenhouse', 'unchanged', 'open'), lead(2, 'greenhouse', 'unchanged', 'open'), lead(3, 'greenhouse', 'unchanged', 'open'),
+    lead(4, 'lever', 'unchanged', 'open'), lead(5, 'lever', 'unchanged', 'open'),
+    lead(6, 'workable', 'unchanged', 'open'), lead(7, 'workable', 'unchanged', 'open'),
+    lead(8, 'jobgether', 'unchanged', 'open'),
+    lead(9, 'greenhouse', 'closed', 'closed'), lead(10, 'lever', 'closed', 'closed'), lead(11, 'jobgether', 'closed', 'closed'),
+    lead(12, 'greenhouse', 'changed', 'open'), lead(13, 'lever', 'changed', 'open'), lead(14, 'workable', 'changed', 'open'),
+    lead(15, 'greenhouse', 'timeout', 'open'), lead(16, 'workable', 'timeout', 'open'),
+    lead(17, 'lever', 'denied', 'open'), lead(18, 'jobgether', 'denied', 'open'),
+    lead(19, 'greenhouse', 'login_wall', 'closed'),
+    lead(20, 'unsupported', 'unsupported', 'closed'),
+    // Hard negatives and stress cases added in fix round 1.
+    ...CLOSURE_LIKE.map((_text, i) => lead(21 + i, i % 2 === 0 ? 'greenhouse' : 'lever', 'closure_like_open', 'open', i)),
+    ...EMPLOYER_EDITS.map((_edit, i) => lead(27 + i, 'greenhouse', 'employer_copy_edit', 'open', i)),
+    ...REQUIREMENT_EDITS.map((_edit, i) => lead(30 + i, 'greenhouse', 'requirement_edit', 'open', i)),
+    lead(33, 'greenhouse', 'full_rewrite_600_lines', 'open'),
+    // Lever's plain-text field: the deadline parser sees the whitespace run directly.
+    lead(34, 'lever', 'adversarial_deadline_text', 'open'),
+    lead(35, 'greenhouse', 'redirect_loop', 'open'),
+    lead(36, 'workable', 'workable_short_link', 'open'),
+    // 20,000 HTML elements: over the parsing budget, so "could not check", not parsed on the main process.
+    lead(37, 'greenhouse', 'markup_bomb', 'open'),
+  ];
+
+  function payloadFor(entry: Lead): string {
+    const live = entry.live;
+    if (entry.kind === 'markup_bomb') {
+      return JSON.stringify({ content: escaped(Array.from({ length: 20_000 }, (_, i) => `item ${i}`).join('\n')) });
+    }
+    return JSON.stringify(
+      entry.source === 'greenhouse' ? { content: escaped(live) }
+      : entry.source === 'lever' ? { descriptionPlain: live }
+      : entry.source === 'workable' ? { description: html(live) }
+      : { offer: { description: html(live) } },
+    );
+  }
+
+  const LOGIN_TARGET = 'https://boards-api.greenhouse.io/users/sign_in';
+
+  /** The stubbed `fetch` behind the real client: one synthetic answer per URL, nothing else reachable. */
+  function fixtureFetch(fetched: string[]): typeof fetch {
+    const byApi = new Map(LEADS.filter((entry) => entry.api !== null).map((entry) => [entry.api!, entry]));
+    return (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      fetched.push(url);
+      const short = LEADS.find((entry) => entry.kind === 'workable_short_link')!;
+      if (url === short.url) {
+        return new Response(null, { status: 301, headers: { location: `https://apply.workable.com/a${short.n}/j/${short.url.split('/').pop()}` } });
+      }
+      if (url.startsWith(`https://apply.workable.com/a${short.n}/j/`)) return new Response('<html>shell</html>');
+      if (url === LOGIN_TARGET) return new Response('<html>Sign in</html>');
+      const bare = url.split('?')[0]!;
+      const entry = byApi.get(bare);
+      if (!entry) throw new Error(`unexpected request in measurement: ${url}`);
+      switch (entry.kind) {
+        case 'closed':
+          return new Response('{"error":"not found"}', { status: 404 });
+        case 'denied':
+          return new Response('', { status: 403 });
+        case 'login_wall':
+          return new Response(null, { status: 302, headers: { location: LOGIN_TARGET } });
+        case 'redirect_loop': {
+          const hop = Number(new URL(url).searchParams.get('hop') ?? '0');
+          return new Response(null, { status: 302, headers: { location: `${bare}?hop=${hop + 1}` } });
+        }
+        case 'timeout':
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          });
+        default:
+          return new Response(payloadFor(entry), { headers: { etag: `"e${entry.n}"`, 'content-type': 'application/json' } });
+      }
+    }) as typeof fetch;
+  }
+
+  async function runPhase(database: WorkspaceDb, phaseDeps: ApplicationPipelineDeps) {
+    const reached: number[] = [];
+    const blocked: Record<string, number[]> = { closed: [], changed: [] };
+    const attemptIds = new Map<number, string>();
+    const overheadMs = new Map<number, number>();
+    for (const entry of LEADS) {
+      const before = generateTailoredResume.mock.calls.length;
+      const started = await pipeline.startApplicationAttempt(phaseDeps, {
+        vacancy: { ...VACANCY, vacancyKey: `lead-${entry.n}`, company: `Customer ${entry.n}`, applyUrl: entry.url, description: entry.snapshot, descriptionComplete: true },
+      });
+      attemptIds.set(entry.n, started.attemptId!);
+      queueApplicationDocumentRenders();
+      const t0 = performance.now();
+      await pipeline.runNextApplicationAttempt(phaseDeps);
+      overheadMs.set(entry.n, performance.now() - t0);
+      if (generateTailoredResume.mock.calls.length > before) reached.push(entry.n);
+      else {
+        const detail = workspace.getApplicationAttempt(database, started.attemptId!).checkpointDetail;
+        if (detail === verification.POSTING_CLOSED_DETAIL) blocked.closed!.push(entry.n);
+        if (detail === verification.POSTING_CHANGED_DETAIL) blocked.changed!.push(entry.n);
+      }
+    }
+    return { reached, blocked, attemptIds, overheadMs };
+  }
+
+  const median = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return Number(sorted[Math.floor(sorted.length / 2)]!.toFixed(1));
+  };
+
+  it('measures closed leads reaching preparation, false closure, physical/logical requests and in-process cost', async () => {
+    // BEFORE: this build's previous behaviour (no verifier configured), its own empty workspace.
+    const beforeDir = mkdtempSync(join(tmpdir(), 'ovr-687-before-'));
+    const beforeDb = createWorkspaceDb(beforeDir);
+    seedCv(beforeDb.db);
+    const beforeRun = await runPhase(beforeDb.db, { ...makeDeps(beforeDb.db), storageRoot: join(beforeDir, 'artifacts') });
+    beforeDb.close();
+    rmSync(beforeDir, { recursive: true, force: true });
+
+    // AFTER: the same fixed leads through the same pipeline with the live check over the production
+    // HTTP composition (real SafeHttpClient + DatabaseHttpCache), fetch and DNS stubbed.
+    generateTailoredResume.mockClear();
+    const engineDir = mkdtempSync(join(tmpdir(), 'ovr-687-engine-'));
+    const engine = engineModule.createDatabaseClient(':memory:');
+    await engineModule.migrateDatabase(engine.db, join(process.cwd(), '..', '..', 'packages', 'vacancy-engine', 'drizzle'));
+    const config = engineModule.loadConfig({ DATABASE_PATH: 'vacancy-engine.db', HTTP_CACHE_DIR: '.cache/http' }, engineDir);
+    // `physical` is the client's own per-fetch telemetry (redacted URLs); `fetched` is the same fetches
+    // seen by the stub with full URLs, used only to attribute them to leads.
+    const physical: string[] = [];
+    const fetched: string[] = [];
+    const atsClient = engineModule.createDatabaseBackedAtsHttpClient(config, engine.db, {
+      fetchFn: fixtureFetch(fetched),
+      resolver: async () => [{ address: '93.184.216.34', family: 4 }],
+      sleep: async () => undefined,
+      random: () => 0.5,
+      onNetworkRequest: (url: string) => physical.push(url),
+    });
+    const logical: string[] = [];
+    const countingClient: AtsHttpClient = {
+      get: (url, options) => {
+        logical.push(url);
+        return atsClient.get(url, options);
+      },
+      postJson: (url, body, options) => atsClient.postJson(url, body, options),
+    };
+    const clock = new Date('2026-09-11T12:00:00.000Z');
+    const afterDeps: ApplicationPipelineDeps = {
+      ...deps,
+      now: () => clock,
+      verifyPosting: createPostingVerifier(countingClient, { now: () => clock, timeoutMs: 50 }).verify,
+    };
+    const physicalBefore = physical.length;
+    const afterRun = await runPhase(db, afterDeps);
+    const afterPhysical = physical.length - physicalBefore;
+    const afterLogical = logical.length;
+    // Attribution for the preparation pass only (later passes are reported separately below).
+    const fetchedDuringPreparation = [...fetched];
+
+    const rows = LEADS.map((entry) => ({ entry, row: store.getLatestPostingVerification(db, afterRun.attemptIds.get(entry.n)!) }));
+    const truthOpen = LEADS.filter((entry) => entry.truth === 'open');
+    const falseClosure = rows.filter(({ entry, row }) => entry.truth === 'open' && row?.result === 'confirmed_closed').map(({ entry }) => entry.n);
+    const trueClosuresDetected = rows.filter(({ entry, row }) => entry.truth === 'closed' && row?.result === 'confirmed_closed').map(({ entry }) => entry.n);
+    const closedTruth = LEADS.filter((entry) => entry.truth === 'closed').map((entry) => entry.n);
+    const closedReachedAfter = closedTruth.filter((n) => afterRun.reached.includes(n));
+    const unableRows = rows.filter(({ row }) => row?.result === 'unable_to_verify').map(({ entry }) => entry.n);
+    const changeStopExpected = LEADS.filter((entry) => entry.expectChangeStop).map((entry) => entry.n);
+    const falseChangeStops = afterRun.blocked.changed!.filter((n) => !changeStopExpected.includes(n));
+    const missedChangeStops = changeStopExpected.filter((n) => !afterRun.blocked.changed!.includes(n));
+    const perLeadPhysical = (entry: Lead) =>
+      fetchedDuringPreparation.filter(
+        (url) =>
+          (entry.api !== null && url.startsWith(entry.api)) ||
+          url.startsWith(entry.url) ||
+          (entry.kind === 'workable_short_link' && url.startsWith(`https://apply.workable.com/a${entry.n}/j/`)) ||
+          (entry.kind === 'login_wall' && url === LOGIN_TARGET),
+      ).length;
+    expect(fetchedDuringPreparation).toHaveLength(afterPhysical);
+
+    // Second pass 10 minutes later: every finding is young (an "unable" one retries after 15 min).
+    const physicalBeforeReuse = physical.length;
+    const reuseClock = new Date(clock.getTime() + 10 * 60 * 1000);
+    for (const entry of LEADS) {
+      await pipeline.verifyPreparedApplicationAttempt({ ...afterDeps, now: () => reuseClock }, afterRun.attemptIds.get(entry.n)!);
+    }
+    const physicalOnReuse = physical.length - physicalBeforeReuse;
+    // Third pass an hour after the first: only "could not check" leads with a route are asked again.
+    const physicalBeforeLater = physical.length;
+    const logicalBeforeLater = logical.length;
+    const laterClock = new Date(clock.getTime() + 60 * 60 * 1000);
+    for (const entry of LEADS) {
+      await pipeline.verifyPreparedApplicationAttempt({ ...afterDeps, now: () => laterClock }, afterRun.attemptIds.get(entry.n)!);
+    }
+    const physicalOneHourLater = physical.length - physicalBeforeLater;
+    const logicalOneHourLater = logical.length - logicalBeforeLater;
+    engine.close();
+    rmSync(engineDir, { recursive: true, force: true });
+
+    const overheadFor = (run: typeof afterRun, kinds: Kind[]) =>
+      LEADS.filter((entry) => kinds.includes(entry.kind)).map((entry) => run.overheadMs.get(entry.n)!);
+    const ordinaryKinds: Kind[] = ['unchanged', 'closed', 'changed', 'denied', 'login_wall', 'unsupported', 'closure_like_open', 'employer_copy_edit', 'requirement_edit', 'redirect_loop', 'workable_short_link'];
+    const leadOf = (kind: Kind) => LEADS.find((entry) => entry.kind === kind)!;
+    const measurement = {
+      issue: 687,
+      round: 'fix-1',
+      kind: "SYNTHETIC fixed-fixture measurement; truth labels are the fixture author's, not human labels of real postings",
+      network: 'production composition createDatabaseBackedAtsHttpClient (real SafeHttpClient + DatabaseHttpCache on a migrated in-memory engine DB); fetch and DNS stubbed; no live site contacted',
+      fixtureCount: LEADS.length,
+      fixtureMix: Object.fromEntries(
+        [...new Set(LEADS.map((entry) => entry.kind))].map((kind) => [kind, LEADS.filter((entry) => entry.kind === kind).length]),
+      ),
+      truthClosedLeads: closedTruth.length,
+      truthOpenLeads: truthOpen.length,
+      before: {
+        behaviour: 'no live check: a stored snapshot goes straight to preparation',
+        leadsReachingPreparation: beforeRun.reached.length,
+        closedLeadsReachingPreparation: closedTruth.filter((n) => beforeRun.reached.includes(n)).length,
+        requests: { logical: 0, physical: 0 },
+      },
+      after: {
+        behaviour: 'one bounded authoritative check at preparation',
+        leadsReachingPreparation: afterRun.reached.length,
+        closedLeadsReachingPreparation: closedReachedAfter.length,
+        closedLeadsReachingPreparationIds: closedReachedAfter,
+        closedLeadsStoppedBeforePreparation: trueClosuresDetected.length,
+        falseClosureCount: falseClosure.length,
+        falseClosureDenominator: truthOpen.length,
+        falseClosureDenominatorIncludesClosureLikeOpenPostings: LEADS.filter((entry) => entry.kind === 'closure_like_open').length,
+        changedLeadsStoppedBeforeRegeneration: afterRun.blocked.changed!.length,
+        changeStopsExpected: changeStopExpected.length,
+        changeStopsMissed: missedChangeStops,
+        falseChangeStops,
+        employerCopyEditsReachingPreparation: LEADS.filter((entry) => entry.kind === 'employer_copy_edit' && afterRun.reached.includes(entry.n)).length,
+        unableToVerifyLeads: unableRows.length,
+        unableToVerifyLeadsThatStillReachedPreparation: unableRows.filter((n) => afterRun.reached.includes(n)).length,
+        requests: {
+          logical: afterLogical,
+          physical: afterPhysical,
+          logicalPerLead: Number((afterLogical / LEADS.length).toFixed(2)),
+          physicalPerLead: Number((afterPhysical / LEADS.length).toFixed(2)),
+          maxPhysicalForOneLead: Math.max(...LEADS.map(perLeadPhysical)),
+          envelope: engineModule.POSTING_REQUEST_ENVELOPE,
+        },
+        leadsWithNoRequest: LEADS.filter((entry) => perLeadPhysical(entry) === 0).map((entry) => entry.n),
+        physicalRequestsOnSecondPassTenMinutesLater: physicalOnReuse,
+        requestsOnThirdPassOneHourLater: { logical: logicalOneHourLater, physical: physicalOneHourLater },
+        requestsOneHourLaterAreOnly: 'could-not-check leads that have an authoritative route (retried after 15 minutes)',
+      },
+      inProcessCostMs: {
+        note: 'in-process wall clock for start+prepare of one lead on this machine, instant fixture network; timeouts use a 50 ms deadline (production: 20 s, enforced by abort); real network round trips are NOT measured and no real-world latency improvement is claimed',
+        beforeMedianOrdinary: median(overheadFor(beforeRun, ordinaryKinds)),
+        afterMedianOrdinary: median(overheadFor(afterRun, ordinaryKinds)),
+        afterTimeoutLeads: overheadFor(afterRun, ['timeout']).map((ms) => Number(ms.toFixed(1))),
+        afterFullRewrite600Lines: Number(afterRun.overheadMs.get(33)!.toFixed(1)),
+        beforeFullRewrite600Lines: Number(beforeRun.overheadMs.get(33)!.toFixed(1)),
+        afterAdversarialDeadlineText: Number(afterRun.overheadMs.get(34)!.toFixed(1)),
+        beforeAdversarialDeadlineText: Number(beforeRun.overheadMs.get(34)!.toFixed(1)),
+        afterMarkupBomb20000Elements: Number(afterRun.overheadMs.get(37)!.toFixed(1)),
+        beforeMarkupBomb20000Elements: Number(beforeRun.overheadMs.get(37)!.toFixed(1)),
+        markupBudget: engineModule.POSTING_MARKUP_BUDGET,
+        productionDeadlineMs: engineModule.POSTING_VERIFY_TIMEOUT_MS,
+      },
+      perLead: rows.map(({ entry, row }) => ({
+        lead: entry.n,
+        source: entry.source,
+        kind: entry.kind,
+        truth: entry.truth,
+        result: row?.result ?? null,
+        reason: row?.reason ?? null,
+        changeKind: row?.changeSummary?.kind ?? null,
+        physicalRequests: perLeadPhysical(entry),
+        reachedPreparationBefore: beforeRun.reached.includes(entry.n),
+        reachedPreparationAfter: afterRun.reached.includes(entry.n),
+      })),
+      limits: [
+        'Fixture network answers instantly and the labels are written by the fixture author; no real posting, human label, closure rate, latency or quality is measured or implied.',
+        'A closed posting hidden behind a login wall, a denial or an unsupported source is NOT detected: it is reported "could not check" and preparation proceeds (leads 19 and 20 here).',
+        'Only Greenhouse, Lever, Workable and Jobgether links have an authoritative single-posting route; every other source costs no request and is "could not check".',
+        'Closure is taken only from 404/410, Workable /oops, or a payload that is nothing but an unqualified closure notice; closure-like prose inside an open posting is open (leads 21-26).',
+        'Requirement detection is a token/section heuristic; a requirement change worded without any requirement signal, outside a requirements section, and under a fifth of the posting is not flagged.',
+        'Physical counts are the real client\'s network fetches (each redirect hop counts); the per-lead count attributes requests by URL prefix.',
+      ],
+    };
+
+    // The headline guarantees, asserted rather than only written down.
+    expect(beforeRun.reached).toHaveLength(LEADS.length);
+    expect(measurement.before.closedLeadsReachingPreparation).toBe(5);
+    expect(falseClosure).toEqual([]);
+    expect(trueClosuresDetected).toEqual([9, 10, 11]);
+    expect(closedReachedAfter).toEqual([19, 20]);
+    expect(missedChangeStops).toEqual([]);
+    expect(falseChangeStops).toEqual([]);
+    expect(measurement.after.employerCopyEditsReachingPreparation).toBe(EMPLOYER_EDITS.length);
+    expect(perLeadPhysical(LEADS.find((entry) => entry.kind === 'redirect_loop')!)).toBe(engineModule.POSTING_REQUEST_ENVELOPE.standard.physical);
+    expect(perLeadPhysical(LEADS.find((entry) => entry.kind === 'workable_short_link')!)).toBeLessThanOrEqual(
+      engineModule.POSTING_REQUEST_ENVELOPE.workableShortLink.physical,
+    );
+    expect(measurement.after.requests.maxPhysicalForOneLead).toBeLessThanOrEqual(engineModule.POSTING_REQUEST_ENVELOPE.workableShortLink.physical);
+    expect(physicalOnReuse).toBe(0);
+    expect(rows.find(({ entry }) => entry.kind === 'login_wall')?.row?.reason).toBe('login_wall');
+    expect(rows.find(({ entry }) => entry.kind === 'markup_bomb')?.row?.reason).toBe('content_too_large');
+    expect(rows.find(({ entry }) => entry.kind === 'workable_short_link')?.row?.result).toBe('confirmed_open');
+    expect(perLeadPhysical(leadOf('workable_short_link'))).toBe(3); // short link 301 + account shell + detail route
+    expect(perLeadPhysical(leadOf('login_wall'))).toBe(2);
+    expect(measurement.inProcessCostMs.afterFullRewrite600Lines).toBeLessThan(2_000);
+    expect(measurement.inProcessCostMs.afterAdversarialDeadlineText).toBeLessThan(2_000);
+    expect(measurement.inProcessCostMs.afterMarkupBomb20000Elements).toBeLessThan(2_000);
+
+    const target = process.env.OVR_687_MEASUREMENT_PATH;
+    if (target) writeFileSync(target, `${JSON.stringify(measurement, null, 2)}\n`);
+  }, 120_000);
 });

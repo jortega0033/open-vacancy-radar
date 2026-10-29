@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { Dialog } from '../shell/Dialog.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
+import { PostingVerificationNotice } from './PostingVerificationNotice.js';
 
 export interface ApplicationAttemptDrawerProps {
   attempt: ApplicationAttemptRecord;
@@ -115,6 +116,18 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
               {recoveryError}
             </div>
           )}
+
+          <PostingVerificationNotice
+            attemptId={attempt.id}
+            postingUrl={attempt.canonicalUrl}
+            reloadKey={attempt.updatedAt}
+            disabled={recovering}
+            onDone={(kind) => {
+              if (kind === 'refreshed' || kind === 'resumed') onChanged?.('retried');
+              // Keep / Get ready anyway put a held package back exactly as it was: it is reviewable again.
+              else if (kind === 'restored') onChanged?.('returned');
+            }}
+          />
 
           {attempt.checkpointDetail && (
             <details className="rounded-box border border-base-300 bg-base-200 p-3 text-sm">

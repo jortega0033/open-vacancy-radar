@@ -239,6 +239,20 @@
       "when": 1791296828961,
       "tag": "0033_sticky_carmella_unuscione",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1793248492302,
+      "tag": "0034_large_pyro",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1793252742764,
+      "tag": "0035_nebulous_satana",
+      "breakpoints": true
     }
   ]
 }

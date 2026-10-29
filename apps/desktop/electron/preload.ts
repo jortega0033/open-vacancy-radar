@@ -45,6 +45,8 @@ import type {
 } from './application-executor-types.js';
 import type {
   ApplicationPipelineBridge,
+  PostingVerificationAction,
+  PostingVerificationView,
   RestartApplicationTailoringResult,
   StartApplicationFromVacancyResult,
   StartApplicationAttemptRefusal,
@@ -1936,8 +1938,28 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
       'original',
     );
   },
-  async resume(attemptId): Promise<RestartApplicationTailoringResult> {
-    const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', { attemptId });
+  async resume(attemptId, options): Promise<RestartApplicationTailoringResult> {
+    const resolution =
+      options?.resolution === 'prepare_anyway' || options?.resolution === 'keep_current' ? options.resolution : undefined;
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', {
+      attemptId,
+      ...(resolution === undefined ? {} : { resolution }),
+    });
+    const source = asRecord(result);
+    const mode = source ? optionalString(source, 'tailoringMode') : undefined;
+    return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
+  },
+  async postingVerification(attemptId): Promise<PostingVerificationView> {
+    return parsePostingVerificationView(await ipcRenderer.invoke('application-pipeline:posting-verification', { attemptId }), attemptId);
+  },
+  async verifyPosting(attemptId, options): Promise<PostingVerificationView> {
+    return parsePostingVerificationView(
+      await ipcRenderer.invoke('application-pipeline:verify-posting', { attemptId, force: options?.force === true }),
+      attemptId,
+    );
+  },
+  async refreshFromPosting(attemptId): Promise<RestartApplicationTailoringResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:refresh-from-posting', { attemptId });
     const source = asRecord(result);
     const mode = source ? optionalString(source, 'tailoringMode') : undefined;
     return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
@@ -1949,6 +1971,87 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
   },
 };
 
+const POSTING_STATUSES: readonly PostingVerificationView['status'][] = [
+  'not_checked',
+  'confirmed_open',
+  'confirmed_closed',
+  'materially_changed',
+  'unable_to_verify',
+  'not_applicable',
+];
+const POSTING_ACTIONS: readonly PostingVerificationAction[] = [
+  'check_again',
+  'open_posting',
+  'refresh',
+  'keep_current',
+  'prepare_anyway',
+];
+const POSTING_RESOLUTIONS = ['refreshed', 'prepare_anyway', 'keep_current'] as const;
+const POSTING_CHANGE_KINDS = ['requirements', 'text'] as const;
+
+function boundedLines(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((line): line is string => typeof line === 'string').slice(0, 6).map((line) => line.slice(0, 240))
+    : [];
+}
+
+/**
+ * Rebuilt field by field, fail closed: an unknown status becomes `not_checked` (never "open" or
+ * "closed"), unknown actions are dropped, and only the documented fields cross the bridge.
+ */
+function parsePostingVerificationView(result: unknown, requestedAttemptId: string): PostingVerificationView {
+  const source = asRecord(result);
+  const status = source ? optionalString(source, 'status') : undefined;
+  const known = (POSTING_STATUSES as readonly string[]).includes(status ?? '') && source?.attemptId === requestedAttemptId;
+  const deadline = source ? asRecord(source.deadline) : undefined;
+  const change = source ? asRecord(source.change) : undefined;
+  const resolution = source ? optionalString(source, 'resolution') : undefined;
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const checkedAt = source ? optionalString(source, 'checkedAt') : undefined;
+  const changeKind = source ? optionalString(source, 'changeKind') : undefined;
+  const recheck = source ? asRecord(source.recheck) : undefined;
+  const recheckAt = recheck ? optionalString(recheck, 'checkedAt') : undefined;
+  const recheckReason = recheck ? optionalString(recheck, 'reason') : undefined;
+  const actions = Array.isArray(source?.actions)
+    ? (source.actions as unknown[]).filter((action): action is PostingVerificationAction =>
+        (POSTING_ACTIONS as readonly unknown[]).includes(action),
+      )
+    : [];
+  return {
+    attemptId: requestedAttemptId,
+    status: known ? (status as PostingVerificationView['status']) : 'not_checked',
+    checkedAt: known && checkedAt !== undefined && !Number.isNaN(Date.parse(checkedAt)) ? checkedAt : null,
+    source: known && source ? (optionalString(source, 'source') ?? null) : null,
+    sourceRef: known && source ? (optionalString(source, 'sourceRef') ?? null) : null,
+    reason: known && reason !== undefined ? (reason as PostingVerificationView['reason']) : null,
+    httpStatus: known && typeof source?.httpStatus === 'number' ? source.httpStatus : null,
+    contentVersion: known && typeof source?.contentVersion === 'number' ? source.contentVersion : null,
+    deadline:
+      known && deadline && typeof deadline.date === 'string' && typeof deadline.excerpt === 'string'
+        ? { date: deadline.date, excerpt: deadline.excerpt.slice(0, 160) }
+        : null,
+    noDeadlineStated: known && source?.noDeadlineStated === true,
+    change: known && change ? { added: boundedLines(change.added), removed: boundedLines(change.removed) } : null,
+    changeKind:
+      known && change && (POSTING_CHANGE_KINDS as readonly unknown[]).includes(changeKind)
+        ? (changeKind as PostingVerificationView['changeKind'])
+        : null,
+    resolution: (POSTING_RESOLUTIONS as readonly unknown[]).includes(resolution)
+      ? (resolution as PostingVerificationView['resolution'])
+      : null,
+    reused: known && source?.reused === true,
+    stale: !known || source?.stale !== false,
+    invalidated: known && source?.invalidated === true,
+    held: known && source?.held === true,
+    released: known && source?.released === true,
+    recheck:
+      known && recheckAt !== undefined && !Number.isNaN(Date.parse(recheckAt)) && recheckReason !== undefined
+        ? { checkedAt: recheckAt, reason: recheckReason as PostingVerificationView['reason'] & string }
+        : null,
+    actions: known ? actions : ['check_again'],
+  };
+}
+
 function parseRestartTailoringResult(
   result: unknown,
   requestedAttemptId: string,
@@ -1958,11 +2061,13 @@ function parseRestartTailoringResult(
   const attemptId = source ? optionalString(source, 'attemptId') : undefined;
   const mode = source ? optionalString(source, 'tailoringMode') : undefined;
   const detail = source ? optionalString(source, 'detail') : undefined;
+  const continued = source ? optionalString(source, 'continued') : undefined;
   return {
     ok: source?.ok === true && attemptId === requestedAttemptId && mode === requestedMode,
     attemptId: attemptId ?? requestedAttemptId,
     tailoringMode: mode === 'original' ? 'original' : 'ai',
     ...(detail === undefined ? {} : { detail }),
+    ...(continued === 'queued' || continued === 'restored' || continued === 'recorded' ? { continued } : {}),
   };
 }
 

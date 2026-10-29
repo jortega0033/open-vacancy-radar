@@ -24,6 +24,7 @@ function toAtsResponse(response: SafeHttpResponse): AtsHttpResponse {
     finalUrl: response.url,
     headers: response.headers,
     body: response.text(),
+    ...(response.revalidated ? { revalidated: true } : {}),
   };
 }
 

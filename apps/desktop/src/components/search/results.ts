@@ -785,8 +785,9 @@ export function formatDate(value: string | null): string {
 }
 
 /**
- * A somewhat arbitrary but stated threshold: nothing here re-checks whether a posting is still
- * live before the user applies to it, so a row past this age is flagged, not hidden.
+ * A somewhat arbitrary but stated threshold: a row past this age is flagged, not hidden. The search
+ * itself never rechecks a posting; getting ready to apply does, once, when the application is
+ * prepared or resumed (#687, `docs/posting-verification.md`), and the result shows on the application.
  */
 const STALE_POSTING_THRESHOLD_DAYS = 30;
 

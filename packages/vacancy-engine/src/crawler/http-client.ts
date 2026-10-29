@@ -99,6 +99,21 @@ export type SafeHttpGetOptions = {
    * honestly and early beats a retry ladder that outlives their patience.
    */
   maxRetries?: number;
+  /**
+   * Caller cancellation (#687). Aborting it stops this request wherever it is: before DNS, while it
+   * waits for a scheduler slot (a still-queued task then makes no fetch when it reaches the front and
+   * frees its slot at once), in flight (the fetch itself is aborted), or between retries. The caller
+   * sees the signal's reason. Like `admitNetworkRequest` it can only stop work, never widen policy.
+   */
+  signal?: AbortSignal;
+  /** May only reduce the constructor redirect limit, never raise it (0 = follow no redirect). */
+  maxRedirects?: number;
+};
+
+/** Per-request limits threaded through the retry/redirect/hop loop. */
+type RequestControls = {
+  signal?: AbortSignal | undefined;
+  maxRedirects: number;
 };
 
 export type SafeHttpStreamGetOptions = SafeHttpGetOptions & {
@@ -417,6 +432,10 @@ function admissionAbortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new Error('The request was cancelled by its admission policy.');
 }
 
+function callerAbortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('The request was cancelled by its caller.', 'AbortError');
+}
+
 export class SafeHttpClient {
   readonly #scheduler: RequestScheduler;
   readonly #cache: HttpCache | undefined;
@@ -635,11 +654,19 @@ export class SafeHttpClient {
     if (maxRetries > this.#maxRetries) {
       throw new RangeError(`maxRetries must not exceed ${this.#maxRetries}`);
     }
+    const maxRedirects = positiveInteger(options.maxRedirects ?? this.#maxRedirects, 'maxRedirects', true);
+    if (maxRedirects > this.#maxRedirects) {
+      throw new RangeError(`maxRedirects must not exceed ${this.#maxRedirects}`);
+    }
+    const controls: RequestControls = { signal: options.signal, maxRedirects };
+    if (options.signal?.aborted) throw callerAbortReason(options.signal);
     const preflightDeadline = this.#now() + this.#timeoutMs;
     const requestedUrl = await this.#awaitBeforeDeadline(
       validatePublicHttpUrl(input, this.#resolver),
       preflightDeadline,
       input,
+      this.#timeoutMs,
+      options.signal,
     );
     const allowedOrigins = normalizeAllowedOrigins(options.allowedOrigins);
     if (allowedOrigins !== null && !allowedOrigins.has(requestedUrl.origin)) {
@@ -666,6 +693,7 @@ export class SafeHttpClient {
         readBoundedBody(response, this.#maxResponseBytes, requestUrl, controller),
       this.#timeoutMs,
       maxRetries,
+      controls,
     );
 
     if (result.kind === 'not_modified') {
@@ -709,6 +737,7 @@ export class SafeHttpClient {
     readBody: ResponseBodyReader<TBody>,
     requestTimeoutMs: number,
     maxRetries = this.#maxRetries,
+    controls: RequestControls = { maxRedirects: this.#maxRedirects },
   ): Promise<Exclude<AttemptResult<TBody>, { kind: 'retryable' } | { kind: 'error' }>> {
     for (let retry = 0; retry <= maxRetries; retry += 1) {
       const initialUrl =
@@ -719,6 +748,7 @@ export class SafeHttpClient {
               Math.min(deadline, this.#now() + requestTimeoutMs),
               requestedUrl,
               requestTimeoutMs,
+              controls.signal,
             );
       const result = await this.#executeAttempt(
         initialUrl,
@@ -731,6 +761,7 @@ export class SafeHttpClient {
         requestBody,
         readBody,
         requestTimeoutMs,
+        controls,
       );
 
       if (result.kind === 'retryable') {
@@ -743,6 +774,7 @@ export class SafeHttpClient {
             deadline,
             requestedUrl,
             requestTimeoutMs,
+            controls.signal,
           );
           if (
             result.cooldownUntil !== undefined &&
@@ -773,6 +805,7 @@ export class SafeHttpClient {
     requestBody: string | undefined,
     readBody: ResponseBodyReader<TBody>,
     requestTimeoutMs: number,
+    controls: RequestControls = { maxRedirects: this.#maxRedirects },
   ): Promise<AttemptResult<TBody>> {
     let currentUrl = initialUrl;
     let redirectCount = 0;
@@ -803,6 +836,7 @@ export class SafeHttpClient {
         readBody,
         requestTimeoutMs,
         redirectCount,
+        controls.signal,
       );
       if (result.kind !== 'redirect') return result;
 
@@ -816,12 +850,12 @@ export class SafeHttpClient {
         });
       }
 
-      if (redirectCount >= this.#maxRedirects) {
+      if (redirectCount >= controls.maxRedirects) {
         throw new CrawlerHttpError({
           category: 'http_error',
           code: 'redirect_limit',
           url: currentUrl,
-          detail: `Redirect limit of ${this.#maxRedirects} exceeded`,
+          detail: `Redirect limit of ${controls.maxRedirects} exceeded`,
           status: result.status,
         });
       }
@@ -854,6 +888,7 @@ export class SafeHttpClient {
         Math.min(deadline, this.#now() + requestTimeoutMs),
         redirectTarget,
         requestTimeoutMs,
+        controls.signal,
       );
       if (validatedTarget.origin !== currentUrl.origin) {
         for (const header of SENSITIVE_REQUEST_HEADERS) redirectHeaders.delete(header);
@@ -873,10 +908,13 @@ export class SafeHttpClient {
     readBody: ResponseBodyReader<TBody>,
     requestTimeoutMs: number,
     redirectIndex = 0,
+    signal?: AbortSignal,
   ): Promise<HopResult<TBody>> {
     const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
     for (;;) {
       const scheduled = this.#scheduler.run<HopResult<TBody> | DeferredHop>(hostname, async () => {
+        // A caller that gave up while this task waited for its slot gets no fetch: the slot is freed now.
+        if (signal?.aborted) throw callerAbortReason(signal);
         const cooldown = this.#domainCooldownUntil.get(hostname);
         if (cooldown !== undefined) {
           if (cooldown.until > this.#now()) {
@@ -908,6 +946,19 @@ export class SafeHttpClient {
               });
         // A losing race must not surface as an unhandled rejection.
         admissionAborted?.catch(() => undefined);
+        let detachCaller: (() => void) | undefined;
+        const callerAborted =
+          signal === undefined
+            ? undefined
+            : new Promise<never>((_resolve, reject) => {
+                const onAbort = () => {
+                  reject(new AdmissionAbort(callerAbortReason(signal)));
+                  controller.abort();
+                };
+                signal.addEventListener('abort', onAbort, { once: true });
+                detachCaller = () => signal.removeEventListener('abort', onAbort);
+              });
+        callerAborted?.catch(() => undefined);
         const timeout = new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
             reject(TIMEOUT_ERROR);
@@ -998,12 +1049,14 @@ export class SafeHttpClient {
         })();
 
         try {
-          return await Promise.race(
-            admissionAborted === undefined ? [operation, timeout] : [operation, timeout, admissionAborted],
-          );
+          const racers: Array<Promise<HopResult<TBody>>> = [operation, timeout];
+          if (admissionAborted !== undefined) racers.push(admissionAborted);
+          if (callerAborted !== undefined) racers.push(callerAborted);
+          return await Promise.race(racers);
         } catch (error) {
           if (error instanceof AdmissionAbort) throw error.reason;
           if (admission?.aborted) throw admissionAbortReason(admission);
+          if (signal?.aborted) throw callerAbortReason(signal);
           if (error === TIMEOUT_ERROR) {
             throw this.#timeoutError(url, requestTimeoutMs);
           }
@@ -1018,16 +1071,17 @@ export class SafeHttpClient {
         } finally {
           if (timer !== undefined) clearTimeout(timer);
           detachAdmission?.();
+          detachCaller?.();
         }
       });
-      const result = await this.#awaitBeforeDeadline(scheduled, deadline, url, requestTimeoutMs);
+      const result = await this.#awaitBeforeDeadline(scheduled, deadline, url, requestTimeoutMs, signal);
       if (result.kind !== 'deferred') return result;
       const delayMs = result.until - this.#now();
       if (delayMs <= 0) continue;
       if (delayMs >= deadline - this.#now()) {
         throw this.#statusError(url, result.status);
       }
-      await this.#sleepBeforeDeadline(delayMs, deadline, url, requestTimeoutMs);
+      await this.#sleepBeforeDeadline(delayMs, deadline, url, requestTimeoutMs, signal);
     }
   }
 
@@ -1036,20 +1090,38 @@ export class SafeHttpClient {
     deadline: number,
     url: string | URL,
     requestTimeoutMs = this.#timeoutMs,
+    signal?: AbortSignal,
   ): Promise<T> {
+    if (signal?.aborted) {
+      operation.catch(() => undefined);
+      throw callerAbortReason(signal);
+    }
     const remainingMs = deadline - this.#now();
     if (remainingMs <= 0) throw this.#timeoutError(url, requestTimeoutMs);
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let detach: (() => void) | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(TIMEOUT_ERROR), remainingMs);
     });
+    const racers: Array<Promise<T>> = [operation, timeout];
+    if (signal !== undefined) {
+      racers.push(
+        new Promise<never>((_resolve, reject) => {
+          const onAbort = () => reject(new AdmissionAbort(callerAbortReason(signal)));
+          signal.addEventListener('abort', onAbort, { once: true });
+          detach = () => signal.removeEventListener('abort', onAbort);
+        }),
+      );
+    }
     try {
-      return await Promise.race([operation, timeout]);
+      return await Promise.race(racers);
     } catch (error) {
       if (error === TIMEOUT_ERROR) throw this.#timeoutError(url, requestTimeoutMs);
+      if (error instanceof AdmissionAbort) throw error.reason;
       throw error;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
+      detach?.();
     }
   }
 
@@ -1058,11 +1130,13 @@ export class SafeHttpClient {
     deadline: number,
     url: string | URL,
     requestTimeoutMs = this.#timeoutMs,
+    signal?: AbortSignal,
   ): Promise<void> {
     const remainingMs = deadline - this.#now();
     if (remainingMs <= 0) throw this.#timeoutError(url, requestTimeoutMs);
     const boundedDelayMs = Math.min(requestedDelayMs, remainingMs);
-    await this.#sleep(boundedDelayMs);
+    if (signal === undefined) await this.#sleep(boundedDelayMs);
+    else await this.#awaitBeforeDeadline(this.#sleep(boundedDelayMs), deadline + 1, url, requestTimeoutMs, signal);
     if (requestedDelayMs >= remainingMs || this.#now() >= deadline) {
       throw this.#timeoutError(url, requestTimeoutMs);
     }

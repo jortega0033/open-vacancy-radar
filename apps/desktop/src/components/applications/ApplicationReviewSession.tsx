@@ -8,6 +8,8 @@ import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
+import { PostingVerificationNotice } from './PostingVerificationNotice.js';
+import { isPostingPreparationStopDetail } from './posting-verification-text.js';
 import { retryLabel, useWaitingForReset } from './provider-reset.js';
 import { WarningBanner } from '../shell/index.js';
 import { classifyProviderError, type ProviderErrorInfo } from '../../provider-error.js';
@@ -182,32 +184,53 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     void loadDocuments();
 
     async function start() {
-      if (attempt.checkpoint === 'needs_user' && attempt.checkpointDetail.startsWith(TAILORING_STOPPED_PREFIX)) {
-        setState({ phase: 'tailoring_blocked', message: attempt.checkpointDetail, busy: false });
+      // Resuming a prepared application (#687): one bounded check of the live posting, which main
+      // only sends when the stored check is older than its freshness window. A changed posting takes
+      // a ready package out of review, so the application is read again afterwards and everything
+      // below decides from that, not from the copy this dialog was opened with. A check that cannot
+      // run never blocks the review.
+      let current = attempt;
+      if (
+        (attempt.checkpoint === 'ready' || attempt.checkpoint === 'needs_user') &&
+        typeof window.applicationPipeline?.verifyPosting === 'function'
+      ) {
+        setState({ phase: 'resolving' });
+        try {
+          await window.applicationPipeline.verifyPosting(attempt.id);
+          if (cancelled) return;
+          current = await window.workspace.getApplicationAttempt(attempt.id);
+          if (cancelled) return;
+          setLiveAttempt(current);
+        } catch {
+          current = attempt;
+        }
+      }
+      if (current.checkpoint === 'needs_user' && current.checkpointDetail.startsWith(TAILORING_STOPPED_PREFIX)) {
+        setState({ phase: 'tailoring_blocked', message: current.checkpointDetail, busy: false });
         return;
       }
       setState({ phase: 'resolving' });
       try {
-        const policyId = await window.applicationExecutor.resolveTargetPolicyId(attempt.canonicalUrl);
+        const policyId = await window.applicationExecutor.resolveTargetPolicyId(current.canonicalUrl);
         if (cancelled) return;
         if (!policyId) {
-          const hasUsefulManualDocuments = attempt.checkpointDetail.includes('Your application documents are ready.')
-            || attempt.checkpointDetail.includes('Your tailored CV is ready.')
-            || attempt.checkpointDetail.includes('Your CV was prepared without any skills.');
-          if (attempt.checkpoint === 'needs_user' && !hasUsefulManualDocuments) {
-            setState({ phase: 'preparation_blocked', message: attempt.checkpointDetail, busy: false });
+          const hasUsefulManualDocuments = current.checkpointDetail.includes('Your application documents are ready.')
+            || current.checkpointDetail.includes('Your tailored CV is ready.')
+            || current.checkpointDetail.includes('Your CV was prepared without any skills.');
+          if (current.checkpoint === 'needs_user' && !hasUsefulManualDocuments) {
+            setState({ phase: 'preparation_blocked', message: current.checkpointDetail, busy: false });
             return;
           }
           setState({ phase: 'ineligible', continued: false, busy: false });
           return;
         }
-        if (attempt.checkpoint === 'needs_user') {
-          setState({ phase: 'preparation_blocked', message: attempt.checkpointDetail, busy: false });
+        if (current.checkpoint === 'needs_user') {
+          setState({ phase: 'preparation_blocked', message: current.checkpointDetail, busy: false });
           return;
         }
         policyIdRef.current = policyId;
         setState({ phase: 'opening' });
-        const review = await window.applicationExecutor.openReview({ attemptId: attempt.id, policyId, targetUrl: attempt.canonicalUrl });
+        const review = await window.applicationExecutor.openReview({ attemptId: attempt.id, policyId, targetUrl: current.canonicalUrl });
         if (cancelled) return;
         openedRef.current = true;
         setState({ phase: 'ready', review });
@@ -569,6 +592,24 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
           </button>
         </div>
 
+        {state.phase !== 'resolving' && state.phase !== 'opening' && (
+          <div className="mb-3">
+            <PostingVerificationNotice
+              attemptId={attempt.id}
+              postingUrl={attempt.canonicalUrl}
+              reloadKey={`${liveAttempt.updatedAt}:${retryNonce}`}
+              disabled={closeDisabled}
+              onDone={(kind, view) => {
+                if (kind === 'refreshed' || kind === 'resumed') onClose('resolved');
+                // A package taken out of review, or put back exactly as it was (Keep / Get ready anyway,
+                // or a later check that found the posting unchanged): read the application again and
+                // let the dialog decide from its current state.
+                else if (kind === 'restored' || view?.invalidated || view?.released) setRetryNonce((nonce) => nonce + 1);
+              }}
+            />
+          </div>
+        )}
+
         {(state.phase === 'resolving' || state.phase === 'opening') && (
           <div className="flex items-center gap-2 py-8 text-sm text-base-content/70">
             <span className="loading loading-spinner loading-sm" />
@@ -631,15 +672,15 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
         {state.phase === 'preparation_blocked' && (
           <div className="space-y-4">
-            {limit ? (
+            {isPostingPreparationStopDetail(state.message) ? null : limit ? (
               <PipelineLimitNotice info={limit} />
             ) : (
               <WarningBanner>
                 {describePreparationBlocker(state.message)}
               </WarningBanner>
             )}
-            <TechnicalDetails text={state.message} label="Details" />
-            {!limit && (
+            {isPostingPreparationStopDetail(state.message) ? null : <TechnicalDetails text={state.message} label="Details" />}
+            {!limit && !isPostingPreparationStopDetail(state.message) && (
               <p className="text-sm text-base-content/70">
                 Resume to try again, or skip this one.
               </p>
@@ -652,14 +693,16 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
                 <button type="button" className="btn btn-outline flex-1" disabled={state.busy} onClick={handleGenerateLetter}>
                   Generate letter
                 </button>
-              ) : (
+              ) : isPostingPreparationStopDetail(state.message) ? null : (
                 <button type="button" className="btn btn-outline flex-1" disabled={state.busy} onClick={() => window.open(attempt.canonicalUrl, '_blank', 'noopener,noreferrer')}>
                   Open vacancy
                 </button>
               )}
-              <button type="button" className="btn btn-primary flex-1" disabled={state.busy || waitingForReset} onClick={() => void handleResume()}>
-                {state.busy ? 'Resuming…' : retryLabel(limit, waitingForReset, 'Resume')}
-              </button>
+              {isPostingPreparationStopDetail(state.message) ? null : (
+                <button type="button" className="btn btn-primary flex-1" disabled={state.busy || waitingForReset} onClick={() => void handleResume()}>
+                  {state.busy ? 'Resuming…' : retryLabel(limit, waitingForReset, 'Resume')}
+                </button>
+              )}
             </div>
           </div>
         )}
