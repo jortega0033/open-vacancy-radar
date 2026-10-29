@@ -431,6 +431,9 @@ declare global {
      * statement about them) and the interview rounds they recorded. Takes ids, a version and the
      * person's own words; never a draft, file or path. */
     interviewContext: import('../electron/interview-context-types.js').InterviewContextBridge;
+    /** #692. The fifteenth namespace: local due actions on an application (create, edit, reschedule,
+     * complete, dismiss, stop suggesting). Takes ids, a version and what the person typed; local only. */
+    applicationActions: import('../electron/application-actions-types.js').ApplicationActionsBridge;
   }
 }
 

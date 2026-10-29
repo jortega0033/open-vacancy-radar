@@ -26,6 +26,7 @@ import type { CompanyEvidenceBridge } from './company-evidence.js';
 import type { ApplicationBriefBridge } from './application-brief.js';
 import { parseCritiqueResult, type ApplicationCritiqueBridge } from './application-critique-types.js';
 import { parseInterviewContextResult, type InterviewContextBridge } from './interview-context-types.js';
+import { parseActionsResult, parseOverviewResult, type ApplicationActionsBridge } from './application-actions-types.js';
 import { parseBriefResult, parseCommitAssessment, parseOkResult, parsePrepareAssessment } from './application-brief-parse.js';
 import { parseCancelResult, parseCompanyEvidenceProse, parseCompanyEvidenceResult } from './company-evidence-parse.js';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
@@ -2234,3 +2235,38 @@ const interviewContextApi: InterviewContextBridge = {
 };
 
 contextBridge.exposeInMainWorld('interviewContext', interviewContextApi);
+
+/**
+ * #692. The fifteenth namespace: local due actions on an application. Every result is REBUILT from known
+ * fields (parseActionsResult, fail closed). Arguments are ids, the version the page was showing and what
+ * the person typed (a due date or time WITH an explicit time zone); never a basis, a provider or a path.
+ * Nothing here starts a model session, a request, a notification or a timer.
+ */
+const applicationActionsApi: ApplicationActionsBridge = {
+  async get(applicationId) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:get', { applicationId }));
+  },
+  async overview() {
+    return parseOverviewResult(await ipcRenderer.invoke('application-actions:overview', {}));
+  },
+  async create(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:create', { ...input }));
+  },
+  async update(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:update', { ...input }));
+  },
+  async reschedule(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:reschedule', { ...input }));
+  },
+  async complete(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:complete', { ...input }));
+  },
+  async dismiss(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:dismiss', { ...input }));
+  },
+  async setSuppressed(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:set-suppressed', { ...input }));
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationActions', applicationActionsApi);

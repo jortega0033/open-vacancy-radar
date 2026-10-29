@@ -65,6 +65,7 @@ import { ApplicationDataResetGate } from './application-data-reset-gate.js';
 import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
 import { createApplicationCritiqueHandlers } from './application-critique-ipc.js';
 import { createInterviewContextHandlers } from './interview-context-ipc.js';
+import { createApplicationActionsHandlers } from './application-actions-ipc.js';
 import { cancelAllCritiques, type CritiqueDeps } from './application-critique-service.js';
 import { readPostingVerification } from './application-posting-verification.js';
 import { runCompanyResearchSession } from './company-evidence-research.js';
@@ -2477,6 +2478,25 @@ guardedIpc.handle('interview-context:get', (_event, input: unknown) => interview
 guardedIpc.handle('interview-context:state-documents', (_event, input: unknown) => interviewContextHandlers['interview-context:state-documents']!(input));
 guardedIpc.handle('interview-context:save-round', (_event, input: unknown) => interviewContextHandlers['interview-context:save-round']!(input));
 guardedIpc.handle('interview-context:delete-round', (_event, input: unknown) => interviewContextHandlers['interview-context:delete-round']!(input));
+
+/**
+ * #692: local due actions on the Applications rows. Local reads and writes only (no model, no request,
+ * no mailbox, no calendar, no timer); writes run under the data reset gate.
+ */
+const applicationActionsHandlers = createApplicationActionsHandlers(async () => ({
+  db: await ensureWorkspaceDb(),
+  now: () => new Date(),
+  mutate: (task) => applicationDataResetGate.runMutation(task),
+}));
+// Literal channel names on purpose: the sender-guard test reads this file to prove every channel is guarded.
+guardedIpc.handle('application-actions:get', (_event, input: unknown) => applicationActionsHandlers['application-actions:get']!(input));
+guardedIpc.handle('application-actions:overview', (_event, input: unknown) => applicationActionsHandlers['application-actions:overview']!(input));
+guardedIpc.handle('application-actions:create', (_event, input: unknown) => applicationActionsHandlers['application-actions:create']!(input));
+guardedIpc.handle('application-actions:update', (_event, input: unknown) => applicationActionsHandlers['application-actions:update']!(input));
+guardedIpc.handle('application-actions:reschedule', (_event, input: unknown) => applicationActionsHandlers['application-actions:reschedule']!(input));
+guardedIpc.handle('application-actions:complete', (_event, input: unknown) => applicationActionsHandlers['application-actions:complete']!(input));
+guardedIpc.handle('application-actions:dismiss', (_event, input: unknown) => applicationActionsHandlers['application-actions:dismiss']!(input));
+guardedIpc.handle('application-actions:set-suppressed', (_event, input: unknown) => applicationActionsHandlers['application-actions:set-suppressed']!(input));
 
 guardedIpc.handle('application-pipeline:attach-letter', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
