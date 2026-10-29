@@ -90,12 +90,16 @@ describe('requiredScanQuery', () => {
   });
 
   it('runs the AI web discovery pass only inside the already-acquired scan guard, and never at all unless explicitly requested (issue #398)', () => {
-    const mainSource = source('main.ts');
     // The AI branch is reached only through `runVacancyScanBranches`, which skips it unless the run
-    // asked for it (executed in vacancy-scan-orchestration.test.ts). That call sits inside
-    // `runExclusiveScan`'s own callback, never wrapping or preceding the acquisition of that guard.
-    expect(mainSource).toMatch(
-      /runExclusiveScan\(\s*async \(\) => \{[\s\S]*runVacancyScanBranches\([\s\S]*runAiWebDiscovery\(client, options\)/,
+    // asked for it (executed in vacancy-scan-orchestration.test.ts). Since #685 the run lifecycle
+    // lives in vacancy-scan-run.ts (executed in vacancy-scan-run.test.ts): that call sits inside
+    // `runExclusiveScan`'s own callback, never wrapping or preceding the acquisition of that guard,
+    // and main.ts only supplies the AI client to it.
+    expect(source('vacancy-scan-run.ts')).toMatch(
+      /deps\.runExclusiveScan\(async \(\) => \{[\s\S]*runVacancyScanBranches\(/,
+    );
+    expect(source('main.ts')).toMatch(
+      /createVacancyScanRunner\(\{[\s\S]*runExclusiveScan: \(run\) => runExclusiveScan\(run, \{ takeAdvisoryLock: true \}\)[\s\S]*runAiWebDiscovery: \(options\) => runAiWebDiscovery\(client, options\)/,
     );
   });
 });

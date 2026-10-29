@@ -33,6 +33,31 @@ describe('describeScanProgress (#459)', () => {
     expect(view.vacancies).toBe('1 listing checked');
   });
 
+  it('says the run is waiting for the AI web search, not scoring, while that step still runs (#685)', () => {
+    for (const aiWebSearch of ['waiting', 'running'] as const) {
+      const view = describeScanProgress(
+        { scanning: true, scanId: 's1', startedAt: started, sourcesDone: 13, sourcesTotal: 13, vacanciesSoFar: 40, aiWebSearch },
+        started + 30_000,
+      );
+      expect(view.fraction).toBeNull();
+      expect(view.headline).toBe('All 13 source groups checked. Waiting for the AI web search to finish…');
+    }
+    for (const aiWebSearch of ['done', 'failed'] as const) {
+      const view = describeScanProgress(
+        { scanning: true, scanId: 's1', startedAt: started, sourcesDone: 13, sourcesTotal: 13, aiWebSearch },
+        started + 30_000,
+      );
+      expect(view.headline).toMatch(/matching sponsors and scoring/i);
+    }
+    // Still determinate while job-site groups are outstanding, whatever the AI step is doing.
+    expect(
+      describeScanProgress(
+        { scanning: true, scanId: 's1', startedAt: started, sourcesDone: 3, sourcesTotal: 13, aiWebSearch: 'running' },
+        started,
+      ).headline,
+    ).toBe('Checked 3 of 13 source groups');
+  });
+
   it('says it is stopping, and shows no fraction, while a stop winds down', () => {
     const view = describeScanProgress(
       { scanning: true, scanId: 's1', startedAt: started, sourcesDone: 4, sourcesTotal: 11, stopping: true },

@@ -170,15 +170,14 @@ describe('unspecified-location country (#684)', () => {
   });
 });
 
-describe('main process wiring (#684)', () => {
-  // The behaviour is covered by vacancy-scan-orchestration.test.ts, which runs the real function with
-  // fakes. This only checks that main.ts still routes through it with the captured snapshot.
-  it('captures the intent from the validated request and passes that snapshot to the orchestration', () => {
+describe('main process wiring (#684, #685)', () => {
+  // The behaviour is covered by vacancy-scan-orchestration.test.ts and vacancy-scan-run.test.ts,
+  // which run the real run lifecycle with fakes. This only checks that main.ts still routes every
+  // scan through that lifecycle, which captures the snapshot.
+  it('routes every scan through the run lifecycle that captures the intent snapshot', () => {
     const main = mainSource();
-    const capture = main.indexOf('captureVacancyRunIntent(scanId, request)');
-    const branches = main.indexOf('runVacancyScanBranches(');
-    expect(capture).toBeGreaterThan(-1);
-    expect(branches).toBeGreaterThan(capture);
-    expect(main.slice(branches, branches + 2500)).toMatch(/\},\s*intent,\s*\);/u);
+    expect(main).toMatch(/async function runVacancyScan\(request: ParsedVacancyScanRequest\)[^{]*\{\s*return vacancyScanRunner\.run\(request\);/u);
+    expect(main).toMatch(/const vacancyScanRunner = createVacancyScanRunner\(/u);
+    expect(main).not.toContain('runVacancyScanBranches(');
   });
 });

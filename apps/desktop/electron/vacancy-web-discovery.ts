@@ -376,6 +376,10 @@ export interface RunAiWebDiscoveryOptions {
    * same `ensureAiWorkspaceDir()`-style directory `main.ts` already uses for other one-shot AI
    * sessions (see that function's own doc comment), not invent a second one. */
   cwd: string;
+  /** The scan's stop signal (#685). Aborting it cancels the session the same way the step's own
+   * time budget does; an already-aborted signal starts no session. The outcome is then an error
+   * row, never a throw. */
+  signal?: AbortSignal;
 }
 
 export interface AiWebDiscoveryOutcome {
@@ -424,6 +428,15 @@ function failureOutcome(
     },
     queriesUsed: [],
   };
+}
+
+/** The step ended because the scan itself was stopped (#685); the scan discards it anyway. */
+function stoppedOutcome(): AiWebDiscoveryOutcome {
+  return failureOutcome(
+    'error',
+    'the scan was stopped, so the AI web discovery session was cancelled',
+    'Incomplete: the scan was stopped.',
+  );
 }
 
 /**
@@ -516,6 +529,8 @@ async function runAiWebDiscoverySession(
   const prompt = buildAiWebDiscoveryPrompt(projection, options.intent);
   onPromptBuilt(buildAiIntentProvenance(options.intent, aiIntentContextUsed(projection, options.intent)));
 
+  if (options.signal?.aborted) return stoppedOutcome();
+
   let session: AgentSession;
   try {
     session = await activeClient.sessions.createVacancyWebDiscovery({ provider: 'claude', cwd: options.cwd, prompt });
@@ -529,6 +544,15 @@ async function runAiWebDiscoverySession(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AI_WEB_DISCOVERY_TIMEOUT_MS);
+  // The scan's own Stop (#685) ends the session through the same path as the time budget, so the
+  // `finally` below cancels it on the daemon; `stopped` keeps the two reasons apart in the outcome.
+  let stopped = false;
+  const onScanStop = () => {
+    stopped = true;
+    controller.abort();
+  };
+  if (options.signal?.aborted) onScanStop();
+  else options.signal?.addEventListener('abort', onScanStop, { once: true });
   let text = '';
   let webSearchCount = 0;
   let webFetchCount = 0;
@@ -587,6 +611,7 @@ async function runAiWebDiscoverySession(
     }
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', onScanStop);
     // Unconditional on ANY non-completed exit from the loop above -- timeout, a caught non-abort
     // error, or the loop simply ending (`return`/`break` in `parseSseStream`, or a clean generator
     // end) without ever delivering a terminal event. A hardened `web-only` session with live
@@ -596,6 +621,7 @@ async function runAiWebDiscoverySession(
     }
   }
 
+  if (stopped) return stoppedOutcome();
   if (timedOut) {
     return failureOutcome(
       'error',

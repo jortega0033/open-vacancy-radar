@@ -419,6 +419,46 @@ describe('runAiWebDiscovery', () => {
     }
   });
 
+  it("the scan's Stop ends a running session through the same cancel path, and says it was stopped rather than timed out (#685)", async () => {
+    const scan = new AbortController();
+    let streaming!: () => void;
+    const started = new Promise<void>((resolve) => (streaming = resolve));
+    const client = fakeClient(async function* (signal: AbortSignal): AsyncGenerator<AgentEventEnvelope, void, void> {
+      streaming();
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+      yield envelope({ type: 'session.completed' }); // unreachable; satisfies require-yield
+    });
+    const resultPromise = runAiWebDiscovery(client as never, {
+      profile: CONFIGURED_PROFILE,
+      intent: QUERY_INTENT,
+      cwd: CWD,
+      signal: scan.signal,
+    });
+    await started;
+    scan.abort();
+    const result = await resultPromise;
+    expect(result.vacancies).toEqual([]);
+    expect(result.sourceAudit).toMatchObject({ status: 'error', completenessReason: 'Incomplete: the scan was stopped.' });
+    expect(result.sourceAudit.error).not.toMatch(/timed out/);
+    expect(client.sessions.cancel).toHaveBeenCalledWith('ai-web-session-1');
+  });
+
+  it('an already-stopped scan starts no AI session (#685)', async () => {
+    const scan = new AbortController();
+    scan.abort();
+    const client = fakeClient([{ type: 'session.completed' }]);
+    const result = await runAiWebDiscovery(client as never, {
+      profile: CONFIGURED_PROFILE,
+      intent: QUERY_INTENT,
+      cwd: CWD,
+      signal: scan.signal,
+    });
+    expect(client.sessions.createVacancyWebDiscovery).not.toHaveBeenCalled();
+    expect(result.sourceAudit).toMatchObject({ status: 'error', completenessReason: 'Incomplete: the scan was stopped.' });
+  });
+
   it('test #6: partial results within budget -- valid candidates are accepted even when one candidate fails schema validation', async () => {
     const malformedCandidate = candidate({ company: 'Bad Co' });
     delete (malformedCandidate as Record<string, unknown>).company; // fails AiWebDiscoveryCandidateSchema (company required)
