@@ -262,7 +262,15 @@ describe('comparePostingText', () => {
 
   it('ignores markup, whitespace, case and punctuation', () => {
     const reformatted = '<p>build the ui with react</p>\n\n<ul><li>FIVE years of   frontend experience</li></ul>\nFluent English is required\nHybrid in Utrecht';
-    expect(comparePostingText(base, reformatted)).toEqual({ same: true, material: false, added: [], removed: [] });
+    expect(comparePostingText(base, reformatted)).toEqual({
+      same: true,
+      material: false,
+      requirementChange: false,
+      kind: 'same',
+      bounded: false,
+      added: [],
+      removed: [],
+    });
   });
 
   it('flags a changed requirement as material and reports what changed', () => {

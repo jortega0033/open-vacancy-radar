@@ -59,6 +59,8 @@ const UNABLE_REASON: Record<string, string> = {
   no_authoritative_source: 'This job source cannot be checked automatically.',
   unexpected_response: 'The site answered in a way we could not read.',
   empty_content: 'The site returned no posting text.',
+  content_too_large: 'The posting is too large to check automatically.',
+  check_failed: 'The check could not start on this computer.',
 };
 
 export type PostingNoticeTone = 'quiet' | 'warning' | 'info';
@@ -104,21 +106,36 @@ export function describePostingVerification(view: PostingVerificationView, now: 
     case 'confirmed_closed': {
       if (checked) lines.push(checked);
       lines.push("The employer's own job system says this posting no longer exists.");
-      lines.push(
-        view.resolution === 'prepare_anyway'
-          ? 'You chose to get ready anyway.'
-          : 'Open the posting to check for yourself. You can still get ready anyway.',
-      );
+      if (view.resolution === 'prepare_anyway') {
+        lines.push('You chose to get ready anyway.');
+      } else if (view.held) {
+        lines.push('Your prepared application is paused until you choose. Get ready anyway puts it back exactly as it was.');
+      } else {
+        lines.push('Open the posting to check for yourself. You can still get ready anyway.');
+      }
+      pushRecheck(view, lines);
       return { tone: 'warning', headline: 'This posting looks closed.', lines };
     }
     case 'materially_changed': {
       if (checked) lines.push(checked);
-      lines.push(
-        view.resolution === 'keep_current'
-          ? 'You chose to keep your application as prepared.'
-          : 'Your application was prepared from the earlier text. Nothing has been changed yet.',
-      );
-      return { tone: 'warning', headline: 'The posting changed since it was read.', lines };
+      if (view.resolution === 'keep_current') {
+        lines.push('You chose to keep your application as prepared.');
+      } else if (view.held) {
+        lines.push(
+          'Your prepared application is paused until you choose. Keep my application puts it back exactly as it was; refreshing prepares it again from the updated posting.',
+        );
+      } else {
+        lines.push('Your application was prepared from the earlier text. Nothing has been changed yet.');
+      }
+      pushRecheck(view, lines);
+      return {
+        tone: 'warning',
+        headline:
+          view.changeKind === 'text'
+            ? 'The posting text changed a lot since it was read.'
+            : 'The requirements in this posting changed since it was read.',
+        lines,
+      };
     }
     case 'unable_to_verify': {
       lines.push(UNABLE_REASON[view.reason ?? ''] ?? 'The check did not finish.');
@@ -137,10 +154,24 @@ export function describePostingVerification(view: PostingVerificationView, now: 
   }
 }
 
+function pushRecheck(view: PostingVerificationView, lines: string[]): void {
+  if (view.recheck === null || view.recheck === undefined) return;
+  const why = UNABLE_REASON[view.recheck.reason] ?? 'The check did not finish.';
+  lines.push(`A later check could not reach the posting. ${why} This finding still stands.`);
+}
+
 export const POSTING_ACTION_LABEL = {
   check_again: 'Check again',
   open_posting: 'Open the posting',
   refresh: 'Refresh from the updated posting',
   keep_current: 'Keep my application',
   prepare_anyway: 'Get ready anyway',
+} as const;
+
+/** What a button says while its request is running. */
+export const POSTING_ACTION_PENDING_LABEL = {
+  check_again: 'Checking…',
+  refresh: 'Refreshing…',
+  keep_current: 'Restoring…',
+  prepare_anyway: 'Working…',
 } as const;

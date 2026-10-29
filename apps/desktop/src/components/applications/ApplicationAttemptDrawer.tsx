@@ -124,6 +124,8 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
             disabled={recovering}
             onDone={(kind) => {
               if (kind === 'refreshed' || kind === 'resumed') onChanged?.('retried');
+              // Keep / Get ready anyway put a held package back exactly as it was: it is reviewable again.
+              else if (kind === 'restored') onChanged?.('returned');
             }}
           />
 

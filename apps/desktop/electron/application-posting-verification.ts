@@ -3,7 +3,9 @@ import {
   comparePostingText,
   POSTING_FRESHNESS_WINDOW_MS,
   POSTING_UNABLE_RETRY_AFTER_MS,
+  POSTING_VERIFY_TIMEOUT_MS,
   postingContentHash,
+  resolvePostingProbe,
   type PostingObservation,
   type PostingValidators,
 } from '@open-vacancy-radar/vacancy-engine';
@@ -17,14 +19,18 @@ import * as workspace from './workspace/repository.js';
 import {
   adoptPostingChange,
   getLatestPostingVerification,
+  getNewestDefinitivePostingVerification,
+  getPendingPostingFinding,
   getPostingObservedText,
-  invalidatePreparedAttempt,
   isHistoricalAttempt,
   recordPostingVerification,
   resolvePostingVerification,
+  type PostingChangeSummary,
+  type PostingHoldEffect,
+  type PostingHoldRequest,
   type PostingVerificationRecord,
-  type PostingVerificationResolution,
   type PostingVerificationResult,
+  type ResolvePostingVerificationOutcome,
 } from './workspace/posting-verification-store.js';
 import type { WorkspaceDb } from './workspace/client.js';
 import type { ApplicationAttemptCheckpoint, ApplicationAttemptRecord } from './workspace/types.js';
@@ -34,21 +40,26 @@ import type { ApplicationAttemptCheckpoint, ApplicationAttemptRecord } from './w
  * preparation, resumption and the explicit "check again" action (see `docs/posting-verification.md`).
  *
  * What it guarantees, and where each guarantee is enforced:
- *  - **One request for overlapping callers.** A prepare run, a resume and a renderer-triggered check
- *    for the same attempt share one in-flight promise (`inFlight`), so they cannot double-fetch or
- *    race two different verdicts into the store.
+ *  - **One network request for overlapping callers, judged by each caller.** Only the network
+ *    observation is shared (`inFlight`, per attempt and URL). Every caller then re-reads the attempt
+ *    and judges and records the result under its OWN trigger, allowed checkpoints and liveness, so a
+ *    renderer check can never make a preparation run lose its observation, its force, or its claim.
+ *  - **A check that cannot run is "could not check".** A rejected or hanging verifier port (for
+ *    example an HTTP client that could not be set up) becomes an `unable` observation; preparation
+ *    continues on the stored text and never stays in `reading_jd`.
  *  - **Freshness without a request.** A stored finding younger than `POSTING_FRESHNESS_WINDOW_MS`
  *    (an "unable" one: `POSTING_UNABLE_RETRY_AFTER_MS`) is returned as it was observed, with its
  *    original `checkedAt`; nothing is fetched and nothing is rewritten.
- *  - **No silent overwrite.** This module never edits `jdSnapshot` (the one exception is filling a
- *    description that was missing or known incomplete, the behaviour the on-demand fetch already had).
- *    A changed posting is stored beside the snapshot and only `adoptPostingChange`, on the person's
- *    explicit refresh, replaces it.
+ *  - **No silent overwrite, no lost package.** This module never edits `jdSnapshot` (except filling a
+ *    description that was missing, as the on-demand fetch did). A closed/changed posting found on a
+ *    prepared package HOLDS it (out of review, checkpoint/detail/answers copied onto the finding);
+ *    Keep / Get ready anyway put it back unchanged; only the explicit Refresh replaces it. An attempt
+ *    waiting for any other reason is never touched; it only shows the finding.
  *  - **Historical attempts are untouchable.** Submitted / reported / skipped attempts are never
  *    verified (no request) and the store refuses to write for them.
  *  - **Interruption is safe.** The write re-reads the attempt in one transaction and requires the
  *    checkpoint the caller was entitled to write at; a cancelled, abandoned or moved-on attempt
- *    records nothing.
+ *    records nothing, and an older observation never replaces a newer one.
  */
 
 export interface PostingVerifierPort {
@@ -69,6 +80,35 @@ export const POSTING_CLOSED_DETAIL =
 export const POSTING_CHANGED_DETAIL =
   'This posting changed since it was read. Review what changed, then refresh your application from the updated posting or keep what you have.';
 
+export function isPostingFindingDetail(detail: string): boolean {
+  return detail === POSTING_CLOSED_DETAIL || detail === POSTING_CHANGED_DETAIL;
+}
+
+/**
+ * The full manual hand-off sentence (`application-pipeline.ts`): documents are ready and the person
+ * applies on the employer site. A test keeps the two in step.
+ */
+export const PREPARED_HANDOFF_PHRASE = 'Your application documents are ready.';
+
+/**
+ * A prepared package a closed/changed posting must take out of review until the person decides: a
+ * `ready` review, or the manual hand-off whose documents are ready. An attempt waiting on anything
+ * else (a question, a missing letter, a failure) is not a package and is never held.
+ */
+export function isPreparedPackage(attempt: { checkpoint: ApplicationAttemptCheckpoint; checkpointDetail: string }): boolean {
+  if (attempt.checkpoint === 'ready') return true;
+  return (
+    attempt.checkpoint === 'needs_user' &&
+    attempt.checkpointDetail.includes(PREPARED_HANDOFF_PHRASE) &&
+    !isPostingFindingDetail(attempt.checkpointDetail)
+  );
+}
+
+const POSTING_HOLD: PostingHoldRequest = {
+  isPreparedPackage,
+  detailFor: (result) => (result === 'confirmed_closed' ? POSTING_CLOSED_DETAIL : POSTING_CHANGED_DETAIL),
+};
+
 const PREPARED_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = ['ready', 'needs_user', 'failed'];
 const IN_FLIGHT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
   'queued',
@@ -77,6 +117,8 @@ const IN_FLIGHT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
   'rendering',
   'filling',
 ];
+/** Desktop-side backstop past the engine's own (aborting) deadline, for a port that never settles. */
+const PORT_BACKSTOP_MS = POSTING_VERIFY_TIMEOUT_MS + 5_000;
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -108,34 +150,44 @@ function actionsFor(
   status: PostingVerificationStatus,
   resolution: PostingVerificationRecord['resolution'],
   attemptCheckpoint: ApplicationAttemptCheckpoint,
+  checkable: boolean,
 ): PostingVerificationAction[] {
   const waiting = attemptCheckpoint === 'needs_user' || attemptCheckpoint === 'failed';
+  // "Check again" only where it can actually ask someone: a link with an authoritative route.
+  const checkAgain: PostingVerificationAction[] = checkable ? ['check_again'] : [];
   switch (status) {
     case 'not_applicable':
       return [];
     case 'confirmed_closed':
       return resolution === null && waiting
-        ? ['open_posting', 'prepare_anyway', 'check_again']
-        : ['open_posting', 'check_again'];
+        ? ['open_posting', 'prepare_anyway', ...checkAgain]
+        : ['open_posting', ...checkAgain];
     case 'materially_changed':
-      return resolution === null && waiting ? ['refresh', 'keep_current', 'open_posting'] : ['open_posting', 'check_again'];
+      return resolution === null && waiting
+        ? ['refresh', 'keep_current', 'open_posting', ...checkAgain]
+        : ['open_posting', ...checkAgain];
     case 'unable_to_verify':
-      return ['open_posting', 'check_again'];
+      return ['open_posting', ...checkAgain];
     case 'confirmed_open':
     case 'not_checked':
-      return ['check_again'];
+      return checkAgain;
   }
 }
 
 export function buildPostingVerificationView(
   attempt: ApplicationAttemptRecord,
-  record: PostingVerificationRecord | null,
+  latest: PostingVerificationRecord | null,
+  pending: PostingVerificationRecord | null,
   now: Date,
-  extra: { reused?: boolean; invalidated?: boolean } = {},
+  extra: { reused?: boolean; hold?: PostingHoldEffect } = {},
 ): PostingVerificationView {
   const historical = isHistoricalAttempt(attempt);
   const baselineHash = baselineHashOf(attempt);
-  const current = record !== null && describesCurrentSnapshot(record, baselineHash) ? record : null;
+  // An undecided closure/change stays the answer until someone decides or a later check answers;
+  // a later "could not check" is shown beside it, not instead of it.
+  const pendingCurrent = pending !== null && describesCurrentSnapshot(pending, baselineHash) ? pending : null;
+  const latestCurrent = latest !== null && describesCurrentSnapshot(latest, baselineHash) ? latest : null;
+  const current = pendingCurrent ?? latestCurrent;
   let status: PostingVerificationStatus = historical ? 'not_applicable' : 'not_checked';
   if (!historical && current !== null) {
     status =
@@ -143,7 +195,13 @@ export function buildPostingVerificationView(
   }
   // A stored finding about an older snapshot is history, not a statement about this one.
   const shown = historical ? null : current;
-  const stale = shown === null || !isPostingFresh(shown, now);
+  const recheck =
+    !historical && pendingCurrent !== null && latest !== null && latest.id !== pendingCurrent.id && latest.result === 'unable_to_verify'
+      ? { checkedAt: latest.observedAt, reason: latest.reason as PostingVerificationReasonCode }
+      : null;
+  const freshnessBasis = recheck !== null ? latest : shown;
+  const changeSummary: PostingChangeSummary | null =
+    shown?.result === 'materially_changed' && shown.resolution !== 'refreshed' ? shown.changeSummary : null;
   return {
     attemptId: attempt.id,
     status,
@@ -158,107 +216,182 @@ export function buildPostingVerificationView(
         ? { date: shown.deadline, excerpt: shown.deadlineProvenance.excerpt }
         : null,
     noDeadlineStated: shown !== null && shown.outcome === 'open' && shown.deadline === null && shown.contentHash !== null,
-    change: shown?.result === 'materially_changed' && shown.resolution !== 'refreshed' ? shown.changeSummary : null,
-    resolution: shown?.resolution ?? null,
+    change: changeSummary ? { added: changeSummary.added, removed: changeSummary.removed } : null,
+    changeKind: changeSummary ? (changeSummary.kind ?? 'requirements') : null,
+    resolution: shown?.resolution === 'superseded' ? null : (shown?.resolution ?? null),
     reused: extra.reused ?? false,
-    stale,
-    invalidated: extra.invalidated ?? false,
-    actions: actionsFor(status, shown?.resolution ?? null, attempt.checkpoint),
+    stale: freshnessBasis === null || !isPostingFresh(freshnessBasis, now),
+    invalidated: extra.hold === 'held',
+    held: !historical && pendingCurrent?.held === true,
+    released: extra.hold === 'released',
+    recheck,
+    actions: actionsFor(
+      status,
+      shown?.resolution ?? null,
+      attempt.checkpoint,
+      !historical && resolvePostingProbe(attempt.canonicalUrl) !== null,
+    ),
   };
+}
+
+function viewFor(deps: { db: WorkspaceDb }, attempt: ApplicationAttemptRecord, now: Date, extra: { reused?: boolean; hold?: PostingHoldEffect } = {}) {
+  return buildPostingVerificationView(
+    attempt,
+    getLatestPostingVerification(deps.db, attempt.id),
+    getPendingPostingFinding(deps.db, attempt.id),
+    now,
+    extra,
+  );
 }
 
 /** Reads the stored finding for the renderer. Makes no request and writes nothing. */
 export function readPostingVerification(deps: { db: WorkspaceDb; now?(): Date }, attemptId: string): PostingVerificationView {
-  const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
-  return buildPostingVerificationView(attempt, getLatestPostingVerification(deps.db, attemptId), nowOf(deps));
+  return viewFor(deps, workspace.getApplicationAttempt(deps.db, attemptId), nowOf(deps));
 }
 
 export type VerifyTrigger = 'prepare' | 'manual';
 
 export interface VerifyAttemptOptions {
   trigger: VerifyTrigger;
-  /** Ignore a fresh stored finding (the explicit "Check again"). */
+  /** Ignore a fresh stored finding (the explicit "Check again"). Joining a request in flight is live, so it honours this. */
   force?: boolean;
   /** Evaluated after the network call: false means the caller lost its claim on the attempt. */
   isLive?: () => boolean;
 }
 
 export type VerifyAttemptResult =
-  | { kind: 'verified'; view: PostingVerificationView; record: PostingVerificationRecord | null; requested: boolean }
+  | {
+      kind: 'verified';
+      view: PostingVerificationView;
+      record: PostingVerificationRecord | null;
+      /** This caller waited on a live request (its own or one it joined); false = stored finding reused. */
+      requested: boolean;
+      /** This caller joined a request another caller had already started. */
+      joined: boolean;
+    }
   | { kind: 'not_applicable'; view: PostingVerificationView }
   | { kind: 'no_verifier'; view: PostingVerificationView }
-  /** The caller lost the attempt while the check was in flight; nothing was written. */
+  /** The caller lost the attempt while the check was in flight; nothing was written by this caller. */
   | { kind: 'dropped'; view: PostingVerificationView };
 
-const inFlight = new Map<string, Promise<VerifyAttemptResult>>();
+/** Only the network observation is shared between overlapping callers, never the judgement or the write. */
+const inFlight = new Map<string, { url: string; promise: Promise<PostingObservation> }>();
+
+function unableObservation(url: string, reason: 'timeout' | 'check_failed', at: Date): PostingObservation {
+  const probe = resolvePostingProbe(url);
+  return {
+    observedAt: at.toISOString(),
+    source: probe?.source ?? 'none',
+    sourceRef: probe?.sourceRef ?? 'none',
+    outcome: 'unable',
+    reason,
+    httpStatus: null,
+    text: null,
+    contentHash: null,
+    validators: null,
+    notModified: false,
+    deadline: null,
+    logicalRequests: 0,
+  };
+}
+
+/** Calls the port; a rejection or a port that never settles is "could not check", never an exception. */
+async function observeSafely(
+  deps: PostingVerificationDeps,
+  verify: PostingVerifierPort['verify'],
+  url: string,
+  validators: PostingValidators | null,
+): Promise<PostingObservation> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const backstop = new Promise<PostingObservation>((resolve) => {
+    timer = setTimeout(() => resolve(unableObservation(url, 'timeout', nowOf(deps))), PORT_BACKSTOP_MS);
+  });
+  try {
+    return await Promise.race([Promise.resolve().then(() => verify({ url, validators })), backstop]);
+  } catch (error) {
+    deps.log?.('the posting check could not run; treating it as "could not check"', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return unableObservation(url, 'check_failed', nowOf(deps));
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function sharedObservation(
+  deps: PostingVerificationDeps,
+  verify: PostingVerifierPort['verify'],
+  attemptId: string,
+  url: string,
+  validators: PostingValidators | null,
+): { promise: Promise<PostingObservation>; joined: boolean } {
+  const existing = inFlight.get(attemptId);
+  if (existing && existing.url === url) return { promise: existing.promise, joined: true };
+  const promise = observeSafely(deps, verify, url, validators).finally(() => {
+    if (inFlight.get(attemptId)?.promise === promise) inFlight.delete(attemptId);
+  });
+  inFlight.set(attemptId, { url, promise });
+  return { promise, joined: false };
+}
 
 function allowedCheckpointsFor(trigger: VerifyTrigger): readonly ApplicationAttemptCheckpoint[] {
   return trigger === 'prepare' ? ['reading_jd'] : PREPARED_CHECKPOINTS;
 }
 
 /**
- * Verifies one attempt's posting. Overlapping calls for the same attempt share one request and one
- * result (the first caller's trigger decides which checkpoints may be written).
+ * Verifies one attempt's posting for one caller. Overlapping callers share the network request only;
+ * each judges and records under its own trigger, checkpoints and liveness.
  */
-export function verifyAttemptPosting(
-  deps: PostingVerificationDeps,
-  attemptId: string,
-  options: VerifyAttemptOptions,
-): Promise<VerifyAttemptResult> {
-  const existing = inFlight.get(attemptId);
-  if (existing) return existing;
-  const run = verifyOnce(deps, attemptId, options).finally(() => {
-    if (inFlight.get(attemptId) === run) inFlight.delete(attemptId);
-  });
-  inFlight.set(attemptId, run);
-  return run;
-}
-
-async function verifyOnce(
+export async function verifyAttemptPosting(
   deps: PostingVerificationDeps,
   attemptId: string,
   options: VerifyAttemptOptions,
 ): Promise<VerifyAttemptResult> {
   const start = nowOf(deps);
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
-  const latest = getLatestPostingVerification(deps.db, attemptId);
   if (isHistoricalAttempt(attempt)) {
-    return { kind: 'not_applicable', view: buildPostingVerificationView(attempt, latest, start) };
+    return { kind: 'not_applicable', view: viewFor(deps, attempt, start) };
   }
-  if (!deps.verifyPosting) {
-    return { kind: 'no_verifier', view: buildPostingVerificationView(attempt, latest, start) };
+  const verify = deps.verifyPosting;
+  if (!verify) {
+    return { kind: 'no_verifier', view: viewFor(deps, attempt, start) };
   }
   // A prepared-attempt check never races a run that is still working on the attempt: that run verifies itself.
   if (options.trigger === 'manual' && IN_FLIGHT_CHECKPOINTS.includes(attempt.checkpoint)) {
-    return { kind: 'not_applicable', view: buildPostingVerificationView(attempt, latest, start) };
+    return { kind: 'not_applicable', view: viewFor(deps, attempt, start) };
   }
 
+  const latest = getLatestPostingVerification(deps.db, attemptId);
   const baselineHash = baselineHashOf(attempt);
   if (latest && !options.force && isPostingFresh(latest, start) && describesCurrentSnapshot(latest, baselineHash)) {
     return {
       kind: 'verified',
-      view: buildPostingVerificationView(attempt, latest, start, { reused: true }),
+      view: viewFor(deps, attempt, start, { reused: true }),
       record: latest,
       requested: false,
+      joined: false,
     };
   }
 
-  const observation = await deps.verifyPosting({
-    url: attempt.canonicalUrl,
-    validators: latest && (latest.etag || latest.lastModified)
-      ? { etag: latest.etag ?? undefined, lastModified: latest.lastModified ?? undefined }
-      : null,
-  });
+  const answered = getNewestDefinitivePostingVerification(deps.db, attemptId);
+  const validatorSource = answered ?? latest;
+  const validators =
+    validatorSource && (validatorSource.etag || validatorSource.lastModified)
+      ? { etag: validatorSource.etag ?? undefined, lastModified: validatorSource.lastModified ?? undefined }
+      : null;
+  const shared = sharedObservation(deps, verify, attemptId, attempt.canonicalUrl, validators);
+  const observation = await shared.promise;
   if (options.isLive && !options.isLive()) {
-    return { kind: 'dropped', view: buildPostingVerificationView(attempt, latest, nowOf(deps)) };
+    return { kind: 'dropped', view: viewFor(deps, workspace.getApplicationAttempt(deps.db, attemptId), nowOf(deps)) };
   }
 
   // The attempt can have moved while the request was out; compare against what it holds NOW.
   const fresh = workspace.getApplicationAttempt(deps.db, attemptId);
   const currentBaseline = baselineHashOf(fresh);
+  const lastAnswer = getNewestDefinitivePostingVerification(deps.db, attemptId);
   const retainedText =
-    observation.notModified && latest?.result === 'materially_changed' ? getPostingObservedText(deps.db, latest.id) : null;
-  const verdict = judge(fresh, currentBaseline, observation, latest, retainedText);
+    observation.notModified && lastAnswer?.result === 'materially_changed' ? getPostingObservedText(deps.db, lastAnswer.id) : null;
+  const verdict = judge(fresh, currentBaseline, observation, lastAnswer, retainedText);
 
   const stored = recordPostingVerification(deps.db, {
     attemptId,
@@ -280,14 +413,18 @@ async function verifyOnce(
     lastModified: observation.validators?.lastModified ?? null,
     changeSummary: verdict.change,
     observedText: verdict.result === 'materially_changed' ? verdict.observedText : null,
+    ...(options.trigger === 'manual' ? { hold: POSTING_HOLD } : {}),
   });
   if (stored.written === 'refused') {
-    deps.log?.('a posting check finished after its attempt moved on; nothing was recorded', { attemptId });
-    return { kind: 'dropped', view: buildPostingVerificationView(workspace.getApplicationAttempt(deps.db, attemptId), stored.record, nowOf(deps)) };
+    deps.log?.('a posting check finished after its attempt moved on; this caller recorded nothing', {
+      attemptId,
+      trigger: options.trigger,
+    });
+    return { kind: 'dropped', view: viewFor(deps, workspace.getApplicationAttempt(deps.db, attemptId), nowOf(deps)) };
   }
 
-  // Filling a description the attempt did not have (or knew was cut off) is the existing on-demand
-  // behaviour, now fed by the verification request itself instead of a second one.
+  // Filling a description the attempt did not have is the existing on-demand behaviour, now fed by
+  // the verification request itself instead of a second one.
   if (options.trigger === 'prepare' && verdict.fillDescription !== null) {
     workspace.recordFetchedJobDescription(deps.db, attemptId, {
       jdSnapshot: verdict.fillDescription,
@@ -296,16 +433,13 @@ async function verifyOnce(
     });
   }
 
-  let invalidated = false;
-  if (options.trigger === 'manual' && verdict.result === 'materially_changed' && stored.record.resolution === null) {
-    invalidated = invalidatePreparedAttempt(deps.db, attemptId, fresh.checkpoint, POSTING_CHANGED_DETAIL);
-  }
   const finalAttempt = workspace.getApplicationAttempt(deps.db, attemptId);
   return {
     kind: 'verified',
-    view: buildPostingVerificationView(finalAttempt, stored.record, nowOf(deps), { invalidated }),
+    view: viewFor(deps, finalAttempt, nowOf(deps), { hold: stored.hold }),
     record: stored.record,
     requested: true,
+    joined: shared.joined,
   };
 }
 
@@ -313,9 +447,9 @@ interface Verdict {
   result: PostingVerificationResult;
   contentHash: string | null;
   deadline: PostingObservation['deadline'];
-  change: { added: string[]; removed: string[] } | null;
+  change: PostingChangeSummary | null;
   observedText: string | null;
-  /** Complete live text to adopt because the attempt had none / an incomplete one. */
+  /** Complete live text to adopt because the attempt had none. */
   fillDescription: string | null;
 }
 
@@ -323,7 +457,7 @@ function judge(
   attempt: ApplicationAttemptRecord,
   baselineHash: string,
   observation: PostingObservation,
-  latest: PostingVerificationRecord | null,
+  lastAnswer: PostingVerificationRecord | null,
   retainedText: string | null,
 ): Verdict {
   const base: Verdict = {
@@ -341,12 +475,12 @@ function judge(
   let contentHash = observation.contentHash;
   let deadline = observation.deadline;
   const text = observation.text;
-  if (contentHash === null && observation.notModified && latest?.contentHash) {
+  if (contentHash === null && observation.notModified && lastAnswer?.contentHash) {
     // The origin confirmed our stored validators: same content as the last time we read it.
-    contentHash = latest.contentHash;
+    contentHash = lastAnswer.contentHash;
     deadline =
-      latest.deadline && latest.deadlineProvenance
-        ? { date: latest.deadline, provenance: latest.deadlineProvenance }
+      lastAnswer.deadline && lastAnswer.deadlineProvenance
+        ? { date: lastAnswer.deadline, provenance: lastAnswer.deadlineProvenance }
         : null;
   }
   if (contentHash === null) return { ...base, result: 'unable_to_verify' };
@@ -360,9 +494,9 @@ function judge(
   }
   if (contentHash === baselineHash) return { ...base, ...common, result: 'confirmed_open' };
   if (text === null) {
-    // Validators say "unchanged since last read", and the last read was a pending change.
-    if (latest?.result === 'materially_changed' && latest.contentHash === contentHash) {
-      return { ...base, ...common, result: 'materially_changed', change: latest.changeSummary, observedText: retainedText };
+    // Validators say "unchanged since last read", and the last read was a change.
+    if (lastAnswer?.result === 'materially_changed' && lastAnswer.contentHash === contentHash) {
+      return { ...base, ...common, result: 'materially_changed', change: lastAnswer.changeSummary, observedText: retainedText };
     }
     return { ...base, ...common, result: 'confirmed_open' };
   }
@@ -372,17 +506,22 @@ function judge(
     ...base,
     ...common,
     result: 'materially_changed',
-    change: { added: comparison.added, removed: comparison.removed },
+    change: {
+      added: comparison.added,
+      removed: comparison.removed,
+      kind: comparison.requirementChange ? 'requirements' : 'text',
+      ...(comparison.bounded ? { bounded: true } : {}),
+    },
     observedText: text,
   };
 }
 
-/** Applies the person's decision about the current finding, then returns the fresh view. */
+/** Applies the person's decision about the current open finding (restoring a held package). */
 export function resolvePostingFinding(
   deps: PostingVerificationDeps,
   attemptId: string,
-  resolution: Extract<PostingVerificationResolution, 'prepare_anyway' | 'keep_current'>,
-): PostingVerificationRecord | null {
+  resolution: 'prepare_anyway' | 'keep_current',
+): ResolvePostingVerificationOutcome | null {
   return resolvePostingVerification(deps.db, attemptId, resolution);
 }
 

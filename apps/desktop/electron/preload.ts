@@ -1987,6 +1987,7 @@ const POSTING_ACTIONS: readonly PostingVerificationAction[] = [
   'prepare_anyway',
 ];
 const POSTING_RESOLUTIONS = ['refreshed', 'prepare_anyway', 'keep_current'] as const;
+const POSTING_CHANGE_KINDS = ['requirements', 'text'] as const;
 
 function boundedLines(value: unknown): string[] {
   return Array.isArray(value)
@@ -2007,6 +2008,10 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
   const resolution = source ? optionalString(source, 'resolution') : undefined;
   const reason = source ? optionalString(source, 'reason') : undefined;
   const checkedAt = source ? optionalString(source, 'checkedAt') : undefined;
+  const changeKind = source ? optionalString(source, 'changeKind') : undefined;
+  const recheck = source ? asRecord(source.recheck) : undefined;
+  const recheckAt = recheck ? optionalString(recheck, 'checkedAt') : undefined;
+  const recheckReason = recheck ? optionalString(recheck, 'reason') : undefined;
   const actions = Array.isArray(source?.actions)
     ? (source.actions as unknown[]).filter((action): action is PostingVerificationAction =>
         (POSTING_ACTIONS as readonly unknown[]).includes(action),
@@ -2027,12 +2032,22 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
         : null,
     noDeadlineStated: known && source?.noDeadlineStated === true,
     change: known && change ? { added: boundedLines(change.added), removed: boundedLines(change.removed) } : null,
+    changeKind:
+      known && change && (POSTING_CHANGE_KINDS as readonly unknown[]).includes(changeKind)
+        ? (changeKind as PostingVerificationView['changeKind'])
+        : null,
     resolution: (POSTING_RESOLUTIONS as readonly unknown[]).includes(resolution)
       ? (resolution as PostingVerificationView['resolution'])
       : null,
     reused: known && source?.reused === true,
     stale: !known || source?.stale !== false,
     invalidated: known && source?.invalidated === true,
+    held: known && source?.held === true,
+    released: known && source?.released === true,
+    recheck:
+      known && recheckAt !== undefined && !Number.isNaN(Date.parse(recheckAt)) && recheckReason !== undefined
+        ? { checkedAt: recheckAt, reason: recheckReason as PostingVerificationView['reason'] & string }
+        : null,
     actions: known ? actions : ['check_again'],
   };
 }
@@ -2046,11 +2061,13 @@ function parseRestartTailoringResult(
   const attemptId = source ? optionalString(source, 'attemptId') : undefined;
   const mode = source ? optionalString(source, 'tailoringMode') : undefined;
   const detail = source ? optionalString(source, 'detail') : undefined;
+  const continued = source ? optionalString(source, 'continued') : undefined;
   return {
     ok: source?.ok === true && attemptId === requestedAttemptId && mode === requestedMode,
     attemptId: attemptId ?? requestedAttemptId,
     tailoringMode: mode === 'original' ? 'original' : 'ai',
     ...(detail === undefined ? {} : { detail }),
+    ...(continued === 'queued' || continued === 'restored' || continued === 'recorded' ? { continued } : {}),
   };
 }
 

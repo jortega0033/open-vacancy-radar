@@ -2158,11 +2158,15 @@ describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
       deadline: { date: '2026-11-15', excerpt: 'Apply by 15 November 2026' },
       noDeadlineStated: false,
       change: { added: ['Eight years required.'], removed: ['Five years required.'] },
+      changeKind: 'requirements',
       resolution: null,
       reused: false,
       stale: false,
       invalidated: true,
-      actions: ['refresh', 'keep_current', 'open_posting'],
+      held: true,
+      released: false,
+      recheck: null,
+      actions: ['refresh', 'keep_current', 'open_posting', 'check_again'],
     };
 
     it('reads, checks and refreshes through fixed channels carrying only the application id', async () => {
@@ -2178,6 +2182,31 @@ describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
       expect(invoke).toHaveBeenNthCalledWith(1, 'application-pipeline:posting-verification', { attemptId: 'attempt-1' });
       expect(invoke).toHaveBeenNthCalledWith(2, 'application-pipeline:verify-posting', { attemptId: 'attempt-1', force: true });
       expect(invoke).toHaveBeenNthCalledWith(3, 'application-pipeline:refresh-from-posting', { attemptId: 'attempt-1' });
+    });
+
+    it('passes on what a decision did (restored / recorded / queued) and nothing else', async () => {
+      const api = await loadPreload('applicationPipeline');
+      const resume = api.resume as (id: string, options?: { resolution?: string }) => Promise<Record<string, unknown>>;
+      invoke.mockResolvedValueOnce({ ok: true, attemptId: 'attempt-1', tailoringMode: 'ai', continued: 'restored' });
+      expect(await resume('attempt-1', { resolution: 'keep_current' })).toEqual({
+        ok: true,
+        attemptId: 'attempt-1',
+        tailoringMode: 'ai',
+        continued: 'restored',
+      });
+      invoke.mockResolvedValueOnce({ ok: true, attemptId: 'attempt-1', tailoringMode: 'ai', continued: 'wipe_everything' });
+      expect(await resume('attempt-1', { resolution: 'keep_current' })).not.toHaveProperty('continued');
+    });
+
+    it('a later failed recheck and the change kind cross only in their documented shapes', async () => {
+      const api = await loadPreload('applicationPipeline');
+      const read = api.postingVerification as (id: string) => Promise<Record<string, unknown>>;
+      invoke.mockResolvedValueOnce({ ...view, recheck: { checkedAt: '2026-10-29T11:00:00.000Z', reason: 'timeout', extra: 1 } });
+      expect((await read('attempt-1')).recheck).toEqual({ checkedAt: '2026-10-29T11:00:00.000Z', reason: 'timeout' });
+      invoke.mockResolvedValueOnce({ ...view, recheck: { checkedAt: 'not a date', reason: 'timeout' }, changeKind: 'everything' });
+      const malformed = await read('attempt-1');
+      expect(malformed.recheck).toBeNull();
+      expect(malformed.changeKind).toBeNull();
     });
 
     it('resume forwards only an allowlisted resolution', async () => {

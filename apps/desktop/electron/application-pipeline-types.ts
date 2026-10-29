@@ -46,6 +46,12 @@ export interface RestartApplicationTailoringResult {
   attemptId: string;
   tailoringMode: 'ai' | 'original';
   detail?: string;
+  /**
+   * What an accepted request did (#687): `queued` = preparation runs again; `restored` = a prepared
+   * package a posting finding had taken out of review was put back exactly as it was (no new work);
+   * `recorded` = only the decision was recorded (the application still waits on its own blocker).
+   */
+  continued?: 'queued' | 'restored' | 'recorded';
 }
 
 /** What a posting check currently says about one attempt (#687). */
@@ -65,7 +71,7 @@ export type PostingVerificationAction = 'check_again' | 'open_posting' | 'refres
 export type PostingVerificationReasonCode =
   | 'verified_open' | 'not_modified' | 'not_found' | 'gone' | 'closure_notice' | 'account_not_found'
   | 'no_authoritative_source' | 'timeout' | 'denied' | 'rate_limited' | 'server_error' | 'network_error'
-  | 'login_wall' | 'redirected_elsewhere' | 'unexpected_response' | 'empty_content';
+  | 'login_wall' | 'redirected_elsewhere' | 'unexpected_response' | 'empty_content' | 'content_too_large' | 'check_failed';
 
 /**
  * Read model for the application flow. Contains no posting text, URL or remote-supplied prose
@@ -88,13 +94,24 @@ export interface PostingVerificationView {
   /** True only after a check that read the posting and found no deadline stated. */
   noDeadlineStated: boolean;
   change: { added: string[]; removed: string[] } | null;
+  /**
+   * `requirements`: requirement-bearing lines changed. `text`: a large rewrite with no requirement
+   * signal, shown as "the posting text changed", never as "the requirements changed".
+   */
+  changeKind: 'requirements' | 'text' | null;
   resolution: 'refreshed' | 'prepare_anyway' | 'keep_current' | null;
   /** This call reused a stored check and made no request. */
   reused: boolean;
   /** Older than the freshness window (or never checked). */
   stale: boolean;
-  /** This call took a prepared attempt out of `ready` because the posting changed. */
+  /** This call took a prepared package out of review because the posting closed or changed. */
   invalidated: boolean;
+  /** A prepared package is out of review until the person decides (Keep / Get ready anyway restore it unchanged). */
+  held: boolean;
+  /** This call found the posting open and unchanged again and put a held package back as it was. */
+  released: boolean;
+  /** A later check of an undecided finding could not reach the posting (the finding still stands). */
+  recheck: { checkedAt: string; reason: PostingVerificationReasonCode } | null;
   actions: PostingVerificationAction[];
 }
 
@@ -126,7 +143,10 @@ export interface ApplicationPipelineBridge {
    * younger than the freshness window unless `force` is set; refuses submitted attempts.
    */
   verifyPosting(attemptId: string, options?: { force?: boolean }): Promise<PostingVerificationView>;
-  /** Replaces the job description with the changed posting and prepares again, deleting the old package. */
+  /**
+   * Replaces the job description with the changed posting and prepares again. Only this explicit
+   * choice deletes the package prepared from the earlier text; Keep never does.
+   */
   refreshFromPosting(attemptId: string): Promise<RestartApplicationTailoringResult>;
   /** Links the letter just saved from the review hand-off to this attempt. Main finds the letter. */
   attachLetter(attemptId: string): Promise<{ ok: boolean; attemptId: string; detail?: string }>;

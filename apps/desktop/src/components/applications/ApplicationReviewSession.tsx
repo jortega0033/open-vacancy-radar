@@ -601,7 +601,10 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
               disabled={closeDisabled}
               onDone={(kind, view) => {
                 if (kind === 'refreshed' || kind === 'resumed') onClose('resolved');
-                else if (view?.invalidated) setRetryNonce((nonce) => nonce + 1);
+                // A package taken out of review, or put back exactly as it was (Keep / Get ready anyway,
+                // or a later check that found the posting unchanged): read the application again and
+                // let the dialog decide from its current state.
+                else if (kind === 'restored' || view?.invalidated || view?.released) setRetryNonce((nonce) => nonce + 1);
               }}
             />
           </div>

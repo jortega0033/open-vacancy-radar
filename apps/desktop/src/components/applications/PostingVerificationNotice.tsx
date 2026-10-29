@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PostingVerificationAction, PostingVerificationView } from '../../window.js';
-import { describePostingVerification, POSTING_ACTION_LABEL } from './posting-verification-text.js';
+import {
+  describePostingVerification,
+  POSTING_ACTION_LABEL,
+  POSTING_ACTION_PENDING_LABEL,
+} from './posting-verification-text.js';
+
+/**
+ * What an action did, for the surrounding screen: `checked` (a new check result), `refreshed`
+ * (preparation queued from the updated posting), `resumed` (preparation queued), `restored` (a held
+ * package was put back exactly as it was) or `recorded` (only the decision was saved).
+ */
+export type PostingNoticeDoneKind = 'checked' | 'refreshed' | 'resumed' | 'restored' | 'recorded';
 
 export interface PostingVerificationNoticeProps {
   /** The application whose posting this describes. Main re-derives everything else from it. */
@@ -10,7 +21,7 @@ export interface PostingVerificationNoticeProps {
   /** Changes whenever the application changes, so the stored check is read again. */
   reloadKey?: string;
   /** Called after an action that changed the application, so the page can refresh. */
-  onDone?: (kind: 'checked' | 'refreshed' | 'resumed', view?: PostingVerificationView) => void;
+  onDone?: (kind: PostingNoticeDoneKind, view?: PostingVerificationView) => void;
   /** Disables the actions while the surrounding dialog is busy. */
   disabled?: boolean;
 }
@@ -27,27 +38,43 @@ export interface PostingVerificationNoticeProps {
  */
 export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, onDone, disabled = false }: PostingVerificationNoticeProps) {
   const [view, setView] = useState<PostingVerificationView | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState<PostingVerificationAction | null>(null);
   const [error, setError] = useState<string>();
+  // An action can outlive the dialog it was started in; nothing is set on an unmounted notice.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const reload = useCallback(async (isCurrent: () => boolean) => {
+    // A bridge from an older build has no such method: show nothing rather than fail.
+    if (typeof window.applicationPipeline?.postingVerification !== 'function') return;
+    try {
+      const next = await window.applicationPipeline.postingVerification(attemptId);
+      if (isCurrent()) {
+        setView(next);
+        setLoadFailed(false);
+      }
+    } catch {
+      if (isCurrent()) {
+        setView(null);
+        setLoadFailed(true);
+      }
+    }
+  }, [attemptId]);
 
   useEffect(() => {
     let cancelled = false;
     setError(undefined);
-    async function load() {
-      // A bridge from an older build has no such method: show nothing rather than fail.
-      if (typeof window.applicationPipeline?.postingVerification !== 'function') return;
-      try {
-        const next = await window.applicationPipeline.postingVerification(attemptId);
-        if (!cancelled) setView(next);
-      } catch {
-        if (!cancelled) setView(null);
-      }
-    }
-    void load();
+    void reload(() => !cancelled && mounted.current);
     return () => {
       cancelled = true;
     };
-  }, [attemptId, reloadKey]);
+  }, [reload, reloadKey]);
 
   const run = useCallback(
     async (action: PostingVerificationAction) => {
@@ -56,27 +83,45 @@ export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, on
       try {
         if (action === 'check_again') {
           const next = await window.applicationPipeline.verifyPosting(attemptId, { force: true });
+          if (!mounted.current) return;
           setView(next);
           onDone?.('checked', next);
         } else if (action === 'refresh') {
           const result = await window.applicationPipeline.refreshFromPosting(attemptId);
           if (!result.ok) throw new Error(result.detail ?? 'We could not refresh this application.');
+          if (!mounted.current) return;
           onDone?.('refreshed');
         } else if (action === 'keep_current' || action === 'prepare_anyway') {
           const result = await window.applicationPipeline.resume(attemptId, { resolution: action });
           if (!result.ok) throw new Error(result.detail ?? 'We could not continue with this application.');
-          onDone?.('resumed');
+          if (!mounted.current) return;
+          if (result.continued === 'restored' || result.continued === 'recorded') {
+            // Nothing was queued: show the decision here and let the screen re-read the application.
+            await reload(() => mounted.current);
+            onDone?.(result.continued);
+          } else {
+            onDone?.('resumed');
+          }
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'That did not work. Try again.');
+        if (mounted.current) setError(err instanceof Error ? err.message : 'That did not work. Try again.');
       } finally {
-        setBusy(null);
+        if (mounted.current) setBusy(null);
       }
     },
-    [attemptId, onDone],
+    [attemptId, onDone, reload],
   );
 
-  if (view === null) return null;
+  if (view === null) {
+    if (!loadFailed) return null;
+    return (
+      <section aria-label="Posting check" data-testid="posting-verification" data-status="load_failed" className="rounded-box border border-base-300 p-3 text-sm">
+        <p role="status" className="text-xs text-base-content/70">
+          We could not load the posting check. This does not mean the posting is closed.
+        </p>
+      </section>
+    );
+  }
   const text = describePostingVerification(view);
   const warning = text.tone === 'warning';
   const buttonActions = view.actions.filter((action) => action !== 'open_posting');
@@ -151,7 +196,9 @@ export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, on
               disabled={disabled || busy !== null}
               onClick={() => void run(action)}
             >
-              {busy === action ? 'Working…' : POSTING_ACTION_LABEL[action as keyof typeof POSTING_ACTION_LABEL]}
+              {busy === action
+                ? POSTING_ACTION_PENDING_LABEL[action as keyof typeof POSTING_ACTION_PENDING_LABEL]
+                : POSTING_ACTION_LABEL[action as keyof typeof POSTING_ACTION_LABEL]}
             </button>
           ))}
           {canOpen && (

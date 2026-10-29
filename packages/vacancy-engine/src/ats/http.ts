@@ -23,6 +23,13 @@ export type AtsHttpRequestOptions = {
    * ladder of retries nobody is watching.
    */
   maxRetries?: number;
+  /** May only reduce the client's redirect limit, never raise it (#687: a bounded posting check). */
+  maxRedirects?: number;
+  /**
+   * Caller cancellation (#687). The shared SafeHttpClient stops DNS, a queued scheduler slot and the
+   * in-flight fetch when it aborts; a seam with no network may ignore it.
+   */
+  signal?: AbortSignal;
 };
 
 /**

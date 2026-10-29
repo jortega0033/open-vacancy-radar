@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { CvSourceDocument } from './cv-source-schema.js';
 import {
   CV_EVIDENCE_OVERLAY_ORIGINS,
@@ -543,7 +543,9 @@ export const applicationArtifacts = sqliteTable('application_artifacts', {
  * that has not been submitted replaces the snapshot. A submitted attempt keeps its package forever;
  * its rows here are history, never an input.
  *
- * `onDelete: 'cascade'` for the same reason artifacts cascade.
+ * `onDelete: 'cascade'` for the same reason artifacts cascade. Rows are bounded per attempt (see
+ * `posting-verification-store.ts`), looked up through `(attempt_id, observed_at)`, and a changed
+ * posting's full text is kept only while the person has not yet decided about it.
  */
 export const applicationPostingVerifications = sqliteTable('application_posting_verifications', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
@@ -580,10 +582,23 @@ export const applicationPostingVerifications = sqliteTable('application_posting_
   changeSummary: text('change_summary', { mode: 'json' }).$type<{ added: string[]; removed: string[] } | null>(),
   /** The changed posting's full text, kept only for `materially_changed` so a refresh needs no second fetch. */
   observedText: text('observed_text'),
-  /** The person's decision about this finding, or null while it is still open. */
-  resolution: text('resolution', { enum: ['refreshed', 'prepare_anyway', 'keep_current'] }),
+  /**
+   * The person's decision about this finding, or null while it is still open. `superseded` = a later
+   * definitive check replaced it before anyone decided (no decision was made).
+   */
+  resolution: text('resolution', { enum: ['refreshed', 'prepare_anyway', 'keep_current', 'superseded'] }),
   resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
-});
+  /**
+   * A prepared package this finding took out of review while the person decides: the attempt's
+   * checkpoint, detail and prepared answers exactly as they were, restored unchanged by Keep / Get
+   * ready anyway (or by a later check that finds the posting open and unchanged). Null otherwise.
+   */
+  heldCheckpoint: text('held_checkpoint'),
+  heldCheckpointDetail: text('held_checkpoint_detail'),
+  heldPreparedFields: text('held_prepared_fields', { mode: 'json' }).$type<PreparedApplicationFields | null>(),
+}, (table) => [
+  index('application_posting_verifications_attempt_observed_idx').on(table.attemptId, table.observedAt),
+]);
 
 /**
  * The durable evidence record behind every submission-outcome claim this app makes (#271).

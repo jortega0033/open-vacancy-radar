@@ -1331,3 +1331,81 @@ describe('SafeHttpClient admitNetworkRequest (#686)', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 });
+
+describe('SafeHttpClient per-request caller signal and redirect cap (#687)', () => {
+  it('aborts an in-flight fetch through its signal and frees the scheduler slot', async () => {
+    const scheduler = new RequestScheduler(1, 1);
+    let fetchSignal: AbortSignal | undefined;
+    const fetchFn = vi.fn(
+      asFetch((_input, init) => {
+        fetchSignal = init?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted by signal')), { once: true });
+        });
+      }),
+    );
+    const client = createClient({ fetchFn, scheduler, timeoutMs: 60_000, maxRetries: 0 });
+    const controller = new AbortController();
+    const reason = new Error('caller gave up');
+    const request = client.get('https://example.com/jobs/1', { signal: controller.signal });
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    controller.abort(reason);
+    await expect(request).rejects.toBe(reason);
+    expect(fetchSignal?.aborted).toBe(true);
+    await vi.waitFor(() => expect(scheduler.snapshot()).toMatchObject({ activeGlobal: 0, queued: 0 }));
+  });
+
+  it('a request aborted while queued never fetches when it reaches the front', async () => {
+    const scheduler = new RequestScheduler(1, 1);
+    let releaseFirst!: () => void;
+    const fetchFn = vi.fn(
+      asFetch((input) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        if (url.endsWith('/first')) {
+          return new Promise<Response>((resolve) => {
+            releaseFirst = () => resolve(new Response('first'));
+          });
+        }
+        return Promise.resolve(new Response('second'));
+      }),
+    );
+    const client = createClient({ fetchFn, scheduler, timeoutMs: 60_000, maxRetries: 0 });
+    const first = client.get('https://example.com/first', { cache: 'no-store' });
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    const controller = new AbortController();
+    const second = client.get('https://example.com/second', { cache: 'no-store', signal: controller.signal });
+    await vi.waitFor(() => expect(scheduler.snapshot().queued).toBe(1));
+    const reason = new Error('no longer wanted');
+    controller.abort(reason);
+    // The caller is released at once, while the first request still holds the only slot.
+    await expect(second).rejects.toBe(reason);
+    releaseFirst();
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await vi.waitFor(() => expect(scheduler.snapshot()).toMatchObject({ activeGlobal: 0, queued: 0 }));
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('an already aborted signal makes no request at all', async () => {
+    const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('ok'))));
+    const client = createClient({ fetchFn });
+    const controller = new AbortController();
+    controller.abort(new Error('before start'));
+    await expect(client.get('https://example.com/jobs', { signal: controller.signal })).rejects.toThrow('before start');
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('a per-request redirect cap can only reduce the client limit', async () => {
+    const fetchFn = vi.fn(
+      asFetch((input) => {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        const hop = Number(url.searchParams.get('hop') ?? '0');
+        return Promise.resolve(new Response(null, { status: 302, headers: { location: `/r?hop=${hop + 1}` } }));
+      }),
+    );
+    const client = createClient({ fetchFn, maxRedirects: 5, maxRetries: 0 });
+    await expect(client.get('https://example.com/r', { maxRedirects: 1 })).rejects.toMatchObject({ code: 'redirect_limit' });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    await expect(client.get('https://example.com/r', { maxRedirects: 6 })).rejects.toBeInstanceOf(RangeError);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+});

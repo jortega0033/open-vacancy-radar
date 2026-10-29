@@ -35,10 +35,14 @@ function view(overrides: Partial<PostingVerificationView> = {}): PostingVerifica
     deadline: null,
     noDeadlineStated: true,
     change: null,
+    changeKind: null,
     resolution: null,
     reused: false,
     stale: false,
     invalidated: false,
+    held: false,
+    released: false,
+    recheck: null,
     actions: ['check_again'],
     ...overrides,
   };
@@ -165,7 +169,7 @@ describe('PostingVerificationNotice', () => {
     const onDone = vi.fn();
     render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} onDone={onDone} />);
 
-    await screen.findByText('The posting changed since it was read.');
+    await screen.findByText('The requirements in this posting changed since it was read.');
     expect(screen.getByText('Eight years of TypeScript experience is required.')).toBeInTheDocument();
     expect(screen.getByText('Five years of TypeScript experience is required.')).toBeInTheDocument();
     // Nothing was refreshed just by looking at it.
@@ -208,6 +212,67 @@ describe('PostingVerificationNotice', () => {
     expect(await screen.findByText('The posting is not rechecked after you apply.')).toBeInTheDocument();
     expect(screen.getByText('The documents you used stay exactly as they were.')).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('a held package says it is paused and that Keep puts it back exactly as it was', async () => {
+    const bridge = installPipeline(
+      { ...CHANGED, held: true, changeKind: 'requirements' },
+      { resume: vi.fn().mockResolvedValue({ ok: true, attemptId: ATTEMPT_ID, tailoringMode: 'ai', continued: 'restored' }) },
+    );
+    const onDone = vi.fn();
+    render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} onDone={onDone} />);
+    expect(await screen.findByText(/Your prepared application is paused until you choose\. Keep my application puts it back exactly as it was/u)).toBeInTheDocument();
+    bridge.postingVerification.mockResolvedValue({ ...CHANGED, resolution: 'keep_current', held: false, actions: ['open_posting', 'check_again'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my application' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('restored'));
+    // Nothing was queued, so the notice re-reads and shows the recorded decision in place.
+    expect(await screen.findByText('You chose to keep your application as prepared.')).toBeInTheDocument();
+  });
+
+  it('a large rewrite with no requirement signal is called a text change, never changed requirements', () => {
+    const text = describePostingVerification({ ...CHANGED, changeKind: 'text' }, NOW);
+    expect(text.headline).toBe('The posting text changed a lot since it was read.');
+    expect(`${text.headline} ${text.lines.join(' ')}`).not.toMatch(/requirements/iu);
+  });
+
+  it('a later check that could not run is shown beside the finding, which still stands', () => {
+    const text = describePostingVerification({ ...CLOSED, recheck: { checkedAt: '2026-10-29T11:30:00.000Z', reason: 'timeout' } }, NOW);
+    expect(text.headline).toBe('This posting looks closed.');
+    expect(text.lines).toContain('A later check could not reach the posting. The check timed out. This finding still stands.');
+  });
+
+  it('a link with no authoritative route shows no useless "Check again"', async () => {
+    installPipeline(view({ status: 'unable_to_verify', reason: 'no_authoritative_source', source: null, sourceRef: null, noDeadlineStated: false, actions: ['open_posting'] }));
+    render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} />);
+    expect(await screen.findByText('This job source cannot be checked automatically.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open the posting' })).toBeInTheDocument();
+  });
+
+  it('says so when the stored check cannot be loaded, without calling the posting closed', async () => {
+    installPipeline(view(), { postingVerification: vi.fn().mockRejectedValue(new Error('ipc failed')) });
+    render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} />);
+    expect(await screen.findByText('We could not load the posting check. This does not mean the posting is closed.')).toBeInTheDocument();
+  });
+
+  it('shows a pending label while a check runs and updates nothing after the notice is gone', async () => {
+    let finish!: (value: PostingVerificationView) => void;
+    const bridge = installPipeline(view(), {
+      verifyPosting: vi.fn(() => new Promise<PostingVerificationView>((resolve) => {
+        finish = resolve;
+      })),
+    });
+    const onDone = vi.fn();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { unmount } = render(<PostingVerificationNotice attemptId={ATTEMPT_ID} postingUrl={POSTING_URL} onDone={onDone} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    expect(await screen.findByRole('button', { name: 'Checking…' })).toBeDisabled();
+    unmount();
+    await act(async () => finish(CLOSED));
+    expect(bridge.verifyPosting).toHaveBeenCalledTimes(1);
+    expect(onDone).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
   });
 
   it('renders nothing when the bridge predates the check, instead of failing the screen', async () => {
@@ -314,6 +379,26 @@ describe('the review dialog (resuming a prepared application)', () => {
     // The generic "Resume" retry would only re-run into the same stop, so it is not offered.
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument();
+  });
+
+  it('a closed posting on a prepared package asks for the same explicit choice; Get ready anyway reopens the review', async () => {
+    const heldClosed = { ...CLOSED, held: true, invalidated: true };
+    const bridge = installPipeline(heldClosed, {
+      resume: vi.fn().mockResolvedValue({ ok: true, attemptId: ATTEMPT_ID, tailoringMode: 'ai', continued: 'restored' }),
+    });
+    const heldAttempt = { ...ATTEMPT, checkpoint: 'needs_user', checkpointDetail: MAIN_CLOSED_DETAIL } as ApplicationAttemptRecord;
+    const { openReview } = installExecutor(heldAttempt);
+    const onClose = vi.fn();
+    render(<ApplicationReviewSession attempt={READY} onClose={onClose} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get ready anyway' }));
+    expect(openReview).not.toHaveBeenCalled();
+    // Restored exactly as it was: the dialog reads the application again and opens the review.
+    (window as unknown as { workspace: { getApplicationAttempt: ReturnType<typeof vi.fn> } }).workspace.getApplicationAttempt.mockResolvedValue(READY);
+    bridge.verifyPosting.mockResolvedValue({ ...CLOSED, resolution: 'prepare_anyway', actions: ['open_posting', 'check_again'] });
+    await waitFor(() => expect(openReview).toHaveBeenCalledTimes(1));
+    expect(bridge.resume).toHaveBeenCalledWith(ATTEMPT_ID, { resolution: 'prepare_anyway' });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('a check that cannot run never blocks the review', async () => {

@@ -22,6 +22,7 @@ import {
 } from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import {
+  isPostingFindingDetail,
   POSTING_CHANGED_DETAIL,
   POSTING_CLOSED_DETAIL,
   refreshAttemptFromPosting,
@@ -29,6 +30,7 @@ import {
   verifyAttemptPosting,
   type PostingVerifierPort,
 } from './application-posting-verification.js';
+import { discardPostingHold, isHistoricalAttempt } from './workspace/posting-verification-store.js';
 import type {
   PostingVerificationView,
   StartApplicationAttemptRefusal,
@@ -359,6 +361,8 @@ export interface RestartApplicationTailoringResult {
   attemptId: string;
   tailoringMode: ApplicationAttemptRecord['tailoringMode'];
   detail?: string;
+  /** See `application-pipeline-types.ts`: `queued` | `restored` (held package put back) | `recorded`. */
+  continued?: 'queued' | 'restored' | 'recorded';
 }
 
 /**
@@ -923,27 +927,46 @@ export async function resumeApplicationAttempt(
       detail: 'this application is not waiting on a preparation blocker',
     };
   }
-  // The person's explicit decision about a posting finding (#687) is recorded before preparation is
-  // queued, and only if that finding is still the current one: a stale click decides nothing.
-  if (options.resolution !== undefined && resolvePostingFinding(deps, attemptId, options.resolution) === null) {
-    return {
-      ok: false,
-      attemptId,
-      tailoringMode: attempt.tailoringMode,
-      detail: 'that posting finding is no longer current; check the posting again first',
-    };
+  // The person's explicit decision about a posting finding (#687), applied to the finding that is still
+  // open (a stale click decides nothing). It never deletes or regenerates a prepared package:
+  //  - a package the finding took out of review is put back exactly as it was (`restored`);
+  //  - an application waiting on its own, unrelated blocker keeps that blocker (`recorded`);
+  //  - only an application whose PREPARATION stopped on this finding, so nothing was prepared yet,
+  //    goes on to be prepared (`queued`).
+  if (options.resolution !== undefined) {
+    if (isHistoricalAttempt(attempt)) {
+      return { ok: false, attemptId, tailoringMode: attempt.tailoringMode, detail: 'this application was already sent' };
+    }
+    const decided = resolvePostingFinding(deps, attemptId, options.resolution);
+    if (decided === null) {
+      return {
+        ok: false,
+        attemptId,
+        tailoringMode: attempt.tailoringMode,
+        detail: 'that posting finding is no longer current; check the posting again first',
+      };
+    }
+    if (decided.restored) {
+      return { ok: true, attemptId, tailoringMode: attempt.tailoringMode, continued: 'restored' };
+    }
+    if (!(attempt.checkpoint === 'needs_user' && isPostingFindingDetail(attempt.checkpointDetail))) {
+      return { ok: true, attemptId, tailoringMode: attempt.tailoringMode, continued: 'recorded' };
+    }
   }
+  // Preparing again from scratch: a package held by an older finding belongs to the old preparation.
+  discardPostingHold(deps.db, attemptId);
   await closeApplicationReview(attemptId).catch(() => {});
   workspace.restartApplicationTailoring(deps.db, attemptId, attempt.tailoringMode);
   await enqueueApplicationAttempt(deps, attemptId);
-  return { ok: true, attemptId, tailoringMode: attempt.tailoringMode };
+  return { ok: true, attemptId, tailoringMode: attempt.tailoringMode, continued: 'queued' };
 }
 
 /**
  * Resumption of a stale prepared job (#687): one bounded check of the live posting for an attempt that
  * is already prepared (or waiting), run when its stored check is older than the freshness window.
- * A changed posting takes a `ready` package out of review so it cannot be sent; a closed one is shown
- * as a warning and leaves the documents alone. Submitted attempts are never consulted.
+ * A closed or changed posting takes a prepared package (a `ready` review or a manual hand-off) out of
+ * review until the person chooses, keeping every document and answer for Keep / Get ready anyway; an
+ * application waiting on anything else only shows the finding. Submitted attempts are never consulted.
  */
 export async function verifyPreparedApplicationAttempt(
   deps: ApplicationPipelineDeps,
@@ -956,7 +979,7 @@ export async function verifyPreparedApplicationAttempt(
   });
   if (result.view.invalidated) {
     await closeApplicationReview(attemptId).catch((err: unknown) => {
-      deps.log?.('could not close the review of an attempt whose posting changed', { attemptId, error: describeError(err) });
+      deps.log?.('could not close the review of an attempt whose posting closed or changed', { attemptId, error: describeError(err) });
     });
   }
   return result.view;
@@ -974,10 +997,11 @@ export async function refreshApplicationFromPosting(
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
   const refreshed = refreshAttemptFromPosting(deps, attemptId);
   if (!refreshed.ok) return { ok: false, attemptId, tailoringMode: attempt.tailoringMode, detail: refreshed.detail };
+  discardPostingHold(deps.db, attemptId);
   await closeApplicationReview(attemptId).catch(() => {});
   workspace.restartApplicationTailoring(deps.db, attemptId, attempt.tailoringMode);
   await enqueueApplicationAttempt(deps, attemptId);
-  return { ok: true, attemptId, tailoringMode: attempt.tailoringMode };
+  return { ok: true, attemptId, tailoringMode: attempt.tailoringMode, continued: 'queued' };
 }
 
 export interface AttachLetterResult {
