@@ -2112,8 +2112,10 @@ const companyEvidenceApi: CompanyEvidenceBridge = {
   async confirmFact(target, factId) {
     return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:confirm-fact', { ...target, factId }));
   },
-  async correctFact(target, factId, claim) {
-    return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:correct-fact', { ...target, factId, claim }));
+  async correctFact(target, factId, claim, quote) {
+    return parseCompanyEvidenceResult(
+      await ipcRenderer.invoke('company-evidence:correct-fact', { ...target, factId, claim, ...(quote ? { quote } : {}) }),
+    );
   },
   async withdrawFact(target, factId) {
     return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:withdraw-fact', { ...target, factId }));

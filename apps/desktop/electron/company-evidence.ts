@@ -18,7 +18,15 @@
  *     for a role claim -- belongs to THIS role. Everything else stays a visible lead.
  *  3. **Renewal is explicit.** `expiresAt` is written when the evidence is observed. Nothing in
  *     here extends it; only a successful re-fetch of the source (the service) writes a new one.
+ *  4. **A found passage must say the claim.** "Source confirmed" means the quoted passage was found
+ *     on the page AND the claim is worded from that passage (`assessQuoteSupport`). It is a lexical
+ *     floor, not semantic verification: a true paraphrase stays a lead until the person confirms it.
  */
+
+import { parse as parseDomain } from 'tldts';
+import { parseAtsTenant, type AtsTenant } from './workspace/application-identity.js';
+
+export type { AtsTenant } from './workspace/application-identity.js';
 
 export type CompanyEvidenceScope = 'company' | 'role';
 export type CompanyEvidenceTopic =
@@ -74,13 +82,18 @@ export function ttlFor(scope: CompanyEvidenceScope): number {
 /* ------------------------------------------------------------------------ identity ----------- */
 
 export interface CompanyIdentity {
-  /** `ats:<provider>:<board>` | `host:<host>` | `domain:<host>`; null = not verified. */
+  /** `ats:<provider>:<board>` | `host:<domain>` | `domain:<domain>`; null = not verified. */
   verifiedKey: string | null;
   keyKind: CompanyEvidenceKeyKind | null;
-  /** The employer host (posting host or confirmed domain) or the ATS host for a tenant, if any. */
+  /**
+   * The employer's OWN registrable website (`northwind.example`), known only for a `posting_host` or
+   * `user_domain` identity. Always null for an ATS tenant: a job board's host is never the employer's site.
+   */
   host: string | null;
+  /** For an `ats_tenant` identity: the job-board account the posting lives under. */
+  tenant: AtsTenant | null;
   displayName: string;
-  /** Normalised name, used ONLY to PROPOSE a link between look-alike records, never as identity. */
+  /** Normalised name, used ONLY to PROPOSE a link or a suggestion, never as identity. */
   nameKey: string;
 }
 
@@ -93,8 +106,8 @@ export function nameKeyOf(company: string): string {
     .replace(/^-+|-+$/gu, '');
 }
 
-/** Job boards and aggregators: a posting hosted here says nothing about who the employer is. */
-const AGGREGATOR_HOSTS = [
+/** Job boards, aggregators and ATS providers: a page hosted here says nothing about who the employer is. */
+const JOB_BOARD_DOMAINS = [
   'linkedin.com',
   'indeed.com',
   'glassdoor.com',
@@ -116,9 +129,26 @@ const AGGREGATOR_HOSTS = [
   'google.com',
   'facebook.com',
   'ind.nl',
+  // ATS providers: their tenants are identified by `parseAtsTenant`, never by the provider's domain.
+  'greenhouse.io',
+  'lever.co',
+  'ashbyhq.com',
+  'rippling.com',
+  'smartrecruiters.com',
+  'workable.com',
+  'recruitee.com',
+  'personio.com',
+  'personio.de',
+  'teamtailor.com',
+  'myworkdayjobs.com',
+  'workday.com',
 ];
 
-const GENERIC_SUBDOMAINS = new Set(['www', 'careers', 'career', 'jobs', 'job', 'apply', 'work', 'boards', 'join']);
+/** Trailing legal-form words that may be dropped when comparing a name to a domain label. */
+const LEGAL_FORMS = new Set([
+  'bv', 'nv', 'vof', 'inc', 'incorporated', 'ltd', 'limited', 'llc', 'llp', 'gmbh', 'ag', 'se', 'sa', 'sas', 'srl', 'plc',
+  'corp', 'corporation', 'co', 'company',
+]);
 
 export function cleanHost(value: string): string | null {
   const text = value.trim().toLowerCase();
@@ -132,38 +162,64 @@ export function cleanHost(value: string): string | null {
     } catch {
       return null;
     }
+  } else if (/[/?#@:]/u.test(text)) {
+    return null;
   }
   host = host.replace(/\.$/u, '');
   if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/u.test(host)) return null;
   return host;
 }
 
-/** `careers.northwind.example` -> `northwind.example`; keeps a country-code second level (`.co.uk`). */
-export function baseHost(host: string): string {
-  const parts = host.split('.');
-  while (parts.length > 2 && GENERIC_SUBDOMAINS.has(parts[0]!)) parts.shift();
-  return parts.join('.');
+function isJobBoardHost(host: string): boolean {
+  return JOB_BOARD_DOMAINS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
 }
 
-function isAggregatorHost(host: string): boolean {
-  return AGGREGATOR_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
+export type EmployerDomainCheck =
+  | { ok: true; domain: string; label: string }
+  | { ok: false; reason: 'invalid_domain' | 'shared_or_public_domain' | 'job_board_domain' };
+
+/**
+ * The registrable domain an employer could own, using the Public Suffix List (tldts, including its
+ * PRIVATE section). A public suffix (`co.uk`), an IP address and any host under a shared-hosting
+ * suffix (`*.github.io`, `*.blogspot.com`, `*.herokuapp.com`, `*.vercel.app`...) are refused: on
+ * those, anyone can publish, so a page there can never be "the employer's own site".
+ */
+export function employerDomainOf(value: string): EmployerDomainCheck {
+  const host = cleanHost(value);
+  if (!host) return { ok: false, reason: 'invalid_domain' };
+  const parsed = parseDomain(host, { allowPrivateDomains: true });
+  if (parsed.isIp || !parsed.domain || !parsed.domainWithoutSuffix || parsed.isPrivate) {
+    return { ok: false, reason: 'shared_or_public_domain' };
+  }
+  if (isJobBoardHost(host) || isJobBoardHost(parsed.domain)) return { ok: false, reason: 'job_board_domain' };
+  return { ok: true, domain: parsed.domain, label: parsed.domainWithoutSuffix };
 }
 
-/** The registrable-ish label (`northwind` for `careers.northwind.example`). */
-function brandLabel(host: string): string {
-  const parts = baseHost(host).split('.');
-  const secondLevel = new Set(['co', 'com', 'org', 'net', 'ac', 'gov']);
-  const labelIndex = parts.length >= 3 && secondLevel.has(parts[parts.length - 2]!) ? parts.length - 3 : parts.length - 2;
-  return parts[Math.max(0, labelIndex)] ?? '';
-}
-
-/** A first-party host only counts when its brand label is recognisably the company named. */
-function hostPlausiblyBelongsTo(host: string, company: string): boolean {
-  if (isAggregatorHost(host)) return false;
-  const label = brandLabel(host).replace(/[^a-z0-9]/gu, '');
-  const name = nameKeyOf(company).replace(/-/gu, '');
-  if (label.length < 4 || name.length < 4) return false;
-  return name === label || name.startsWith(label) || label.startsWith(name);
+/**
+ * A posting host is the employer's own only when its registrable label IS the company name (all
+ * separators removed, optionally without a trailing legal form). A prefix or a superstring
+ * (`apex` vs `apexlegends`, `acme` vs `acme-recruiting`) is a near miss: it stays unverified and is
+ * offered to the person as a suggestion to confirm, never assumed.
+ */
+export function domainLabelMatchesName(label: string, company: string): boolean {
+  const compact = label.toLowerCase().replace(/[^a-z0-9]/gu, '');
+  // "B.V." / "N.V." arrive as single letters: join runs of single letters back into one word.
+  const words: string[] = [];
+  let singleRun = false;
+  for (const word of nameKeyOf(company).split('-')) {
+    if (word === '') continue;
+    if (word.length === 1 && singleRun) words[words.length - 1] += word;
+    else words.push(word);
+    singleRun = word.length === 1;
+  }
+  if (compact.length < 3 || words.length === 0) return false;
+  const variants = new Set([words.join('')]);
+  const trimmed = [...words];
+  while (trimmed.length > 1 && LEGAL_FORMS.has(trimmed[trimmed.length - 1]!)) {
+    trimmed.pop();
+    variants.add(trimmed.join(''));
+  }
+  return variants.has(compact);
 }
 
 export interface DeriveIdentityInput {
@@ -173,6 +229,21 @@ export interface DeriveIdentityInput {
   employerKey: string;
 }
 
+function httpsUrl(value: string): URL | null {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      (url.port === '' || url.port === '443') &&
+      !url.hostname.endsWith('.')
+      ? url
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The verified identity of the employer a vacancy names, or `verifiedKey: null` when the only
  * thing known is a name. Never throws, never reaches the network.
@@ -180,42 +251,43 @@ export interface DeriveIdentityInput {
 export function deriveCompanyIdentity(input: DeriveIdentityInput): CompanyIdentity {
   const displayName = sanitizeLabel(input.company) || 'this company';
   const nameKey = nameKeyOf(input.company);
-  const tenant = /^([a-z0-9]+):([a-z0-9._-]+)$/u.exec(input.employerKey.trim());
-  let host: string | null;
-  let isHttps: boolean;
-  try {
-    const url = new URL(input.canonicalUrl.trim());
-    isHttps = url.protocol === 'https:' && !url.username && !url.password;
-    host = cleanHost(url.hostname);
-  } catch {
-    isHttps = false;
-    host = null;
+  const none: CompanyIdentity = { verifiedKey: null, keyKind: null, host: null, tenant: null, displayName, nameKey };
+  const url = httpsUrl(input.canonicalUrl);
+  if (!url) return none;
+  // The tenant must be what the exact ATS URL rules say AND what the attempt's own key says.
+  const tenant = parseAtsTenant(url.href);
+  if (tenant) {
+    return input.employerKey.trim().toLowerCase() === `${tenant.provider}:${tenant.board}`
+      ? { verifiedKey: `ats:${tenant.provider}:${tenant.board}`, keyKind: 'ats_tenant', host: null, tenant, displayName, nameKey }
+      : none;
   }
-  if (tenant && isHttps) {
-    return {
-      verifiedKey: `ats:${tenant[1]}:${tenant[2]}`,
-      keyKind: 'ats_tenant',
-      host,
-      displayName,
-      nameKey,
-    };
+  const domain = employerDomainOf(url.hostname);
+  if (domain.ok && domainLabelMatchesName(domain.label, input.company)) {
+    return { verifiedKey: `host:${domain.domain}`, keyKind: 'posting_host', host: domain.domain, tenant: null, displayName, nameKey };
   }
-  if (host && isHttps && hostPlausiblyBelongsTo(host, input.company)) {
-    const base = baseHost(host);
-    return { verifiedKey: `host:${base}`, keyKind: 'posting_host', host: base, displayName, nameKey };
-  }
-  return { verifiedKey: null, keyKind: null, host: null, displayName, nameKey };
+  return none;
 }
 
-/** The identity a person confirmed by naming the employer's own domain. */
+/**
+ * A domain the person could be asked to confirm for a name-only or near-miss vacancy: the posting's
+ * own registrable domain when it is a plausible employer site. A SUGGESTION, never an identity.
+ */
+export function suggestedEmployerDomain(canonicalUrl: string): string | null {
+  const url = httpsUrl(canonicalUrl);
+  if (!url || parseAtsTenant(url.href)) return null;
+  const domain = employerDomainOf(url.hostname);
+  return domain.ok ? domain.domain : null;
+}
+
+/** The identity a person confirmed by naming the employer's own domain (registrable domain only). */
 export function identityFromConfirmedDomain(company: string, domain: string): CompanyIdentity | null {
-  const host = cleanHost(domain);
-  if (!host || isAggregatorHost(host)) return null;
-  const base = baseHost(host);
+  const check = employerDomainOf(domain);
+  if (!check.ok) return null;
   return {
-    verifiedKey: `domain:${base}`,
+    verifiedKey: `domain:${check.domain}`,
     keyKind: 'user_domain',
-    host: base,
+    host: check.domain,
+    tenant: null,
     displayName: sanitizeLabel(company) || 'this company',
     nameKey: nameKeyOf(company),
   };
@@ -260,27 +332,23 @@ export function isHttpsSource(value: string): boolean {
   }
 }
 
-/** Does this source live on the employer's own host (or its ATS tenant)? */
+/**
+ * Is this source the employer's own (its exact ATS tenant, or a page on its own registrable domain)?
+ * Exact rules only: a host that merely CONTAINS a provider's name, a board name in the path of an
+ * unrelated host, credentials, a non-default port or a shared-hosting tenant never qualify.
+ */
 export function sourceMatchesIdentity(sourceUrl: string, identity: Pick<CompanyIdentity, 'verifiedKey' | 'host'>): boolean {
-  let url: URL;
-  try {
-    url = new URL(sourceUrl);
-  } catch {
-    return false;
-  }
-  const host = cleanHost(url.hostname);
-  if (!host) return false;
+  const url = httpsUrl(sourceUrl);
+  if (!url) return false;
   const key = identity.verifiedKey ?? '';
   if (key.startsWith('ats:')) {
     const [, provider = '', board = ''] = key.split(':');
-    return (
-      url.hostname.toLowerCase().includes(provider) &&
-      (url.pathname.toLowerCase().split('/').includes(board.toLowerCase()) || host.startsWith(`${board.toLowerCase()}.`))
-    );
+    const tenant = parseAtsTenant(url.href);
+    return tenant !== null && tenant.provider === provider && tenant.board === board.toLowerCase();
   }
-  if (!identity.host) return false;
-  const base = baseHost(identity.host);
-  return host === base || host.endsWith(`.${base}`);
+  if (!identity.host || !(key.startsWith('host:') || key.startsWith('domain:'))) return false;
+  const domain = employerDomainOf(url.hostname);
+  return domain.ok && domain.domain === identity.host;
 }
 
 export function inferSourceKind(
@@ -291,7 +359,7 @@ export function inferSourceKind(
   if (declared === 'ind_register') return 'ind_register';
   let host: string;
   try {
-    host = new URL(sourceUrl).hostname.toLowerCase();
+    host = new URL(sourceUrl).hostname.toLowerCase().replace(/\.$/u, '');
   } catch {
     host = '';
   }
@@ -300,6 +368,180 @@ export function inferSourceKind(
     return (identity.verifiedKey ?? '').startsWith('ats:') ? 'ats_posting' : 'company_site';
   }
   return 'public_web';
+}
+
+/* ------------------------------------------------------------- claim <-> quote support -------- */
+
+/**
+ * Why a quoted passage does not adequately support a claim. These are LEXICAL checks, stated as
+ * such: they establish that the claim is worded from its passage (near-verbatim), not that the
+ * passage is true or that the claim means the same in every reading.
+ */
+export type QuoteSupportFailure =
+  | 'quote_missing'
+  | 'claim_number_mismatch'
+  | 'claim_negation_mismatch'
+  | 'claim_entity_mismatch'
+  | 'claim_not_in_quote';
+
+export type QuoteSupport = { ok: true } | { ok: false; reason: QuoteSupportFailure };
+
+const STOPWORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'for', 'by', 'with', 'from', 'as', 'is', 'are', 'was',
+  'were', 'be', 'been', 'being', 'it', 'its', 'this', 'that', 'these', 'those', 'has', 'have', 'had', 'do', 'does',
+  'did', 'about', 'into', 'over', 'per', 'than', 'then', 'also', 'which', 'who', 'whose', 'where', 'there', 'here',
+  'all', 'both', 'each', 'so', 'such', 'very', 'just', 'today', 'currently', 'now',
+  'de', 'het', 'een', 'en', 'van', 'op', 'te', 'voor', 'met', 'zijn', 'die', 'dat', 'deze', 'dit', 'bij',
+  'naar', 'uit', 'als', 'ook', 'om', 'aan', 'tot', 'door', 'er', 'wordt', 'worden', 'heeft', 'hebben',
+]);
+const NEGATIONS = new Set([
+  'not', 'no', 'never', 'none', 'nor', 'neither', 'without', 'cannot', 'nobody', 'nothing', 'nowhere',
+  'niet', 'geen', 'nooit', 'zonder', 'noch', 'niets', 'niemand', 'nergens',
+]);
+/** Modality / time qualifiers: "will", "may", "formerly"... change what a sentence asserts. */
+const QUALIFIERS = new Set([
+  'will', 'would', 'may', 'might', 'could', 'should', 'can', 'plan', 'plans', 'planned', 'planning', 'aim', 'aims',
+  'intend', 'intends', 'intended', 'expect', 'expects', 'expected', 'hope', 'hopes', 'soon', 'formerly', 'former',
+  'previously', 'ceased', 'stopped', 'discontinued', 'until', 'except', 'unless', 'only',
+  'zal', 'zullen', 'zou', 'zouden', 'kan', 'kunnen', 'mag', 'mogen', 'mogelijk', 'misschien', 'voorheen',
+  'vroeger', 'gestopt', 'tenzij', 'behalve', 'binnenkort', 'gepland', 'alleen',
+]);
+const FIRST_PERSON = new Set(['we', 'our', 'us', 'ours', 'wij', 'ons', 'onze']);
+
+interface Token {
+  word: string;
+  /** Comparison key: a normalised number, or a lightly stemmed word. */
+  key: string;
+  isNumber: boolean;
+  capitalised: boolean;
+}
+
+function stem(word: string): string {
+  if (word.length > 5 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (word.length > 5 && word.endsWith('ing')) return word.slice(0, -3);
+  if (word.length > 4 && word.endsWith('ed')) return word.slice(0, -2);
+  if (word.length > 4 && word.endsWith('es')) return word.slice(0, -2);
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
+  return word;
+}
+
+function normaliseNumber(raw: string): string {
+  if (/^\d{1,3}(?:[.,]\d{3})+$/u.test(raw)) return raw.replace(/[.,]/gu, '');
+  return raw.replace(/,/gu, '.');
+}
+
+const TOKEN_PATTERN = /\d+(?:[.,]\d+)*|\p{L}[\p{L}\p{M}]*(?:'\p{L}+)?/gu;
+
+/** Linear tokenizer over a bounded claim or quote. */
+function tokens(text: string): Token[] {
+  const normalised = text.slice(0, 4000).normalize('NFKC').replace(/[‘’ʼ]/gu, "'");
+  const out: Token[] = [];
+  for (const match of normalised.matchAll(TOKEN_PATTERN)) {
+    const raw = match[0];
+    if (/^\d/u.test(raw)) {
+      const value = normaliseNumber(raw);
+      out.push({ word: value, key: value, isNumber: true, capitalised: false });
+      continue;
+    }
+    const lower = raw.toLowerCase();
+    if (lower.endsWith("n't")) {
+      out.push({ word: 'not', key: 'not', isNumber: false, capitalised: false });
+      continue;
+    }
+    const word = lower.replace(/'.*$/u, '');
+    out.push({ word, key: stem(word), isNumber: false, capitalised: raw[0] !== raw[0]!.toLowerCase() });
+  }
+  return out;
+}
+
+const isContent = (token: Token): boolean =>
+  token.isNumber ||
+  !(STOPWORDS.has(token.word) || NEGATIONS.has(token.word) || QUALIFIERS.has(token.word) || FIRST_PERSON.has(token.word));
+
+/**
+ * The deterministic, fail-closed support floor (#689): may this passage, found on the source page,
+ * stand behind this exact claim? Conservative by design -- a claim must be worded from its passage:
+ *
+ *  - every number in the claim (14, 2009, 12,000 = 12.000) is a number in the passage (14 is not 140);
+ *  - every content word of the claim occurs in the passage, IN THE SAME ORDER (light stemming only);
+ *  - negation ("not", "no", "geen", "niet", "n't") and modality/time qualifiers ("will", "may",
+ *    "formerly", "only"...) agree between the claim and the part of the passage it was matched to;
+ *  - a capitalised name in the claim is in the passage. The employer's own name may be left out of
+ *    the passage only when the passage speaks in the first person ("we", "our") and names no other
+ *    organisation where the claim was matched.
+ *
+ * A paraphrase therefore stays a lead even when it is true: the person can confirm it themselves.
+ * This proves wording overlap with a passage that was found on the page, never semantic truth.
+ */
+export function assessQuoteSupport(claim: string, quote: string, employerNames: readonly string[] = []): QuoteSupport {
+  const fail = (reason: QuoteSupportFailure): QuoteSupport => ({ ok: false, reason });
+  const passage = tokens(quote);
+  if (quote.replace(/\s+/gu, ' ').trim().length < MIN_QUOTE_CHARS || passage.length === 0) return fail('quote_missing');
+  const said = tokens(claim);
+  const passageKeys = new Set(passage.map((token) => token.key));
+
+  for (const token of said) if (token.isNumber && !passageKeys.has(token.key)) return fail('claim_number_mismatch');
+
+  const nameKeys = new Set(
+    employerNames.flatMap((name) => tokens(name).filter((token) => !token.isNumber).map((token) => token.key)),
+  );
+  const firstPerson = passage.some((token) => FIRST_PERSON.has(token.word));
+  const content = said.filter(isContent);
+  const required = content.filter((token) => !(firstPerson && nameKeys.has(token.key) && !passageKeys.has(token.key)));
+  const nameLeftOut = required.length < content.length;
+  if (required.length === 0) return fail('claim_not_in_quote');
+  for (const token of required) if (token.capitalised && !passageKeys.has(token.key)) return fail('claim_entity_mismatch');
+
+  const matched: number[] = [];
+  let cursor = 0;
+  for (const token of required) {
+    let found = -1;
+    for (let index = cursor; index < passage.length; index += 1) {
+      if (passage[index]!.key === token.key) {
+        found = index;
+        break;
+      }
+    }
+    if (found < 0) return fail('claim_not_in_quote');
+    matched.push(found);
+    cursor = found + 1;
+  }
+  const span = passage.slice(Math.max(0, matched[0]! - 4), matched[matched.length - 1]! + 1);
+  const negated = (list: readonly Token[]) => list.some((token) => NEGATIONS.has(token.word));
+  if (negated(said) !== negated(span)) return fail('claim_negation_mismatch');
+  const qualifiers = (list: readonly Token[]) =>
+    [...new Set(list.filter((token) => QUALIFIERS.has(token.word)).map((token) => token.word))].sort().join('|');
+  if (qualifiers(said) !== qualifiers(span)) return fail('claim_negation_mismatch');
+  if (nameLeftOut) {
+    const claimKeys = new Set(said.map((token) => token.key));
+    const foreign = span.some(
+      (token) =>
+        token.capitalised &&
+        !FIRST_PERSON.has(token.word) &&
+        !STOPWORDS.has(token.word) &&
+        !claimKeys.has(token.key) &&
+        !nameKeys.has(token.key),
+    );
+    if (foreign) return fail('claim_entity_mismatch');
+  }
+  return { ok: true };
+}
+
+/**
+ * Sponsorship / visa / work-permit wording (English and Dutch). Decided from the claim AND its
+ * quote, never from the topic label a model or a form supplied, so a mislabelled claim still has to
+ * meet the sponsorship rule. Over-matching is deliberate: it can only make a claim harder to use.
+ */
+const SPONSORSHIP_WORDING =
+  /\b(?:visas?|visum\w*|sponsor\w*|work[\s-]permits?|work[\s-]authori[sz]ation|right[\s-]to[\s-]work|kennismigrant\w*|highly[\s-]skilled[\s-]migrants?|blue[\s-]card|blauwe[\s-]kaart|werkvergunning\w*|tewerkstellingsvergunning\w*|verblijfsvergunning\w*|erkend[\s-]referent\w*|ind)\b/u;
+
+export function mentionsSponsorship(...texts: readonly string[]): boolean {
+  return SPONSORSHIP_WORDING.test(texts.join(' ').normalize('NFKC').toLowerCase().slice(0, 4000));
+}
+
+/** The topic a claim is actually about, as far as the sponsorship rule is concerned. */
+export function effectiveTopic(topic: CompanyEvidenceTopic, claim: string, quote: string): CompanyEvidenceTopic {
+  return mentionsSponsorship(claim, quote) ? 'sponsorship' : topic;
 }
 
 /* -------------------------------------------------------------------------- facts ------------ */
@@ -329,7 +571,11 @@ export interface CompanyEvidenceFactData {
   lastRefreshAt: string | null;
   lastRefreshOutcome: CompanyEvidenceRefreshOutcome | null;
   lastRefreshReason: string | null;
-  correction: { originalClaim: string; correctedAt: string } | null;
+  /**
+   * User correction provenance. `originalQuote` is the passage the FIRST wording rested on: it is kept
+   * for the record but no longer supports anything (the corrected claim needs its own passage).
+   */
+  correction: { originalClaim: string; correctedAt: string; originalQuote?: string } | null;
   /** Ids of facts this one is in an OPEN contradiction with. */
   contradictedBy: string[];
   /** The linked company this fact came from, when it arrived over a confirmed identity link. */
@@ -346,20 +592,28 @@ export type CompanyEvidenceLeadReason =
   | 'identity_not_verified'
   | 'ind_name_match_only'
   | 'sponsorship_needs_role_source'
-  | 'source_not_https';
+  | 'source_not_https'
+  | QuoteSupportFailure;
 
 export interface ClassificationContext {
   /** The role the prose is for; null when none is known (role facts then never support). */
   roleKey: string | null;
   identityVerified: boolean;
   identity: Pick<CompanyIdentity, 'verifiedKey' | 'host'>;
+  /** The employer's names (display name, the vacancy's company field), for the quote floor's own-name rule. */
+  employerNames?: readonly string[];
 }
 
 export interface ClassifiedFact extends CompanyEvidenceFactData {
   support: 'supported' | 'lead';
   reasons: CompanyEvidenceLeadReason[];
-  /** The source is on the employer's own host / ATS tenant. */
+  /** The source is on the employer's own registrable domain / exact ATS tenant. */
   official: boolean;
+}
+
+/** The quote floor for one stored fact (the linked company's name counts as an own name for its facts). */
+export function factQuoteSupport(fact: Pick<CompanyEvidenceFactData, 'claim' | 'quote' | 'viaLink'>, employerNames: readonly string[] = []): QuoteSupport {
+  return assessQuoteSupport(fact.claim, fact.quote, fact.viaLink ? [...employerNames, fact.viaLink] : employerNames);
 }
 
 export function classifyFact(fact: CompanyEvidenceFactData, ctx: ClassificationContext, now: Date): ClassifiedFact {
@@ -368,16 +622,24 @@ export function classifyFact(fact: CompanyEvidenceFactData, ctx: ClassificationC
   if (fact.status === 'superseded') reasons.push('superseded');
   if (!ctx.identityVerified) reasons.push('identity_not_verified');
   if (fact.verification === 'unverified') reasons.push('unverified');
+  // A person's explicit "I read the source" is their own attested observation; everything else that
+  // claims support must pass the quote floor, re-checked here on every read and every prose use.
+  if (fact.verification !== 'user_confirmed') {
+    const floor = factQuoteSupport(fact, ctx.employerNames ?? []);
+    if (!floor.ok) reasons.push(floor.reason);
+  }
   if (Date.parse(fact.expiresAt) <= now.getTime() || Number.isNaN(Date.parse(fact.expiresAt))) reasons.push('expired');
   if (fact.contradictedBy.length > 0) reasons.push('contradicted');
   if (fact.scope === 'role' && (ctx.roleKey === null || fact.roleKey !== ctx.roleKey)) reasons.push('other_role');
   if (!isHttpsSource(fact.sourceUrl)) reasons.push('source_not_https');
   if (fact.sourceKind === 'ind_register') reasons.push('ind_name_match_only');
   const official = sourceMatchesIdentity(fact.sourceUrl, ctx.identity);
-  if (fact.topic === 'sponsorship' && !(fact.scope === 'role' && official && fact.sourceKind !== 'ind_register')) {
+  // Decided from what the claim and its quote SAY, not from the topic label.
+  const topic = effectiveTopic(fact.topic, fact.claim, fact.quote);
+  if (topic === 'sponsorship' && !(fact.scope === 'role' && official && fact.viaLink === null && fact.sourceKind !== 'ind_register')) {
     reasons.push('sponsorship_needs_role_source');
   }
-  return { ...fact, support: reasons.length === 0 ? 'supported' : 'lead', reasons, official };
+  return { ...fact, topic, support: reasons.length === 0 ? 'supported' : 'lead', reasons, official };
 }
 
 /** What a letter or an interview prompt is allowed to carry about a company claim. */
@@ -471,6 +733,11 @@ export interface CompanyEvidenceUseView {
   verification: 'source_confirmed' | 'user_confirmed';
 }
 
+export interface CompanyEvidenceSuggestion {
+  domain: string;
+  basis: 'posting_domain' | 'same_name_elsewhere';
+}
+
 export interface CompanyEvidenceView {
   /** `no_identity`: only a name is known, nothing can be recorded as support until a domain is confirmed. */
   state: 'no_identity' | 'ready';
@@ -485,6 +752,12 @@ export interface CompanyEvidenceView {
   research: CompanyResearchDiagnostics | null;
   /** Only for an attempt target: the claims its letter carries, unaffected by later edits or deletion. */
   lettersUsed: CompanyEvidenceUseView[];
+  /**
+   * For a vacancy with no verified identity: domains the person may confirm (the posting's own
+   * domain when plausible, and domains they already confirmed for another vacancy of the same
+   * name). Suggestions only: nothing is shared until the person confirms one FOR THIS vacancy.
+   */
+  suggestions: CompanyEvidenceSuggestion[];
   supportedCount: number;
   leadCount: number;
   /** ISO of the view, so the renderer can re-check expiry against the same clock source. */
@@ -502,7 +775,15 @@ export const LEAD_REASON_TEXT: Record<CompanyEvidenceLeadReason, string> = {
   ind_name_match_only: 'A register name match does not confirm who this employer is or that it sponsors this role.',
   sponsorship_needs_role_source: 'Sponsorship needs a source from the employer about this role.',
   source_not_https: 'The source is not a secure public web address.',
+  quote_missing: 'No passage copied from the page is saved for this wording, so it cannot be checked. Add one, or confirm you read the source yourself.',
+  claim_not_in_quote: 'The saved passage does not say this in these words. Only a claim worded from its passage is used automatically.',
+  claim_number_mismatch: 'A number or date in the claim is not in the saved passage.',
+  claim_negation_mismatch: 'The claim and the passage differ in wording such as "not", "no", "will" or "formerly", so they may not say the same thing.',
+  claim_entity_mismatch: 'The claim names someone or something the passage does not, or the passage is about another organisation.',
 };
+
+/** Every lead reason, for fail-closed parsing across the preload boundary. */
+export const COMPANY_EVIDENCE_LEAD_REASONS = Object.keys(LEAD_REASON_TEXT) as CompanyEvidenceLeadReason[];
 
 /* ------------------------------------------------------------------------- bridge ---------- */
 
@@ -515,8 +796,13 @@ export interface ActionStats {
   requests: number;
   /** Web research sessions this action started. */
   sessions: number;
-  /** Research sessions / source fetches a stored, current fact made unnecessary. */
+  /** Research sessions this action did not start because current company-scope evidence covered every topic. */
   avoidedSessions: number;
+  /**
+   * OBSERVED skips only: stored facts a refresh did not re-fetch because they were still current (each
+   * would otherwise have been exactly one request). A research cache hit reports 0 here: how many pages
+   * a session would have opened is unknown, so it is not guessed.
+   */
   avoidedFetches: number;
   cacheHit: boolean;
   renewed: number;
@@ -547,7 +833,8 @@ export interface CompanyEvidenceBridge {
     },
   ): Promise<CompanyEvidenceResult>;
   confirmFact(target: CompanyEvidenceTargetInput, factId: string): Promise<CompanyEvidenceResult>;
-  correctFact(target: CompanyEvidenceTargetInput, factId: string, claim: string): Promise<CompanyEvidenceResult>;
+  /** A new `quote` (a passage from the same page that says the corrected wording) lets the app check it again. */
+  correctFact(target: CompanyEvidenceTargetInput, factId: string, claim: string, quote?: string): Promise<CompanyEvidenceResult>;
   withdrawFact(target: CompanyEvidenceTargetInput, factId: string): Promise<CompanyEvidenceResult>;
   resolveContradiction(target: CompanyEvidenceTargetInput, contradictionId: string, keepFactId: string): Promise<CompanyEvidenceResult>;
   decideLink(target: CompanyEvidenceTargetInput, linkId: string, decision: 'confirmed' | 'rejected'): Promise<CompanyEvidenceResult>;

@@ -34,7 +34,7 @@ const TOPIC_LABEL: Record<CompanyEvidenceTopic, string> = {
 const IDENTITY_BASIS_LABEL: Record<string, string> = {
   ats_tenant: 'the job board account in the posting address',
   posting_host: "the employer's own site in the posting address",
-  user_domain: 'a website you confirmed',
+  user_domain: 'a website you confirmed for this vacancy',
 };
 
 function formatDay(iso: string | null): string {
@@ -48,6 +48,19 @@ function scopeLabel(fact: ClassifiedFact): string {
   return fact.reasons.includes('other_role') ? `Other role: ${fact.roleLabel || 'unnamed'}` : 'This role';
 }
 
+/** Network failures only: a claim the quote floor refused was never fetched, and its reason is listed above. */
+const UNREACHABLE_REASONS = new Set(['timeout', 'blocked', 'not_found', 'fetch_failed', 'not_text', 'cancelled']);
+
+function lastCheckText(fact: ClassifiedFact): string | null {
+  if (!fact.lastRefreshOutcome || fact.lastRefreshOutcome === 'renewed') return null;
+  if (fact.lastRefreshOutcome === 'cache_hit') return 'Still current, so the source was not fetched again.';
+  if (fact.lastRefreshOutcome === 'source_changed') return 'The last check no longer found this passage on the source page.';
+  if (fact.lastRefreshReason === 'quote_not_found') return 'The quoted passage was not found on the source page.';
+  if (fact.lastRefreshReason === 'content_too_large') return 'The source page is too large to check safely, so it was not used.';
+  if (UNREACHABLE_REASONS.has(fact.lastRefreshReason ?? '')) return 'The last check could not reach the source, so the dates above did not change.';
+  return null;
+}
+
 function sourceHost(url: string): string {
   try {
     return new URL(url).hostname;
@@ -59,13 +72,14 @@ function sourceHost(url: string): string {
 /**
  * Sourced company evidence for one application (#689), in the screens the person already uses (the
  * attempt drawer and "Prepare interview"). Every claim shows its scope, its public source, when the
- * app last observed it and why it is, or is not, being used. A claim is "Used" only while it has a
- * confirmed source, is current, has no open disagreement and fits this role; everything else is a
- * lead the person can see and fix but the drafts never rely on.
+ * app last observed it and why it is, or is not, usable. A claim is "Usable" (eligible) only while
+ * its quoted passage was found on its page and the claim is worded from it (or the person confirmed
+ * reading it), it is current, nothing disagrees with it and it fits this role. "Used" is reserved
+ * for what a prepared letter actually carried (its snapshot), never for mere eligibility.
  *
  * Nothing here runs by itself: reading shows what is stored, and every network action (research,
- * checking sources) is a button with a Stop button beside it. A stopped or failed action leaves the
- * saved evidence and every prepared draft exactly as they were.
+ * checking sources) is a button with a Stop button beside it. Closing the panel stops an action it
+ * started. A stopped or failed action leaves the saved evidence and every prepared draft as they were.
  */
 export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEvidencePanelProps) {
   const [view, setView] = useState<CompanyEvidenceView | null>(null);
@@ -74,16 +88,25 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [domain, setDomain] = useState('');
-  const [editing, setEditing] = useState<{ id: string; claim: string } | null>(null);
+  const [entityRef, setEntityRef] = useState('');
+  const [editing, setEditing] = useState<{ id: string; claim: string; quote: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState({ claim: '', sourceUrl: '', quote: '', scope: 'company' as CompanyEvidenceScope, topic: 'general' as CompanyEvidenceTopic });
   const mounted = useRef(true);
   const targetKey = 'attemptId' in target ? `a:${target.attemptId}` : `p:${target.applicationId}`;
+  /** The long-running action THIS panel started (research / refresh), so closing it can stop it. */
+  const ownedRun = useRef<CompanyEvidenceTargetInput | null>(null);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      const owned = ownedRun.current;
+      ownedRun.current = null;
+      // Work the person can no longer see is stopped, not left running out of sight.
+      if (owned && typeof window.companyEvidence?.cancel === 'function') {
+        void window.companyEvidence.cancel(owned).catch(() => undefined);
+      }
     };
   }, []);
 
@@ -133,15 +156,18 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
     async (name: string, action: () => Promise<CompanyEvidenceResult>, changed = true) => {
       setBusy(name);
       setError('');
+      const long = name === 'research' || name === 'refresh';
+      if (long) ownedRun.current = target;
       try {
         accept(await action(), changed);
       } catch {
         if (mounted.current) setError('That did not work. Nothing was changed.');
       } finally {
+        if (long) ownedRun.current = null;
         if (mounted.current) setBusy(null);
       }
     },
-    [accept],
+    [accept, target],
   );
 
   if (view === null) {
@@ -155,7 +181,6 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
     );
   }
 
-  const company = view.identity.displayName;
   const longRunning = busy === 'research' || busy === 'refresh';
   const idle = busy === null;
   const used = view.facts.filter((fact) => fact.support === 'supported');
@@ -170,12 +195,16 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
         <p className="break-words text-sm">{fact.claim}</p>
         <p className="mt-1 flex flex-wrap items-center gap-1 text-xs">
           <span className={fact.support === 'supported' ? 'badge badge-sm badge-success' : 'badge badge-sm badge-warning'}>
-            {fact.support === 'supported' ? 'Used' : 'Lead only'}
+            {fact.support === 'supported' ? 'Usable' : 'Lead only'}
           </span>
           <span className="badge badge-sm badge-outline">{scopeLabel(fact)}</span>
           <span className="badge badge-sm badge-outline">{TOPIC_LABEL[fact.topic]}</span>
           <span className="badge badge-sm badge-outline">
-            {fact.verification === 'source_confirmed' ? 'Source checked' : fact.verification === 'user_confirmed' ? 'You confirmed' : 'Not confirmed'}
+            {fact.verification === 'source_confirmed'
+              ? 'Quoted passage found'
+              : fact.verification === 'user_confirmed'
+                ? 'You confirmed'
+                : 'Not confirmed'}
           </span>
         </p>
         <p className="mt-1 break-words text-xs text-base-content/70">
@@ -194,18 +223,14 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
             ))}
           </ul>
         )}
-        {fact.lastRefreshOutcome && fact.lastRefreshOutcome !== 'renewed' && (
-          <p className="mt-1 text-xs text-base-content/70">
-            {fact.lastRefreshOutcome === 'cache_hit'
-              ? 'Still current, so the source was not fetched again.'
-              : fact.lastRefreshOutcome === 'source_changed'
-                ? 'The last check no longer found this passage on the source page.'
-                : 'The last check could not reach the source, so the dates above did not change.'}
-          </p>
-        )}
+        {lastCheckText(fact) && <p className="mt-1 text-xs text-base-content/70">{lastCheckText(fact)}</p>}
+        {fact.quote && <p className="mt-1 break-words text-xs text-base-content/70">Saved passage: &ldquo;{fact.quote}&rdquo;</p>}
         {fact.correction && (
           <p className="mt-1 break-words text-xs text-base-content/70">
             You corrected this on {formatDay(fact.correction.correctedAt)}. It first read: {fact.correction.originalClaim}
+            {fact.correction.originalQuote
+              ? ` (its passage is kept for the record but no longer supports it: "${fact.correction.originalQuote}")`
+              : ''}
           </p>
         )}
         {!fact.viaLink && (
@@ -220,13 +245,30 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
                   id={`fact-edit-${fact.id}`}
                   className="input input-bordered input-sm min-w-0 flex-1"
                   value={editing.claim}
-                  onChange={(event) => setEditing({ id: fact.id, claim: event.target.value })}
+                  onChange={(event) => setEditing({ ...editing, claim: event.target.value })}
+                />
+                <textarea
+                  aria-label="Passage from the page that says the corrected wording (optional)"
+                  className="textarea textarea-bordered textarea-sm w-full"
+                  rows={2}
+                  placeholder="Optional: copy the passage that says the corrected wording, so the app can check it"
+                  value={editing.quote}
+                  onChange={(event) => setEditing({ ...editing, quote: event.target.value })}
                 />
                 <button
                   type="button"
                   className="btn btn-primary btn-xs"
                   disabled={!idle}
-                  onClick={() => void run('correct', () => window.companyEvidence.correctFact(target, fact.id, editing.claim)).then(() => setEditing(null))}
+                  onClick={() =>
+                    void run('correct', () =>
+                      window.companyEvidence.correctFact(
+                        target,
+                        fact.id,
+                        editing.claim,
+                        editing.quote.trim() === '' ? undefined : editing.quote,
+                      ),
+                    ).then(() => setEditing(null))
+                  }
                 >
                   Save correction
                 </button>
@@ -246,7 +288,7 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
                     I read the source
                   </button>
                 )}
-                <button type="button" className="btn btn-ghost btn-xs" disabled={!idle} onClick={() => setEditing({ id: fact.id, claim: fact.claim })}>
+                <button type="button" className="btn btn-ghost btn-xs" disabled={!idle} onClick={() => setEditing({ id: fact.id, claim: fact.claim, quote: '' })}>
                   Correct
                 </button>
                 <button
@@ -269,8 +311,11 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
     <section aria-label="Company evidence" data-testid="company-evidence" data-state={view.state} className="rounded-box border border-base-300 p-3 text-sm">
       <h3 className="font-semibold">Company evidence</h3>
       <p className="mt-0.5 text-xs text-base-content/70">
-        Public facts about {company}, kept apart from your CV. Only a fact with a checked source that is still current, has no
-        disagreement and fits this role is used in a letter or interview prep. Everything else is a lead.
+        Public facts about this employer, kept apart from your CV. Only two things use them: the cover letter this app prepares
+        for an application, and the &ldquo;Prepare interview&rdquo; prompt. The Letters page and the CV assistant do not. A claim
+        is usable only while its quoted passage was found on its page and the claim is worded from that passage (or you
+        confirmed you read it), it is current, nothing disagrees with it and it fits this role. That checks the wording only; it
+        does not prove the page is right. Everything else is a lead.
       </p>
 
       <div role="status" aria-live="polite" className="mt-2 min-h-4 text-xs">
@@ -285,9 +330,27 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
       {view.state === 'no_identity' ? (
         <div className="mt-2" data-testid="company-identity-missing">
           <p className="text-xs">
-            We cannot tell which {company} this is from the posting alone, and a name or a register match is not enough. Enter the
-            company's own website to start a record.
+            We cannot tell which employer this is from the posting alone, and a name or a register match is not enough. Enter the
+            employer&apos;s own website to start a record for this vacancy. Another vacancy with the same name is not affected.
           </p>
+          {view.suggestions.length > 0 && (
+            <ul className="mt-2 space-y-1" data-testid="company-domain-suggestions">
+              {view.suggestions.map((suggestion) => (
+                <li key={suggestion.domain} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span>
+                    {suggestion.domain} (
+                    {suggestion.basis === 'posting_domain'
+                      ? 'the domain of this posting'
+                      : 'you confirmed it for another vacancy with this name'}
+                    )
+                  </span>
+                  <button type="button" className="btn btn-ghost btn-xs" disabled={!idle} onClick={() => setDomain(suggestion.domain)}>
+                    Use this address
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="mt-2 flex flex-wrap gap-2">
             <label className="sr-only" htmlFor="company-evidence-domain">
               Company website
@@ -300,11 +363,26 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
               value={domain}
               onChange={(event) => setDomain(event.target.value)}
             />
+            <label className="sr-only" htmlFor="company-evidence-entity">
+              Registration number or legal name (optional)
+            </label>
+            <input
+              aria-label="Registration number or legal name (optional)"
+              id="company-evidence-entity"
+              className="input input-bordered input-sm min-w-0 flex-1"
+              placeholder="Optional: registration number or legal name"
+              value={entityRef}
+              onChange={(event) => setEntityRef(event.target.value)}
+            />
             <button
               type="button"
               className="btn btn-primary btn-sm"
               disabled={!idle || domain.trim().length < 3}
-              onClick={() => void run('domain', () => window.companyEvidence.confirmDomain(target, { domain }))}
+              onClick={() =>
+                void run('domain', () =>
+                  window.companyEvidence.confirmDomain(target, { domain, ...(entityRef.trim() ? { entityRef } : {}) }),
+                )
+              }
             >
               Confirm website
             </button>
@@ -314,7 +392,12 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
         <>
           <p className="mt-2 text-xs text-base-content/70" data-testid="company-identity">
             Identified by {IDENTITY_BASIS_LABEL[view.identity.keyKind ?? 'ats_tenant']}
-            {view.identity.host ? ` (${view.identity.host})` : ''}. {view.supportedCount} used, {view.leadCount} leads.
+            {view.identity.tenant
+              ? ` (${view.identity.tenant.provider} board "${view.identity.tenant.board}"; the employer's own website is not known)`
+              : view.identity.host
+                ? ` (${view.identity.host})`
+                : ''}
+            {view.entityRef ? `, entity reference ${view.entityRef}` : ''}. {view.supportedCount} usable, {view.leadCount} leads.
           </p>
 
           {view.links.filter((link) => link.status === 'proposed').map((link) => (
@@ -408,8 +491,11 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
             )}
           </div>
           <p className="mt-1 text-xs text-base-content/60">
-            Research searches the public web for facts about {company} only. Your CV, letters and notes are never sent. Nothing
-            prepared changes if it fails or you stop it.
+            Research searches the public web for facts about this employer only and takes up to about 90 seconds: one web session
+            of up to 60 seconds, then up to 30 seconds checking the pages it cites. Your CV, letters and notes are never sent. The
+            session&apos;s searches are counted as they happen and it is stopped, with its results discarded, if it goes over its
+            budget; a search that has already started cannot be prevented. Nothing prepared changes if it fails or you stop it, and
+            closing this panel stops it.
           </p>
           {view.research && (
             <p className="mt-1 text-xs text-base-content/70" data-testid="company-research-last">
@@ -420,7 +506,7 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
 
           {used.length > 0 && (
             <>
-              <h4 className="mt-3 text-xs font-semibold uppercase tracking-wide">Used in letters and interview prep</h4>
+              <h4 className="mt-3 text-xs font-semibold uppercase tracking-wide">Usable in the prepared letter and interview prep</h4>
               <ul className="mt-1 space-y-2">{used.map(renderFact)}</ul>
             </>
           )}
@@ -441,7 +527,7 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
             <p className="mt-3 text-xs text-base-content/70" data-testid="company-letter-uses">
               {view.lettersUsed.length === 0
                 ? 'The prepared letter makes no claim about the company from these sources.'
-                : `The prepared letter carries ${view.lettersUsed.length} sourced company claim${view.lettersUsed.length === 1 ? '' : 's'}: ${view.lettersUsed
+                : `Used in the prepared letter: ${view.lettersUsed.length} sourced company claim${view.lettersUsed.length === 1 ? '' : 's'}: ${view.lettersUsed
                     .map((use) => `"${use.claim}" (${sourceHost(use.sourceUrl)}, observed ${formatDay(use.observedAt)})`)
                     .join('; ')}. Changing the evidence later does not change that letter.`}
             </p>
@@ -528,7 +614,9 @@ export function CompanyEvidencePanel({ target, reloadKey, onChanged }: CompanyEv
             <div className="mt-3">
               {confirmDelete ? (
                 <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Confirm delete">
-                  <span className="text-xs">Delete everything saved about {company}? Documents already prepared keep what they said.</span>
+                  <span className="text-xs">
+                    Delete everything saved about {view.identity.displayName}? Documents already prepared keep what they said.
+                  </span>
                   <button
                     type="button"
                     className="btn btn-outline btn-xs"

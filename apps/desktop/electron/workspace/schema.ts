@@ -817,13 +817,16 @@ export const companyEvidenceRecords = sqliteTable('company_evidence_records', {
   displayName: text('display_name').notNull(),
   /** Normalised name, used only to PROPOSE links between look-alike records. */
   nameKey: text('name_key').notNull().default(''),
+  /** The employer's own registrable website (posting host / confirmed domain); null for an ATS tenant. */
   host: text('host'),
   /**
-   * Normalised company names the PERSON confirmed belong to this domain, so a vacancy that only names
-   * the company (no ATS tenant or own-host URL) can reach its record. A name is never matched
-   * otherwise, and a name confirmed for two records is treated as ambiguous (unverified).
+   * The concrete vacancies (`application:<id>`, `posting:<canonical url key>`) the PERSON confirmed
+   * this domain for, so a vacancy that only names the company (no ATS tenant or own-host URL) can
+   * reach its record. A bare name never does: another vacancy with the same name gets a suggestion
+   * only, and a vacancy bound to two records is treated as ambiguous (unverified). (Column name kept
+   * from the first migration; the values are target keys.)
    */
-  confirmedNameKeys: text('confirmed_name_keys', { mode: 'json' }).notNull().$type<string[]>().default([]),
+  confirmedTargets: text('confirmed_name_keys', { mode: 'json' }).notNull().$type<string[]>().default([]),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   /** The last explicit research run: stable codes, counts and the model's public queries only. */
@@ -861,8 +864,8 @@ export const companyEvidenceFacts = sqliteTable('company_evidence_facts', {
   lastRefreshAt: integer('last_refresh_at', { mode: 'timestamp_ms' }),
   lastRefreshOutcome: text('last_refresh_outcome', { enum: ['renewed', 'failed', 'source_changed', 'cache_hit'] }),
   lastRefreshReason: text('last_refresh_reason'),
-  /** User correction provenance: the claim as it stood before the person changed it. */
-  correction: text('correction', { mode: 'json' }).$type<{ originalClaim: string; correctedAt: string } | null>(),
+  /** User correction provenance: the claim (and the passage it rested on) before the person changed it. */
+  correction: text('correction', { mode: 'json' }).$type<{ originalClaim: string; correctedAt: string; originalQuote?: string } | null>(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 }, (table) => [
   index('company_evidence_facts_record_idx').on(table.recordId, table.status),

@@ -772,11 +772,18 @@ export async function runApplicationAttempt(
       deps.log?.('company evidence unavailable for the letter; continuing without it', { error: describeError(err) });
     }
     try {
+      const loadCompanyEvidence = deps.loadCompanyEvidence;
       const generated = await generateApplicationCoverLetterWithEvidence(
         attempt,
         cv,
         deps.generateCoverLetter,
         companyEvidence,
+        {
+          // Re-read after the session: evidence withdrawn, corrected, expired, contradicted or
+          // unlinked while the model ran must not reach the letter or its "used" snapshot.
+          ...(loadCompanyEvidence ? { revalidate: () => loadCompanyEvidence(attempt) } : {}),
+          now: () => new Date(nowIso(deps)),
+        },
       );
       letters = [{ kind: 'cover_letter', title: 'Cover Letter', body: generated.body }];
       usedCompanyEvidence = generated.usedCompanyEvidence;

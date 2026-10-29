@@ -144,11 +144,42 @@ export interface ApplicationCoverLetterResult {
   usedCompanyEvidence: CompanyEvidenceProseFact[];
 }
 
+/**
+ * Is the fact the model selected still EXACTLY the approved fact it was offered as? Same id, same
+ * claim, source, scope and verification, and still before its expiry. Anything else -- withdrawn,
+ * corrected, expired, newly contradicted, its link revoked, its record deleted -- is absent from (or
+ * different in) the fresh approved list and is dropped.
+ */
+function stillApproved(offered: CompanyEvidenceProseFact, fresh: readonly CompanyEvidenceProseFact[], now: Date): boolean {
+  const current = fresh.find((fact) => fact.id === offered.id);
+  return (
+    current !== undefined &&
+    current.claim === offered.claim &&
+    current.sourceUrl === offered.sourceUrl &&
+    current.scope === offered.scope &&
+    current.verification === offered.verification &&
+    current.expiresAt === offered.expiresAt &&
+    Date.parse(current.expiresAt) > now.getTime()
+  );
+}
+
+export interface CoverLetterEvidenceOptions {
+  /**
+   * Re-reads the approved evidence AFTER the (possibly long) generation session and before the
+   * letter is assembled. A selected company fact survives only if it is still exactly the approved
+   * fact it was offered as; a failing re-read drops every company fact (fail closed). Absent = no
+   * company fact may be used at all when evidence was offered (there is no way to re-check it).
+   */
+  revalidate?: () => readonly CompanyEvidenceProseFact[] | Promise<readonly CompanyEvidenceProseFact[]>;
+  now?: () => Date;
+}
+
 export async function generateApplicationCoverLetterWithEvidence(
   attempt: ApplicationAttemptRecord,
   cv: CvDocumentRecord,
   generate: (prompt: string) => Promise<ApplicationCoverLetterGenerationResult>,
   companyEvidence: readonly CompanyEvidenceProseFact[] = [],
+  options: CoverLetterEvidenceOptions = {},
 ): Promise<ApplicationCoverLetterResult> {
   if (!cv.source) {
     throw new Error(
@@ -168,19 +199,35 @@ export async function generateApplicationCoverLetterWithEvidence(
   if (candidateFacts.length === 0) {
     throw new Error('the generated cover letter selected only company facts and none of your reviewed CV facts');
   }
-  const selectedCompany = facts.filter((fact) => fact.id.startsWith(COMPANY_FACT_ID_PREFIX));
+  // company-N -> the exact fact offered under that id (never re-mapped to whatever is at index N now).
+  const offeredById = new Map(companyFacts.map((fact, index) => [fact.id, companyEvidence[index]!] as const));
+  let selectedCompany = facts.filter((fact) => fact.id.startsWith(COMPANY_FACT_ID_PREFIX));
+  if (selectedCompany.length > 0) {
+    let fresh: readonly CompanyEvidenceProseFact[] = [];
+    try {
+      fresh = options.revalidate ? await options.revalidate() : [];
+    } catch {
+      fresh = [];
+    }
+    const now = (options.now ?? (() => new Date()))();
+    selectedCompany = selectedCompany.filter((fact) => {
+      const offered = offeredById.get(fact.id);
+      return offered !== undefined && stillApproved(offered, fresh, now);
+    });
+  }
+  const keptIds = new Set(selectedCompany.map((fact) => fact.id));
   const body = assembleGroundedLetter({
     ...UNATTENDED_SHAPE,
-    facts,
+    facts: facts.filter((fact) => !fact.id.startsWith(COMPANY_FACT_ID_PREFIX) || keptIds.has(fact.id)),
     role: attempt.role,
     company: attempt.company,
     candidateName: cv.source.contact.name,
   });
   // Report what the finished text really carries: assembly may drop a repeat or trim to the band.
   const used = selectedCompany
-    .map((fact) => companyFacts.findIndex((candidate) => candidate.id === fact.id))
-    .filter((index) => index >= 0 && body.includes(companyFacts[index]!.sentence))
-    .map((index) => companyEvidence[index]!);
+    .map((fact) => companyFacts.find((candidate) => candidate.id === fact.id))
+    .filter((candidate): candidate is GroundedSourceFact => candidate !== undefined && body.includes(candidate.sentence))
+    .map((candidate) => offeredById.get(candidate.id)!);
   return { body, usedCompanyEvidence: used };
 }
 
@@ -189,6 +236,7 @@ export async function generateApplicationCoverLetter(
   cv: CvDocumentRecord,
   generate: (prompt: string) => Promise<ApplicationCoverLetterGenerationResult>,
   companyEvidence: readonly CompanyEvidenceProseFact[] = [],
+  options: CoverLetterEvidenceOptions = {},
 ): Promise<string> {
-  return (await generateApplicationCoverLetterWithEvidence(attempt, cv, generate, companyEvidence)).body;
+  return (await generateApplicationCoverLetterWithEvidence(attempt, cv, generate, companyEvidence, options)).body;
 }

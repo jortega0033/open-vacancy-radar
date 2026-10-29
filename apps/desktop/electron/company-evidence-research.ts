@@ -48,16 +48,67 @@ export const COMPANY_RESEARCH_MAX_SEARCHES = 4;
 export const COMPANY_RESEARCH_MAX_FETCHES = 6;
 export const COMPANY_RESEARCH_MAX_CANDIDATES = 6;
 export const SOURCE_FETCH_TIMEOUT_MS = 20_000;
-const MAX_SOURCE_TEXT_CHARS = 400_000;
+/**
+ * One shared deadline for ALL of a research run's source checks (they run up to
+ * `SOURCE_CHECK_CONCURRENCY` at a time), so a run is bounded by session + checks =
+ * 60 s + 30 s, not by 6 sequential 20 s fetches.
+ */
+export const RESEARCH_CONFIRM_PHASE_MS = 30_000;
+/** One shared deadline for a "check sources again" pass over up to 8 stored sources. */
+export const REFRESH_ENVELOPE_MS = 45_000;
+export const SOURCE_CHECK_CONCURRENCY = 3;
 
 /** The ONLY data a public research query may be built from. Deliberately not a record type. */
 export interface CompanyResearchInput {
   companyName: string;
-  /** The verified employer host (or ATS host). */
-  host: string;
+  /**
+   * The employer's OWN verified website (a posting host whose name is the company's, or a domain the
+   * person confirmed); '' when it is not known. Never a job board or ATS host.
+   */
+  website: string;
+  /**
+   * For an ATS-tenant identity: the verified job-board account and the public posting address
+   * (origin + path, no query). This identifies the POSTING, not the employer's website.
+   */
+  jobBoard: { provider: string; board: string; postingUrl: string } | null;
   /** Public vacancy title; '' for company-only research. */
   roleTitle: string;
   topics: readonly CompanyEvidenceTopic[];
+}
+
+/** origin + path of a public https posting URL (no query, fragment or credentials), or ''. */
+export function publicPostingReference(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== 'https:' || url.username || url.password) return '';
+    return sanitizeLabel(`${url.origin}${url.pathname}`, 300);
+  } catch {
+    return '';
+  }
+}
+
+function identityLines(input: CompanyResearchInput): { employer: string; preference: string } {
+  const website = sanitizeLabel(input.website ?? '', 120);
+  if (website) {
+    return {
+      employer: `Verified employer website: ${website}`,
+      preference: `Prefer pages on ${website} (or the employer's own job posting) over third-party pages.`,
+    };
+  }
+  if (input.jobBoard) {
+    const provider = sanitizeLabel(input.jobBoard.provider, 40);
+    const board = sanitizeLabel(input.jobBoard.board, 120);
+    const posting = sanitizeLabel(input.jobBoard.postingUrl, 300);
+    return {
+      employer: `Verified job-board account: ${provider} board "${board}"${posting ? ` (the posting: ${posting})` : ''}
+Employer website: UNKNOWN. The ${provider} site hosts many different employers; it is NOT this employer's website.`,
+      preference: `Prefer the employer's own posting under the ${provider} board "${board}", or pages you can establish are the employer's own website. A page about another employer on the same job-board site is not about this one.`,
+    };
+  }
+  return {
+    employer: 'Employer website: UNKNOWN.',
+    preference: "Prefer the employer's own pages over third-party pages.",
+  };
 }
 
 const TOPIC_HELP: Record<CompanyEvidenceTopic, string> = {
@@ -74,7 +125,7 @@ const TOPIC_HELP: Record<CompanyEvidenceTopic, string> = {
 
 export function buildCompanyResearchPrompt(input: CompanyResearchInput): string {
   const company = sanitizeLabel(input.companyName, 120);
-  const host = sanitizeLabel(input.host, 120);
+  const identity = identityLines(input);
   const role = sanitizeLabel(input.roleTitle, 120);
   const topics = (input.topics.length > 0 ? input.topics : (['general'] as const))
     .filter((topic) => COMPANY_EVIDENCE_TOPICS.includes(topic))
@@ -85,15 +136,15 @@ export function buildCompanyResearchPrompt(input: CompanyResearchInput): string 
 
 EMPLOYER (public information only)
 Company: ${company}
-Verified website: ${host}
+${identity.employer}
 ${role ? `Role being considered: ${role}` : 'Role: none (company-level facts only)'}
 
 TOPICS WANTED
 ${topics}
 
 RULES
-- Prefer pages on ${host} (or the employer's own job posting) over third-party pages. Do not rely on a page about a company with a merely similar name.
-- Report only what a page you actually opened states. For each fact give the claim in one plain sentence, the exact page URL, and a short VERBATIM quote of at least ${MIN_QUOTE_CHARS} characters copied from that page. If you cannot quote it, do not report it.
+- ${identity.preference} Do not rely on a page about a company with a merely similar name.
+- Report only what a page you actually opened states. For each fact give the claim in one plain sentence worded from the quote (keep its numbers, names and any "not"), the exact page URL, and a short VERBATIM quote of at least ${MIN_QUOTE_CHARS} characters copied from that page. If you cannot quote it, do not report it.
 - Use scope "role" only for something about the role named above, otherwise "company".
 - No employee names beyond leadership the company itself publishes, no personal profiles, no reviews or sentiment, no salary guesses, no anything behind a login.
 - Do not invent, estimate or fill gaps. An empty list is a correct answer.
@@ -321,18 +372,144 @@ export type SourceCheckFailure =
   | 'fetch_failed'
   | 'not_text'
   | 'quote_not_found'
-  | 'quote_too_short';
+  | 'quote_too_short'
+  | 'content_too_large';
 
-function pageText(html: string): string {
-  return html
-    .replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1>/giu, ' ')
-    .replace(/<[^>]+>/gu, ' ')
-    .replace(/&nbsp;|&#160;/giu, ' ')
-    .replace(/&amp;/giu, '&')
-    .replace(/&quot;|&#34;/giu, '"')
-    .replace(/&#39;|&apos;/giu, "'")
-    .replace(/&lt;/giu, '<')
-    .replace(/&gt;/giu, '>');
+/* ------------------------------------------------------------ page text (linear) ------------- */
+
+/**
+ * Upper bound on the HTML this app will read when checking a quote, BEFORE any parsing. A larger
+ * page is refused as `content_too_large` (stated, never a silent truncation that could drop the
+ * passage). The scanner below is linear, so this bounds the main-thread work directly.
+ */
+export const MAX_SOURCE_HTML_CHARS = 3_000_000;
+
+/** Elements whose content is never page text. */
+const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'noscript', 'template', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes']);
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  ndash: '-',
+  mdash: '-',
+  lsquo: "'",
+  rsquo: "'",
+  ldquo: '"',
+  rdquo: '"',
+  hellip: '...',
+  euro: '€',
+  copy: '©',
+  reg: '®',
+};
+
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+/**
+ * Decodes ONE character reference starting at `html[at] === '&'`. Returns the text and the index
+ * after it, or null when it is not a well-formed reference (the `&` is then kept literally). Each
+ * reference is decoded exactly once and its output is never scanned again, so `&amp;quot;` becomes
+ * the literal text `&quot;`, never `"`.
+ */
+function decodeEntity(html: string, at: number): { text: string; next: number } | null {
+  // Bounded look-ahead (never a scan to the end of the page: a run of "&" stays linear).
+  let end = -1;
+  for (let probe = at + 1; probe < html.length && probe <= at + 12; probe += 1) {
+    if (html.charCodeAt(probe) === 59 /* ; */) {
+      end = probe;
+      break;
+    }
+  }
+  if (end < 0) return null;
+  const body = html.slice(at + 1, end);
+  let code: number | null = null;
+  if (/^#[0-9]{1,7}$/u.test(body)) code = Number.parseInt(body.slice(1), 10);
+  else if (/^#[xX][0-9a-fA-F]{1,6}$/u.test(body)) code = Number.parseInt(body.slice(2), 16);
+  if (code !== null) {
+    if (code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return { text: '\uFFFD', next: end + 1 };
+    return { text: code === 160 ? ' ' : String.fromCodePoint(code), next: end + 1 };
+  }
+  const named = /^[a-zA-Z][a-zA-Z0-9]{1,10}$/u.test(body) ? NAMED_ENTITIES[body.toLowerCase()] : undefined;
+  return named === undefined ? null : { text: named, next: end + 1 };
+}
+
+/**
+ * HTML to visible-ish text in ONE forward pass. Every step either moves the cursor forward past what
+ * it inspected or ends the scan (an unterminated tag, comment or raw-text element ends the page), so
+ * the cost is O(length) whatever the markup: runs of `<`, thousands of unclosed `<script`, deep
+ * nesting or malformed entities cannot make it quadratic. No regex runs over the page itself.
+ */
+export function htmlToText(html: string): string {
+  // ASCII-only lowercasing keeps every index aligned with `html` (full Unicode lowercasing can
+  // change string length); it is used only to find closing raw-text tags.
+  const lower = html.replace(/[A-Z]+/gu, (run) => run.toLowerCase());
+  const out: string[] = [];
+  let textStart = 0;
+  let index = 0;
+  const flush = (until: number) => {
+    if (until > textStart) out.push(html.slice(textStart, until));
+  };
+  while (index < html.length) {
+    const char = html.charCodeAt(index);
+    if (char === 38 /* & */) {
+      const decoded = decodeEntity(html, index);
+      if (decoded) {
+        flush(index);
+        out.push(decoded.text);
+        index = decoded.next;
+        textStart = index;
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+    if (char !== 60 /* < */) {
+      index += 1;
+      continue;
+    }
+    const nextChar = html.charCodeAt(index + 1);
+    if (html.startsWith('<!--', index)) {
+      flush(index);
+      const close = html.indexOf('-->', index + 4);
+      if (close < 0) return out.join('');
+      out.push(' ');
+      index = close + 3;
+      textStart = index;
+      continue;
+    }
+    const closing = nextChar === 47; /* / */
+    const nameStart = closing ? index + 2 : index + 1;
+    const opensTag = isAsciiLetter(html.charCodeAt(nameStart)) || (!closing && (nextChar === 33 || nextChar === 63)); /* ! ? */
+    if (!opensTag) {
+      // A lone "<" is text.
+      index += 1;
+      continue;
+    }
+    flush(index);
+    const tagEnd = html.indexOf('>', nameStart);
+    if (tagEnd < 0) return out.join('');
+    out.push(' ');
+    let nameEnd = nameStart;
+    while (nameEnd < tagEnd && isAsciiLetter(lower.charCodeAt(nameEnd))) nameEnd += 1;
+    while (nameEnd < tagEnd && /[0-9a-z-]/u.test(lower[nameEnd]!)) nameEnd += 1;
+    const name = lower.slice(nameStart, nameEnd);
+    index = tagEnd + 1;
+    if (!closing && RAW_TEXT_ELEMENTS.has(name) && html.charCodeAt(tagEnd - 1) !== 47) {
+      const closeTag = lower.indexOf(`</${name}`, index);
+      if (closeTag < 0) return out.join('');
+      const closeEnd = html.indexOf('>', closeTag + name.length + 2);
+      if (closeEnd < 0) return out.join('');
+      index = closeEnd + 1;
+    }
+    textStart = index;
+  }
+  flush(html.length);
+  return out.join('');
 }
 
 function squash(value: string): string {
@@ -389,7 +566,9 @@ export async function confirmSourceQuote(
     return { ok: false, reason: 'fetch_failed' };
   }
   if (body.length === 0) return { ok: false, reason: 'not_text' };
-  const text = squash(pageText(body.slice(0, MAX_SOURCE_TEXT_CHARS)));
+  if (body.length > MAX_SOURCE_HTML_CHARS) return { ok: false, reason: 'content_too_large' };
+  if (options.signal?.aborted) return { ok: false, reason: 'cancelled' };
+  const text = squash(htmlToText(body));
   if (!text.includes(wanted)) return { ok: false, reason: 'quote_not_found' };
   return {
     ok: true,
@@ -408,5 +587,6 @@ export const SOURCE_FAILURE_TEXT: Record<SourceCheckFailure, string> = {
   not_text: 'The source returned no readable text.',
   quote_not_found: 'The quoted passage is not on the source page.',
   quote_too_short: 'Add a longer quote from the page so it can be checked.',
+  content_too_large: 'The source page is too large to check safely, so it was not used.',
 };
 

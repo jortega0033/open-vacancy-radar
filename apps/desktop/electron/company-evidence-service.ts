@@ -1,12 +1,16 @@
 import type { AtsHttpClient } from '@open-vacancy-radar/vacancy-engine';
 import {
   COMPANY_EVIDENCE_TOPICS,
+  LEAD_REASON_TEXT,
   MAX_INTERVIEW_COMPANY_FACTS,
   MAX_LETTER_COMPANY_FACTS,
   MAX_QUOTE_CHARS,
   MIN_QUOTE_CHARS,
+  assessQuoteSupport,
   classifyFact,
   deriveCompanyIdentity,
+  effectiveTopic,
+  employerDomainOf,
   identityFromConfirmedDomain,
   inferSourceKind,
   isHttpsSource,
@@ -15,22 +19,30 @@ import {
   sanitizeClaim,
   sanitizeLabel,
   selectProseEvidence,
+  suggestedEmployerDomain,
   type ClassificationContext,
   type ActionStats,
   type CompanyEvidenceProseFact,
   type CompanyEvidenceResult,
   type CompanyEvidenceScope,
   type CompanyEvidenceSourceKind,
+  type CompanyEvidenceSuggestion,
   type CompanyEvidenceTopic,
   type CompanyEvidenceView,
   type CompanyIdentity,
   type CompanyResearchDiagnostics,
+  type EmployerDomainCheck,
 } from './company-evidence.js';
 import {
+  REFRESH_ENVELOPE_MS,
+  RESEARCH_CONFIRM_PHASE_MS,
+  SOURCE_CHECK_CONCURRENCY,
   SOURCE_FAILURE_TEXT,
   confirmSourceQuote,
+  publicPostingReference,
   type CompanyResearchInput,
   type ResearchSessionOutcome,
+  type SourceCheck,
 } from './company-evidence-research.js';
 import * as store from './workspace/company-evidence-store.js';
 import * as workspace from './workspace/repository.js';
@@ -62,6 +74,8 @@ export interface CompanyEvidenceDeps {
   /** The explicit research session (web-only profile). Absent => research reports unavailable. */
   runResearch?: (input: CompanyResearchInput, signal: AbortSignal) => Promise<ResearchSessionOutcome>;
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  /** Overrides of the shared deadlines (tests); production uses the exported defaults. */
+  deadlines?: { confirmPhaseMs?: number; refreshEnvelopeMs?: number };
 }
 
 function stats(partial: Partial<ActionStats> = {}): ActionStats {
@@ -94,6 +108,15 @@ export interface ResolvedContext {
   company: string;
   role: string;
   attemptId: string | null;
+  /** The public posting URL the vacancy came from ('' when none). */
+  canonicalUrl: string;
+  /**
+   * The concrete vacancy keys a domain confirmation for THIS target is bound to
+   * (`application:<id>`, `posting:<canonical url key>`). Never a name.
+   */
+  bindingKeys: string[];
+  /** Domains the person may confirm (only for a vacancy with no verified identity). */
+  suggestions: CompanyEvidenceSuggestion[];
 }
 
 function latestAttemptFor(db: WorkspaceDb, applicationId: string): ApplicationAttemptRecord | null {
@@ -105,23 +128,33 @@ function latestAttemptFor(db: WorkspaceDb, applicationId: string): ApplicationAt
   );
 }
 
+function bindingKeysFor(applicationId: string | null, attempt: ApplicationAttemptRecord | null): string[] {
+  const keys: string[] = [];
+  if (applicationId) keys.push(`application:${applicationId}`);
+  if (attempt?.canonicalUrlKey) keys.push(`posting:${attempt.canonicalUrlKey}`);
+  return keys;
+}
+
 /** Resolves the verified employer and role an attempt or application refers to. Reads only. */
 export function resolveContext(deps: CompanyEvidenceDeps, target: EvidenceTarget): ResolvedContext {
   const { db } = deps;
   let company: string;
   let role: string;
   let attempt: ApplicationAttemptRecord | null;
+  let applicationId: string | null;
   let applicationAttemptsFallback = false;
   if ('attemptId' in target) {
     attempt = workspace.getApplicationAttempt(db, target.attemptId);
     company = attempt.company;
     role = attempt.role;
+    applicationId = attempt.applicationId;
   } else {
     const application = workspace.listApplications(db, 'all').find((row) => row.id === target.applicationId);
     if (!application) throw new WorkspaceNotFoundError('application', target.applicationId);
     attempt = latestAttemptFor(db, application.id);
     company = application.company;
     role = application.role;
+    applicationId = application.id;
     applicationAttemptsFallback = attempt === null;
   }
 
@@ -130,23 +163,39 @@ export function resolveContext(deps: CompanyEvidenceDeps, target: EvidenceTarget
     canonicalUrl: attempt?.canonicalUrl ?? '',
     employerKey: attempt?.employerKey ?? nameKeyOf(company),
   });
+  const bindingKeys = bindingKeysFor(applicationId, attempt);
   let recordId: string | null = null;
   let entityRef = '';
+  const suggestions: CompanyEvidenceSuggestion[] = [];
   if (identity.verifiedKey) {
     const found = store.findRecord(deps.db, identity.verifiedKey);
     recordId = found?.id ?? null;
     entityRef = found?.entityRef ?? '';
   } else {
-    // A name is only ever a pointer to a domain the PERSON confirmed, and only when unambiguous.
-    const confirmed = store.findRecordsByConfirmedName(db, identity.nameKey);
-    if (confirmed.length === 1) {
-      const record = confirmed[0]!;
-      const fromRecord = identityFromConfirmedDomain(record.displayName, record.host ?? '');
-      if (fromRecord) {
-        identity = { ...fromRecord, displayName: record.displayName, verifiedKey: record.verifiedKey, keyKind: record.keyKind };
-        recordId = record.id;
-        entityRef = record.entityRef;
-      }
+    // Only a domain the PERSON confirmed for THIS vacancy (application / posting) identifies it.
+    const bound = store.findRecordsByConfirmedTargets(db, bindingKeys);
+    const record = bound.length === 1 ? bound[0]! : null;
+    if (record && record.host) {
+      identity = {
+        verifiedKey: record.verifiedKey,
+        keyKind: record.keyKind,
+        host: record.host,
+        tenant: null,
+        displayName: record.displayName,
+        nameKey: identity.nameKey,
+      };
+      recordId = record.id;
+      entityRef = record.entityRef;
+    } else {
+      const seen = new Set<string>();
+      const add = (domain: string | null, basis: CompanyEvidenceSuggestion['basis']) => {
+        if (domain && !seen.has(domain) && suggestions.length < 5) {
+          seen.add(domain);
+          suggestions.push({ domain, basis });
+        }
+      };
+      add(suggestedEmployerDomain(attempt?.canonicalUrl ?? ''), 'posting_domain');
+      for (const other of store.findConfirmedDomainsByName(db, identity.nameKey)) add(other.host, 'same_name_elsewhere');
     }
   }
 
@@ -164,7 +213,14 @@ export function resolveContext(deps: CompanyEvidenceDeps, target: EvidenceTarget
     company,
     role,
     attemptId: attempt?.id ?? null,
+    canonicalUrl: attempt?.canonicalUrl ?? '',
+    bindingKeys,
+    suggestions,
   };
+}
+
+function employerNames(ctx: ResolvedContext): string[] {
+  return [...new Set([ctx.identity.displayName, sanitizeLabel(ctx.company)].filter((name) => name !== ''))];
 }
 
 function classificationContext(ctx: ResolvedContext): ClassificationContext {
@@ -172,6 +228,7 @@ function classificationContext(ctx: ResolvedContext): ClassificationContext {
     roleKey: ctx.roleKey,
     identityVerified: ctx.identity.verifiedKey !== null,
     identity: ctx.identity,
+    employerNames: employerNames(ctx),
   };
 }
 
@@ -206,6 +263,7 @@ export function buildView(deps: CompanyEvidenceDeps, ctx: ResolvedContext, attem
           verification: use.verification,
         }))
       : [],
+    suggestions: ctx.suggestions,
     supportedCount: facts.filter((fact) => fact.support === 'supported').length,
     leadCount: facts.filter((fact) => fact.support === 'lead' && fact.reasons.every((reason) => reason !== 'other_role')).length,
     generatedAt: now.toISOString(),
@@ -290,6 +348,16 @@ function requireVerified(ctx: ResolvedContext): CompanyEvidenceResult | null {
     : fail('identity_not_verified', 'Confirm the company website first. A name alone cannot identify an employer.');
 }
 
+const RECORD_FULL = (): CompanyEvidenceResult =>
+  fail('record_full', `This company already has ${store.MAX_FACTS_PER_RECORD} saved claims. Remove some before adding more.`);
+
+const DOMAIN_REFUSAL: Record<Exclude<EmployerDomainCheck, { ok: true }>['reason'], string> = {
+  invalid_domain: "Enter the employer's own website address, such as example.com.",
+  shared_or_public_domain:
+    'That address is a shared hosting service or a public suffix, where anyone can publish. Enter the employer\'s own domain.',
+  job_board_domain: "That is a job board or recruiting system, not the employer's own website.",
+};
+
 export function confirmDomain(
   deps: CompanyEvidenceDeps,
   target: EvidenceTarget,
@@ -297,15 +365,62 @@ export function confirmDomain(
 ): CompanyEvidenceResult {
   const ctx = resolveContext(deps, target);
   if (ctx.identity.verifiedKey) {
-    return fail('already_verified', 'This company is already identified from its posting.');
+    return fail('already_verified', 'This vacancy is already identified. Delete its company evidence to start again.');
   }
-  const identity = identityFromConfirmedDomain(ctx.company, input.domain);
-  if (!identity) return fail('invalid_domain', 'Enter the employer\'s own website address, not a job board.');
+  const check = employerDomainOf(input.domain);
+  if (!check.ok) return fail(check.reason, DOMAIN_REFUSAL[check.reason]);
+  const identity = identityFromConfirmedDomain(ctx.company, check.domain);
+  if (!identity) return fail('invalid_domain', DOMAIN_REFUSAL.invalid_domain);
+  if (ctx.bindingKeys.length === 0) return fail('no_target', 'This vacancy has no posting or application to confirm the website for.');
   const entityRef = sanitizeLabel(input.entityRef ?? '', 80).toLowerCase();
   const now = deps.now();
   const { record } = store.ensureRecord(deps.db, identity, now, entityRef);
-  store.addConfirmedNameKey(deps.db, record.id, ctx.identity.nameKey, now);
-  return { ok: true, view: getView(deps, target), notice: `Recorded ${identity.host} as ${identity.displayName}'s own website.` };
+  // Bound to THIS vacancy (its application and its posting), never to every vacancy with the name.
+  store.addConfirmedTargets(deps.db, record.id, ctx.bindingKeys, now);
+  return {
+    ok: true,
+    view: getView(deps, target),
+    notice: `Recorded ${identity.host} as ${identity.displayName}'s own website for this vacancy.${entityRef ? ` Entity reference: ${entityRef}.` : ''}`,
+  };
+}
+
+/** Floor first, then (only if it can pass) one safe fetch; writes go through the store's guarded apply. */
+async function checkAndConfirm(
+  deps: CompanyEvidenceDeps,
+  ctx: ResolvedContext,
+  factId: string,
+  sourceUrl: string,
+  claim: string,
+  quote: string,
+  signal: AbortSignal | undefined,
+): Promise<{ notice: string; requests: number }> {
+  const floor = assessQuoteSupport(claim, quote, employerNames(ctx));
+  if (!floor.ok) {
+    store.recordRefreshAttempt(deps.db, factId, 'failed', floor.reason, deps.now());
+    return { notice: `Saved as a lead. ${LEAD_REASON_TEXT[floor.reason]}`, requests: 0 };
+  }
+  if (!deps.getHttp) return { notice: 'Saved as a lead. Checking sources is not available right now.', requests: 0 };
+  const check = await confirmSourceQuote(await deps.getHttp(), sourceUrl, quote, {
+    ...(signal ? { signal } : {}),
+    now: deps.now,
+  });
+  if (!check.ok) {
+    store.recordRefreshAttempt(deps.db, factId, 'failed', check.reason, deps.now());
+    return { notice: `Saved as a lead. ${SOURCE_FAILURE_TEXT[check.reason]}`, requests: 1 };
+  }
+  const applied = store.confirmFactFromFetch(
+    deps.db,
+    factId,
+    { retrievedAt: check.checkedAt, contentHash: check.contentHash, claim, quote, employerNames: employerNames(ctx) },
+    deps.now(),
+  );
+  return {
+    notice:
+      applied === 'applied'
+        ? 'Quoted passage found on the page, and the claim is worded from it. It can be used.'
+        : 'Saved as a lead. The claim changed while its source was being checked, so nothing was confirmed.',
+    requests: 1,
+  };
 }
 
 export async function addFact(
@@ -322,13 +437,14 @@ export async function addFact(
   const sourceUrl = input.sourceUrl.trim();
   if (!isHttpsSource(sourceUrl)) return fail('source_not_https', 'Use the secure (https) web address of a public page.');
   if (input.scope === 'role' && ctx.roleKey === null) return fail('no_role', 'This claim needs a specific role to belong to.');
-  const topic = COMPANY_EVIDENCE_TOPICS.includes(input.topic) ? input.topic : 'general';
   const quote = sanitizeLabel(input.quote, MAX_QUOTE_CHARS);
+  // The topic follows what the claim and its quote say: sponsorship wording is sponsorship.
+  const topic = effectiveTopic(COMPANY_EVIDENCE_TOPICS.includes(input.topic) ? input.topic : 'general', claim, quote);
   const now = deps.now();
   const observed = input.observedAt && !Number.isNaN(Date.parse(input.observedAt)) ? new Date(input.observedAt) : now;
   const observedAt = observed.getTime() > now.getTime() ? now : observed;
 
-  const { record } = store.ensureRecord(deps.db, ctx.identity, now, ctx.entityRef);
+  const { record, created } = store.ensureRecord(deps.db, ctx.identity, now, ctx.entityRef);
   const inserted = store.insertFact(
     deps.db,
     {
@@ -350,21 +466,17 @@ export async function addFact(
     now,
   );
   if (!inserted) return fail('record_gone', 'This company record no longer exists.');
-
-  let notice = 'Saved as a lead. It will not be used until its source is confirmed.';
-  if (quote.length >= MIN_QUOTE_CHARS && deps.getHttp) {
-    const check = await confirmSourceQuote(await deps.getHttp(), sourceUrl, quote, { ...(signal ? { signal } : {}), now: deps.now });
-    if (check.ok) {
-      store.confirmFactFromFetch(deps.db, inserted.id, { retrievedAt: check.checkedAt, contentHash: check.contentHash }, deps.now());
-      notice = 'Source checked: the quoted passage is on the page.';
-    } else {
-      store.recordRefreshAttempt(deps.db, inserted.id, 'failed', check.reason, deps.now());
-      notice = `Saved as a lead. ${SOURCE_FAILURE_TEXT[check.reason]}`;
-    }
-  } else if (quote.length < MIN_QUOTE_CHARS) {
-    notice = 'Saved as a lead. Add a quote from the page, or confirm you read the source yourself.';
+  if ('refused' in inserted) {
+    if (created) store.pruneEmptyRecord(deps.db, record.id);
+    return RECORD_FULL();
   }
-  return { ok: true, view: getView(deps, target), notice, stats: stats({ requests: quote.length >= MIN_QUOTE_CHARS && deps.getHttp ? 1 : 0 }) };
+
+  let notice = 'Saved as a lead. Add a passage copied from the page, or confirm you read the source yourself.';
+  let requests = 0;
+  if (quote.length >= MIN_QUOTE_CHARS) {
+    ({ notice, requests } = await checkAndConfirm(deps, ctx, inserted.id, sourceUrl, claim, quote, signal));
+  }
+  return { ok: true, view: getView(deps, target), notice, stats: stats({ requests }) };
 }
 
 function factInContext(deps: CompanyEvidenceDeps, ctx: ResolvedContext, factId: string) {
@@ -386,15 +498,33 @@ export function confirmFact(deps: CompanyEvidenceDeps, target: EvidenceTarget, f
   return { ok: true, view: getView(deps, target), notice: 'Recorded that you read the source and it says this.' };
 }
 
-export function correctFact(deps: CompanyEvidenceDeps, target: EvidenceTarget, factId: string, claim: string): CompanyEvidenceResult {
+/**
+ * A person's correction. The corrected wording is never carried by the OLD passage: the store
+ * moves that passage into the correction record, and the claim is a lead until a NEW passage the
+ * person supplies passes the floor and is found on the page (or they confirm they read it).
+ */
+export async function correctFact(
+  deps: CompanyEvidenceDeps,
+  target: EvidenceTarget,
+  factId: string,
+  claim: string,
+  newQuote = '',
+  signal?: AbortSignal,
+): Promise<CompanyEvidenceResult> {
   const ctx = resolveContext(deps, target);
   const blocked = requireVerified(ctx);
   if (blocked) return blocked;
   const clean = sanitizeClaim(claim);
   if (clean.length < 8) return fail('claim_too_short', 'Write the claim as one clear sentence.');
-  if (!factInContext(deps, ctx, factId)) return fail('fact_not_found', 'That claim is no longer on this company.');
-  store.correctFact(deps.db, factId, clean, deps.now());
-  return { ok: true, view: getView(deps, target), notice: 'Claim corrected. The original wording is kept, and it needs its source confirmed again.' };
+  const quote = sanitizeLabel(newQuote, MAX_QUOTE_CHARS);
+  if (quote !== '' && quote.length < MIN_QUOTE_CHARS) return fail('quote_too_short', SOURCE_FAILURE_TEXT.quote_too_short);
+  const fact = factInContext(deps, ctx, factId);
+  if (!fact || fact.status !== 'active') return fail('fact_not_found', 'That claim is no longer on this company.');
+  store.correctFact(deps.db, factId, clean, deps.now(), quote);
+  let notice = 'Claim corrected. The original wording and passage are kept, and it is a lead until a passage that says the new wording is checked.';
+  let requests = 0;
+  if (quote !== '') ({ notice, requests } = await checkAndConfirm(deps, ctx, factId, fact.sourceUrl, clean, quote, signal));
+  return { ok: true, view: getView(deps, target), notice: quote === '' ? notice : `Claim corrected. ${notice}`, stats: stats({ requests }) };
 }
 
 export function withdrawFact(deps: CompanyEvidenceDeps, target: EvidenceTarget, factId: string): CompanyEvidenceResult {
@@ -433,7 +563,10 @@ export function decideLink(
   return {
     ok: true,
     view: getView(deps, target),
-    notice: decision === 'confirmed' ? `Company-level claims from ${link.otherName} are now shared. Role claims never are.` : 'Kept separate.',
+    notice:
+      decision === 'confirmed'
+        ? `Company-level claims from ${link.otherName} are now shared. Role claims never are. Where the two disagree, neither is used until you choose.`
+        : 'Kept separate. Nothing is shared, and any choice that depended on the link was undone.',
   };
 }
 
@@ -451,17 +584,22 @@ export function deleteRecordFor(deps: CompanyEvidenceDeps, target: EvidenceTarge
 
 /* ------------------------------------------------------------------------ refresh ------------ */
 
-function isCurrentlySupported(deps: CompanyEvidenceDeps, ctx: ResolvedContext, factId: string): boolean {
+function currentlySupported(deps: CompanyEvidenceDeps, ctx: ResolvedContext, factId: string): boolean {
   if (!ctx.recordId) return false;
   const fact = store.listFactsForRecord(deps.db, ctx.recordId).find((row) => row.id === factId);
   return !!fact && classifyFact(fact, classificationContext(ctx), deps.now()).support === 'supported';
 }
 
+const checkable = (fact: { quote: string; sourceUrl: string }): boolean => fact.quote.length >= MIN_QUOTE_CHARS && isHttpsSource(fact.sourceUrl);
+
 /**
  * Re-checks the stored sources of this company's non-current claims. A current, supported claim is a
  * CACHE HIT: no request, its original retrieval time stays. Only a source that still contains the
- * quoted passage renews a claim; a failure, a timeout or a cancel leaves `retrievedAt`/`expiresAt`
- * exactly as they were, and a source that no longer says it demotes the claim to a lead.
+ * quoted passage -- for a claim that is worded from that passage -- renews a claim; a failure, a
+ * timeout or a cancel leaves `retrievedAt`/`expiresAt` exactly as they were, a source that no longer
+ * says it demotes the claim to a lead, and a claim that fails the quote floor (a corrected claim
+ * whose old passage was set aside, a paraphrase) is not fetched at all. The whole pass shares one
+ * `REFRESH_ENVELOPE_MS` deadline.
  */
 export async function refreshEvidence(
   deps: CompanyEvidenceDeps,
@@ -477,6 +615,9 @@ export async function refreshEvidence(
   const controller = runs.begin(key);
   if (!controller) return fail('busy', 'This company is already being checked.');
   const result = stats();
+  let notCheckable = 0;
+  const envelope = AbortSignal.timeout(deps.deadlines?.refreshEnvelopeMs ?? REFRESH_ENVELOPE_MS);
+  const signal = AbortSignal.any([controller.signal, envelope]);
   try {
     const own = store
       .listFactsForRecord(deps.db, ctx.recordId)
@@ -485,20 +626,38 @@ export async function refreshEvidence(
     const http = await deps.getHttp();
     let checked = 0;
     for (const fact of own) {
-      if (controller.signal.aborted) break;
-      if (isCurrentlySupported(deps, ctx, fact.id)) {
-        result.avoidedFetches += 1;
+      if (signal.aborted) break;
+      if (currentlySupported(deps, ctx, fact.id)) {
         result.cacheHit = true;
+        // Observed: this fact would otherwise have been fetched (it has a checkable passage).
+        if (checkable(fact)) result.avoidedFetches += 1;
         continue;
       }
       if (checked >= MAX_REFRESH_FACTS) break;
-      if (fact.quote.length < MIN_QUOTE_CHARS || !isHttpsSource(fact.sourceUrl)) continue;
+      if (!checkable(fact)) {
+        notCheckable += 1;
+        continue;
+      }
+      if (fact.verification !== 'user_confirmed' && !assessQuoteSupport(fact.claim, fact.quote, employerNames(ctx)).ok) {
+        notCheckable += 1;
+        continue;
+      }
       checked += 1;
       result.requests += 1;
-      const check = await confirmSourceQuote(http, fact.sourceUrl, fact.quote, { signal: controller.signal, now: deps.now });
+      const check = await confirmSourceQuote(http, fact.sourceUrl, fact.quote, { signal, now: deps.now });
       if (check.ok) {
-        if (store.renewFact(deps.db, fact.id, { retrievedAt: check.checkedAt, contentHash: check.contentHash }, deps.now())) result.renewed += 1;
+        const applied = store.renewFact(
+          deps.db,
+          fact.id,
+          { retrievedAt: check.checkedAt, contentHash: check.contentHash, claim: fact.claim, quote: fact.quote, employerNames: employerNames(ctx) },
+          deps.now(),
+        );
+        if (applied === 'applied') result.renewed += 1;
       } else if (check.reason === 'cancelled') {
+        if (!controller.signal.aborted && envelope.aborted) {
+          store.recordRefreshAttempt(deps.db, fact.id, 'failed', 'timeout', deps.now());
+          result.failed += 1;
+        }
         break;
       } else if (check.reason === 'quote_not_found') {
         store.recordRefreshAttempt(deps.db, fact.id, 'source_changed', check.reason, deps.now());
@@ -511,23 +670,40 @@ export async function refreshEvidence(
   } finally {
     runs.end(key, controller);
   }
+  const extra = notCheckable > 0 ? ` ${notCheckable} need a passage that says their wording before they can be checked.` : '';
   const notice = controller.signal.aborted
     ? 'Stopped. Nothing was renewed and your drafts are unchanged.'
     : result.requests === 0
       ? result.cacheHit
-        ? 'Everything saved is still current, so no source was fetched.'
-        : 'No saved claim has a quote to check.'
-      : `Checked ${result.requests} source${result.requests === 1 ? '' : 's'}: ${result.renewed} renewed, ${result.demoted} no longer match, ${result.failed} could not be reached.`;
+        ? `Everything checkable is still current, so no source was fetched.${extra}`
+        : `No saved claim has a passage to check.${extra}`
+      : `Checked ${result.requests} source${result.requests === 1 ? '' : 's'}: ${result.renewed} renewed, ${result.demoted} no longer match, ${result.failed} could not be reached.${extra}${envelope.aborted ? ' The time limit was reached.' : ''}`;
   return viewResult(deps, target, notice, result);
 }
 
 /* ------------------------------------------------------------------------ research ------------ */
 
+async function boundedMap<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      out[index] = await task(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 /**
  * The explicit, bounded, cancellable research action. When every requested topic already has
- * current supported evidence for this company/role, no session starts (a cache hit that reports
- * the calls it avoided). Otherwise one `web-only` session runs; every researched claim is stored as
- * an unverified lead and then confirmed (or not) by the app's own fetch of the cited page.
+ * current supported COMPANY-scope evidence (a role fact never satisfies a company topic), no session
+ * starts (a cache hit). Otherwise one `web-only` session runs; every researched claim is stored as an
+ * unverified lead, and only a claim that passes the quote floor is checked against its page by the
+ * app's own fetch (up to `SOURCE_CHECK_CONCURRENCY` at a time under one `RESEARCH_CONFIRM_PHASE_MS`
+ * deadline).
  *
  * Failure, cancel, timeout and budget overruns store diagnostics (codes and counts) and leave
  * every existing fact, and every draft, exactly as it was.
@@ -545,13 +721,13 @@ export async function researchCompany(
   const topics = (options.topics?.length ? options.topics : DEFAULT_RESEARCH_TOPICS).filter((topic) => COMPANY_EVIDENCE_TOPICS.includes(topic));
   const now = deps.now();
 
-  // Cache hit: nothing to ask the web for.
+  // Cache hit: only current, supported COMPANY-scope facts count for a company topic.
   if (ctx.recordId) {
     const supportedTopics = new Set(
       store
         .listFactsForRecord(deps.db, ctx.recordId)
         .map((fact) => classifyFact(fact, classificationContext(ctx), now))
-        .filter((fact) => fact.support === 'supported')
+        .filter((fact) => fact.support === 'supported' && fact.scope === 'company')
         .map((fact) => fact.topic),
     );
     if (topics.every((topic) => supportedTopics.has(topic))) {
@@ -559,7 +735,7 @@ export async function researchCompany(
         ok: true,
         view: getView(deps, target),
         notice: 'Already current. Showing what was saved, with its original check time.',
-        stats: stats({ cacheHit: true, avoidedSessions: 1, avoidedFetches: topics.length }),
+        stats: stats({ cacheHit: true, avoidedSessions: 1 }),
       };
     }
   }
@@ -572,9 +748,11 @@ export async function researchCompany(
   try {
     const { record, created } = store.ensureRecord(deps.db, ctx.identity, now, ctx.entityRef);
     if (created) createdRecordId = record.id;
+    const tenant = ctx.identity.tenant;
     const input: CompanyResearchInput = {
       companyName: record.displayName,
-      host: ctx.identity.host ?? '',
+      website: ctx.identity.host ?? '',
+      jobBoard: tenant ? { provider: tenant.provider, board: tenant.board, postingUrl: publicPostingReference(ctx.canonicalUrl) } : null,
       roleTitle: options.includeRole === false ? '' : ctx.roleLabel,
       topics,
     };
@@ -589,25 +767,32 @@ export async function researchCompany(
     let finalReason = outcome.reason;
     if (outcome.status === 'completed') {
       const http = deps.getHttp ? await deps.getHttp() : undefined;
-      type Pending = { candidate: (typeof outcome.candidates)[number]; confirm: Awaited<ReturnType<typeof confirmSourceQuote>> | null };
-      const pending: Pending[] = [];
-      for (const candidate of outcome.candidates) {
-        if (controller.signal.aborted) break;
-        if (candidate.scope === 'role' && options.includeRole === false) continue;
-        if (candidate.scope === 'role' && ctx.roleKey === null) continue;
-        result.requests += http ? 1 : 0;
-        pending.push({
-          candidate,
-          confirm: http ? await confirmSourceQuote(http, candidate.sourceUrl, candidate.quote, { signal: controller.signal, now: deps.now }) : null,
-        });
-      }
+      const names = employerNames(ctx);
+      const usable = outcome.candidates
+        .filter((candidate) => !(candidate.scope === 'role' && (options.includeRole === false || ctx.roleKey === null)))
+        .map((candidate) => ({
+          candidate: { ...candidate, topic: effectiveTopic(candidate.topic, candidate.claim, candidate.quote) },
+          floor: assessQuoteSupport(candidate.claim, candidate.quote, names),
+        }));
+      const phase = AbortSignal.timeout(deps.deadlines?.confirmPhaseMs ?? RESEARCH_CONFIRM_PHASE_MS);
+      const signal = AbortSignal.any([controller.signal, phase]);
+      const checks = await boundedMap(usable, SOURCE_CHECK_CONCURRENCY, async (item): Promise<SourceCheck | null> => {
+        // A claim the passage cannot support is never fetched for: it stays a lead with its reason.
+        if (!http || !item.floor.ok) return null;
+        // The shared deadline passed before this page was reached: recorded as a timeout, not fetched.
+        if (signal.aborted) return controller.signal.aborted ? null : { ok: false, reason: 'timeout' };
+        result.requests += 1;
+        const check = await confirmSourceQuote(http, item.candidate.sourceUrl, item.candidate.quote, { signal, now: deps.now });
+        return !check.ok && check.reason === 'cancelled' && !controller.signal.aborted ? { ok: false, reason: 'timeout' } : check;
+      });
       if (controller.signal.aborted) {
         // Cancelled while confirming: store nothing from this run.
         finalStatus = 'cancelled';
         finalReason = 'cancelled_by_user';
       } else {
-        for (const { candidate, confirm } of pending) {
-          candidateCount += 1;
+        for (let index = 0; index < usable.length; index += 1) {
+          const { candidate, floor } = usable[index]!;
+          const confirm = checks[index] ?? null;
           const inserted = store.insertFact(
             deps.db,
             {
@@ -625,6 +810,7 @@ export async function researchCompany(
               retrievedAt: null,
               observedAt: deps.now(),
               contentHash: null,
+              refreshReason: floor.ok ? null : floor.reason,
             },
             deps.now(),
           );
@@ -633,9 +819,19 @@ export async function researchCompany(
             finalReason = 'record_removed';
             break;
           }
+          if ('refused' in inserted) {
+            finalReason = 'record_full';
+            break;
+          }
+          candidateCount += 1;
           if (confirm?.ok) {
-            store.confirmFactFromFetch(deps.db, inserted.id, { retrievedAt: confirm.checkedAt, contentHash: confirm.contentHash }, deps.now());
-            confirmedCount += 1;
+            const applied = store.confirmFactFromFetch(
+              deps.db,
+              inserted.id,
+              { retrievedAt: confirm.checkedAt, contentHash: confirm.contentHash, claim: candidate.claim, quote: candidate.quote, employerNames: names },
+              deps.now(),
+            );
+            if (applied === 'applied') confirmedCount += 1;
           } else if (confirm && !confirm.ok) {
             store.recordRefreshAttempt(deps.db, inserted.id, 'failed', confirm.reason, deps.now());
           }
@@ -658,9 +854,10 @@ export async function researchCompany(
     if (finalStatus !== 'cancelled') store.recordResearchDiagnostics(deps.db, record.id, diagnostics, deps.now());
     deps.log?.('company evidence research finished', { status: finalStatus, reason: finalReason, candidates: candidateCount, confirmed: confirmedCount });
     if (createdRecordId) store.pruneEmptyRecord(deps.db, createdRecordId);
+    const full = finalReason === 'record_full' ? ` This company reached the limit of ${store.MAX_FACTS_PER_RECORD} saved claims, so the rest were not added.` : '';
     const notice =
       finalStatus === 'completed'
-        ? `Research finished: ${candidateCount} possible claim${candidateCount === 1 ? '' : 's'}, ${confirmedCount} confirmed against their source. The rest are leads.`
+        ? `Research finished: ${candidateCount} possible claim${candidateCount === 1 ? '' : 's'}, ${confirmedCount} with their quoted passage found on the page. The rest are leads.${full}`
         : finalStatus === 'cancelled'
           ? 'Stopped. Nothing was added and your drafts are unchanged.'
           : finalStatus === 'unavailable'

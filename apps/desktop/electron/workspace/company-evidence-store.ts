@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, inArray, or } from 'drizzle-orm';
 import {
   SINGLE_VALUE_TOPICS,
+  effectiveTopic,
+  factQuoteSupport,
   nameKeyOf,
   normalizeClaim,
   ttlFor,
@@ -41,12 +43,22 @@ import {
  *    company-scope facts, labelled with where they came from);
  *  - touch an attempt, an artifact or `application_attempt_evidence_uses` when evidence changes.
  *
- * Retention: at most `MAX_FACTS_PER_RECORD` facts per record. Pruning removes withdrawn and
- * superseded facts first, then the oldest expired leads, and never a current fact or one that is
- * part of an open contradiction. A record left with no facts and no reviewed link is deleted.
+ * Retention: ADMISSION is bounded -- a record holds at most `MAX_FACTS_PER_RECORD` active facts and
+ * `MAX_ROWS_PER_RECORD` rows in total (superseded/withdrawn provenance included); a new fact beyond
+ * either bound is refused with the stable `record_full` outcome, never silently kept. Withdrawn facts
+ * no contradiction references are deleted; when the row bound is reached, the oldest expired or
+ * unverified leads outside any open contradiction are pruned first. Current facts, facts in an open
+ * contradiction and superseded decisions are never pruned. A record left with no facts and no
+ * reviewed link is deleted.
  */
 
 export const MAX_FACTS_PER_RECORD = 80;
+export const MAX_ROWS_PER_RECORD = 160;
+
+/** Why `insertFact` stored nothing although the record exists. */
+export interface FactRefused {
+  refused: 'record_full';
+}
 
 type RecordRow = typeof companyEvidenceRecords.$inferSelect;
 type FactRow = typeof companyEvidenceFacts.$inferSelect;
@@ -60,7 +72,11 @@ export interface CompanyEvidenceRecord {
   displayName: string;
   nameKey: string;
   host: string | null;
-  confirmedNameKeys: string[];
+  /**
+   * The concrete vacancies (`application:<id>`, `posting:<canonical url key>`) the person confirmed
+   * this domain FOR. A name-only vacancy reaches this record only through its own binding.
+   */
+  confirmedTargets: string[];
   createdAt: string;
   updatedAt: string;
   lastResearch: CompanyResearchDiagnostics | null;
@@ -75,7 +91,7 @@ function toRecord(row: RecordRow): CompanyEvidenceRecord {
     displayName: row.displayName,
     nameKey: row.nameKey,
     host: row.host,
-    confirmedNameKeys: Array.isArray(row.confirmedNameKeys) ? [...row.confirmedNameKeys] : [],
+    confirmedTargets: Array.isArray(row.confirmedTargets) ? [...row.confirmedTargets] : [],
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lastResearch: row.lastResearch ?? null,
@@ -175,6 +191,7 @@ export function ensureRecord(
         entityRef,
         displayName: identity.displayName,
         nameKey: identity.nameKey || nameKeyOf(identity.displayName),
+        // The employer's own website only; an ATS tenant record has none.
         host: identity.host,
         createdAt: now,
         updatedAt: now,
@@ -196,31 +213,46 @@ export function ensureRecord(
   });
 }
 
-/** The person confirmed that vacancies naming this company belong to this record's domain. */
-export function addConfirmedNameKey(db: WorkspaceDb, recordId: string, nameKey: string, now: Date): boolean {
-  if (nameKey === '') return false;
+/** Upper bound on remembered confirmation targets per record (oldest dropped first). */
+const MAX_CONFIRMED_TARGETS = 500;
+
+/**
+ * The person confirmed this record's domain for these concrete vacancies (application / posting
+ * keys). Never a bare name: another vacancy that merely shares the name is NOT bound by this.
+ */
+export function addConfirmedTargets(db: WorkspaceDb, recordId: string, targets: readonly string[], now: Date): boolean {
+  const wanted = targets.filter((key) => key !== '');
+  if (wanted.length === 0) return false;
   return db.transaction((tx) => {
     const row = tx.select().from(companyEvidenceRecords).where(eq(companyEvidenceRecords.id, recordId)).get();
     if (!row) return false;
-    const keys = Array.isArray(row.confirmedNameKeys) ? row.confirmedNameKeys : [];
-    if (!keys.includes(nameKey)) {
-      tx.update(companyEvidenceRecords)
-        .set({ confirmedNameKeys: [...keys, nameKey].slice(-20), updatedAt: now })
-        .where(eq(companyEvidenceRecords.id, recordId))
-        .run();
-    }
+    const keys = Array.isArray(row.confirmedTargets) ? row.confirmedTargets : [];
+    const merged = [...keys.filter((key) => !wanted.includes(key)), ...wanted].slice(-MAX_CONFIRMED_TARGETS);
+    tx.update(companyEvidenceRecords).set({ confirmedTargets: merged, updatedAt: now }).where(eq(companyEvidenceRecords.id, recordId)).run();
     return true;
   });
 }
 
-/** Records the person confirmed for this exact name. More than one means the name is ambiguous. */
-export function findRecordsByConfirmedName(db: Pick<WorkspaceDb, 'select'>, nameKey: string): CompanyEvidenceRecord[] {
-  if (nameKey === '') return [];
+/** Records the person confirmed for any of these concrete vacancy keys. More than one = ambiguous. */
+export function findRecordsByConfirmedTargets(db: Pick<WorkspaceDb, 'select'>, targets: readonly string[]): CompanyEvidenceRecord[] {
+  const wanted = new Set(targets.filter((key) => key !== ''));
+  if (wanted.size === 0) return [];
   return db
     .select()
     .from(companyEvidenceRecords)
     .all()
-    .filter((row) => Array.isArray(row.confirmedNameKeys) && row.confirmedNameKeys.includes(nameKey))
+    .filter((row) => Array.isArray(row.confirmedTargets) && row.confirmedTargets.some((key) => wanted.has(key)))
+    .map(toRecord);
+}
+
+/** Person-confirmed domains for the same normalised name: offered as SUGGESTIONS, never applied. */
+export function findConfirmedDomainsByName(db: Pick<WorkspaceDb, 'select'>, nameKey: string): CompanyEvidenceRecord[] {
+  if (nameKey === '') return [];
+  return db
+    .select()
+    .from(companyEvidenceRecords)
+    .where(and(eq(companyEvidenceRecords.nameKey, nameKey), eq(companyEvidenceRecords.keyKind, 'user_domain')))
+    .all()
     .map(toRecord);
 }
 
@@ -273,14 +305,32 @@ export function recordResearchDiagnostics(
 
 /* ------------------------------------------------------------------------- reads ------------- */
 
-function openContradictionsFor(db: Pick<WorkspaceDb, 'select'>, recordIds: readonly string[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  if (recordIds.length === 0) return map;
-  const rows = db
+type ContradictionRow = typeof companyEvidenceContradictions.$inferSelect;
+
+/**
+ * Open contradictions among a set of VISIBLE facts: a row counts only when both of its facts are
+ * visible. That is what makes a cross-record contradiction (two records joined by a confirmed link)
+ * appear while the link is confirmed and disappear by itself when the link is revoked.
+ */
+function openContradictionsAmong(db: Pick<WorkspaceDb, 'select'>, factIds: readonly string[]): ContradictionRow[] {
+  if (factIds.length === 0) return [];
+  const visible = new Set(factIds);
+  const ids = [...visible];
+  return db
     .select()
     .from(companyEvidenceContradictions)
-    .where(and(inArray(companyEvidenceContradictions.recordId, [...recordIds]), eq(companyEvidenceContradictions.status, 'open')))
-    .all();
+    .where(
+      and(
+        eq(companyEvidenceContradictions.status, 'open'),
+        or(inArray(companyEvidenceContradictions.factAId, ids), inArray(companyEvidenceContradictions.factBId, ids)),
+      ),
+    )
+    .all()
+    .filter((row) => visible.has(row.factAId) && visible.has(row.factBId));
+}
+
+function contradictionMap(rows: readonly ContradictionRow[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
   for (const row of rows) {
     map.set(row.factAId, [...(map.get(row.factAId) ?? []), row.factBId]);
     map.set(row.factBId, [...(map.get(row.factBId) ?? []), row.factAId]);
@@ -305,39 +355,49 @@ export function listLinks(db: Pick<WorkspaceDb, 'select'>, recordId: string): Co
   return views;
 }
 
-export function listOpenContradictions(db: Pick<WorkspaceDb, 'select'>, recordId: string): CompanyEvidenceContradictionView[] {
-  return db
-    .select()
-    .from(companyEvidenceContradictions)
-    .where(and(eq(companyEvidenceContradictions.recordId, recordId), eq(companyEvidenceContradictions.status, 'open')))
-    .all()
-    .map((row) => ({ id: row.id, factAId: row.factAId, factBId: row.factBId, topic: row.topic as CompanyEvidenceTopic }));
-}
-
-/**
- * The record's own facts plus the COMPANY-scope facts of every record it has a CONFIRMED link to.
- * Role facts never cross a link, and a proposed or rejected link shares nothing.
- */
-export function listFactsForRecord(db: Pick<WorkspaceDb, 'select'>, recordId: string): CompanyEvidenceFactData[] {
+/** Visible rows for a record: its own facts plus the COMPANY-scope facts of confirmed-link records. */
+function visibleFactRows(db: Pick<WorkspaceDb, 'select'>, recordId: string): { rows: FactRow[]; nameOf: Map<string, string> } {
   const linked = listLinks(db, recordId).filter((link) => link.status === 'confirmed');
   const ids = [recordId, ...linked.map((link) => link.otherRecordId)];
-  const contradictions = openContradictionsFor(db, ids);
   const rows = db
     .select()
     .from(companyEvidenceFacts)
     .where(inArray(companyEvidenceFacts.recordId, ids))
     .orderBy(desc(companyEvidenceFacts.createdAt), asc(companyEvidenceFacts.id))
-    .all();
-  const nameOf = new Map(linked.map((link) => [link.otherRecordId, link.otherName]));
-  return rows
-    .filter((row) => row.recordId === recordId || row.scope === 'company')
-    .map((row) => toFact(row, contradictions.get(row.id) ?? [], row.recordId === recordId ? null : (nameOf.get(row.recordId) ?? null)));
+    .all()
+    .filter((row) => row.recordId === recordId || row.scope === 'company');
+  return { rows, nameOf: new Map(linked.map((link) => [link.otherRecordId, link.otherName])) };
+}
+
+/** Open contradictions the person can see from this record, including across a confirmed link. */
+export function listOpenContradictions(db: Pick<WorkspaceDb, 'select'>, recordId: string): CompanyEvidenceContradictionView[] {
+  const { rows } = visibleFactRows(db, recordId);
+  return openContradictionsAmong(db, rows.map((row) => row.id)).map((row) => ({
+    id: row.id,
+    factAId: row.factAId,
+    factBId: row.factBId,
+    topic: row.topic as CompanyEvidenceTopic,
+  }));
+}
+
+/**
+ * The record's own facts plus the COMPANY-scope facts of every record it has a CONFIRMED link to.
+ * Role facts never cross a link, a proposed or rejected link shares nothing, and a disagreement
+ * between this record and a linked one marks BOTH sides contradicted.
+ */
+export function listFactsForRecord(db: Pick<WorkspaceDb, 'select'>, recordId: string): CompanyEvidenceFactData[] {
+  const { rows, nameOf } = visibleFactRows(db, recordId);
+  const contradictions = contradictionMap(openContradictionsAmong(db, rows.map((row) => row.id)));
+  return rows.map((row) =>
+    toFact(row, contradictions.get(row.id) ?? [], row.recordId === recordId ? null : (nameOf.get(row.recordId) ?? null)),
+  );
 }
 
 export function getFact(db: Pick<WorkspaceDb, 'select'>, factId: string): CompanyEvidenceFactData | null {
   const row = db.select().from(companyEvidenceFacts).where(eq(companyEvidenceFacts.id, factId)).get();
   if (!row) return null;
-  return toFact(row, openContradictionsFor(db, [row.recordId]).get(row.id) ?? [], null);
+  const own = visibleFactRows(db, row.recordId).rows.map((fact) => fact.id);
+  return toFact(row, contradictionMap(openContradictionsAmong(db, own)).get(row.id) ?? [], null);
 }
 
 /* ------------------------------------------------------------------------ writes ------------- */
@@ -361,6 +421,22 @@ export interface NewCompanyFact {
   refreshReason?: string | null;
 }
 
+function insertContradiction(tx: Tx, recordId: string, a: FactRow, b: FactRow, now: Date): void {
+  const [factAId, factBId] = orderedPair(a.id, b.id);
+  tx.insert(companyEvidenceContradictions)
+    .values({ recordId, factAId, factBId, topic: a.topic, status: 'open', createdAt: now })
+    .onConflictDoNothing()
+    .run();
+}
+
+const conflicts = (a: FactRow, b: FactRow): boolean =>
+  a.id !== b.id &&
+  a.status === 'active' &&
+  b.status === 'active' &&
+  a.topic === b.topic &&
+  SINGLE_VALUE_TOPICS.includes(a.topic) &&
+  normalizeClaim(a.claim) !== normalizeClaim(b.claim);
+
 function detectContradictions(tx: Tx, fact: FactRow, now: Date): void {
   if (!SINGLE_VALUE_TOPICS.includes(fact.topic) || fact.status !== 'active') return;
   const peers = tx
@@ -376,14 +452,45 @@ function detectContradictions(tx: Tx, fact: FactRow, now: Date): void {
       ),
     )
     .all();
-  for (const peer of peers) {
-    if (peer.id === fact.id) continue;
-    if (normalizeClaim(peer.claim) === normalizeClaim(fact.claim)) continue;
-    const [factAId, factBId] = orderedPair(fact.id, peer.id);
-    tx.insert(companyEvidenceContradictions)
-      .values({ recordId: fact.recordId, factAId, factBId, topic: fact.topic, status: 'open', createdAt: now })
-      .onConflictDoNothing()
-      .run();
+  for (const peer of peers) if (conflicts(fact, peer)) insertContradiction(tx, fact.recordId, fact, peer, now);
+  syncLinkedContradictionsTx(tx, fact.recordId, now);
+}
+
+function confirmedLinkPeers(tx: Tx, recordId: string): string[] {
+  return tx
+    .select()
+    .from(companyEvidenceIdentityLinks)
+    .where(
+      and(
+        eq(companyEvidenceIdentityLinks.status, 'confirmed'),
+        or(eq(companyEvidenceIdentityLinks.recordAId, recordId), eq(companyEvidenceIdentityLinks.recordBId, recordId)),
+      ),
+    )
+    .all()
+    .map((link) => (link.recordAId === recordId ? link.recordBId : link.recordAId));
+}
+
+function activeCompanyFacts(tx: Tx, recordId: string): FactRow[] {
+  return tx
+    .select()
+    .from(companyEvidenceFacts)
+    .where(and(eq(companyEvidenceFacts.recordId, recordId), eq(companyEvidenceFacts.scope, 'company'), eq(companyEvidenceFacts.status, 'active')))
+    .all()
+    .filter((row) => SINGLE_VALUE_TOPICS.includes(row.topic));
+}
+
+/**
+ * Records a contradiction for every pair of active COMPANY-scope facts, one on each side of a
+ * CONFIRMED identity link, that answer the same single-value topic differently. Role facts never
+ * take part (they never cross a link). Idempotent.
+ */
+function syncLinkedContradictionsTx(tx: Tx, recordId: string, now: Date): void {
+  const own = activeCompanyFacts(tx, recordId);
+  if (own.length === 0) return;
+  for (const otherId of confirmedLinkPeers(tx, recordId)) {
+    for (const theirs of activeCompanyFacts(tx, otherId)) {
+      for (const mine of own) if (conflicts(mine, theirs)) insertContradiction(tx, recordId, mine, theirs, now);
+    }
   }
 }
 
@@ -422,7 +529,7 @@ export function insertFact(
   db: WorkspaceDb,
   input: NewCompanyFact,
   now: Date,
-): { id: string; duplicate: boolean } | null {
+): { id: string; duplicate: boolean } | FactRefused | null {
   return db.transaction((tx) => {
     const record = tx.select({ id: companyEvidenceRecords.id }).from(companyEvidenceRecords).where(eq(companyEvidenceRecords.id, input.recordId)).get();
     if (!record) return null;
@@ -443,6 +550,13 @@ export function insertFact(
       .all()
       .find((row) => normalizeClaim(row.claim) === normalizeClaim(input.claim) && row.status !== 'withdrawn');
     if (sameKey) return { id: sameKey.id, duplicate: true };
+
+    // Admission bound: make room only from what retention may drop, then refuse with a stable code.
+    pruneRecordTx(tx, input.recordId, now, 1);
+    const existing = tx.select().from(companyEvidenceFacts).where(eq(companyEvidenceFacts.recordId, input.recordId)).all();
+    if (existing.length >= MAX_ROWS_PER_RECORD || existing.filter((row) => row.status === 'active').length >= MAX_FACTS_PER_RECORD) {
+      return { refused: 'record_full' as const };
+    }
 
     const [row] = tx
       .insert(companyEvidenceFacts)
@@ -471,7 +585,6 @@ export function insertFact(
     if (!row) throw new Error('could not store the company fact');
     detectContradictions(tx, row, now);
     tx.update(companyEvidenceRecords).set({ updatedAt: now }).where(eq(companyEvidenceRecords.id, input.recordId)).run();
-    pruneRecordTx(tx, input.recordId, now);
     return { id: row.id, duplicate: false };
   });
 }
@@ -481,31 +594,55 @@ function activeFact(tx: Tx, factId: string): FactRow | undefined {
   return row && row.status === 'active' ? row : undefined;
 }
 
-/** A fetched source confirmed the claim: the only function (with `confirmFactByUser`) that moves `expiresAt`. */
-export function renewFact(
-  db: WorkspaceDb,
-  factId: string,
-  fetched: { retrievedAt: Date; contentHash: string | null },
-  now: Date,
-): boolean {
-  return db.transaction((tx) => {
-    const row = activeFact(tx, factId);
-    if (!row) return false;
-    tx.update(companyEvidenceFacts)
-      .set({
-        retrievedAt: fetched.retrievedAt,
-        observedAt: fetched.retrievedAt,
-        expiresAt: new Date(fetched.retrievedAt.getTime() + ttlFor(row.scope)),
-        verification: row.verification === 'user_confirmed' ? 'user_confirmed' : 'source_confirmed',
-        contentHash: fetched.contentHash,
-        lastRefreshAt: now,
-        lastRefreshOutcome: 'renewed',
-        lastRefreshReason: null,
-      })
-      .where(eq(companyEvidenceFacts.id, factId))
-      .run();
-    return true;
-  });
+/**
+ * What a fetch actually checked. The store renews or confirms ONLY when the row still carries this
+ * exact claim and quote (a correction that landed while the page was being fetched makes the check
+ * stale) and the claim passes the quote floor (`factQuoteSupport`).
+ */
+export interface FetchedCheck {
+  retrievedAt: Date;
+  contentHash: string | null;
+  claim: string;
+  quote: string;
+  /** Employer names for the floor's own-name rule. */
+  employerNames: readonly string[];
+}
+
+export type FetchApplyOutcome = 'applied' | 'stale' | 'unsupported' | 'gone';
+
+function applyFetchedCheck(tx: Tx, factId: string, fetched: FetchedCheck, now: Date): FetchApplyOutcome {
+  const row = activeFact(tx, factId);
+  if (!row) return 'gone';
+  if (row.claim !== fetched.claim || row.quote !== fetched.quote) return 'stale';
+  if (row.verification !== 'user_confirmed') {
+    const floor = factQuoteSupport({ claim: row.claim, quote: row.quote, viaLink: null }, fetched.employerNames);
+    if (!floor.ok) {
+      tx.update(companyEvidenceFacts)
+        .set({ verification: 'unverified', lastRefreshAt: now, lastRefreshOutcome: 'failed', lastRefreshReason: floor.reason })
+        .where(eq(companyEvidenceFacts.id, factId))
+        .run();
+      return 'unsupported';
+    }
+  }
+  tx.update(companyEvidenceFacts)
+    .set({
+      verification: row.verification === 'user_confirmed' ? 'user_confirmed' : 'source_confirmed',
+      retrievedAt: fetched.retrievedAt,
+      observedAt: fetched.retrievedAt,
+      expiresAt: new Date(fetched.retrievedAt.getTime() + ttlFor(row.scope)),
+      contentHash: fetched.contentHash,
+      lastRefreshAt: now,
+      lastRefreshOutcome: 'renewed',
+      lastRefreshReason: null,
+    })
+    .where(eq(companyEvidenceFacts.id, factId))
+    .run();
+  return 'applied';
+}
+
+/** A re-fetched source still carries the passage: the only path (with `confirmFactByUser`) that moves `expiresAt`. */
+export function renewFact(db: WorkspaceDb, factId: string, fetched: FetchedCheck, now: Date): FetchApplyOutcome {
+  return db.transaction((tx) => applyFetchedCheck(tx, factId, fetched, now));
 }
 
 /**
@@ -553,38 +690,19 @@ export function confirmFactByUser(db: WorkspaceDb, factId: string, now: Date): b
   });
 }
 
-/** A source fetched for the first time confirmed a lead (user-supplied or researched). */
-export function confirmFactFromFetch(
-  db: WorkspaceDb,
-  factId: string,
-  fetched: { retrievedAt: Date; contentHash: string | null },
-  now: Date,
-): boolean {
-  return db.transaction((tx) => {
-    const row = activeFact(tx, factId);
-    if (!row) return false;
-    tx.update(companyEvidenceFacts)
-      .set({
-        verification: row.verification === 'user_confirmed' ? 'user_confirmed' : 'source_confirmed',
-        retrievedAt: fetched.retrievedAt,
-        observedAt: fetched.retrievedAt,
-        expiresAt: new Date(fetched.retrievedAt.getTime() + ttlFor(row.scope)),
-        contentHash: fetched.contentHash,
-        lastRefreshAt: now,
-        lastRefreshOutcome: 'renewed',
-        lastRefreshReason: null,
-      })
-      .where(eq(companyEvidenceFacts.id, factId))
-      .run();
-    return true;
-  });
+/** A source fetched for the first time carried the passage of a lead (user-supplied or researched). */
+export function confirmFactFromFetch(db: WorkspaceDb, factId: string, fetched: FetchedCheck, now: Date): FetchApplyOutcome {
+  return db.transaction((tx) => applyFetchedCheck(tx, factId, fetched, now));
 }
 
 /**
- * The person corrected the wording. The first wording is kept as provenance, support is withdrawn
- * until the corrected claim is confirmed against its source, and `expiresAt` is NOT moved.
+ * The person corrected the wording. Support is invalidated, not carried over: verification resets,
+ * the content hash is cleared, and the passage the FIRST wording rested on moves into the correction
+ * provenance (kept for the record, no longer the support). The active quote becomes the new passage
+ * the person supplied, or nothing -- so a refresh cannot re-fetch the old passage and "renew" the
+ * new wording. `retrievedAt`, `observedAt` and `expiresAt` are NOT moved.
  */
-export function correctFact(db: WorkspaceDb, factId: string, claim: string, now: Date): boolean {
+export function correctFact(db: WorkspaceDb, factId: string, claim: string, now: Date, newQuote = ''): boolean {
   return db.transaction((tx) => {
     const row = activeFact(tx, factId);
     if (!row) return false;
@@ -592,8 +710,15 @@ export function correctFact(db: WorkspaceDb, factId: string, claim: string, now:
       .update(companyEvidenceFacts)
       .set({
         claim,
+        quote: newQuote,
+        // Sponsorship wording in the corrected claim makes it a sponsorship claim, whatever it was before.
+        topic: effectiveTopic(row.topic, claim, newQuote),
         verification: 'unverified',
-        correction: row.correction ?? { originalClaim: row.claim, correctedAt: now.toISOString() },
+        contentHash: null,
+        lastRefreshReason: newQuote === '' ? 'quote_missing' : null,
+        correction: row.correction
+          ? { ...row.correction, originalQuote: row.correction.originalQuote ?? row.quote }
+          : { originalClaim: row.claim, correctedAt: now.toISOString(), originalQuote: row.quote },
       })
       .where(eq(companyEvidenceFacts.id, factId))
       .returning()
@@ -634,43 +759,89 @@ export function resolveContradiction(db: WorkspaceDb, contradictionId: string, k
   });
 }
 
+/**
+ * Records the person's decision on an identity link. Confirming records every cross-link
+ * contradiction. Revoking (or rejecting) a link undoes what depended on it: a fact that was marked
+ * superseded by choosing between the two records' claims becomes active again, and that
+ * contradiction is reopened (it stays invisible while the records are not linked, and asks again if
+ * they are re-linked).
+ */
 export function decideLink(db: WorkspaceDb, linkId: string, decision: 'confirmed' | 'rejected', now: Date): boolean {
   return db.transaction((tx) => {
-    const updated = tx
-      .update(companyEvidenceIdentityLinks)
-      .set({ status: decision, decidedAt: now })
-      .where(eq(companyEvidenceIdentityLinks.id, linkId))
-      .returning({ id: companyEvidenceIdentityLinks.id })
+    const link = tx.select().from(companyEvidenceIdentityLinks).where(eq(companyEvidenceIdentityLinks.id, linkId)).get();
+    if (!link) return false;
+    tx.update(companyEvidenceIdentityLinks).set({ status: decision, decidedAt: now }).where(eq(companyEvidenceIdentityLinks.id, linkId)).run();
+    if (decision === 'confirmed') {
+      syncLinkedContradictionsTx(tx, link.recordAId, now);
+      return true;
+    }
+    const sides = new Set([link.recordAId, link.recordBId]);
+    const crossIds = tx
+      .select({ id: companyEvidenceFacts.id, recordId: companyEvidenceFacts.recordId })
+      .from(companyEvidenceFacts)
+      .where(inArray(companyEvidenceFacts.recordId, [...sides]))
       .all();
-    return updated.length > 0;
+    const recordOf = new Map(crossIds.map((row) => [row.id, row.recordId]));
+    const ids = [...recordOf.keys()];
+    if (ids.length === 0) return true;
+    const resolved = tx
+      .select()
+      .from(companyEvidenceContradictions)
+      .where(and(eq(companyEvidenceContradictions.status, 'resolved'), inArray(companyEvidenceContradictions.factAId, ids)))
+      .all()
+      .filter((row) => recordOf.has(row.factBId) && recordOf.get(row.factAId) !== recordOf.get(row.factBId) && row.resolvedFactId);
+    for (const row of resolved) {
+      const loser = row.resolvedFactId === row.factAId ? row.factBId : row.factAId;
+      tx.update(companyEvidenceFacts)
+        .set({ status: 'active' })
+        .where(and(eq(companyEvidenceFacts.id, loser), eq(companyEvidenceFacts.status, 'superseded')))
+        .run();
+      tx.update(companyEvidenceContradictions)
+        .set({ status: 'open', resolvedFactId: null, resolvedAt: null })
+        .where(eq(companyEvidenceContradictions.id, row.id))
+        .run();
+    }
+    return true;
   });
 }
 
 /* ----------------------------------------------------------------------- retention ----------- */
 
-function pruneRecordTx(tx: Tx, recordId: string, now: Date): void {
+/**
+ * Retention for one record: deletes withdrawn facts no open contradiction references, then -- only
+ * when fewer than `room` rows are free under `MAX_ROWS_PER_RECORD` -- the oldest expired or
+ * unverified ACTIVE leads outside any open contradiction. Never a current confirmed fact, never a
+ * fact in an open contradiction, never a superseded decision.
+ */
+function pruneRecordTx(tx: Tx, recordId: string, now: Date, room = 0): void {
   const rows = tx.select().from(companyEvidenceFacts).where(eq(companyEvidenceFacts.recordId, recordId)).all();
+  if (rows.length === 0) return;
   const inOpenContradiction = new Set<string>();
+  const ids = rows.map((row) => row.id);
   for (const row of tx
     .select()
     .from(companyEvidenceContradictions)
-    .where(and(eq(companyEvidenceContradictions.recordId, recordId), eq(companyEvidenceContradictions.status, 'open')))
+    .where(
+      and(
+        eq(companyEvidenceContradictions.status, 'open'),
+        or(inArray(companyEvidenceContradictions.factAId, ids), inArray(companyEvidenceContradictions.factBId, ids)),
+      ),
+    )
     .all()) {
     inOpenContradiction.add(row.factAId);
     inOpenContradiction.add(row.factBId);
   }
-  // Withdrawn facts carry nothing worth keeping once nothing references them.
   const withdrawn = rows.filter((row) => row.status === 'withdrawn' && !inOpenContradiction.has(row.id));
   if (withdrawn.length > 0) {
     tx.delete(companyEvidenceFacts).where(inArray(companyEvidenceFacts.id, withdrawn.map((row) => row.id))).run();
   }
   const remaining = rows.filter((row) => !withdrawn.includes(row));
-  let excess = remaining.length - MAX_FACTS_PER_RECORD;
+  let excess = remaining.length + room - MAX_ROWS_PER_RECORD;
   if (excess <= 0) return;
   const droppable = remaining
-    .filter((row) => !inOpenContradiction.has(row.id))
-    .filter((row) => row.status !== 'active' || row.expiresAt.getTime() <= now.getTime() || row.verification === 'unverified')
-    .sort((a, b) => Number(b.status !== 'active') - Number(a.status !== 'active') || a.createdAt.getTime() - b.createdAt.getTime());
+    .filter((row) => row.status === 'active' && !inOpenContradiction.has(row.id))
+    .filter((row) => row.expiresAt.getTime() <= now.getTime() || row.verification === 'unverified')
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   const victims: string[] = [];
   for (const row of droppable) {
     if (excess <= 0) break;

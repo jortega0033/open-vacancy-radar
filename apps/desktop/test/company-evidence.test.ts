@@ -266,7 +266,7 @@ describe('one verified employer across two roles', () => {
     expect(platform.employerKey).toBe('greenhouse:northwind');
 
     await addSized(target(platform.id), 'Northwind Freight operates 14 depots across the Netherlands and Belgium.', ABOUT, PLATFORM_QUOTE);
-    await addSized(target(platform.id), 'Platform Engineer offers visa sponsorship.', NORTHWIND, VISA_QUOTE, { scope: 'role', topic: 'sponsorship' });
+    await addSized(target(platform.id), 'Visa sponsorship is available for this role.', NORTHWIND, VISA_QUOTE, { scope: 'role', topic: 'sponsorship' });
     await addSized(target(data.id), 'The Data Engineer works on depot forecasting.', NORTHWIND_DATA, DATA_QUOTE, { scope: 'role' });
 
     const platformView = getView(deps, target(platform.id));
@@ -276,22 +276,22 @@ describe('one verified employer across two roles', () => {
 
     const used = (view: CompanyEvidenceView) => view.facts.filter((fact) => fact.support === 'supported').map((fact) => fact.claim);
     expect(used(platformView)).toEqual(
-      expect.arrayContaining(['Northwind Freight operates 14 depots across the Netherlands and Belgium.', 'Platform Engineer offers visa sponsorship.']),
+      expect.arrayContaining(['Northwind Freight operates 14 depots across the Netherlands and Belgium.', 'Visa sponsorship is available for this role.']),
     );
     expect(used(platformView)).not.toContain('The Data Engineer works on depot forecasting.');
     expect(used(dataView)).toEqual(
       expect.arrayContaining(['Northwind Freight operates 14 depots across the Netherlands and Belgium.', 'The Data Engineer works on depot forecasting.']),
     );
-    expect(used(dataView)).not.toContain('Platform Engineer offers visa sponsorship.');
-    const leaked = dataView.facts.find((fact) => fact.claim === 'Platform Engineer offers visa sponsorship.');
+    expect(used(dataView)).not.toContain('Visa sponsorship is available for this role.');
+    const leaked = dataView.facts.find((fact) => fact.claim === 'Visa sponsorship is available for this role.');
     expect(leaked).toMatchObject({ support: 'lead', reasons: expect.arrayContaining(['other_role']) });
     // The role-only claim is not a lead the second role must worry about either.
     expect(dataView.leadCount).toBe(0);
 
     // What a letter or interview may carry is exactly the supported, role-matching set.
     const letterClaims = (id: string) => proseEvidence(deps, target(id), 'letter').map((fact) => fact.claim);
-    expect(letterClaims(data.id)).not.toContain('Platform Engineer offers visa sponsorship.');
-    expect(letterClaims(platform.id)).toContain('Platform Engineer offers visa sponsorship.');
+    expect(letterClaims(data.id)).not.toContain('Visa sponsorship is available for this role.');
+    expect(letterClaims(platform.id)).toContain('Visa sponsorship is available for this role.');
   });
 
   it('resolves the same record from an application through its latest attempt', async () => {
@@ -319,7 +319,7 @@ describe('similar names and different domains', () => {
     const northwind = makeAttempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
     const group = makeAttempt('Northwind Freight Group', 'Dispatcher', 'https://careers.northwind-freight-group.example/jobs/9');
     await addSized(target(northwind.id), 'Northwind Freight operates 14 depots across the Netherlands and Belgium.', ABOUT, PLATFORM_QUOTE);
-    await addSized(target(northwind.id), 'Platform Engineer offers visa sponsorship.', NORTHWIND, VISA_QUOTE, { scope: 'role', topic: 'sponsorship' });
+    await addSized(target(northwind.id), 'Visa sponsorship is available for this role.', NORTHWIND, VISA_QUOTE, { scope: 'role', topic: 'sponsorship' });
 
     // The other employer has a different verified key and starts with nothing.
     const before = getView(deps, target(group.id));
@@ -341,7 +341,7 @@ describe('similar names and different domains', () => {
     const shared = getView(deps, target(group.id));
     const viaLink = shared.facts.filter((fact) => fact.viaLink === 'Northwind Freight');
     expect(viaLink.map((fact) => fact.claim)).toEqual(['Northwind Freight operates 14 depots across the Netherlands and Belgium.']);
-    expect(shared.facts.some((fact) => fact.claim === 'Platform Engineer offers visa sponsorship.')).toBe(false);
+    expect(shared.facts.some((fact) => fact.claim === 'Visa sponsorship is available for this role.')).toBe(false);
     // A linked fact may be read but not edited from the other company's screen.
     const linkedId = viaLink[0]!.id;
     expect(withdrawFact(deps, target(group.id), linkedId)).toMatchObject({ ok: false, code: 'fact_not_found' });
@@ -359,7 +359,7 @@ describe('similar names and different domains', () => {
       ok: false,
       code: 'identity_not_verified',
     });
-    expect(confirmDomain(deps, target(harbor.id), { domain: 'jobgether.com' })).toMatchObject({ ok: false, code: 'invalid_domain' });
+    expect(confirmDomain(deps, target(harbor.id), { domain: 'jobgether.com' })).toMatchObject({ ok: false, code: 'job_board_domain' });
     expect(store.findRecord(db, 'domain:jobgether.com')).toBeNull();
 
     // The person names the employer's own site: that, and only that, makes a record.
@@ -377,13 +377,13 @@ describe('similar names and different domains', () => {
     expect(proseEvidence(deps, target(harbor.id), 'interview')).toEqual([]);
   });
 
-  it('treats a name confirmed for two different domains as ambiguous instead of picking one', () => {
+  it('treats a vacancy bound to two different domains as ambiguous instead of picking one', () => {
     const one = makeAttempt('Harbor Systems', 'Support Engineer', 'https://www.jobgether.com/offer/1');
-    const two = makeAttempt('Harbor Systems', 'Sales Engineer', 'https://www.jobgether.com/offer/2');
     expect(confirmDomain(deps, target(one.id), { domain: 'harbor-systems.example' }).ok).toBe(true);
+    expect(getView(deps, target(one.id)).state).toBe('ready');
     const second = store.ensureRecord(db, identityFromConfirmedDomain('Harbor Systems', 'harbor-systems.io')!, T0);
-    store.addConfirmedNameKey(db, second.record.id, 'harbor-systems', T0);
-    expect(getView(deps, target(two.id)).state).toBe('no_identity');
+    store.addConfirmedTargets(db, second.record.id, [`posting:${one.canonicalUrlKey}`], T0);
+    expect(getView(deps, target(one.id)).state).toBe('no_identity');
   });
 });
 
@@ -531,21 +531,28 @@ describe('contradictions and user corrections', () => {
     const original = getView(deps, target(attempt.id)).facts[0]!;
 
     clock = new Date(T0.getTime() + 3 * DAY);
-    expect(correctFact(deps, target(attempt.id), original.id, 'Northwind Freight operates 15 depots.').ok).toBe(true);
+    expect((await correctFact(deps, target(attempt.id), original.id, 'Northwind Freight operates 15 depots.')).ok).toBe(true);
     const corrected = getView(deps, target(attempt.id)).facts[0]!;
     expect(corrected).toMatchObject({
       claim: 'Northwind Freight operates 15 depots.',
       verification: 'unverified',
       support: 'lead',
-      correction: { originalClaim: 'Northwind Freight operates 14 depots across the Netherlands and Belgium.', correctedAt: clock.toISOString() },
+      // The passage the first wording rested on is provenance now, not support.
+      quote: '',
+      correction: {
+        originalClaim: 'Northwind Freight operates 14 depots across the Netherlands and Belgium.',
+        correctedAt: clock.toISOString(),
+        originalQuote: PLATFORM_QUOTE,
+      },
     });
+    expect(corrected.reasons).toEqual(expect.arrayContaining(['unverified', 'quote_missing']));
     // Correcting did not move the source's expiry or retrieval time.
     expect(corrected.expiresAt).toBe(original.expiresAt);
     expect(corrected.retrievedAt).toBe(original.retrievedAt);
     expect(proseEvidence(deps, target(attempt.id), 'letter')).toEqual([]);
 
     // A second correction keeps the FIRST wording as provenance.
-    correctFact(deps, target(attempt.id), original.id, 'Northwind Freight operates 16 depots.');
+    await correctFact(deps, target(attempt.id), original.id, 'Northwind Freight operates 16 depots.');
     expect(getView(deps, target(attempt.id)).facts[0]!.correction?.originalClaim).toBe('Northwind Freight operates 14 depots across the Netherlands and Belgium.');
 
     expect(confirmFact(deps, target(attempt.id), original.id).ok).toBe(true);
@@ -611,7 +618,8 @@ describe('unsupported claims never reach a letter or interview prep', () => {
     expect(prompt).not.toContain('LEAD-');
 
     const generate = vi.fn(async () => ({ ok: true, text: '{"factIds":["summary","company-1"]}' }));
-    const letter = await generateApplicationCoverLetterWithEvidence(record, cv(SOURCE), generate, evidence);
+    const revalidate = () => proseEvidence(deps, target(attempt.id), 'letter');
+    const letter = await generateApplicationCoverLetterWithEvidence(record, cv(SOURCE), generate, evidence, { revalidate, now: () => clock });
     expect(letter.body).toContain('Something I noted about Northwind Freight from public sources: Northwind Freight operates 14 depots across the Netherlands and Belgium.');
     expect(letter.usedCompanyEvidence.map((fact) => fact.claim)).toEqual(['Northwind Freight operates 14 depots across the Netherlands and Belgium.']);
     expect(letter.body).not.toContain('LEAD-');
@@ -755,7 +763,10 @@ describe('explicit, bounded, cancellable research', () => {
     expect(created[0]).toMatchObject({ provider: 'claude', cwd: join(dir, 'ai-workspace') });
     const prompt = created[0]!.prompt;
     expect(prompt).toContain('Northwind Freight');
-    expect(prompt).toContain('job-boards.greenhouse.io');
+    // An ATS tenant is the POSTING's identity: the board and the posting address, website unknown.
+    expect(prompt).toContain('Verified job-board account: greenhouse board "northwind" (the posting: https://job-boards.greenhouse.io/northwind/jobs/1001)');
+    expect(prompt).toContain('Employer website: UNKNOWN.');
+    expect(prompt).not.toMatch(/Verified (employer )?website: job-boards\.greenhouse\.io/);
     expect(prompt).toContain('Platform Engineer');
     for (const secret of PRIVATE) expect(prompt).not.toContain(secret);
 
@@ -773,7 +784,7 @@ describe('explicit, bounded, cancellable research', () => {
   });
 
   it('exposes no way to pass candidate data into a query (the input type and prompt carry public fields only)', () => {
-    const input = { companyName: 'Northwind Freight', host: 'northwind.example', roleTitle: 'Platform Engineer', topics: ['size'] as const };
+    const input = { companyName: 'Northwind Freight', website: 'northwind.example', jobBoard: null, roleTitle: 'Platform Engineer', topics: ['size'] as const };
     const prompt = buildCompanyResearchPrompt({ ...input, ...({ cvText: 'CV-SENTINEL', notes: 'NOTE-SENTINEL' } as object) });
     expect(prompt).not.toContain('SENTINEL');
     expect(buildCompanyResearchPrompt({ ...input, roleTitle: '' })).toContain('company-level facts only');
@@ -1122,12 +1133,137 @@ describe('#689 measurement on a fixed synthetic fixture set', () => {
     return { roles, attempts, sessions, web: localWeb, db: created.db, deps: localDeps, runs: localRuns, advance: (ms: number) => { localClock = new Date(localClock.getTime() + ms); }, close: () => { created.close(); rmSync(localDir, { recursive: true, force: true }); } };
   }
 
+  /**
+   * Adversarial fixture matrix (fix round 1). Each case runs the REAL service/store/letter code on a
+   * fresh database. `expected` is the fixture author's label of what the app MUST do (usable / lead /
+   * refused), never a claim that a statement is true in the world.
+   */
+  async function adversarialMatrix() {
+    type Case = { id: string; kind: string; expected: 'usable' | 'lead' | 'refused' | 'not_in_letter'; trueParaphrase?: boolean; run: (h: Harness) => Promise<string> };
+    interface Harness {
+      deps: CompanyEvidenceDeps;
+      runs: CompanyEvidenceRuns;
+      web: FakeWeb;
+      db: WorkspaceDb;
+      attempt: (company: string, role: string, url: string) => ReturnType<typeof workspace.createApplicationAttempt>;
+      advance: (ms: number) => void;
+    }
+    const label = (h: Harness, attemptId: string, claim: string): string => {
+      const fact = getView(h.deps, { attemptId }).facts.find((row) => row.claim === claim);
+      if (!fact) return 'absent';
+      return proseEvidence(h.deps, { attemptId }, 'interview').some((row) => row.id === fact.id) ? 'usable' : 'lead';
+    };
+    const add = (h: Harness, attemptId: string, claim: string, sourceUrl: string, quote: string, extra: Record<string, unknown> = {}) =>
+      addFact(h.deps, { attemptId }, { claim, sourceUrl, quote, scope: 'company', topic: 'general', ...extra });
+    const NW = 'https://job-boards.greenhouse.io/northwind/jobs/1001';
+    const PAGE = 'https://northwind.example/about';
+    const cases: Case[] = [
+      { id: 'A1', kind: 'claim equals quote', expected: 'usable', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight operates 14 depots in the Benelux.', PAGE, 'Northwind Freight operates 14 depots in the Benelux'); return label(h, a.id, 'Northwind Freight operates 14 depots in the Benelux.'); } },
+      { id: 'A2', kind: 'first-person passage, own name omitted', expected: 'usable', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight employs about 450 people.', PAGE, 'We employ about 450 people across our depots'); return label(h, a.id, 'Northwind Freight employs about 450 people.'); } },
+      { id: 'A3', kind: 'unrelated boilerplate quote', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight employs 12,000 people worldwide.', PAGE, 'We are an equal opportunity employer and value diversity', { topic: 'size' }); return label(h, a.id, 'Northwind Freight employs 12,000 people worldwide.'); } },
+      { id: 'A4', kind: 'number 14 vs 140', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight operates 140 depots in the Benelux.', PAGE, 'Northwind Freight operates 14 depots in the Benelux'); return label(h, a.id, 'Northwind Freight operates 140 depots in the Benelux.'); } },
+      { id: 'A5', kind: 'opposite negation', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight offers remote work to every engineer.', PAGE, 'Northwind Freight does not offer remote work to every engineer'); return label(h, a.id, 'Northwind Freight offers remote work to every engineer.'); } },
+      { id: 'A6', kind: 'different entity', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Contoso operates 14 depots in the Benelux.', PAGE, 'Northwind Freight operates 14 depots in the Benelux'); return label(h, a.id, 'Contoso operates 14 depots in the Benelux.'); } },
+      { id: 'A7', kind: 'true paraphrase (author label: true, not near-verbatim)', expected: 'lead', trueParaphrase: true, run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight runs fourteen depots.', PAGE, 'Northwind Freight operates 14 depots in the Benelux'); return label(h, a.id, 'Northwind Freight runs fourteen depots.'); } },
+      { id: 'A8', kind: 'sponsorship mislabelled general, random blog', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); h.web.page('https://blog.example/p', 'Northwind Freight sponsors work visas for this role'); await add(h, a.id, 'Northwind Freight sponsors work visas for this role.', 'https://blog.example/p', 'Northwind Freight sponsors work visas for this role', { scope: 'role' }); return label(h, a.id, 'Northwind Freight sponsors work visas for this role.'); } },
+      { id: 'A9', kind: 'sponsorship on spoofed ATS host', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); const spoof = 'https://greenhouse.evil-lookalike.example/northwind/jobs/1'; h.web.page(spoof, 'Visa sponsorship is available for this role'); await add(h, a.id, 'Visa sponsorship is available for this role.', spoof, 'Visa sponsorship is available for this role', { scope: 'role', topic: 'sponsorship' }); return label(h, a.id, 'Visa sponsorship is available for this role.'); } },
+      { id: 'A10', kind: 'sponsorship on the exact ATS tenant posting', expected: 'usable', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); h.web.page(NW, 'Visa sponsorship is available for this role'); await add(h, a.id, 'Visa sponsorship is available for this role.', NW, 'Visa sponsorship is available for this role', { scope: 'role' }); return label(h, a.id, 'Visa sponsorship is available for this role.'); } },
+      { id: 'A11', kind: 'correction then refresh with the old passage', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight operates 14 depots in the Benelux.', PAGE, 'Northwind Freight operates 14 depots in the Benelux'); const id = getView(h.deps, { attemptId: a.id }).facts[0]!.id; await correctFact(h.deps, { attemptId: a.id }, id, 'Northwind Freight operates 140 depots on three continents.'); h.advance(COMPANY_FACT_TTL_MS + DAY); await refreshEvidence(h.deps, { attemptId: a.id }, h.runs); return label(h, a.id, 'Northwind Freight operates 140 depots on three continents.'); } },
+      { id: 'A12', kind: 'public-suffix / shared-hosting domain confirmation', expected: 'refused', run: async (h) => { const a = h.attempt('Northwind', 'R', 'https://www.linkedin.com/jobs/view/1'); const out = ['github.io', 'northwind.github.io', 'co.uk', 'northwind.herokuapp.com'].map((domain) => confirmDomain(h.deps, { attemptId: a.id }, { domain }).ok); return out.every((ok) => !ok) ? 'refused' : 'accepted'; } },
+      { id: 'A13', kind: 'same-name second vacancy after a confirmation elsewhere', expected: 'lead', run: async (h) => { const one = h.attempt('Apex', 'R1', 'https://www.jobgether.com/offer/1'); confirmDomain(h.deps, { attemptId: one.id }, { domain: 'apex-logistics.example' }); h.web.page('https://apex-logistics.example/a', 'Apex operates cold storage warehouses'); await add(h, one.id, 'Apex operates cold storage warehouses.', 'https://apex-logistics.example/a', 'Apex operates cold storage warehouses'); const two = h.attempt('Apex', 'R2', 'https://www.linkedin.com/jobs/view/2'); return proseEvidence(h.deps, { attemptId: two.id }, 'interview').length === 0 ? 'lead' : 'usable'; } },
+      { id: 'A14', kind: 'look-alike posting host (prefix only)', expected: 'refused', run: async (h) => { const a = h.attempt('Apex', 'R', 'https://careers.apexlegends.example/jobs/1'); return getView(h.deps, { attemptId: a.id }).state === 'no_identity' ? 'refused' : 'accepted'; } },
+      { id: 'A15', kind: 'linked records disagree (450 vs 9000) after link confirmed', expected: 'lead', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); const b = h.attempt('Northwind Freight Group', 'R', 'https://careers.northwind-freight-group.example/j/1'); h.web.page('https://northwind.example/s', 'Northwind Freight employs about 450 people in total'); h.web.page('https://northwind-freight-group.example/s', 'Northwind Freight Group employs about 9000 people in total'); await add(h, a.id, 'Northwind Freight employs about 450 people.', 'https://northwind.example/s', 'Northwind Freight employs about 450 people in total', { topic: 'size' }); await add(h, b.id, 'Northwind Freight Group employs about 9000 people.', 'https://northwind-freight-group.example/s', 'Northwind Freight Group employs about 9000 people in total', { topic: 'size' }); const link = getView(h.deps, { attemptId: a.id }).links[0]!; decideLink(h.deps, { attemptId: a.id }, link.id, 'confirmed'); return label(h, a.id, 'Northwind Freight employs about 450 people.'); } },
+      { id: 'A16', kind: 'fact withdrawn while the letter is drafted', expected: 'not_in_letter', run: async (h) => { const a = h.attempt('Northwind Freight', 'R', NW); await add(h, a.id, 'Northwind Freight operates 14 depots in the Benelux.', PAGE, 'Northwind Freight operates 14 depots in the Benelux'); const id = getView(h.deps, { attemptId: a.id }).facts[0]!.id; const evidence = proseEvidence(h.deps, { attemptId: a.id }, 'letter'); const record = workspace.getApplicationAttempt(h.db, a.id); const letter = await generateApplicationCoverLetterWithEvidence(record, MEASURE_CV, async () => { withdrawFact(h.deps, { attemptId: a.id }, id); return { ok: true, text: '{"factIds":["summary","company-1"]}' }; }, evidence, { revalidate: () => proseEvidence(h.deps, { attemptId: a.id }, 'letter'), now: h.deps.now }); return letter.body.includes('depots') || letter.usedCompanyEvidence.length > 0 ? 'in_letter' : 'not_in_letter'; } },
+    ];
+    const rows: Record<string, unknown>[] = [];
+    const FLOOR_ONLY_CASES = new Set(['A3', 'A4', 'A6', 'A7']);
+    let floorFailedFetches = 0;
+    for (const entry of cases) {
+      const localDir = mkdtempSync(join(tmpdir(), 'ovr-evidence-adv-measure-'));
+      const created = createWorkspaceDb(localDir);
+      const localWeb = new FakeWeb();
+      localWeb.page('https://northwind.example/about', 'Northwind Freight operates 14 depots in the Benelux. We employ about 450 people across our depots. We are an equal opportunity employer and value diversity. Northwind Freight does not offer remote work to every engineer');
+      let localClock = new Date(T0);
+      const h: Harness = {
+        deps: { db: created.db, now: () => new Date(localClock), getHttp: async () => localWeb.client },
+        runs: new CompanyEvidenceRuns(),
+        web: localWeb,
+        db: created.db,
+        attempt: (company, role, url) => workspace.createApplicationAttempt(created.db, { company, role, canonicalUrl: url, sourceCvContentHash: 'h', jdSnapshotHash: 'j', force: true }),
+        advance: (ms) => {
+          localClock = new Date(localClock.getTime() + ms);
+        },
+      };
+      try {
+        const observed = await entry.run(h);
+        const floorRefusals = created.db
+          .select()
+          .from(schema.companyEvidenceFacts)
+          .all()
+          .filter((row) => (row.lastRefreshReason ?? '').startsWith('claim_')).length;
+        // Single-fact cases whose only claim fails the floor: any request here would be wasted.
+        if (FLOOR_ONLY_CASES.has(entry.id)) floorFailedFetches += localWeb.calls.length;
+        rows.push({
+          id: entry.id,
+          kind: entry.kind,
+          expected: entry.expected,
+          observed,
+          matches: observed === entry.expected,
+          appSourceFetches: localWeb.calls.length,
+          floorRefusedFacts: floorRefusals,
+          ...(entry.trueParaphrase ? { trueParaphrase: true } : {}),
+        });
+      } finally {
+        created.close();
+        rmSync(localDir, { recursive: true, force: true });
+      }
+    }
+    for (const row of rows) expect(row, String(row.id)).toMatchObject({ matches: true });
+    return {
+      kind: 'SYNTHETIC adversarial matrix; expected = fixture author label of what the app must do, not truth about any real employer',
+      cases: rows,
+      summary: {
+        cases: rows.length,
+        matchingExpectation: rows.filter((row) => row.matches).length,
+        falselyUsable: rows.filter((row) => row.observed === 'usable' && row.expected !== 'usable').length,
+        trueParaphrasesKeptAsLeads: rows.filter((row) => row.trueParaphrase && row.observed === 'lead').length,
+        appSourceFetchesSpentOnFloorFailures: floorFailedFetches,
+      },
+    };
+  }
+
+  const MEASURE_CV = {
+    id: 'cv-m',
+    name: 'CV',
+    kind: 'manual',
+    text: 'Synthetic CV.',
+    profile: { title: 'Engineer', location: 'Amsterdam', skills: [], summary: 'Synthetic.' },
+    source: {
+      contact: { name: 'Sam Example', title: 'Engineer', location: 'Amsterdam', email: 'sam@example.invalid', phone: '+31 6 0000 0000', links: [] },
+      summary: 'Synthetic summary for a synthetic candidate.',
+      experience: [{ id: 'experience-1', company: 'Example BV', title: 'Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] }],
+      education: [],
+      projects: [],
+      maxProjects: 0,
+      complete: true,
+      incompleteReason: '',
+      coveredChars: 100,
+      sourceChars: 100,
+      reviewedAt: '2026-01-01T00:00:00.000Z',
+    },
+    isDefault: true,
+    createdAt: T0.toISOString(),
+    updatedAt: T0.toISOString(),
+  } as unknown as Parameters<typeof generateApplicationCoverLetterWithEvidence>[1];
+
   it('counts the research sessions and fetches avoided and the verified claims reused, with no accuracy claim', async () => {
     const cold = scenario();
     const warm = scenario();
     try {
       let coldFetches = 0;
       let warmFetches = 0;
+      let inAppAvoidedSessions = 0;
+      let inAppAvoidedFetches = 0;
       const perRole: Record<string, unknown>[] = [];
       for (let index = 0; index < cold.roles.length; index += 1) {
         const role = cold.roles[index]!;
@@ -1142,6 +1278,10 @@ describe('#689 measurement on a fixed synthetic fixture set', () => {
         const warmResult = await researchCompany(warm.deps, { attemptId: warm.attempts[index]!.id }, { topics: [...TOPICS] }, warm.runs);
         expect(warmResult.ok).toBe(true);
         warmFetches += warm.web.calls.length - warmBefore;
+        if (warmResult.ok) {
+          inAppAvoidedSessions += warmResult.stats?.avoidedSessions ?? 0;
+          inAppAvoidedFetches += warmResult.stats?.avoidedFetches ?? 0;
+        }
         perRole.push({
           role: role.role,
           lookAlikeEmployer: role.group,
@@ -1156,8 +1296,15 @@ describe('#689 measurement on a fixed synthetic fixture set', () => {
       const avoidedSessions = cold.sessions.count - warm.sessions.count;
       const avoidedFetches = coldFetches - warmFetches;
       // E1..E4 re-use after their first role (2+2+1+1 = 6 roles); E5 never verifies every topic, so it re-researches.
-      expect(avoidedSessions).toBe(6);
-      expect(avoidedFetches).toBe(6 * 3);
+      // Derived from the fixture's structure, not a remembered number: every fully verifiable employer
+      // re-uses its record after its first role; Emp5 never verifies every topic, so it re-researches.
+      const expectedAvoided = EMPLOYERS.filter((employer) => !employer.lead).reduce((sum, employer) => sum + employer.roles - 1, 0);
+      expect(avoidedSessions).toBe(expectedAvoided);
+      expect(avoidedFetches).toBe(expectedAvoided * TOPICS.length);
+      // The in-app stats report only what they observed: one session not started per cache hit, and no
+      // guessed fetch count (how many pages a session would have opened is unknown).
+      expect(inAppAvoidedSessions).toBe(avoidedSessions);
+      expect(inAppAvoidedFetches).toBe(0);
 
       // Reuse and isolation, measured on what actually reaches prose.
       let letterClaims = 0;
@@ -1207,6 +1354,8 @@ describe('#689 measurement on a fixed synthetic fixture set', () => {
       let usableAfterRefresh = 0;
       warm.attempts.forEach((attempt) => (usableAfterRefresh += proseEvidence(warm.deps, { attemptId: attempt.id }, 'interview').length));
 
+      const adversarial = await adversarialMatrix();
+      const scriptedToolEvents = (sessions: number) => ({ webSearch: sessions * 1, webFetch: sessions * 3 });
       const measurement = {
         issue: 689,
         kind: 'SYNTHETIC fixed-fixture measurement; pages, quotes and truth labels are the fixture author\'s, not human labels of real employers',
@@ -1216,11 +1365,19 @@ describe('#689 measurement on a fixed synthetic fixture set', () => {
           'Counted: research sessions asked of the scripted provider, safe source fetches the app made, and the facts that reach the letter and interview lists. Wall-clock time is not measured.',
         ],
         fixture: { roles, employersWithSharedRoles: 5, lookAlikeNames: 2, topicsRequestedPerRole: [...TOPICS], employerWhoseLocationQuoteIsNotOnItsPage: 'Emp5 Corp' },
-        cold: { researchSessions: cold.sessions.count, sourceFetches: coldFetches },
-        shared: { researchSessions: warm.sessions.count, sourceFetches: warmFetches },
+        counting: {
+          appSourceFetches: "OBSERVED: requests in the FakeWeb call log (the AtsHttpClient seam the app's safe client implements); one entry per physical request the app made",
+          scriptedSessionToolEvents: 'SCRIPTED, not observed: the WebSearch/WebFetch counts each scripted research session REPORTS (1 search, 3 fetches); no real tool ran',
+          inAppStats: 'What the action itself reported (ActionStats), compared with the observed counts',
+        },
+        cold: { researchSessions: cold.sessions.count, appSourceFetches: coldFetches, scriptedSessionToolEvents: scriptedToolEvents(cold.sessions.count) },
+        shared: { researchSessions: warm.sessions.count, appSourceFetches: warmFetches, scriptedSessionToolEvents: scriptedToolEvents(warm.sessions.count) },
         avoided: {
-          researchSessions: avoidedSessions,
-          sourceFetches: avoidedFetches,
+          observedResearchSessions: avoidedSessions,
+          observedAppSourceFetches: avoidedFetches,
+          inAppReportedAvoidedSessions: inAppAvoidedSessions,
+          inAppReportedAvoidedFetches: inAppAvoidedFetches,
+          inAppNote: 'A research cache hit reports avoidedFetches = 0 on purpose: the number of pages a session would have opened is unknown, so it is not guessed.',
           rolesServedFromTheRecord: perRole.filter((row) => row.sharedCacheHit === true).length,
           rolesThatStillNeededResearch: perRole.filter((row) => row.sharedCacheHit !== true).length,
         },
@@ -1241,7 +1398,11 @@ describe('#689 measurement on a fixed synthetic fixture set', () => {
           usableClaimsAfterSuccessfulRefresh: usableAfterRefresh,
         },
         perRole,
+        adversarial,
         limits: [
+          'The "cold" baseline is constructed (the record is deleted after each role); the reuse rate follows from the fixture having 2-3 roles per employer. It shows the arithmetic of reuse, not a real-world saving.',
+          'In the reuse fixture every claim equals its quote, so that part cannot test adequate support; the adversarial matrix does, with fixture-author labels (not human labels of real employers).',
+          'The quote floor is lexical: it proves a claim is worded from a passage found on the page, not that the page or the claim is true. True paraphrases are kept as leads (counted below as a cost).',
           'Role-scoped claims are never reused across roles by design, so a request for role-level facts always needs its own research; only company-level topics are counted as avoided here.',
           'An employer whose topics are not all verified (Emp5 Corp) is re-researched for every role: avoiding a call requires current, verified support for every requested topic.',
           'The sessions are scripted and instant; real research cost (time, provider usage), real source availability and real claim accuracy are not measured and no accuracy or quality gain is assumed.',

@@ -1,4 +1,5 @@
 import {
+  COMPANY_EVIDENCE_LEAD_REASONS,
   COMPANY_EVIDENCE_TOPICS,
   type ActionStats,
   type ClassifiedFact,
@@ -7,6 +8,7 @@ import {
   type CompanyEvidenceLinkView,
   type CompanyEvidenceProseFact,
   type CompanyEvidenceResult,
+  type CompanyEvidenceSuggestion,
   type CompanyEvidenceTopic,
   type CompanyEvidenceUseView,
   type CompanyEvidenceView,
@@ -34,18 +36,7 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | nul
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : null;
 }
 
-const REASONS: readonly CompanyEvidenceLeadReason[] = [
-  'withdrawn',
-  'superseded',
-  'expired',
-  'unverified',
-  'contradicted',
-  'other_role',
-  'identity_not_verified',
-  'ind_name_match_only',
-  'sponsorship_needs_role_source',
-  'source_not_https',
-];
+const REASONS: readonly CompanyEvidenceLeadReason[] = COMPANY_EVIDENCE_LEAD_REASONS;
 
 function parseIdentity(value: unknown): CompanyIdentity | null {
   const source = rec(value);
@@ -54,10 +45,15 @@ function parseIdentity(value: unknown): CompanyIdentity | null {
   if (displayName === null) return null;
   const keyKind = oneOf(source.keyKind, ['ats_tenant', 'posting_host', 'user_domain'] as const);
   const verifiedKey = str(source, 'verifiedKey', 300);
+  const tenantSource = rec(source.tenant);
+  const provider = tenantSource ? str(tenantSource, 'provider', 40) : null;
+  const board = tenantSource ? str(tenantSource, 'board', 128) : null;
   return {
     verifiedKey: keyKind && verifiedKey ? verifiedKey : null,
     keyKind: keyKind && verifiedKey ? keyKind : null,
-    host: str(source, 'host', 253),
+    // An ATS tenant has no employer website, whatever arrives.
+    host: keyKind === 'ats_tenant' ? null : str(source, 'host', 253),
+    tenant: keyKind === 'ats_tenant' && provider && board ? { provider, board } : null,
     displayName,
     nameKey: str(source, 'nameKey', 200) ?? '',
   };
@@ -85,6 +81,7 @@ function parseFact(value: unknown): ClassifiedFact | null {
   const correction = rec(source.correction);
   const original = correction ? str(correction, 'originalClaim', 600) : null;
   const correctedAt = correction ? str(correction, 'correctedAt', 40) : null;
+  const originalQuote = correction ? str(correction, 'originalQuote', 600) : null;
   return {
     id,
     recordId,
@@ -105,7 +102,7 @@ function parseFact(value: unknown): ClassifiedFact | null {
     lastRefreshAt: str(source, 'lastRefreshAt', 40),
     lastRefreshOutcome: oneOf(source.lastRefreshOutcome, ['renewed', 'failed', 'source_changed', 'cache_hit'] as const),
     lastRefreshReason: str(source, 'lastRefreshReason', 80),
-    correction: original && correctedAt ? { originalClaim: original, correctedAt } : null,
+    correction: original && correctedAt ? { originalClaim: original, correctedAt, ...(originalQuote !== null ? { originalQuote } : {}) } : null,
     contradictedBy: Array.isArray(source.contradictedBy) ? source.contradictedBy.filter((v): v is string => typeof v === 'string').slice(0, 20) : [],
     viaLink: str(source, 'viaLink', 200),
     support,
@@ -148,6 +145,17 @@ function parseUses(value: unknown): CompanyEvidenceUseView[] {
   return uses;
 }
 
+function parseSuggestions(value: unknown): CompanyEvidenceSuggestion[] {
+  const out: CompanyEvidenceSuggestion[] = [];
+  for (const raw of Array.isArray(value) ? value.slice(0, 5) : []) {
+    const item = rec(raw);
+    const domain = item ? str(item, 'domain', 253) : null;
+    const basis = item ? oneOf(item.basis, ['posting_domain', 'same_name_elsewhere'] as const) : null;
+    if (domain && basis && /^[a-z0-9.-]+$/u.test(domain)) out.push({ domain, basis });
+  }
+  return out;
+}
+
 export function parseCompanyEvidenceView(value: unknown): CompanyEvidenceView | null {
   const source = rec(value);
   const identity = source ? parseIdentity(source.identity) : null;
@@ -187,6 +195,7 @@ export function parseCompanyEvidenceView(value: unknown): CompanyEvidenceView | 
     links,
     research: parseResearch(source.research),
     lettersUsed: parseUses(source.lettersUsed),
+    suggestions: identity.verifiedKey ? [] : parseSuggestions(source.suggestions),
     supportedCount: facts.filter((fact) => fact.support === 'supported').length,
     leadCount: facts.filter((fact) => fact.support === 'lead' && !fact.reasons.includes('other_role')).length,
     generatedAt: str(source, 'generatedAt', 40) ?? new Date(0).toISOString(),

@@ -65,7 +65,7 @@ function bridge(): CompanyEvidenceBridge {
     confirmDomain: (t, input) => call('company-evidence:confirm-domain', { ...t, ...input }),
     addFact: (t, input) => call('company-evidence:add-fact', { ...t, ...input }),
     confirmFact: (t, factId) => call('company-evidence:confirm-fact', { ...t, factId }),
-    correctFact: (t, factId, claim) => call('company-evidence:correct-fact', { ...t, factId, claim }),
+    correctFact: (t, factId, claim, quote) => call('company-evidence:correct-fact', { ...t, factId, claim, ...(quote ? { quote } : {}) }),
     withdrawFact: (t, factId) => call('company-evidence:withdraw-fact', { ...t, factId }),
     resolveContradiction: (t, contradictionId, keepFactId) => call('company-evidence:resolve-contradiction', { ...t, contradictionId, keepFactId }),
     decideLink: (t, linkId, decision) => call('company-evidence:decide-link', { ...t, linkId, decision }),
@@ -125,11 +125,11 @@ describe('CompanyEvidencePanel', () => {
 
     fireEvent.change(screen.getByLabelText('Company website'), { target: { value: 'jobgether.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm website' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('own website address, not a job board');
+    expect(await screen.findByRole('alert')).toHaveTextContent("a job board or recruiting system, not the employer's own website");
 
     fireEvent.change(screen.getByLabelText('Company website'), { target: { value: 'harbor-systems.example' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm website' }));
-    expect(await screen.findByTestId('company-identity')).toHaveTextContent('a website you confirmed (harbor-systems.example)');
+    expect(await screen.findByTestId('company-identity')).toHaveTextContent('a website you confirmed for this vacancy (harbor-systems.example)');
   });
 
   it('shows scope, source, original check time and why a claim is or is not used', async () => {
@@ -142,9 +142,11 @@ describe('CompanyEvidencePanel', () => {
     const used = await screen.findByText(CLAIM);
     const card = used.closest('[data-testid="company-fact"]') as HTMLElement;
     expect(card).toHaveAttribute('data-support', 'supported');
-    expect(within(card).getByText('Used')).toBeInTheDocument();
+    // "Usable" = eligible; "Used" is reserved for what a prepared letter actually carried.
+    expect(within(card).getByText('Usable')).toBeInTheDocument();
+    expect(within(card).queryByText('Used')).toBeNull();
     expect(within(card).getByText('Company')).toBeInTheDocument();
-    expect(within(card).getByText('Source checked')).toBeInTheDocument();
+    expect(within(card).getByText('Quoted passage found')).toBeInTheDocument();
     expect(within(card).getByRole('link', { name: 'northwind.example' })).toHaveAttribute('href', ABOUT);
     expect(card).toHaveTextContent('Last checked');
     expect(card).toHaveTextContent('Valid until');
@@ -169,7 +171,7 @@ describe('CompanyEvidencePanel', () => {
     expect(details).not.toHaveAttribute('open');
     expect(details).toHaveTextContent('Other role: Data Engineer');
     expect(details).toHaveTextContent('About a different role, so it is not used for this one.');
-    expect(screen.getByTestId('company-identity')).toHaveTextContent('0 used, 0 leads');
+    expect(screen.getByTestId('company-identity')).toHaveTextContent('0 usable, 0 leads');
   });
 
   it('lets the person decide a disagreement and a similar-name suggestion, in plain words', async () => {
@@ -187,10 +189,10 @@ describe('CompanyEvidencePanel', () => {
     render(<CompanyEvidencePanel target={{ attemptId: platform.id }} onChanged={onChanged} />);
     const dispute = await screen.findByTestId('company-contradiction');
     expect(dispute).toHaveTextContent('Two sources disagree about size. Neither is used until you choose.');
-    expect(screen.queryByText('Used in letters and interview prep')).toBeNull();
+    expect(screen.queryByText('Usable in the prepared letter and interview prep')).toBeNull();
     fireEvent.click(within(dispute).getAllByRole('button', { name: 'Keep this one' })[0]!);
     await waitFor(() => expect(screen.queryByTestId('company-contradiction')).toBeNull());
-    expect(await screen.findByText('Used in letters and interview prep')).toBeInTheDocument();
+    expect(await screen.findByText('Usable in the prepared letter and interview prep')).toBeInTheDocument();
     expect(onChanged).toHaveBeenCalled();
 
     const proposal = await screen.findByTestId('company-link-proposal');
@@ -238,6 +240,83 @@ describe('CompanyEvidencePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete company evidence' }));
     fireEvent.click(within(screen.getByRole('group', { name: 'Confirm delete' })).getByRole('button', { name: 'Delete' }));
     expect(await screen.findByText('Nothing saved for this company yet.')).toBeInTheDocument();
+  });
+
+  it('says which consumers use evidence and what "usable" proves, without repeating the company name beside the heading', async () => {
+    const platform = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    render(<CompanyEvidencePanel target={{ attemptId: platform.id }} />);
+    const panel = await screen.findByTestId('company-evidence');
+    expect(panel).toHaveTextContent('the cover letter this app prepares for an application, and the “Prepare interview” prompt');
+    expect(panel).toHaveTextContent('The Letters page and the CV assistant do not.');
+    expect(panel).toHaveTextContent('That checks the wording only; it does not prove the page is right.');
+    expect(panel).toHaveTextContent('greenhouse board "northwind"; the employer\'s own website is not known');
+    expect(panel).toHaveTextContent('takes up to about 90 seconds');
+    expect(panel).not.toHaveTextContent('Northwind Freight');
+  });
+
+  it('a correction can carry a new passage, and a correction without one stays a lead that needs a passage', async () => {
+    const platform = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    await bridge().addFact({ attemptId: platform.id }, { claim: CLAIM, sourceUrl: ABOUT, quote: QUOTE, scope: 'company', topic: 'general' });
+    render(<CompanyEvidencePanel target={{ attemptId: platform.id }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Correct' }));
+    fireEvent.change(screen.getByLabelText('Corrected claim'), { target: { value: 'Northwind Freight operates 140 depots.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+    const card = (await screen.findByText('Northwind Freight operates 140 depots.')).closest('[data-testid="company-fact"]') as HTMLElement;
+    await waitFor(() => expect(card).toHaveAttribute('data-support', 'lead'));
+    expect(card).toHaveTextContent('No passage copied from the page is saved for this wording');
+    expect(card).toHaveTextContent('no longer supports it');
+
+    pages.set(ABOUT, 'Northwind Freight now operates 15 depots in the Benelux');
+    fireEvent.click(within(card).getByRole('button', { name: 'Correct' }));
+    fireEvent.change(screen.getByLabelText('Corrected claim'), { target: { value: 'Northwind Freight operates 15 depots in the Benelux.' } });
+    fireEvent.change(screen.getByLabelText(/Passage from the page that says the corrected wording/), {
+      target: { value: 'Northwind Freight now operates 15 depots in the Benelux' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+    const fixed = (await screen.findByText('Northwind Freight operates 15 depots in the Benelux.')).closest('[data-testid="company-fact"]') as HTMLElement;
+    await waitFor(() => expect(fixed).toHaveAttribute('data-support', 'supported'));
+    expect(within(fixed).getByText('Quoted passage found')).toBeInTheDocument();
+  });
+
+  it('confirms a website with an optional entity reference, and offers same-name domains only as suggestions', async () => {
+    const first = attempt('Apex', 'Engineer', 'https://www.jobgether.com/offer/1');
+    await bridge().confirmDomain({ attemptId: first.id }, { domain: 'apex-logistics.example' });
+    const second = attempt('Apex', 'Designer', 'https://www.linkedin.com/jobs/view/2');
+    render(<CompanyEvidencePanel target={{ attemptId: second.id }} />);
+    const suggestions = await screen.findByTestId('company-domain-suggestions');
+    expect(suggestions).toHaveTextContent('apex-logistics.example (you confirmed it for another vacancy with this name)');
+    expect(screen.getByTestId('company-identity-missing')).toHaveTextContent('Another vacancy with the same name is not affected.');
+    fireEvent.click(within(suggestions).getByRole('button', { name: 'Use this address' }));
+    expect(screen.getByLabelText('Company website')).toHaveValue('apex-logistics.example');
+    fireEvent.change(screen.getByLabelText('Registration number or legal name (optional)'), { target: { value: 'KvK 87654321' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm website' }));
+    expect(await screen.findByTestId('company-identity')).toHaveTextContent('entity reference kvk 87654321');
+  });
+
+  it('closing the panel while research runs cancels the work it started', async () => {
+    const platform = attempt('Northwind Freight', 'Platform Engineer', NORTHWIND);
+    let aborted = false;
+    research.mockImplementation(
+      (_input: unknown, signal: AbortSignal) =>
+        new Promise((resolve) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              aborted = true;
+              resolve({ status: 'cancelled', reason: 'cancelled_by_user', candidates: [], queries: [], searches: 0, fetches: 0 });
+            },
+            { once: true },
+          );
+        }),
+    );
+    const view = render(<CompanyEvidencePanel target={{ attemptId: platform.id }} />);
+    await screen.findByTestId('company-identity');
+    fireEvent.click(screen.getByRole('button', { name: 'Research this company' }));
+    await screen.findByRole('button', { name: 'Stop' });
+    await waitFor(() => expect(runs.active).toBe(1));
+    view.unmount();
+    await waitFor(() => expect(aborted).toBe(true));
+    await waitFor(() => expect(runs.active).toBe(0));
   });
 
   it('renders nothing on a build without the bridge, and a plain note when it cannot load', async () => {

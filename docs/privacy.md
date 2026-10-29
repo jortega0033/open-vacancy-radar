@@ -255,7 +255,8 @@ stored in the local workspace database and goes nowhere else.
 - **Company evidence** (#689): public facts about an employer that you added or that explicit research found, each
   with its source address, quote, observation time and expiry, kept in `workspace.db` apart from your CV and notes.
   Nothing is fetched or researched until you press a button. Research sends a model only the company name, its
-  verified website, the public role title and topic names, never your CV, letters or notes. Retained until you delete
+  verified website (or, for a job-board identity, the board name and the public posting address without its query
+  string), the public role title and topic names, never your CV, letters or notes. Retained until you delete
   the company's evidence in the panel, delete `workspace.db`, or use Settings > Advanced > Reset application data
   (which deletes every evidence table). Deleting or correcting evidence does not change a document already prepared;
   a prepared letter keeps its own record of the sourced claims it used until that attempt is deleted. See

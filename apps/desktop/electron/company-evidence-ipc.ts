@@ -67,7 +67,7 @@ const AddFactInput = withTarget({
   observedAt: z.string().max(40).optional(),
 });
 const FactInput = withTarget({ factId: Id });
-const CorrectInput = withTarget({ factId: Id, claim: z.string().trim().min(1).max(2000) });
+const CorrectInput = withTarget({ factId: Id, claim: z.string().trim().min(1).max(2000), quote: z.string().trim().max(4000).optional() });
 const ResolveInput = withTarget({ contradictionId: Id, keepFactId: Id });
 const LinkInput = withTarget({ linkId: Id, decision: z.enum(['confirmed', 'rejected']) });
 const ResearchInput = withTarget({ topics: z.array(Topic).max(9).optional(), includeRole: z.boolean().optional() });
@@ -142,7 +142,7 @@ export function createCompanyEvidenceHandlers(deps: CompanyEvidenceIpcDeps): Rec
         true,
       ),
     'company-evidence:confirm-fact': (input) => run(FactInput, input, (v, s) => confirmFact(s, targetOf(v), v.factId), true),
-    'company-evidence:correct-fact': (input) => run(CorrectInput, input, (v, s) => correctFact(s, targetOf(v), v.factId, v.claim), true),
+    'company-evidence:correct-fact': (input) => run(CorrectInput, input, (v, s) => correctFact(s, targetOf(v), v.factId, v.claim, v.quote ?? ''), true),
     'company-evidence:withdraw-fact': (input) => run(FactInput, input, (v, s) => withdrawFact(s, targetOf(v), v.factId), true),
     'company-evidence:resolve-contradiction': (input) =>
       run(ResolveInput, input, (v, s) => resolveContradiction(s, targetOf(v), v.contradictionId, v.keepFactId), true),
