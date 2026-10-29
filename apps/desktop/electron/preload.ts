@@ -25,6 +25,7 @@ import type { SearchPlanLoadResult, SearchPlanResetResult } from './search-plan-
 import type { CompanyEvidenceBridge } from './company-evidence.js';
 import type { ApplicationBriefBridge } from './application-brief.js';
 import { parseCritiqueResult, type ApplicationCritiqueBridge } from './application-critique-types.js';
+import { parseInterviewContextResult, type InterviewContextBridge } from './interview-context-types.js';
 import { parseBriefResult, parseCommitAssessment, parseOkResult, parsePrepareAssessment } from './application-brief-parse.js';
 import { parseCancelResult, parseCompanyEvidenceProse, parseCompanyEvidenceResult } from './company-evidence-parse.js';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
@@ -2209,3 +2210,27 @@ const applicationCritiqueApi: ApplicationCritiqueBridge = {
 };
 
 contextBridge.exposeInMainWorld('applicationCritique', applicationCritiqueApi);
+
+/**
+ * #691. The fourteenth namespace: which documents went with an application, and the interview rounds the
+ * person recorded. Every result is REBUILT from known fields (`parseInterviewContextResult`, fail closed).
+ * Arguments are ids, the version the page was showing, the person's own statement about a document
+ * (optionally the text they sent) and their own round notes: never a draft id, an artifact, a path or a
+ * prompt. Nothing here starts a model session or a request.
+ */
+const interviewContextApi: InterviewContextBridge = {
+  async get(applicationId) {
+    return parseInterviewContextResult(await ipcRenderer.invoke('interview-context:get', { applicationId }));
+  },
+  async stateDocuments(input) {
+    return parseInterviewContextResult(await ipcRenderer.invoke('interview-context:state-documents', { ...input }));
+  },
+  async saveRound(input) {
+    return parseInterviewContextResult(await ipcRenderer.invoke('interview-context:save-round', { ...input }));
+  },
+  async deleteRound(input) {
+    return parseInterviewContextResult(await ipcRenderer.invoke('interview-context:delete-round', { ...input }));
+  },
+};
+
+contextBridge.exposeInMainWorld('interviewContext', interviewContextApi);

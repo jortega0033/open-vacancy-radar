@@ -427,6 +427,10 @@ declare global {
     /** #690. The thirteenth namespace: the optional independent critique of a prepared package (read, run, cancel,
      * reject, accept). Takes ids and the run/document hash the page was looking at; never document text. */
     applicationCritique: import('../electron/application-critique-types.js').ApplicationCritiqueBridge;
+    /** #691. The fourteenth namespace: the documents that went with an application (read, the person's
+     * statement about them) and the interview rounds they recorded. Takes ids, a version and the
+     * person's own words; never a draft, file or path. */
+    interviewContext: import('../electron/interview-context-types.js').InterviewContextBridge;
   }
 }
 

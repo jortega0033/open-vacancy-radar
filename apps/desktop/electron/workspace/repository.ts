@@ -58,6 +58,8 @@ import { applicationAnswerKey } from './application-answer-key.js';
 import { deleteAllCompanyEvidence } from './company-evidence-store.js';
 import { deleteAllApplicationBriefs, pruneUnreferencedBriefs } from './application-brief-store.js';
 import { deleteAllCritiques } from './application-critique-store.js';
+import { bindSubmissionPackage, deleteAllSubmissionPackages } from './submission-package-store.js';
+import { deleteAllInterviewRounds } from './interview-round-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -501,6 +503,14 @@ function toCvDocument(row: CvDocumentRow): CvDocumentRecord {
     isDefault: row.isDefault,
     uploadedAt: iso(row.uploadedAt),
     updatedAt: iso(row.updatedAt),
+  };
+}
+
+/** #691: reads a library CV in the record shape the #690 review fence hashes (reviewed evidence). */
+export function cvEvidenceReader(db: Pick<WorkspaceDb, 'select'>): (cvId: string) => CvDocumentRecord | null {
+  return (cvId) => {
+    const row = db.select().from(cvDocuments).where(eq(cvDocuments.id, cvId)).get();
+    return row ? toCvDocument(row) : null;
   };
 }
 
@@ -2452,11 +2462,22 @@ export function updateApplicationAttempt(
       }
     }
 
+    const before = tx
+      .select({ checkpoint: applicationAttempts.checkpoint })
+      .from(applicationAttempts)
+      .where(eq(applicationAttempts.id, id))
+      .get();
     const [row] = tx.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
     if (!row) throw new WorkspaceNotFoundError('application attempt', id);
     // Same transaction as the checkpoint write, so the tracker can never show a state the attempt
     // does not have (#444).
     syncApplicationForAttempt(tx, id);
+    // #691: a recorded submission (an observed receipt, a delayed receipt, or the person's own "I
+    // applied") binds the manifest of what this app held for it, in this same transaction. Only on the
+    // transition: a later edit of an already-recorded attempt never re-binds what was sent.
+    if ((next === 'submitted' || next === 'user_reported') && before?.checkpoint !== next) {
+      bindSubmissionPackage(tx, id, new Date(), cvEvidenceReader(tx));
+    }
     return toApplicationAttempt(tx.select().from(applicationAttempts).where(eq(applicationAttempts.id, id)).get() ?? row);
   });
 }
@@ -3068,6 +3089,9 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       ...deleteAllApplicationBriefs(tx),
       // #690: the critiques and the structured drafts they describe.
       ...deleteAllCritiques(tx),
+      // #691: the submitted-document manifests and the recorded interview rounds.
+      ...deleteAllSubmissionPackages(tx),
+      ...deleteAllInterviewRounds(tx),
     };
 
     tx.delete(applicationAttempts).run();

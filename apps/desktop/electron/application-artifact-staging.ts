@@ -8,6 +8,7 @@ import {
   type DocumentArtifactKind,
   type DocumentTarget,
 } from './document-acceptance.js';
+import { stagedArtifactFileName } from './application-artifact-naming.js';
 import { letterAcceptanceContract, resumeAcceptanceContract } from './document-contracts.js';
 import { checkDocumentReadiness, type DocumentReadinessResult } from './document-readiness.js';
 import { renderLetterHtml } from './letter-html.js';
@@ -42,7 +43,7 @@ import type { ApplicationArtifactKind, ApplicationArtifactRecord } from './works
  * content hash so re-staging identical content twice is idempotent at the filesystem level too.
  */
 export function stagedArtifactPath(storageRoot: string, attemptId: string, contentHash: string, fileName: string): string {
-  return join(storageRoot, attemptId, `${contentHash}-${fileName}`);
+  return join(storageRoot, attemptId, stagedArtifactFileName(contentHash, fileName));
 }
 
 /**

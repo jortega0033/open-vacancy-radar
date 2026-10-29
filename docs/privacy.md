@@ -270,6 +270,18 @@ stored in the local workspace database and goes nowhere else.
   panel never starts a session. Retained until you delete the application, delete `workspace.db`, or use Settings >
   Advanced > Reset application data. Drafts and reviews of a package that was already sent are never changed. See
   [application-critique.md](application-critique.md).
+- **Documents you sent and interview rounds** (#691): when a submission is recorded (a receipt this app observed,
+  or your own "I applied"), a record of which prepared CV and letter versions belonged to it: ids, version numbers and
+  hashes of the drafts and files described above, the posting hash and the requisition, with how each document is
+  known (prepared, confirmed by you, attached by this app when it sent the application, or unknown). It copies text
+  only when you supply it: text you paste as what you sent, or your linked library CV or letter as it read when you
+  said it is what you sent. Interview rounds hold what you enter: type, optional date, planned or done, your notes and
+  topics you marked as open. Nothing is read from email, a calendar or a recording, and nothing is sent anywhere when
+  you save; your notes and the recorded documents go to your chosen provider only inside a prep pack you generate
+  with "Generate prep pack". Editing or deleting a library CV or letter never changes these records. Retained until
+  you delete the application (rounds and your statements for an application with no prepared documents), delete
+  the attempt it belongs to (its document record), delete `workspace.db`, or use Settings > Advanced > Reset
+  application data (which deletes both tables). See [interview-context.md](interview-context.md).
 - **Application brief** (#688): one decision record per job, kept in `workspace.db`: the scan's own score and
   reasons, work-eligibility answers with their sources, every original source link of the job, the posting text
   saved with it (cut at 80,000 characters), a summary of the CV assessment with the versions it was made under, and

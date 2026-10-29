@@ -6,6 +6,8 @@ import {
   MAX_CV_PROMPT_CHARS,
   UNTRUSTED_VACANCY_RULE,
 } from '../cv/prompts.js';
+import { defuseForgedSectionHeaders } from './defuse-section-headers-prompt.js';
+import { describeRoundsOmissions, planIsComplete, planPriorRounds, ROUNDS_PROMPT_BUDGET } from './interview-rounds-budget.js';
 import type { CompanyEvidenceProseFact } from '../../../electron/company-evidence.js';
 import {
   COMPANY_EVIDENCE_RULE,
@@ -66,33 +68,62 @@ export interface InterviewPrepContext {
    * Kept apart from `cv` and `letter`: nothing in here is a fact about the candidate.
    */
   companyEvidence?: readonly CompanyEvidenceProseFact[];
+  /**
+   * #691: the documents of the selected recorded package. `undefined` = no package is used and the
+   * current linked CV/letter above are the only (clearly labelled) basis, exactly as before. When set,
+   * a document with text replaces the current linked one for its slot; a document without text says so
+   * and the current linked one is offered as a labelled fallback for that slot only.
+   */
+  submitted?: SubmittedBasis;
+  /** #691: true when the application links a CV / letter that is no longer in the library. */
+  staleLinks?: { cv: boolean; letter: boolean };
+  /** #691: interview rounds the candidate recorded. `prior` = rounds they held, oldest first. */
+  rounds?: { prior: readonly PriorRound[]; next: NextRound | null };
+}
+
+export type BasisProvenance = 'prepared' | 'user_confirmed' | 'receipt_backed' | 'unknown';
+
+export interface SubmittedDocument {
+  /** 'CV', 'cover letter' or 'motivation letter'. */
+  label: string;
+  provenance: BasisProvenance;
+  source: 'draft' | 'artifact_only' | 'person_text' | 'linked_copy' | 'none';
+  version: number | null;
+  /** First 12 characters of the recorded hash, or null. */
+  fingerprint: string | null;
+  /** The text, only when the app holds it and it matches its record. */
+  text: string | null;
+}
+
+export interface SubmittedBasis {
+  /** Short human label of the package, e.g. "record version 2". */
+  reference: string;
+  evidence: 'receipt' | 'user_reported' | 'none';
+  /** YYYY-MM-DD or null. */
+  recordedOn: string | null;
+  cv: SubmittedDocument | null;
+  letter: SubmittedDocument | null;
+}
+
+export interface PriorRound {
+  /** The record's id, so the rounds panel can say how a pack uses this round. Never sent in the prompt. */
+  id?: string;
+  type: string;
+  /** YYYY-MM-DD or null when the candidate did not record a date. */
+  date: string | null;
+  feedback: string;
+  openTopics: readonly string[];
+}
+
+export interface NextRound {
+  type: string;
+  date: string | null;
 }
 
 /** Exported so a test (or a future caller) can read the exact bound this prompt applies to the
  * JD snapshot without re-deriving it from `GENERATION_INPUT_BUDGETS`. */
 export const MAX_INTERVIEW_PREP_JD_CHARS = GENERATION_INPUT_BUDGETS.interviewPrepJdChars;
 export const MAX_INTERVIEW_PREP_LETTER_CHARS = GENERATION_INPUT_BUDGETS.interviewPrepLetterChars;
-
-/**
- * Defuses a forged `=== SECTION ===`-shaped line inside untrusted multi-line text (adversarial
- * review finding for #358): `fieldPromptText` flattens a single-line value to one line specifically
- * so it cannot forge a section delimiter of its own, but the JD snapshot, CV text and letter body
- * below are multi-line and only pass through `clampPromptText`, which truncates but never flattens.
- * Without this, a hostile job-description snapshot containing a line like
- * `=== YOUR CURRENT LINKED CV (may differ...) ===` followed by fabricated "CV" content would land
- * inside the real `=== JOB DESCRIPTION ===` section looking exactly like the start of the genuine
- * CV section that follows it later in the same prompt -- letting fabricated text be misread as
- * CV-sourced fact. Applied to every multi-line untrusted block before it is clamped. Only a line
- * that both starts and ends with three or more `=` signs is touched (this codebase's own section
- * headers are never written any other way), and the fix keeps the suspicious text fully visible --
- * it just stops the line from starting at column 0 with the exact shape a real header has.
- */
-function defuseForgedSectionHeaders(text: string): string {
-  return text.replace(
-    /^([ \t]*)(={3,}.*={3,}[ \t]*)$/gm,
-    '$1[quoted from the untrusted text below, not a real section header] $2',
-  );
-}
 
 const STAGE_LABEL: Record<InterviewPrepStage, string> = {
   recruiter_screen: 'Recruiter screen',
@@ -121,6 +152,18 @@ const INTERVIEW_PREP_EXTRA_RULES =
  */
 const PROVENANCE_RULE =
   'Never describe the candidate\'s linked CV or letter below as "the version the interviewer received" or "what was submitted" for this application, and never present them as a reliable prediction of what the interviewer already knows or will ask about -- they are the candidate\'s current linked CV/letter, which may have changed since they applied. Frame every claim you draw from them as "your CV/letter currently says," not as a fact already in the interviewer\'s hands.';
+
+/** #691: how each kind of document basis may be described. Present whenever a recorded package is used. */
+const SUBMITTED_BASIS_RULE =
+  'The DOCUMENT BASIS block lists every document this preparation uses, each with a reference ([D1], [D2]). Cite the reference whenever you draw on a document. Describe each document only the way its basis line allows: "sent" documents may be called the CV or letter the candidate sent; a document "prepared for this application" must be called that, never what the interviewer received; a "current" document must be framed as "your CV/letter currently says". Never mix text from one document into another.';
+
+/** #691: the candidate's own notes from earlier rounds. Present only when such notes exist. */
+const PRIOR_ROUNDS_RULE =
+  "The EARLIER ROUNDS block is the candidate's own report of earlier conversations, cited as [R1], [R2], and so on. Use it to decide what to prepare for next, especially the topics the candidate marked as open, and cite the round whenever you use it. It is not evidence: never treat anything in it as the candidate's experience or a CV fact, never as a verified fact about the employer, and never infer from it how the employer judged the candidate, whether they will advance, or any other outcome.";
+
+/** #691: added when the rounds budget left something out, so the model treats the gap as unknown. */
+const PRIOR_ROUNDS_OMISSION_RULE =
+  'The EARLIER ROUNDS block states which earlier rounds, or which parts of a note or topic list, are not included. Treat everything not shown as unknown: do not infer, reconstruct or guess it, and say plainly that you could not see it when it would matter.';
 
 const STAR_RULE =
   'For the STAR candidates section, draw only on facts the CV text below actually states. Where a Situation, Task, Action or Result element of a candidate story is not supported by the CV text, say plainly that element is missing and phrase it as a question back to the candidate (for example, "What was the measurable result of this project?") -- never invent it.';
@@ -202,13 +245,21 @@ function jdBlock(context: InterviewPrepContext): string {
 }
 
 function cvBlock(context: InterviewPrepContext): string {
-  if (!context.cv) return '\nNo CV is linked to this application.';
+  if (!context.cv) {
+    return context.staleLinks?.cv
+      ? "\nThe CV linked to this application is no longer in the candidate's library, so no current CV text is available."
+      : '\nNo CV is linked to this application.';
+  }
   const text = clampPromptText(defuseForgedSectionHeaders(context.cv.text), MAX_CV_PROMPT_CHARS);
   return `\n=== YOUR CURRENT LINKED CV (may differ from what you actually submitted for this application) ===\n${text}`;
 }
 
 function letterBlock(context: InterviewPrepContext): string {
-  if (!context.letter) return '\nNo letter is linked to this application.';
+  if (!context.letter) {
+    return context.staleLinks?.letter
+      ? "\nThe letter linked to this application is no longer in the candidate's library, so no current letter text is available."
+      : '\nNo letter is linked to this application.';
+  }
   const text = clampPromptText(defuseForgedSectionHeaders(context.letter.body), MAX_INTERVIEW_PREP_LETTER_CHARS);
   return `\n=== YOUR CURRENT LINKED LETTER (may differ from what you actually submitted) ===\nType: ${fieldPromptText(context.letter.type)}\n${text}`;
 }
@@ -218,24 +269,180 @@ function companyEvidenceRule(context: InterviewPrepContext, now: Date): string {
   return `\n${currentCompanyEvidence(context.companyEvidence, now).length > 0 ? COMPANY_EVIDENCE_RULE : NO_COMPANY_EVIDENCE_RULE}`;
 }
 
+const PROVENANCE_LINE: Record<BasisProvenance, string> = {
+  receipt_backed:
+    'sent: this app attached this file when it sent the application and then observed a confirmation (the confirmation itself does not show the file)',
+  user_confirmed: 'sent: the candidate confirmed this is the version they sent',
+  prepared: 'prepared for this application by this app; the candidate has not confirmed they sent this version',
+  unknown: 'the candidate does not know which version they sent',
+};
+
+function sourceNote(doc: SubmittedDocument): string {
+  if (doc.source === 'person_text') return ' (text the candidate supplied)';
+  if (doc.source === 'linked_copy') return ' (a copy of their library document that they said they sent)';
+  return '';
+}
+
+function describeDocument(ref: string, doc: SubmittedDocument): string {
+  const version = doc.version !== null ? `version ${doc.version}` : 'no version number';
+  const fingerprint = doc.fingerprint ? `, fingerprint ${fieldPromptText(doc.fingerprint)}` : '';
+  const availability = doc.text ? '' : '; its text is not available to this preparation';
+  return `[${ref}] ${fieldPromptText(doc.label)}: ${version}${fingerprint}, ${PROVENANCE_LINE[doc.provenance]}${sourceNote(doc)}${availability}`;
+}
+
+interface Slot {
+  ref: string;
+  /** The recorded document, when the package lists one. */
+  recorded: SubmittedDocument | null;
+  /** Whether the current linked document is used for this slot (labelled as current). */
+  useCurrent: boolean;
+}
+
+function slots(context: InterviewPrepContext): { cv: Slot; letter: Slot } {
+  const submitted = context.submitted;
+  const plan = (recorded: SubmittedDocument | null, hasCurrent: boolean): Omit<Slot, 'ref'> => {
+    if (!submitted) return { recorded: null, useCurrent: hasCurrent };
+    if (recorded?.text) return { recorded, useCurrent: false };
+    // Not recorded, or recorded without text (not known, a file whose text this app never held): the
+    // current linked document is a labelled fallback for this slot only.
+    return { recorded, useCurrent: hasCurrent };
+  };
+  return {
+    cv: { ref: 'D1', ...plan(submitted?.cv ?? null, context.cv !== null) },
+    letter: { ref: 'D2', ...plan(submitted?.letter ?? null, context.letter !== null) },
+  };
+}
+
+function evidenceLine(submitted: SubmittedBasis): string {
+  const on = submitted.recordedOn ? ` on ${fieldPromptText(submitted.recordedOn)}` : '';
+  switch (submitted.evidence) {
+    case 'receipt':
+      return `Application: sent by this app${on}; a confirmation was observed.`;
+    case 'user_reported':
+      return `Application: the candidate reported applying${on}.`;
+    default:
+      return 'Application: no submission is recorded in this app.';
+  }
+}
+
+function basisBlock(context: InterviewPrepContext): string {
+  const submitted = context.submitted;
+  if (!submitted) return '';
+  const plan = slots(context);
+  const lines = ['', `=== DOCUMENT BASIS (${fieldPromptText(submitted.reference)}) ===`, evidenceLine(submitted)];
+  const entries: Array<[Slot, string]> = [
+    [plan.cv, 'CV'],
+    [plan.letter, 'letter'],
+  ];
+  for (const [slot, label] of entries) {
+    if (slot.recorded) lines.push(describeDocument(slot.ref, slot.recorded));
+    else lines.push(`[${slot.ref}] ${label}: none is recorded with this application's documents.`);
+    if (slot.useCurrent) {
+      lines.push(
+        `[${slot.ref}-current] the candidate's current linked ${label}, used only because no recorded text is available for it; it may differ from what was sent.`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+function recordedDocumentBlock(ref: string, doc: SubmittedDocument, max: number): string {
+  const label = fieldPromptText(doc.label).toUpperCase();
+  const heading =
+    doc.provenance === 'prepared'
+      ? `${label} PREPARED FOR THIS APPLICATION [${ref}] (not confirmed as sent)`
+      : `${label} THE CANDIDATE SENT [${ref}]`;
+  return `\n=== ${heading} ===\n${clampPromptText(defuseForgedSectionHeaders(doc.text ?? ''), max)}`;
+}
+
+function documentBlocks(context: InterviewPrepContext): string {
+  if (!context.submitted) return `${cvBlock(context)}\n${letterBlock(context)}`;
+  const plan = slots(context);
+  const parts: string[] = [];
+  if (plan.cv.recorded?.text) parts.push(recordedDocumentBlock(plan.cv.ref, plan.cv.recorded, MAX_CV_PROMPT_CHARS));
+  else if (plan.cv.useCurrent) parts.push(cvBlock(context));
+  if (plan.letter.recorded?.text) {
+    parts.push(recordedDocumentBlock(plan.letter.ref, plan.letter.recorded, MAX_INTERVIEW_PREP_LETTER_CHARS));
+  } else if (plan.letter.useCurrent) parts.push(letterBlock(context));
+  return parts.length > 0 ? parts.join('\n') : '\nNo document text is available for this application.';
+}
+
+function usesCurrentDocuments(context: InterviewPrepContext): boolean {
+  if (!context.submitted) return true;
+  const plan = slots(context);
+  return plan.cv.useCurrent || plan.letter.useCurrent;
+}
+
+function roundsBlock(context: InterviewPrepContext): string {
+  const rounds = context.rounds;
+  if (!rounds) return '';
+  const lines: string[] = [];
+  if (rounds.next) {
+    const when = rounds.next.date ? ` on ${fieldPromptText(rounds.next.date)}` : ' (date not recorded)';
+    lines.push('', '=== NEXT ROUND (as the candidate recorded it) ===', `${fieldPromptText(rounds.next.type)}${when}`);
+  }
+  if (rounds.prior.length > 0) {
+    const plan = planPriorRounds(rounds.prior);
+    lines.push('', "=== EARLIER ROUNDS (the candidate's own notes of what they were told; nobody has checked them) ===");
+    const omissions = describeRoundsOmissions(plan);
+    lines.push(
+      omissions
+        ? `Not everything the candidate recorded is below: ${plan.rounds.length} of ${plan.recorded} earlier ${plan.recorded === 1 ? 'round' : 'rounds'} included. Left out or shortened: ${omissions}. Anything not shown here is unknown to you; do not guess at it.`
+        : `All ${plan.recorded} earlier ${plan.recorded === 1 ? 'round' : 'rounds'} the candidate recorded are included.`,
+    );
+    plan.rounds.forEach((round, index) => {
+      const when = round.date ? round.date : 'date not recorded';
+      const feedback = round.feedback ? round.feedback : '(no notes recorded)';
+      const topics = round.topics.length > 0 ? round.topics.join('; ') : '(none marked)';
+      lines.push(`[R${index + 1}] ${round.type}, ${when}.`, `What the candidate noted: ${feedback}`);
+      if (round.feedbackUsedChars < round.feedbackRecordedChars) {
+        lines.push(
+          `[Only the first ${round.feedbackUsedChars.toLocaleString('en-US')} of ${round.feedbackRecordedChars.toLocaleString('en-US')} characters of this note are included; the rest is not shown. Do not guess at it.]`,
+        );
+      }
+      lines.push(`Topics the candidate marked as still open: ${topics}`);
+      if (round.topicsDropped > 0 || round.topicsShortened > 0) {
+        lines.push(
+          `[Topics of this round: ${round.topicsRecorded} recorded, ${round.topics.length} shown${round.topicsShortened > 0 ? `, ${round.topicsShortened} cut to ${ROUNDS_PROMPT_BUDGET.topicChars} characters` : ''}. Do not guess at the rest.]`,
+        );
+      }
+    });
+  }
+  return lines.join('\n');
+}
+
 export function buildInterviewPrepPrompt(context: InterviewPrepContext, now: Date = new Date()): string {
   const untrustedVacancyRule = context.jdSnapshot ? `\n${UNTRUSTED_VACANCY_RULE}` : '';
   const companyEvidenceSection =
     context.companyEvidence === undefined ? '' : companyEvidenceBlock(context.companyEvidence, now);
+  const priorRounds = (context.rounds?.prior.length ?? 0) > 0;
+  const extraRules = priorRounds
+    ? "Beyond the rules above: never invent a project the candidate did not do, a seniority level or job title they did not hold, or any interview feedback, evaluation or outcome beyond what the EARLIER ROUNDS block states in the candidate's own words."
+    : INTERVIEW_PREP_EXTRA_RULES;
+  const provenanceRules = [
+    context.submitted ? SUBMITTED_BASIS_RULE : '',
+    usesCurrentDocuments(context) ? PROVENANCE_RULE : '',
+    priorRounds ? PRIOR_ROUNDS_RULE : '',
+    priorRounds && !planIsComplete(planPriorRounds(context.rounds!.prior)) ? PRIOR_ROUNDS_OMISSION_RULE : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const pastInterviews = priorRounds
+    ? "This is a review-only preparation pack: beyond the candidate's own notes, never claim to know how any past conversation went, and never promise this preparation guarantees an outcome."
+    : 'This is a review-only preparation pack: never claim to know how any past interview for this candidate went, and never promise this preparation guarantees an outcome.';
 
   return `${roleFraming(context)}
 
 ${GROUNDING_RULES}${untrustedVacancyRule}
-${INTERVIEW_PREP_EXTRA_RULES}
-${PROVENANCE_RULE}
+${extraRules}
+${provenanceRules}
 ${jdProvenanceRule(context)}
 ${STAR_RULE}${companyEvidenceRule(context, now)}
-This is a review-only preparation pack: never claim to know how any past interview for this candidate went, and never promise this preparation guarantees an outcome.
+${pastInterviews}
 
 ${headings()}
 
-${applicationContextBlock(context)}${savedJobBlock(context)}
+${applicationContextBlock(context)}${savedJobBlock(context)}${basisBlock(context)}${roundsBlock(context)}
 ${jdBlock(context)}${companyEvidenceSection}
-${cvBlock(context)}
-${letterBlock(context)}`;
+${documentBlocks(context)}`;
 }

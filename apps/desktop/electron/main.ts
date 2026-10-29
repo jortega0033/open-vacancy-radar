@@ -64,6 +64,7 @@ import type { ApplicationQueueEvent } from './application-queue-types.js';
 import { ApplicationDataResetGate } from './application-data-reset-gate.js';
 import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
 import { createApplicationCritiqueHandlers } from './application-critique-ipc.js';
+import { createInterviewContextHandlers } from './interview-context-ipc.js';
 import { cancelAllCritiques, type CritiqueDeps } from './application-critique-service.js';
 import { readPostingVerification } from './application-posting-verification.js';
 import { runCompanyResearchSession } from './company-evidence-research.js';
@@ -2461,6 +2462,21 @@ guardedIpc.handle('application-critique:run', (_event, input: unknown) => applic
 guardedIpc.handle('application-critique:cancel', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:cancel']!(input));
 guardedIpc.handle('application-critique:reject', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:reject']!(input));
 guardedIpc.handle('application-critique:accept', (_event, input: unknown) => applicationCritiqueHandlers['application-critique:accept']!(input));
+
+/**
+ * #691: the documents that went with each application and the interview rounds the person recorded.
+ * Local reads and writes only (no model, no request); writes run under the data reset gate.
+ */
+const interviewContextHandlers = createInterviewContextHandlers(async () => ({
+  db: await ensureWorkspaceDb(),
+  now: () => new Date(),
+  mutate: (task) => applicationDataResetGate.runMutation(task),
+}));
+// Literal channel names on purpose: the sender-guard test reads this file to prove every channel is guarded.
+guardedIpc.handle('interview-context:get', (_event, input: unknown) => interviewContextHandlers['interview-context:get']!(input));
+guardedIpc.handle('interview-context:state-documents', (_event, input: unknown) => interviewContextHandlers['interview-context:state-documents']!(input));
+guardedIpc.handle('interview-context:save-round', (_event, input: unknown) => interviewContextHandlers['interview-context:save-round']!(input));
+guardedIpc.handle('interview-context:delete-round', (_event, input: unknown) => interviewContextHandlers['interview-context:delete-round']!(input));
 
 guardedIpc.handle('application-pipeline:attach-letter', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {

@@ -24,6 +24,7 @@ import type { CompanyResearchDiagnostics } from '../company-evidence.js';
 import type { PreparedApplicationFields } from './types.js';
 import type { BriefNotice, BriefSourceFacts, FrozenBrief, StoredAssessment } from '../application-brief.js';
 import type { DraftContent, InputFence, RefusedFinding, StoredFinding, StoredProposal } from '../application-critique.js';
+import type { PackageManifestContent } from '../submitted-package.js';
 
 /**
  * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
@@ -1071,3 +1072,59 @@ export const applicationCritiques = sqliteTable('application_critiques', {
   lastRunAt: integer('last_run_at', { mode: 'timestamp_ms' }),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });
+
+/**
+ * #691: what was actually sent for one application, as a versioned manifest. INSERT-ONLY: a new
+ * version supersedes the previous one (kept, never edited), so a later statement or a later draft
+ * can never rewrite the record of an earlier one.
+ *
+ * Exactly one subject. An attempt (`attempt:<id>`, the normal case: bound when the attempt's
+ * submission is recorded, cascades with the attempt like its artifacts and receipts), or an
+ * Applications row that has no attempt (`application:<id>`, a row the person tracks by hand:
+ * written only when the person states what they sent, cascades with the row).
+ *
+ * The manifest names drafts and artifacts by id, version and hash; it copies text only when the
+ * person supplied it (pasted, or "my linked CV as it reads now"), because no other owner holds it.
+ */
+export const applicationSubmissionPackages = sqliteTable('application_submission_packages', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  subjectKey: text('subject_key').notNull(),
+  attemptId: text('attempt_id').references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  applicationId: text('application_id').references(() => applications.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  status: text('status', { enum: ['current', 'superseded'] }).notNull().default('current'),
+  /** `submission` = bound by the recorded submission itself; `person` = appended by the person's statement. */
+  boundBy: text('bound_by', { enum: ['submission', 'person'] }).notNull(),
+  manifest: text('manifest', { mode: 'json' }).notNull().$type<PackageManifestContent>(),
+  manifestHash: text('manifest_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  supersededAt: integer('superseded_at', { mode: 'timestamp_ms' }),
+}, (table) => [
+  uniqueIndex('application_submission_packages_version_idx').on(table.subjectKey, table.version),
+  index('application_submission_packages_attempt_idx').on(table.attemptId),
+  index('application_submission_packages_application_idx').on(table.applicationId),
+]);
+
+/**
+ * #691: one interview round as the person recorded it. A local record only: it never changes the
+ * application's status, the CV, the profile or any evidence. `scheduledOn` is null when the person
+ * did not record a date (never guessed). `feedback` and `openTopics` are the person's own report of
+ * what they were told or noticed. Cascades with the Applications row.
+ */
+export const applicationInterviewRounds = sqliteTable('application_interview_rounds', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  applicationId: text('application_id')
+    .notNull()
+    .references(() => applications.id, { onDelete: 'cascade' }),
+  roundType: text('round_type', {
+    enum: ['recruiter_screen', 'phone_screen', 'technical', 'hiring_manager', 'panel', 'take_home', 'onsite', 'final', 'other'],
+  }).notNull(),
+  scheduledOn: text('scheduled_on'),
+  state: text('state', { enum: ['planned', 'held'] }).notNull(),
+  feedback: text('feedback').notNull().default(''),
+  openTopics: text('open_topics', { mode: 'json' }).notNull().$type<string[]>().default([]),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  index('application_interview_rounds_application_idx').on(table.applicationId),
+]);
