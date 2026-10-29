@@ -25,6 +25,7 @@ import {
   createDatabaseBackedAtsHttpClient,
   createDatabaseClient,
   createLogger,
+  createPostingVerifier,
   createScanLock,
   fetchJobgetherOfferDetail,
   fetchWorkableJobDetail,
@@ -62,11 +63,14 @@ import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './appli
 import type { ApplicationQueueEvent } from './application-queue-types.js';
 import { ApplicationDataResetGate } from './application-data-reset-gate.js';
 import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
+import { readPostingVerification } from './application-posting-verification.js';
 import {
   recoverInterruptedApplicationAttempts,
   resumeApplicationAttempt,
   attachLetterToAttempt,
+  refreshApplicationFromPosting,
   restartApplicationTailoring,
+  verifyPreparedApplicationAttempt,
   runNextApplicationAttempt,
   startApplicationAttempt,
   type ApplicationPipelineDeps,
@@ -2162,6 +2166,11 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
       });
     },
     loadProfile: loadApplicationValueProfile,
+    // #687: the one bounded live check, through the same shared safe-HTTP client the on-demand
+    // description fetch uses. Built lazily so an app that never prepares anything never opens the engine DB.
+    async verifyPosting(input) {
+      return createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+    },
     async fetchMissingJobDescription(canonicalUrl: string) {
       const description = await fetchOnDemandJobDescription(canonicalUrl);
       if (description === null) return null;
@@ -2281,7 +2290,39 @@ guardedIpc.handle('application-pipeline:use-original-cv', async (_event, input: 
 guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
     const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-    const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
+    const resolution =
+      source.resolution === 'prepare_anyway' || source.resolution === 'keep_current' ? source.resolution : undefined;
+    const result = await resumeApplicationAttempt(
+      await applicationPipelineDeps(),
+      parseId(source.attemptId, 'attemptId'),
+      resolution === undefined ? {} : { resolution },
+    );
+    if (result.ok) void applicationPipelineTick.runOnce();
+    return result;
+  });
+});
+
+// #687: reading the stored posting check never touches the network.
+guardedIpc.handle('application-pipeline:posting-verification', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return readPostingVerification(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
+});
+
+// One bounded live check of a prepared attempt's posting. A mutation (it can take a `ready` package
+// out of review), so it runs under the same data-reset gate as every other preparation write.
+guardedIpc.handle('application-pipeline:verify-posting', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return verifyPreparedApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'), {
+      force: source.force === true,
+    });
+  });
+});
+
+guardedIpc.handle('application-pipeline:refresh-from-posting', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const result = await refreshApplicationFromPosting(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
     if (result.ok) void applicationPipelineTick.runOnce();
     return result;
   });

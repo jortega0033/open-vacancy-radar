@@ -2065,7 +2065,17 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
 describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
   it('exposes exactly the preparation entry and recovery points', async () => {
     const api = await loadPreload('applicationPipeline');
-    expect(Object.keys(api)).toEqual(['start', 'startFromVacancy', 'retryTailoring', 'useOriginalCv', 'resume', 'attachLetter']);
+    expect(Object.keys(api)).toEqual([
+      'start',
+      'startFromVacancy',
+      'retryTailoring',
+      'useOriginalCv',
+      'resume',
+      'postingVerification',
+      'verifyPosting',
+      'refreshFromPosting',
+      'attachLetter',
+    ]);
     expect(typeof api.start).toBe('function');
     expect(typeof api.startFromVacancy).toBe('function');
     expect(typeof api.retryTailoring).toBe('function');
@@ -2133,5 +2143,79 @@ describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
     invoke.mockResolvedValue({ nonsense: true, reason: 'something_new', extra: 'should not cross' });
     const api = await loadPreload('applicationPipeline');
     expect(await (api.start as (id: string) => Promise<unknown>)('saved-1')).toEqual({ ok: false });
+  });
+
+  describe('posting check (#687)', () => {
+    const view = {
+      attemptId: 'attempt-1',
+      status: 'materially_changed',
+      checkedAt: '2026-10-29T10:00:00.000Z',
+      source: 'greenhouse',
+      sourceRef: 'boards-api.greenhouse.io/v1/boards/{board}/jobs/{id}',
+      reason: 'verified_open',
+      httpStatus: 200,
+      contentVersion: 2,
+      deadline: { date: '2026-11-15', excerpt: 'Apply by 15 November 2026' },
+      noDeadlineStated: false,
+      change: { added: ['Eight years required.'], removed: ['Five years required.'] },
+      resolution: null,
+      reused: false,
+      stale: false,
+      invalidated: true,
+      actions: ['refresh', 'keep_current', 'open_posting'],
+    };
+
+    it('reads, checks and refreshes through fixed channels carrying only the application id', async () => {
+      const api = await loadPreload('applicationPipeline');
+      invoke.mockResolvedValueOnce(view).mockResolvedValueOnce(view).mockResolvedValueOnce({ ok: true, attemptId: 'attempt-1', tailoringMode: 'ai' });
+      expect(await (api.postingVerification as (id: string) => Promise<unknown>)('attempt-1')).toEqual(view);
+      await (api.verifyPosting as (id: string, options?: { force?: boolean }) => Promise<unknown>)('attempt-1', { force: true });
+      expect(await (api.refreshFromPosting as (id: string) => Promise<unknown>)('attempt-1')).toEqual({
+        ok: true,
+        attemptId: 'attempt-1',
+        tailoringMode: 'ai',
+      });
+      expect(invoke).toHaveBeenNthCalledWith(1, 'application-pipeline:posting-verification', { attemptId: 'attempt-1' });
+      expect(invoke).toHaveBeenNthCalledWith(2, 'application-pipeline:verify-posting', { attemptId: 'attempt-1', force: true });
+      expect(invoke).toHaveBeenNthCalledWith(3, 'application-pipeline:refresh-from-posting', { attemptId: 'attempt-1' });
+    });
+
+    it('resume forwards only an allowlisted resolution', async () => {
+      invoke.mockResolvedValue({ ok: true, attemptId: 'attempt-1', tailoringMode: 'ai' });
+      const api = await loadPreload('applicationPipeline');
+      const resume = api.resume as (id: string, options?: { resolution?: string }) => Promise<unknown>;
+      await resume('attempt-1', { resolution: 'prepare_anyway' });
+      await resume('attempt-1', { resolution: 'delete_everything' });
+      await resume('attempt-1');
+      expect(invoke).toHaveBeenNthCalledWith(1, 'application-pipeline:resume', { attemptId: 'attempt-1', resolution: 'prepare_anyway' });
+      expect(invoke).toHaveBeenNthCalledWith(2, 'application-pipeline:resume', { attemptId: 'attempt-1' });
+      expect(invoke).toHaveBeenNthCalledWith(3, 'application-pipeline:resume', { attemptId: 'attempt-1' });
+    });
+
+    it('fails closed: an unknown status is "not checked" (never open or closed), unknown actions and extra fields do not cross', async () => {
+      invoke.mockResolvedValue({ ...view, status: 'definitely_open', actions: ['check_again', 'delete_all'], secret: 'x' });
+      const api = await loadPreload('applicationPipeline');
+      const result = (await (api.postingVerification as (id: string) => Promise<unknown>)('attempt-1')) as Record<string, unknown>;
+      expect(result.status).toBe('not_checked');
+      expect(result.actions).toEqual(['check_again']);
+      expect(result.checkedAt).toBeNull();
+      expect(result).not.toHaveProperty('secret');
+    });
+
+    it('rejects a view that is about a different application', async () => {
+      invoke.mockResolvedValue({ ...view, attemptId: 'someone-else' });
+      const api = await loadPreload('applicationPipeline');
+      const result = (await (api.postingVerification as (id: string) => Promise<unknown>)('attempt-1')) as Record<string, unknown>;
+      expect(result.status).toBe('not_checked');
+      expect(result.attemptId).toBe('attempt-1');
+    });
+
+    it('bounds the changed lines it passes on', async () => {
+      invoke.mockResolvedValue({ ...view, change: { added: Array.from({ length: 20 }, (_, i) => `line ${i} ${'x'.repeat(400)}`), removed: [] } });
+      const api = await loadPreload('applicationPipeline');
+      const result = (await (api.postingVerification as (id: string) => Promise<{ change: { added: string[] } }>)('attempt-1'));
+      expect(result.change.added).toHaveLength(6);
+      expect(result.change.added[0]!.length).toBeLessThanOrEqual(240);
+    });
   });
 });

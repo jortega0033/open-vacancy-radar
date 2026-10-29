@@ -1,0 +1,23 @@
+CREATE TABLE `application_posting_verifications` (
+	`id` text PRIMARY KEY NOT NULL,
+	`attempt_id` text NOT NULL,
+	`observed_at` integer NOT NULL,
+	`source` text NOT NULL,
+	`source_ref` text DEFAULT '' NOT NULL,
+	`outcome` text NOT NULL,
+	`result` text NOT NULL,
+	`reason` text NOT NULL,
+	`http_status` integer,
+	`content_hash` text,
+	`content_version` integer DEFAULT 1 NOT NULL,
+	`baseline_hash` text DEFAULT '' NOT NULL,
+	`deadline` text,
+	`deadline_provenance` text,
+	`etag` text,
+	`last_modified` text,
+	`change_summary` text,
+	`observed_text` text,
+	`resolution` text,
+	`resolved_at` integer,
+	FOREIGN KEY (`attempt_id`) REFERENCES `application_attempts`(`id`) ON UPDATE no action ON DELETE cascade
+);

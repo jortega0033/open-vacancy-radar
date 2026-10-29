@@ -21,6 +21,8 @@ export {
 } from './pipeline/global-remote.js';
 export { readGlobalRemoteReport, readGlobalRemoteReportWithFallback, type LoadedGlobalRemoteReport } from './global-remote/report.js';
 export { createDatabaseBackedAtsHttpClient } from './pipeline/ats-http-client.js';
+export { AtsResponseError, type AtsHttpClient, type AtsHttpRequestOptions, type AtsHttpResponse } from './ats/http.js';
+export { CrawlerHttpError, isCrawlerHttpError } from './crawler/errors.js';
 export {
   DEFAULT_ATS_SOURCE_SCOUT_LIMITS,
   emptyAtsSourceScoutCounters,
@@ -42,6 +44,29 @@ export {
   type WorkableJobDetail,
   type WorkableJobReference,
 } from './global-remote/structured-discovery.js';
+export {
+  comparePostingText,
+  createPostingVerifier,
+  normalizePostingText,
+  observePosting,
+  parseStatedDeadline,
+  postingContentHash,
+  POSTING_FRESHNESS_WINDOW_MS,
+  POSTING_TEXT_MAX_CHARS,
+  POSTING_UNABLE_RETRY_AFTER_MS,
+  POSTING_VERIFY_TIMEOUT_MS,
+  resolvePostingProbe,
+  type PostingDeadline,
+  type PostingObservation,
+  type PostingObservationOutcome,
+  type PostingObservationReason,
+  type PostingProbe,
+  type PostingSource,
+  type PostingTextComparison,
+  type PostingValidators,
+  type PostingVerifier,
+  type PostingVerifyInput,
+} from './verification/posting-verification.js';
 export { applyFocusedScanCriteria, isUnspecifiedCountry, SOURCE_FILTER_CAPABILITIES, vacancyMatchesRole, vacancyTitleMatches, planQueryMatchField, type FocusedScanCriteria } from './global-remote/focused-scan.js';
 export {
   addSearchPlanSuggestions,

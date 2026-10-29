@@ -389,6 +389,8 @@ export type {
  * records above are: one definition shared by main, preload and the renderer. Type-only. */
 export type {
   ApplicationPipelineBridge,
+  PostingVerificationAction,
+  PostingVerificationView,
   StartApplicationAttemptRefusal,
   StartApplicationAttemptResult,
 } from '../electron/application-pipeline-types.js';

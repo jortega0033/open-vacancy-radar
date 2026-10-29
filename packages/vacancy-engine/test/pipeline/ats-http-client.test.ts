@@ -29,9 +29,25 @@ describe('createAtsHttpClient', () => {
       finalUrl: 'https://ats.example.net/boards/acme/jobs',
       headers: safeResponse.headers,
       body: '{"role":"Développeur"}',
+      // #687: a 304 revalidation against the stored validators is surfaced to the posting check.
+      revalidated: true,
     });
     expect(get).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith('https://careers.example.com/jobs');
+  });
+
+  it('adds no revalidation flag to a response that came straight from the network', async () => {
+    const fresh = new SafeHttpResponse({
+      requestedUrl: 'https://careers.example.com/jobs',
+      url: 'https://careers.example.com/jobs',
+      status: 200,
+      headers: {},
+      body: new TextEncoder().encode('{}'),
+      fromCache: false,
+      revalidated: false,
+    });
+    const client = createAtsHttpClient({ get: vi.fn(() => Promise.resolve(fresh)), postJson: vi.fn(() => Promise.resolve(fresh)) });
+    expect(await client.get('https://careers.example.com/jobs')).not.toHaveProperty('revalidated');
   });
 
   it('composes ATS and streaming views over the same safe client', async () => {

@@ -21,7 +21,19 @@ import {
   openApplicationReview,
 } from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
-import type { StartApplicationAttemptRefusal, StartApplicationAttemptResult } from './application-pipeline-types.js';
+import {
+  POSTING_CHANGED_DETAIL,
+  POSTING_CLOSED_DETAIL,
+  refreshAttemptFromPosting,
+  resolvePostingFinding,
+  verifyAttemptPosting,
+  type PostingVerifierPort,
+} from './application-posting-verification.js';
+import type {
+  PostingVerificationView,
+  StartApplicationAttemptRefusal,
+  StartApplicationAttemptResult,
+} from './application-pipeline-types.js';
 import {
   buildApplicationValueTable,
   buildFieldMapGenerationPrompt,
@@ -132,6 +144,13 @@ export interface ApplicationPipelineDeps {
    * refusal, it never replaces it.
    */
   fetchMissingJobDescription?(canonicalUrl: string): Promise<{ description: string; complete: boolean } | null>;
+  /**
+   * The ONE bounded, authoritative check of the live posting (#687), run when an attempt is prepared
+   * or resumed even though a stored snapshot exists. Reuses a stored finding younger than the
+   * freshness window; see `application-posting-verification.ts`. Absent means no check at all, and
+   * every behaviour below is exactly what it was before this existed.
+   */
+  verifyPosting?: PostingVerifierPort['verify'];
   /**
    * How long one attempt's preparation may go without settling before `runNextApplicationAttempt`
    * stops waiting for it, hands the daemon's lease back, and fences everything the abandoned run
@@ -593,7 +612,40 @@ export async function runApplicationAttempt(
 
   // ------------------------------------------------------------------- 1. the job description
   fencedWrite(run, () => workspace.updateApplicationAttempt(deps.db, attemptId, { checkpoint: 'reading_jd', checkpointDetail: '' }));
-  if (attempt.jdSnapshot.trim().length === 0 && deps.fetchMissingJobDescription) {
+  // #687: before spending a tailoring session on a stored snapshot, ask the posting's own authority
+  // whether it still exists and still says the same thing. Inability to ask is never closure.
+  let checkedByVerifier = false;
+  let verifierHadNoSource = false;
+  if (deps.verifyPosting) {
+    const checked = await verifyAttemptPosting(deps, attemptId, { trigger: 'prepare', isLive: () => isLivePreparation(run) });
+    if (!isLivePreparation(run)) return abandoned(run, attemptId);
+    if (checked.kind === 'dropped') {
+      // The attempt was cancelled, reset or moved on while the check was out; it belongs to someone else now.
+      const current = workspace.getApplicationAttempt(deps.db, attemptId);
+      return { attemptId, outcome: 'halted', checkpoint: current.checkpoint, detail: current.checkpointDetail };
+    }
+    checkedByVerifier = checked.kind === 'verified';
+    verifierHadNoSource = checked.view.reason === 'no_authoritative_source';
+    // The check can take seconds; a person may have paused or cancelled meanwhile.
+    const stillWantedAfterCheck = await queueStillWantsThis(deps, attemptId);
+    if (stillWantedAfterCheck.action === 'halt') {
+      return settle(run, attemptId, stillWantedAfterCheck.checkpoint, stillWantedAfterCheck.detail, 'halted');
+    }
+    attempt = workspace.getApplicationAttempt(deps.db, attemptId);
+    const { view } = checked;
+    if (view.status === 'confirmed_closed' && view.resolution !== 'prepare_anyway') {
+      return settle(run, attemptId, 'needs_user', POSTING_CLOSED_DETAIL, 'needs_user');
+    }
+    if (view.status === 'materially_changed' && view.resolution === null) {
+      return settle(run, attemptId, 'needs_user', POSTING_CHANGED_DETAIL, 'needs_user');
+    }
+  }
+  if (
+    attempt.jdSnapshot.trim().length === 0 &&
+    deps.fetchMissingJobDescription &&
+    // The verification request already asked the same authority; only a source it has no route to may still use this.
+    (!checkedByVerifier || verifierHadNoSource)
+  ) {
     // The scan captured nothing for this vacancy -- some sources' list endpoints never carry a
     // description at all. One last, best-effort try before refusing: a live fetch of the specific
     // page this attempt is actually for, not a retry of the scan.
@@ -854,6 +906,7 @@ export async function restartApplicationTailoring(
 export async function resumeApplicationAttempt(
   deps: ApplicationPipelineDeps,
   attemptId: string,
+  options: { resolution?: 'prepare_anyway' | 'keep_current' } = {},
 ): Promise<RestartApplicationTailoringResult> {
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
   // A `failed` attempt is a preparation that stopped before anything reached an employer, so it can
@@ -870,6 +923,57 @@ export async function resumeApplicationAttempt(
       detail: 'this application is not waiting on a preparation blocker',
     };
   }
+  // The person's explicit decision about a posting finding (#687) is recorded before preparation is
+  // queued, and only if that finding is still the current one: a stale click decides nothing.
+  if (options.resolution !== undefined && resolvePostingFinding(deps, attemptId, options.resolution) === null) {
+    return {
+      ok: false,
+      attemptId,
+      tailoringMode: attempt.tailoringMode,
+      detail: 'that posting finding is no longer current; check the posting again first',
+    };
+  }
+  await closeApplicationReview(attemptId).catch(() => {});
+  workspace.restartApplicationTailoring(deps.db, attemptId, attempt.tailoringMode);
+  await enqueueApplicationAttempt(deps, attemptId);
+  return { ok: true, attemptId, tailoringMode: attempt.tailoringMode };
+}
+
+/**
+ * Resumption of a stale prepared job (#687): one bounded check of the live posting for an attempt that
+ * is already prepared (or waiting), run when its stored check is older than the freshness window.
+ * A changed posting takes a `ready` package out of review so it cannot be sent; a closed one is shown
+ * as a warning and leaves the documents alone. Submitted attempts are never consulted.
+ */
+export async function verifyPreparedApplicationAttempt(
+  deps: ApplicationPipelineDeps,
+  attemptId: string,
+  options: { force?: boolean } = {},
+): Promise<PostingVerificationView> {
+  const result = await verifyAttemptPosting(deps, attemptId, {
+    trigger: 'manual',
+    ...(options.force ? { force: true } : {}),
+  });
+  if (result.view.invalidated) {
+    await closeApplicationReview(attemptId).catch((err: unknown) => {
+      deps.log?.('could not close the review of an attempt whose posting changed', { attemptId, error: describeError(err) });
+    });
+  }
+  return result.view;
+}
+
+/**
+ * The person's explicit "refresh from the updated posting": adopts the changed text as the attempt's
+ * description, deletes the package prepared from the old text and queues preparation again through the
+ * same flow as every other restart. A submitted attempt is refused and keeps its package untouched.
+ */
+export async function refreshApplicationFromPosting(
+  deps: ApplicationPipelineDeps,
+  attemptId: string,
+): Promise<RestartApplicationTailoringResult> {
+  const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
+  const refreshed = refreshAttemptFromPosting(deps, attemptId);
+  if (!refreshed.ok) return { ok: false, attemptId, tailoringMode: attempt.tailoringMode, detail: refreshed.detail };
   await closeApplicationReview(attemptId).catch(() => {});
   workspace.restartApplicationTailoring(deps.db, attemptId, attempt.tailoringMode);
   await enqueueApplicationAttempt(deps, attemptId);

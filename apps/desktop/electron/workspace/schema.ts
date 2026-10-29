@@ -533,6 +533,59 @@ export const applicationArtifacts = sqliteTable('application_artifacts', {
 });
 
 /**
+ * What one bounded, authoritative check of an attempt's live posting found (#687). One row per
+ * distinct state: a repeat observation with the same outcome/content/reason refreshes `observedAt`
+ * rather than inserting, so overlapping prepare/resume requests cannot duplicate it.
+ *
+ * Deliberately NOT columns on `applicationAttempts`: `jdSnapshot` / `jdSnapshotHash` are what the
+ * documents were prepared against and what the pre-submit gate trusts, so a live posting changing
+ * (or closing) must never rewrite them. Only an explicit, guarded `adoptPostingChange` on an attempt
+ * that has not been submitted replaces the snapshot. A submitted attempt keeps its package forever;
+ * its rows here are history, never an input.
+ *
+ * `onDelete: 'cascade'` for the same reason artifacts cascade.
+ */
+export const applicationPostingVerifications = sqliteTable('application_posting_verifications', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  attemptId: text('attempt_id')
+    .notNull()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  /** When the authority was actually contacted (or revalidated). Never the time of a later reuse. */
+  observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+  /** `greenhouse` | `lever` | `workable` | `jobgether` | `none` (no authoritative route; no request). */
+  source: text('source').notNull(),
+  /** Host and route shape only: no ids, no query. */
+  sourceRef: text('source_ref').notNull().default(''),
+  /** The raw finding of the check. */
+  outcome: text('outcome', { enum: ['open', 'closed', 'unable'] }).notNull(),
+  /** The finding as the person sees it, derived against the snapshot at the time of the check. */
+  result: text('result', {
+    enum: ['confirmed_open', 'confirmed_closed', 'materially_changed', 'unable_to_verify'],
+  }).notNull(),
+  /** A stable code (`not_found`, `denied`, `timeout`, ...). Never free text from the remote. */
+  reason: text('reason').notNull(),
+  httpStatus: integer('http_status'),
+  /** sha256 of the normalised posting text; null when the check returned no text. */
+  contentHash: text('content_hash'),
+  /** Per attempt: the snapshot the work was prepared against is version 1. */
+  contentVersion: integer('content_version').notNull().default(1),
+  /** The normalised hash of the attempt's `jdSnapshot` this check was compared against. */
+  baselineHash: text('baseline_hash').notNull().default(''),
+  /** `YYYY-MM-DD` as the posting explicitly states it, or null. Never inferred from dates seen. */
+  deadline: text('deadline'),
+  deadlineProvenance: text('deadline_provenance', { mode: 'json' }).$type<{ source: 'posting_text'; excerpt: string } | null>(),
+  etag: text('etag'),
+  lastModified: text('last_modified'),
+  /** What changed (a few capped lines), kept only for `materially_changed`. */
+  changeSummary: text('change_summary', { mode: 'json' }).$type<{ added: string[]; removed: string[] } | null>(),
+  /** The changed posting's full text, kept only for `materially_changed` so a refresh needs no second fetch. */
+  observedText: text('observed_text'),
+  /** The person's decision about this finding, or null while it is still open. */
+  resolution: text('resolution', { enum: ['refreshed', 'prepare_anyway', 'keep_current'] }),
+  resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
+});
+
+/**
  * The durable evidence record behind every submission-outcome claim this app makes (#271).
  *
  * Before this table, "submitted" was a single enum value on the attempt with nothing standing

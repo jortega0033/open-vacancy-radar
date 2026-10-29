@@ -143,6 +143,9 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
     retryTailoring: vi.fn(),
     useOriginalCv: vi.fn(),
     resume: vi.fn(),
+    postingVerification: vi.fn(),
+    verifyPosting: vi.fn(),
+    refreshFromPosting: vi.fn(),
     attachLetter: vi.fn(),
   };
   return installVacancyRadarBridge({

@@ -3,6 +3,12 @@ export type AtsHttpResponse = {
   readonly finalUrl: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
+  /**
+   * True when the shared HTTP cache's stored validators (ETag / Last-Modified) were sent and the
+   * origin answered 304, so `body` is the previously stored one confirmed unchanged now (#687).
+   * Absent on seams that have no cache.
+   */
+  readonly revalidated?: boolean;
 };
 
 export type AtsHttpRequestOptions = {
