@@ -418,6 +418,9 @@ declare global {
      * taking a saved-job id and nothing else -- where an application goes, which CV it is built
      * from and what it is tailored against are all resolved in Electron main. Never submits. */
     applicationPipeline: import('../electron/application-pipeline-types.js').ApplicationPipelineBridge;
+    /** #689. The eleventh namespace: sourced company evidence (read, add, confirm, correct, research,
+     * refresh, delete). Takes ids and the person's own public-source input; never CV or note text. */
+    companyEvidence: import('../electron/company-evidence.js').CompanyEvidenceBridge;
   }
 }
 

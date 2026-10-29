@@ -271,7 +271,9 @@ base.describe('Escape dismissal for seeded-workspace overlays', () => {
         await window.getByRole('row', { name: /Attempt Drawer Regression Co/ }).click();
 
         const drawer = window.getByRole('dialog');
-        await expect(drawer.getByText('Attempt Drawer Regression Co')).toBeVisible();
+        // The drawer's own heading ("<role> at <company>"), not any text that merely mentions the company:
+        // the drawer also hosts the company-evidence panel (#689).
+        await expect(drawer.getByRole('heading', { name: /Staff Frontend Engineer at Attempt Drawer Regression Co/ })).toBeVisible();
         await window.keyboard.press('Escape');
         await expect(drawer).toBeHidden();
       } finally {

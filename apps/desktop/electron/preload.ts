@@ -22,6 +22,8 @@ import type {
   ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
 import type { SearchPlanLoadResult, SearchPlanResetResult } from './search-plan-store.js';
+import type { CompanyEvidenceBridge } from './company-evidence.js';
+import { parseCancelResult, parseCompanyEvidenceProse, parseCompanyEvidenceResult } from './company-evidence-parse.js';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
 import type {
@@ -2072,3 +2074,78 @@ function parseRestartTailoringResult(
 }
 
 contextBridge.exposeInMainWorld('applicationPipeline', applicationPipelineApi);
+
+/**
+ * #689. The eleventh namespace: company evidence. Every method resolves with a result REBUILT from
+ * known fields by `company-evidence-parse.ts` (fail closed), and sends only ids and the person's own
+ * evidence input. No CV, letter or application note is ever an argument.
+ */
+const companyEvidenceApi: CompanyEvidenceBridge = {
+  async get(target) {
+    return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:get', { ...target }));
+  },
+  async prose(target) {
+    return parseCompanyEvidenceProse(await ipcRenderer.invoke('company-evidence:prose', { ...target }));
+  },
+  async confirmDomain(target, input) {
+    return parseCompanyEvidenceResult(
+      await ipcRenderer.invoke('company-evidence:confirm-domain', {
+        ...target,
+        domain: input.domain,
+        ...(input.entityRef ? { entityRef: input.entityRef } : {}),
+      }),
+    );
+  },
+  async addFact(target, input) {
+    return parseCompanyEvidenceResult(
+      await ipcRenderer.invoke('company-evidence:add-fact', {
+        ...target,
+        claim: input.claim,
+        sourceUrl: input.sourceUrl,
+        quote: input.quote,
+        scope: input.scope,
+        topic: input.topic,
+        ...(input.sourceKind ? { sourceKind: input.sourceKind } : {}),
+      }),
+    );
+  },
+  async confirmFact(target, factId) {
+    return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:confirm-fact', { ...target, factId }));
+  },
+  async correctFact(target, factId, claim, quote) {
+    return parseCompanyEvidenceResult(
+      await ipcRenderer.invoke('company-evidence:correct-fact', { ...target, factId, claim, ...(quote ? { quote } : {}) }),
+    );
+  },
+  async withdrawFact(target, factId) {
+    return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:withdraw-fact', { ...target, factId }));
+  },
+  async resolveContradiction(target, contradictionId, keepFactId) {
+    return parseCompanyEvidenceResult(
+      await ipcRenderer.invoke('company-evidence:resolve-contradiction', { ...target, contradictionId, keepFactId }),
+    );
+  },
+  async decideLink(target, linkId, decision) {
+    return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:decide-link', { ...target, linkId, decision }));
+  },
+  async deleteRecord(target) {
+    return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:delete', { ...target }));
+  },
+  async refresh(target) {
+    return parseCompanyEvidenceResult(await ipcRenderer.invoke('company-evidence:refresh', { ...target }));
+  },
+  async research(target, options) {
+    return parseCompanyEvidenceResult(
+      await ipcRenderer.invoke('company-evidence:research', {
+        ...target,
+        ...(options?.topics ? { topics: options.topics } : {}),
+        ...(options?.includeRole === undefined ? {} : { includeRole: options.includeRole }),
+      }),
+    );
+  },
+  async cancel(target) {
+    return parseCancelResult(await ipcRenderer.invoke('company-evidence:cancel', { ...target }));
+  },
+};
+
+contextBridge.exposeInMainWorld('companyEvidence', companyEvidenceApi);

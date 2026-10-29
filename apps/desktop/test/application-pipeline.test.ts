@@ -8,6 +8,8 @@ import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CdpDomNode } from '@agent-dock/application-executor';
 import { classifyProviderError } from '../src/provider-error.js';
+import * as evidenceService from '../electron/company-evidence-service.js';
+import * as evidenceStore from '../electron/workspace/company-evidence-store.js';
 
 /**
  * The end-to-end proof for issue #272: one vacancy carried through the *production* entry point --
@@ -53,6 +55,9 @@ const { printToPDF } = vi.hoisted(() => ({ printToPDF: vi.fn() }));
  * a run parked here does not hold on to the PDF a later run needs: the run that gets there next
  * takes the next queued render, and the held one takes whatever is still queued when it wakes up.
  */
+/** #689: the HTML every offscreen window was asked to load, so a test can read the letter that was rendered. */
+const { loadedHtml } = vi.hoisted(() => ({ loadedHtml: [] as string[] }));
+
 const { printHold } = vi.hoisted(() => ({
   printHold: { pending: null as Promise<void> | null, entered: null as (() => void) | null },
 }));
@@ -72,7 +77,9 @@ vi.mock('electron', () => ({
         return Buffer.from(printQueue.shift() ?? new Uint8Array());
       },
     };
-    async loadURL(): Promise<void> {}
+    async loadURL(url?: string): Promise<void> {
+      loadedHtml.push(decodeURIComponent(String(url ?? '').replace(/^data:text\/html;charset=utf-8,/u, '')));
+    }
     destroy(): void {}
   },
 }));
@@ -578,6 +585,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'ovr-pipeline-test-'));
   ({ db, close: closeDb } = createWorkspaceDb(dir));
   views.length = 0;
+  loadedHtml.length = 0;
   printQueue.length = 0;
   printHold.pending = null;
   printHold.entered = null;
@@ -3584,4 +3592,456 @@ describe('#687 measurement on a fixed synthetic fixture set', () => {
     const target = process.env.OVR_687_MEASUREMENT_PATH;
     if (target) writeFileSync(target, `${JSON.stringify(measurement, null, 2)}\n`);
   }, 120_000);
+});
+
+
+// ============================================================================ #689 company evidence
+
+describe('#689 company evidence in preparation', () => {
+  const ABOUT_URL = 'https://northwind.example/about';
+  const QUOTE = 'Northwind Freight operates 14 depots across the Netherlands and Belgium';
+  const CLAIM = 'Northwind Freight operates 14 depots across the Netherlands and Belgium.';
+  const NOW = new Date('2026-09-11T12:00:00.000Z');
+
+  /** One public page behind the same seam the safe HTTP client implements; counts every request. */
+  function evidenceWeb() {
+    const calls: string[] = [];
+    const client: AtsHttpClient = {
+      get: async (url) => {
+        calls.push(url);
+        if (url !== ABOUT_URL) throw new Error('unexpected fetch');
+        return { status: 200, finalUrl: url, headers: {}, body: `<html><body><p>${QUOTE}. Founded in 2009.</p></body></html>` };
+      },
+      postJson: async () => {
+        throw new Error('never used');
+      },
+    };
+    return { calls, client };
+  }
+
+  function evidenceDeps(web: ReturnType<typeof evidenceWeb>, extra: Partial<evidenceService.CompanyEvidenceDeps> = {}): evidenceService.CompanyEvidenceDeps {
+    return { db, now: () => NOW, getHttp: async () => web.client, ...extra };
+  }
+
+  async function startConfirmedAttempt(web: ReturnType<typeof evidenceWeb>): Promise<{ attemptId: string; ev: evidenceService.CompanyEvidenceDeps }> {
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    if (!started.ok || !started.attemptId) throw new Error('start refused');
+    const ev = evidenceDeps(web);
+    // The fixture apply URL carries no employer identity, so the person confirms the employer's own site.
+    expect(evidenceService.confirmDomain(ev, { attemptId: started.attemptId }, { domain: 'northwind.example' }).ok).toBe(true);
+    return { attemptId: started.attemptId, ev };
+  }
+
+  function coverLetterHtml(): string | undefined {
+    return loadedHtml.find((html) => html.includes('Dear Northwind Freight hiring team'));
+  }
+
+  it('writes a supported, sourced company claim into the prepared letter and snapshots what it used; leads stay out', async () => {
+    const web = evidenceWeb();
+    const { attemptId, ev } = await startConfirmedAttempt(web);
+    const added = await evidenceService.addFact(ev, { attemptId }, { claim: CLAIM, sourceUrl: ABOUT_URL, quote: QUOTE, scope: 'company', topic: 'general' });
+    expect(added.ok && added.stats?.requests).toBe(1);
+    await evidenceService.addFact(ev, { attemptId }, { claim: 'LEAD-UNCHECKED Northwind Freight is about to be sold.', sourceUrl: 'https://rumours.example/n', quote: '', scope: 'company', topic: 'other' });
+
+    const prompts: string[] = [];
+    generateCoverLetter.mockImplementation(async (prompt: string) => {
+      prompts.push(prompt);
+      return { ok: true, text: '{"factIds":["summary","experience-1","company-1"]}' };
+    });
+    const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (attempt) => evidenceService.proseEvidence(ev, { attemptId: attempt.id }, 'letter') };
+    queueApplicationDocumentRenders();
+    const ticked = await pipeline.runNextApplicationAttempt(withEvidence);
+    expect(ticked.result?.outcome).toBe('ready');
+
+    // The drafting stage received the checked claim as an offered fact, and never the lead.
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('company-1');
+    expect(prompts[0]).toContain(CLAIM);
+    expect(prompts[0]).not.toContain('LEAD-UNCHECKED');
+    // It made no network request of its own: the only request ever made was the person's own source check.
+    expect(web.calls).toEqual([ABOUT_URL]);
+
+    const html = coverLetterHtml();
+    expect(html).toContain(`Something I noted about Northwind Freight from public sources: ${CLAIM}`);
+    expect(html).not.toContain('LEAD-UNCHECKED');
+
+    const uses = evidenceStore.listEvidenceUses(db, attemptId);
+    expect(uses).toMatchObject([{ claim: CLAIM, sourceUrl: ABOUT_URL, scope: 'company', verification: 'source_confirmed' }]);
+    expect(evidenceService.getView(ev, { attemptId }).lettersUsed).toHaveLength(1);
+    // The CV tailoring session never saw any company evidence.
+    expect(generateTailoredResume.mock.calls[0]?.[0]).not.toContain(CLAIM);
+  });
+
+  it('prepares exactly as before when there is no evidence, or when reading it fails', async () => {
+    const baseline: string[] = [];
+    generateCoverLetter.mockImplementation(async (prompt: string) => {
+      baseline.push(prompt);
+      return { ok: true, text: '{"factIds":["summary","experience-1"]}' };
+    });
+    const first = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    queueApplicationDocumentRenders();
+    expect((await pipeline.runNextApplicationAttempt(deps)).result?.outcome).toBe('ready');
+    expect(baseline[0]).not.toContain('company-');
+    expect(evidenceStore.listEvidenceUses(db, first.attemptId!)).toEqual([]);
+
+    // A throwing evidence reader is logged and skipped; it never blocks a letter that does not need it.
+    const log = vi.fn();
+    workspace.deleteApplicationAttempt(db, first.attemptId!);
+    const broken: ApplicationPipelineDeps = {
+      ...deps,
+      log,
+      loadCompanyEvidence: () => {
+        throw new Error('store unavailable');
+      },
+    };
+    await pipeline.startApplicationAttempt(broken, { vacancy: VACANCY });
+    queueApplicationDocumentRenders();
+    expect((await pipeline.runNextApplicationAttempt(broken)).result?.outcome).toBe('ready');
+    expect(baseline[1]).toBe(baseline[0]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('company evidence unavailable'), expect.anything());
+  });
+
+  it('leaves a prepared attempt, its documents and its letter untouched when research fails, is cancelled, or the evidence is deleted', async () => {
+    const web = evidenceWeb();
+    const { attemptId, ev } = await startConfirmedAttempt(web);
+    await evidenceService.addFact(ev, { attemptId }, { claim: CLAIM, sourceUrl: ABOUT_URL, quote: QUOTE, scope: 'company', topic: 'general' });
+    generateCoverLetter.mockResolvedValue({ ok: true, text: '{"factIds":["summary","company-1"]}' });
+    const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (attempt) => evidenceService.proseEvidence(ev, { attemptId: attempt.id }, 'letter') };
+    queueApplicationDocumentRenders();
+    expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+
+    const snapshot = () =>
+      JSON.stringify({
+        attempt: workspace.getApplicationAttempt(db, attemptId),
+        artifacts: workspace.listApplicationArtifacts(db, attemptId),
+        uses: evidenceStore.listEvidenceUses(db, attemptId),
+      });
+    const prepared = snapshot();
+    const runs = new evidenceService.CompanyEvidenceRuns();
+
+    // Research that throws, is refused by the provider, or is cancelled mid-run.
+    const failing = evidenceDeps(web, { runResearch: async () => ({ status: 'failed', reason: 'session_failed', candidates: [], queries: [], searches: 0, fetches: 0 }) });
+    expect((await evidenceService.researchCompany(failing, { attemptId }, { topics: ['size'] }, runs)).ok).toBe(true);
+    const cancelling = evidenceDeps(web, {
+      runResearch: async (_input, signal) => {
+        runs.cancelAll();
+        expect(signal.aborted).toBe(true);
+        return { status: 'cancelled', reason: 'cancelled_by_user', candidates: [], queries: [], searches: 1, fetches: 0 };
+      },
+    });
+    expect((await evidenceService.researchCompany(cancelling, { attemptId }, { topics: ['size'] }, runs)).ok).toBe(true);
+    const throwing = evidenceDeps(web, {
+      runResearch: async () => {
+        throw new Error('daemon exploded');
+      },
+    });
+    // A research runner that throws is a failed run, never an unhandled rejection.
+    expect((await evidenceService.researchCompany(throwing, { attemptId }, { topics: ['size'] }, runs)).ok).toBe(true);
+    expect(runs.active).toBe(0);
+    expect(snapshot()).toBe(prepared);
+
+    // Correcting then deleting the evidence afterwards changes nothing that was prepared.
+    const factId = evidenceService.getView(ev, { attemptId }).facts[0]!.id;
+    await evidenceService.correctFact(ev, { attemptId }, factId, 'Northwind Freight operates 99 depots.');
+    expect(evidenceService.deleteRecordFor(ev, { attemptId }).ok).toBe(true);
+    expect(snapshot()).toBe(prepared);
+    expect(evidenceService.getView(ev, { attemptId }).facts).toEqual([]);
+    expect(evidenceService.getView(ev, { attemptId }).lettersUsed[0]?.claim).toBe(CLAIM);
+  });
+
+  /**
+   * Fix round 2 (review 2, P1): a claim that borrows a figure from a competitor's sentence, or a
+   * role-sponsorship claim whose page sentence goes on "...for some roles, but not for this one",
+   * reached the rendered letter and the use snapshot. Both now stay leads through the REAL
+   * preparation run; the borrowed one costs no fetch, the truncated one costs exactly the one fetch
+   * that showed the page sentence. The whole-sentence claim on the same site is still used.
+   */
+  it('keeps a wrong-entity claim and a truncated role-sponsorship claim out of the rendered letter and the snapshot (fix 2)', async () => {
+    const NEWS_URL = 'https://northwind.example/news';
+    const VISA_URL = 'https://northwind.example/careers/visa';
+    const COMPETITOR_QUOTE = 'Northwind Freight is a logistics firm. Our competitor Acme Haulage employs 12,000 people worldwide.';
+    const pages: Record<string, string> = {
+      [ABOUT_URL]: `<html><body><h1>About us</h1><p>${QUOTE}. Founded in 2009.</p></body></html>`,
+      [NEWS_URL]: `<html><body><p>${COMPETITOR_QUOTE}</p></body></html>`,
+      [VISA_URL]: '<html><body><h2>Visa</h2><p>Northwind Freight offers visa sponsorship for some roles, but not for this one.</p></body></html>',
+    };
+    const calls: string[] = [];
+    const client: AtsHttpClient = {
+      get: async (url) => {
+        calls.push(url);
+        const body = pages[url];
+        if (body === undefined) throw new Error('unexpected fetch');
+        return { status: 200, finalUrl: url, headers: {}, body };
+      },
+      postJson: async () => {
+        throw new Error('never used');
+      },
+    };
+    const web = { calls, client };
+    const { attemptId, ev } = await startConfirmedAttempt(web as ReturnType<typeof evidenceWeb>);
+
+    const borrowed = await evidenceService.addFact(ev, { attemptId }, { claim: 'Northwind Freight employs 12,000 people.', sourceUrl: NEWS_URL, quote: COMPETITOR_QUOTE, scope: 'company', topic: 'size' });
+    expect(borrowed).toMatchObject({ ok: true, stats: { requests: 0 } });
+    const truncated = await evidenceService.addFact(ev, { attemptId }, { claim: 'Northwind Freight offers visa sponsorship.', sourceUrl: VISA_URL, quote: 'Northwind Freight offers visa sponsorship', scope: 'role', topic: 'general' });
+    expect(truncated).toMatchObject({ ok: true, stats: { requests: 1 } });
+    expect(truncated.ok && truncated.notice).toContain('but not');
+    expect(calls).toEqual([VISA_URL]);
+    expect(await evidenceService.addFact(ev, { attemptId }, { claim: CLAIM, sourceUrl: ABOUT_URL, quote: QUOTE, scope: 'company', topic: 'general' })).toMatchObject({ ok: true, stats: { requests: 1 } });
+
+    const view = evidenceService.getView(ev, { attemptId });
+    const byClaim = (claim: string) => view.facts.find((fact) => fact.claim === claim);
+    expect(byClaim('Northwind Freight employs 12,000 people.')).toMatchObject({ support: 'lead', verification: 'unverified', lastRefreshReason: 'claim_entity_mismatch' });
+    expect(byClaim('Northwind Freight offers visa sponsorship.')).toMatchObject({ support: 'lead', topic: 'sponsorship', verification: 'unverified', lastRefreshReason: 'quote_context_unsupported' });
+    expect(byClaim(CLAIM)).toMatchObject({ support: 'supported', verification: 'source_confirmed' });
+    expect(evidenceService.proseEvidence(ev, { attemptId }, 'interview').map((fact) => fact.claim)).toEqual([CLAIM]);
+
+    const prompts: string[] = [];
+    generateCoverLetter.mockImplementation(async (prompt: string) => {
+      prompts.push(prompt);
+      return { ok: true, text: '{"factIds":["summary","company-1"]}' };
+    });
+    const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (attempt) => evidenceService.proseEvidence(ev, { attemptId: attempt.id }, 'letter') };
+    queueApplicationDocumentRenders();
+    expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+
+    expect(prompts[0]).not.toContain('12,000');
+    expect(prompts[0]).not.toContain('visa sponsorship');
+    const html = coverLetterHtml();
+    expect(html).toContain(`Something I noted about Northwind Freight from public sources: ${CLAIM}`);
+    expect(html).not.toContain('12,000');
+    expect(html).not.toContain('visa sponsorship');
+    expect(evidenceStore.listEvidenceUses(db, attemptId).map((use) => use.claim)).toEqual([CLAIM]);
+    // Preparation itself fetched nothing: the two requests above were the person's own source checks.
+    expect(calls).toEqual([VISA_URL, ABOUT_URL]);
+  });
+
+  it('keeps a claim beside a restricting sentence or ";"/":" clause, and another organisation\'s role sentence, out of the rendered letter and the snapshot (fix 3)', async () => {
+    const REMOTE_URL = 'https://northwind.example/remote';
+    const BONUS_URL = 'https://northwind.example/bonus';
+    const HYBRID_URL = 'https://northwind.example/hybrid';
+    const ACME_URL = 'https://northwind.example/careers/acme';
+    const ROLE_URL = 'https://northwind.example/careers/platform';
+    // An unnamed sentence about THIS vacancy (its own title), on the employer's own site: still usable.
+    const ROLE_CLAIM = 'The Logistics Platform Engineer role is based in Utrecht.';
+    const pages: Record<string, string> = {
+      [ABOUT_URL]: `<html><body><h1>About us</h1><p>${QUOTE}. Founded in 2009.</p></body></html>`,
+      [REMOTE_URL]: '<html><body><p>Northwind Freight offers remote work. Engineering teams are not included at this time.</p></body></html>',
+      [BONUS_URL]: '<html><body><p>Northwind Freight offers a yearly bonus: for managers in Germany at the moment.</p></body></html>',
+      [HYBRID_URL]: '<html><body><p>Northwind Freight offers hybrid work; engineers vallen hier niet onder op dit moment.</p></body></html>',
+      [ACME_URL]: '<html><body><p>Acme Haulage offers visa sponsorship for this role.</p></body></html>',
+      [ROLE_URL]: `<html><body><h2>Location</h2><p>${ROLE_CLAIM}</p></body></html>`,
+    };
+    const calls: string[] = [];
+    const client: AtsHttpClient = {
+      get: async (url) => {
+        calls.push(url);
+        const body = pages[url];
+        if (body === undefined) throw new Error('unexpected fetch');
+        return { status: 200, finalUrl: url, headers: {}, body };
+      },
+      postJson: async () => {
+        throw new Error('never used');
+      },
+    };
+    const { attemptId, ev } = await startConfirmedAttempt({ calls, client } as ReturnType<typeof evidenceWeb>);
+    const add = (claim: string, sourceUrl: string, scope: 'company' | 'role' = 'company') =>
+      evidenceService.addFact(ev, { attemptId }, { claim, sourceUrl, quote: claim.slice(0, -1), scope, topic: 'general' });
+
+    // Whole-sentence quotes, so only the page around them shows the restriction: one request each.
+    for (const [claim, url] of [
+      ['Northwind Freight offers remote work.', REMOTE_URL],
+      ['Northwind Freight offers a yearly bonus.', BONUS_URL],
+      ['Northwind Freight offers hybrid work.', HYBRID_URL],
+    ] as const) {
+      expect(await add(claim, url), claim).toMatchObject({ ok: true, stats: { requests: 1 } });
+    }
+    // Another organisation's sentence on the employer's own careers site: refused before any request.
+    expect(await add('Acme Haulage offers visa sponsorship for this role.', ACME_URL, 'role')).toMatchObject({ ok: true, stats: { requests: 0 } });
+    expect(await add(ROLE_CLAIM, ROLE_URL, 'role')).toMatchObject({ ok: true, stats: { requests: 1 } });
+    expect(await add(CLAIM, ABOUT_URL)).toMatchObject({ ok: true, stats: { requests: 1 } });
+
+    const view = evidenceService.getView(ev, { attemptId });
+    const byClaim = (claim: string) => view.facts.find((fact) => fact.claim === claim);
+    for (const claim of ['Northwind Freight offers remote work.', 'Northwind Freight offers a yearly bonus.', 'Northwind Freight offers hybrid work.']) {
+      expect(byClaim(claim), claim).toMatchObject({ support: 'lead', verification: 'unverified', lastRefreshReason: 'quote_context_unsupported' });
+    }
+    expect(byClaim('Acme Haulage offers visa sponsorship for this role.')).toMatchObject({ support: 'lead', lastRefreshReason: 'claim_entity_mismatch' });
+    expect(byClaim(ROLE_CLAIM)).toMatchObject({ support: 'supported', verification: 'source_confirmed', scope: 'role' });
+    expect(evidenceService.proseEvidence(ev, { attemptId }, 'interview').map((fact) => fact.claim).sort()).toEqual([CLAIM, ROLE_CLAIM].sort());
+
+    const prompts: string[] = [];
+    generateCoverLetter.mockImplementation(async (prompt: string) => {
+      prompts.push(prompt);
+      return { ok: true, text: '{"factIds":["summary","company-1","company-2"]}' };
+    });
+    const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (attempt) => evidenceService.proseEvidence(ev, { attemptId: attempt.id }, 'letter') };
+    queueApplicationDocumentRenders();
+    expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+
+    for (const wrong of ['remote work', 'yearly bonus', 'hybrid work', 'Acme']) {
+      expect(prompts[0], wrong).not.toContain(wrong);
+      expect(coverLetterHtml(), wrong).not.toContain(wrong);
+    }
+    const html = coverLetterHtml();
+    expect(html).toContain(`Something I noted about Northwind Freight from public sources: ${CLAIM}`);
+    expect(html).toContain(ROLE_CLAIM);
+    expect(evidenceStore.listEvidenceUses(db, attemptId).map((use) => use.claim).sort()).toEqual([CLAIM, ROLE_CLAIM].sort());
+    // Preparation itself fetched nothing: every request above was the person's own source check.
+    expect(calls).toEqual([REMOTE_URL, BONUS_URL, HYBRID_URL, ROLE_URL, ABOUT_URL]);
+  });
+
+  /**
+   * Fix round 1 (P5): the drafting session can run for a while. Whatever happens to the selected
+   * evidence WHILE it runs must keep that claim out of the rendered letter and out of the "used"
+   * snapshot, without failing the letter and without substituting a different fact.
+   */
+  describe('evidence that changes while the letter is being drafted', () => {
+    const OTHER_URL = 'https://news.example/northwind';
+    const LINKED_URL = 'https://northwind-freight-group.example/about';
+    const LINKED_QUOTE = 'Northwind Freight Group runs a dispatch centre in Rotterdam';
+
+    function raceWeb() {
+      const pages = new Map<string, string>([
+        [ABOUT_URL, `${QUOTE}. Founded in 2009.`],
+        [OTHER_URL, 'Northwind Freight operates 20 depots across the Netherlands and Belgium'],
+        [LINKED_URL, LINKED_QUOTE],
+      ]);
+      const calls: string[] = [];
+      const client: AtsHttpClient = {
+        get: async (url) => {
+          calls.push(url);
+          const page = pages.get(url);
+          if (page === undefined) throw new Error('unexpected fetch');
+          return { status: 200, finalUrl: url, headers: {}, body: `<html><body><p>${page}.</p></body></html>` };
+        },
+        postJson: async () => {
+          throw new Error('never used');
+        },
+      };
+      return { calls, client };
+    }
+
+    type Mutation = (ctx: { ev: evidenceService.CompanyEvidenceDeps; attemptId: string; factId: string; advance: (ms: number) => void }) => Promise<void> | void;
+    const mutations: [string, Mutation][] = [
+      ['withdrawn', ({ ev, attemptId, factId }) => void evidenceService.withdrawFact(ev, { attemptId }, factId)],
+      ['corrected', async ({ ev, attemptId, factId }) => void (await evidenceService.correctFact(ev, { attemptId }, factId, 'Northwind Freight operates 99 depots.'))],
+      ['expired', ({ advance }) => advance(91 * 24 * 60 * 60 * 1000)],
+      [
+        'newly contradicted',
+        async ({ ev, attemptId }) =>
+          void (await evidenceService.addFact(ev, { attemptId }, {
+            claim: 'Northwind Freight operates 20 depots across the Netherlands and Belgium.',
+            sourceUrl: OTHER_URL,
+            quote: 'Northwind Freight operates 20 depots across the Netherlands and Belgium',
+            scope: 'company',
+            topic: 'size',
+          })),
+      ],
+      ['record deleted', ({ ev, attemptId }) => void evidenceService.deleteRecordFor(ev, { attemptId })],
+    ];
+
+    it.each(mutations)('a fact %s during drafting is not rendered and not snapshotted', async (_name, mutate) => {
+      const web = raceWeb();
+      let clockNow = NOW;
+      const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+      const attemptId = started.attemptId!;
+      const ev: evidenceService.CompanyEvidenceDeps = { db, now: () => clockNow, getHttp: async () => web.client };
+      expect(evidenceService.confirmDomain(ev, { attemptId }, { domain: 'northwind.example' }).ok).toBe(true);
+      await evidenceService.addFact(ev, { attemptId }, { claim: CLAIM, sourceUrl: ABOUT_URL, quote: QUOTE, scope: 'company', topic: 'size' });
+      const factId = evidenceService.getView(ev, { attemptId }).facts[0]!.id;
+      expect(evidenceService.proseEvidence(ev, { attemptId }, 'letter').map((fact) => fact.claim)).toEqual([CLAIM]);
+
+      generateCoverLetter.mockImplementation(async () => {
+        await mutate({ ev, attemptId, factId, advance: (ms) => (clockNow = new Date(clockNow.getTime() + ms)) });
+        return { ok: true, text: '{"factIds":["summary","experience-1","company-1"]}' };
+      });
+      const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (row) => evidenceService.proseEvidence(ev, { attemptId: row.id }, 'letter') };
+      queueApplicationDocumentRenders();
+      expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+
+      const html = coverLetterHtml();
+      expect(html).toBeDefined();
+      expect(html).not.toContain('Something I noted about');
+      expect(html).not.toContain('depots');
+      expect(evidenceStore.listEvidenceUses(db, attemptId)).toEqual([]);
+    });
+
+    it('a fact that arrived over an identity link that is revoked during drafting is not rendered or snapshotted', async () => {
+      const web = raceWeb();
+      const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+      const attemptId = started.attemptId!;
+      const ev: evidenceService.CompanyEvidenceDeps = { db, now: () => NOW, getHttp: async () => web.client };
+      expect(evidenceService.confirmDomain(ev, { attemptId }, { domain: 'northwind.example' }).ok).toBe(true);
+      const { identityFromConfirmedDomain } = await import('../electron/company-evidence.js');
+      const groupIdentity = identityFromConfirmedDomain('Northwind Freight Group', 'northwind-freight-group.example')!;
+      const group = evidenceStore.ensureRecord(db, groupIdentity, NOW).record;
+      const inserted = evidenceStore.insertFact(
+        db,
+        {
+          recordId: group.id,
+          scope: 'company',
+          roleKey: '',
+          roleLabel: '',
+          topic: 'general',
+          claim: 'Northwind Freight Group runs a dispatch centre in Rotterdam.',
+          sourceUrl: LINKED_URL,
+          sourceKind: 'company_site',
+          quote: LINKED_QUOTE,
+          verification: 'unverified',
+          origin: 'user',
+          retrievedAt: null,
+          observedAt: NOW,
+          contentHash: null,
+        },
+        NOW,
+      );
+      if (!inserted || 'refused' in inserted) throw new Error('not inserted');
+      evidenceStore.confirmFactFromFetch(
+        db,
+        inserted.id,
+        { retrievedAt: NOW, contentHash: null, claim: 'Northwind Freight Group runs a dispatch centre in Rotterdam.', quote: LINKED_QUOTE, employerNames: ['Northwind Freight Group'], identity: groupIdentity, context: LINKED_QUOTE },
+        NOW,
+      );
+      const link = evidenceService.getView(ev, { attemptId }).links[0]!;
+      expect(evidenceService.decideLink(ev, { attemptId }, link.id, 'confirmed').ok).toBe(true);
+      expect(evidenceService.proseEvidence(ev, { attemptId }, 'letter').map((fact) => fact.viaLink)).toEqual(['Northwind Freight Group']);
+
+      generateCoverLetter.mockImplementation(async () => {
+        evidenceService.decideLink(ev, { attemptId }, link.id, 'rejected');
+        return { ok: true, text: '{"factIds":["summary","experience-1","company-1"]}' };
+      });
+      const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (row) => evidenceService.proseEvidence(ev, { attemptId: row.id }, 'letter') };
+      queueApplicationDocumentRenders();
+      expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+      expect(coverLetterHtml()).not.toContain('dispatch centre');
+      expect(evidenceStore.listEvidenceUses(db, attemptId)).toEqual([]);
+    });
+
+    it('an unrelated change during drafting keeps the selected, still-approved fact (no false drop, no substitution)', async () => {
+      const web = raceWeb();
+      const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+      const attemptId = started.attemptId!;
+      const ev: evidenceService.CompanyEvidenceDeps = { db, now: () => NOW, getHttp: async () => web.client };
+      evidenceService.confirmDomain(ev, { attemptId }, { domain: 'northwind.example' });
+      await evidenceService.addFact(ev, { attemptId }, { claim: CLAIM, sourceUrl: ABOUT_URL, quote: QUOTE, scope: 'company', topic: 'general' });
+      generateCoverLetter.mockImplementation(async () => {
+        // A NEW approved fact appears first in the list while drafting: company-1 must still mean CLAIM.
+        await evidenceService.addFact(ev, { attemptId }, {
+          claim: 'Northwind Freight operates 20 depots across the Netherlands and Belgium.',
+          sourceUrl: OTHER_URL,
+          quote: 'Northwind Freight operates 20 depots across the Netherlands and Belgium',
+          scope: 'company',
+          topic: 'general',
+        });
+        return { ok: true, text: '{"factIds":["summary","experience-1","company-1"]}' };
+      });
+      const withEvidence: ApplicationPipelineDeps = { ...deps, loadCompanyEvidence: (row) => evidenceService.proseEvidence(ev, { attemptId: row.id }, 'letter') };
+      queueApplicationDocumentRenders();
+      expect((await pipeline.runNextApplicationAttempt(withEvidence)).result?.outcome).toBe('ready');
+      const html = coverLetterHtml();
+      expect(html).toContain(`Something I noted about Northwind Freight from public sources: ${CLAIM}`);
+      expect(html).not.toContain('20 depots');
+      expect(evidenceStore.listEvidenceUses(db, attemptId).map((use) => use.claim)).toEqual([CLAIM]);
+    });
+  });
 });

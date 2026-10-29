@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { CvSourceDocument } from './cv-source-schema.js';
 import {
   CV_EVIDENCE_OVERLAY_ORIGINS,
@@ -20,6 +20,7 @@ import {
 import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
 import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js';
 import type { SupportPromptState } from './support-prompt.js';
+import type { CompanyResearchDiagnostics } from '../company-evidence.js';
 import type { PreparedApplicationFields } from './types.js';
 
 /**
@@ -798,3 +799,134 @@ export const appSettings = sqliteTable('app_settings', {
     .$type<SupportPromptState>()
     .default({ answered: false, asks: 0, successesSinceDismissal: 0 }),
 });
+
+/**
+ * #689: one employer, keyed by a VERIFIED identity (an ATS tenant, the employer's own posting host,
+ * or a domain the person confirmed) plus an optional disambiguating entity reference. A company
+ * name is never a key: two look-alike names with different domains are two rows that share nothing
+ * until a reviewed identity link says so. Candidate data never lives here: the table holds public
+ * claims about an employer, separate from the CV and from every application note.
+ */
+export const companyEvidenceRecords = sqliteTable('company_evidence_records', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** `ats:<provider>:<board>` | `host:<host>` | `domain:<host>`. */
+  verifiedKey: text('verified_key').notNull(),
+  keyKind: text('key_kind', { enum: ['ats_tenant', 'posting_host', 'user_domain'] }).notNull(),
+  /** Disambiguator the person entered (a registry number, a legal entity name); '' when none. */
+  entityRef: text('entity_ref').notNull().default(''),
+  displayName: text('display_name').notNull(),
+  /** Normalised name, used only to PROPOSE links between look-alike records. */
+  nameKey: text('name_key').notNull().default(''),
+  /** The employer's own registrable website (posting host / confirmed domain); null for an ATS tenant. */
+  host: text('host'),
+  /**
+   * The concrete vacancies (`application:<id>`, `posting:<canonical url key>`) the PERSON confirmed
+   * this domain for, so a vacancy that only names the company (no ATS tenant or own-host URL) can
+   * reach its record. A bare name never does: another vacancy with the same name gets a suggestion
+   * only, and a vacancy bound to two records is treated as ambiguous (unverified). (Column name kept
+   * from the first migration; the values are target keys.)
+   */
+  confirmedTargets: text('confirmed_name_keys', { mode: 'json' }).notNull().$type<string[]>().default([]),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  /** The last explicit research run: stable codes, counts and the model's public queries only. */
+  lastResearch: text('last_research', { mode: 'json' }).$type<CompanyResearchDiagnostics | null>(),
+}, (table) => [
+  uniqueIndex('company_evidence_records_identity_idx').on(table.verifiedKey, table.entityRef),
+  index('company_evidence_records_name_idx').on(table.nameKey),
+]);
+
+export const companyEvidenceFacts = sqliteTable('company_evidence_facts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  recordId: text('record_id')
+    .notNull()
+    .references(() => companyEvidenceRecords.id, { onDelete: 'cascade' }),
+  scope: text('scope', { enum: ['company', 'role'] }).notNull(),
+  /** '' for company scope; otherwise the role the claim is about (never matched against another role). */
+  roleKey: text('role_key').notNull().default(''),
+  roleLabel: text('role_label').notNull().default(''),
+  topic: text('topic', {
+    enum: ['general', 'products', 'size', 'location', 'remote_policy', 'funding', 'leadership', 'sponsorship', 'other'],
+  }).notNull().default('general'),
+  claim: text('claim').notNull(),
+  sourceUrl: text('source_url').notNull(),
+  sourceKind: text('source_kind', { enum: ['company_site', 'ats_posting', 'public_web', 'ind_register'] }).notNull(),
+  quote: text('quote').notNull().default(''),
+  /** When the source was actually fetched; null for a claim whose source was never fetched. */
+  retrievedAt: integer('retrieved_at', { mode: 'timestamp_ms' }),
+  observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Written at observation time and moved only by a successful re-fetch of the source. */
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  verification: text('verification', { enum: ['unverified', 'source_confirmed', 'user_confirmed'] }).notNull(),
+  origin: text('origin', { enum: ['user', 'research'] }).notNull(),
+  status: text('status', { enum: ['active', 'superseded', 'withdrawn'] }).notNull().default('active'),
+  contentHash: text('content_hash'),
+  lastRefreshAt: integer('last_refresh_at', { mode: 'timestamp_ms' }),
+  lastRefreshOutcome: text('last_refresh_outcome', { enum: ['renewed', 'failed', 'source_changed', 'cache_hit'] }),
+  lastRefreshReason: text('last_refresh_reason'),
+  /** User correction provenance: the claim (and the passage it rested on) before the person changed it. */
+  correction: text('correction', { mode: 'json' }).$type<{ originalClaim: string; correctedAt: string; originalQuote?: string } | null>(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  index('company_evidence_facts_record_idx').on(table.recordId, table.status),
+]);
+
+export const companyEvidenceContradictions = sqliteTable('company_evidence_contradictions', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  recordId: text('record_id')
+    .notNull()
+    .references(() => companyEvidenceRecords.id, { onDelete: 'cascade' }),
+  factAId: text('fact_a_id')
+    .notNull()
+    .references(() => companyEvidenceFacts.id, { onDelete: 'cascade' }),
+  factBId: text('fact_b_id')
+    .notNull()
+    .references(() => companyEvidenceFacts.id, { onDelete: 'cascade' }),
+  topic: text('topic').notNull(),
+  status: text('status', { enum: ['open', 'resolved'] }).notNull().default('open'),
+  /** The fact the person chose when resolving; the other one is kept as `superseded`. */
+  resolvedFactId: text('resolved_fact_id'),
+  resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('company_evidence_contradictions_pair_idx').on(table.factAId, table.factBId),
+]);
+
+export const companyEvidenceIdentityLinks = sqliteTable('company_evidence_identity_links', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** Ordered so each pair has exactly one row: recordAId < recordBId. */
+  recordAId: text('record_a_id')
+    .notNull()
+    .references(() => companyEvidenceRecords.id, { onDelete: 'cascade' }),
+  recordBId: text('record_b_id')
+    .notNull()
+    .references(() => companyEvidenceRecords.id, { onDelete: 'cascade' }),
+  reason: text('reason', { enum: ['near_name'] }).notNull().default('near_name'),
+  status: text('status', { enum: ['proposed', 'confirmed', 'rejected'] }).notNull().default('proposed'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  decidedAt: integer('decided_at', { mode: 'timestamp_ms' }),
+}, (table) => [
+  uniqueIndex('company_evidence_identity_links_pair_idx').on(table.recordAId, table.recordBId),
+]);
+
+/**
+ * What a prepared letter actually used, snapshotted at assembly. Deliberately NO foreign key to the
+ * fact: correcting or deleting evidence later must not rewrite the history of what a prepared (or
+ * submitted) package said. Cascades with the attempt, so it follows the attempt's own retention.
+ */
+export const applicationAttemptEvidenceUses = sqliteTable('application_attempt_evidence_uses', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  attemptId: text('attempt_id')
+    .notNull()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  usedIn: text('used_in', { enum: ['cover_letter'] }).notNull(),
+  claim: text('claim').notNull(),
+  sourceUrl: text('source_url').notNull(),
+  scope: text('scope', { enum: ['company', 'role'] }).notNull(),
+  retrievedAt: integer('retrieved_at', { mode: 'timestamp_ms' }),
+  observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+  verification: text('verification', { enum: ['source_confirmed', 'user_confirmed'] }).notNull(),
+  recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  index('application_attempt_evidence_uses_attempt_idx').on(table.attemptId),
+]);

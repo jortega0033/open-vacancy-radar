@@ -4,6 +4,7 @@ import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../..
 import { Dialog } from '../shell/Dialog.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
 import { PostingVerificationNotice } from './PostingVerificationNotice.js';
+import { CompanyEvidencePanel } from './CompanyEvidencePanel.js';
 
 export interface ApplicationAttemptDrawerProps {
   attempt: ApplicationAttemptRecord;
@@ -128,6 +129,8 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
               else if (kind === 'restored') onChanged?.('returned');
             }}
           />
+
+          <CompanyEvidencePanel target={{ attemptId: attempt.id }} reloadKey={attempt.updatedAt} />
 
           {attempt.checkpointDetail && (
             <details className="rounded-box border border-base-300 bg-base-200 p-3 text-sm">

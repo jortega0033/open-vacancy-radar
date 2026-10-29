@@ -426,6 +426,7 @@ function factKind(fact: GroundedSourceFact): string {
   if (fact.id === 'summary') return 'summary';
   if (fact.id.startsWith('experience-')) return 'experience';
   if (fact.id.startsWith('project-')) return 'project';
+  if (fact.id.startsWith('company-')) return 'company';
   return 'background';
 }
 

@@ -55,6 +55,7 @@ import { assessJdCompleteness } from '../generation-input.js';
 import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
+import { deleteAllCompanyEvidence } from './company-evidence-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -3055,6 +3056,9 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       mcpClientGrants: tx.select({ id: mcpClientGrants.id }).from(mcpClientGrants).all().length,
       mcpAuditLogEntries: tx.select({ id: mcpAuditLogEntries.id }).from(mcpAuditLogEntries).all().length,
       cvTailoringProposals: tx.select({ id: cvTailoringProposals.id }).from(cvTailoringProposals).all().length,
+      // #689: counted and deleted explicitly (not left to a cascade) so the reset reports them and no
+      // evidence record, fact, link or "what the letter used" snapshot can survive it.
+      ...deleteAllCompanyEvidence(tx),
     };
 
     tx.delete(applicationAttempts).run();

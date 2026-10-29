@@ -234,6 +234,53 @@ function parseAtsRequisition(url: URL): AtsRequisition | null {
   return null;
 }
 
+/** The employer account (board/tenant) an ATS URL belongs to, as the ATS itself locates it. */
+export interface AtsTenant {
+  provider: string;
+  /** Lowercased board / tenant token. */
+  board: string;
+}
+
+/**
+ * The ATS tenant a URL lives under (#689), using the SAME anchored host rules as
+ * `parseAtsRequisition` (a host must BE the provider's domain or a subdomain of it, never merely
+ * contain its name) and the provider's real tenant location: the first path segment for path-based
+ * boards, the subdomain label for subdomain-based ones. Unlike `parseAtsRequisition` it does not
+ * need a requisition id, so a board's own pages also resolve. Non-https URLs, credentials and
+ * non-default ports return null.
+ */
+export function parseAtsTenant(value: string): AtsTenant | null {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port !== '' && url.port !== '443')) return null;
+  // A trailing-dot FQDN is refused rather than normalised: an official source must be spelled exactly.
+  if (url.hostname.endsWith('.')) return null;
+  const host = hostKey(url);
+  const segments = pathSegments(url);
+  const first = token(segments[0]);
+  const tenant = (provider: string, board: string | null): AtsTenant | null =>
+    board === null ? null : { provider, board: board.toLowerCase() };
+  if (/(^|\.)greenhouse\.io$/u.test(host)) {
+    // The embedded board form carries the board in `?for=` (as `parseAtsRequisition` reads it).
+    const embedded = segments[0] === 'embed' ? token(url.searchParams.get('for') ?? undefined) : null;
+    return tenant('greenhouse', embedded ?? first ?? token(url.searchParams.get('for') ?? undefined));
+  }
+  if (/(^|\.)lever\.co$/u.test(host)) return tenant('lever', first);
+  if (/(^|\.)ashbyhq\.com$/u.test(host)) return tenant('ashby', first);
+  if (/(^|\.)rippling\.com$/u.test(host)) return tenant('rippling', first);
+  if (/(^|\.)smartrecruiters\.com$/u.test(host)) return tenant('smartrecruiters', first);
+  if (/(^|\.)workable\.com$/u.test(host)) return tenant('workable', first);
+  if (/^[^.]+\.recruitee\.com$/u.test(host)) return tenant('recruitee', subdomainBoard(host, '.recruitee.com'));
+  if (/^[^.]+\.jobs\.personio\.(?:com|de)$/u.test(host)) return tenant('personio', token(host.split('.')[0]));
+  if (/^[^.]+\.teamtailor\.com$/u.test(host)) return tenant('teamtailor', subdomainBoard(host, '.teamtailor.com'));
+  if (/^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$/u.test(host)) return tenant('workday', token(host.split('.')[0]));
+  return null;
+}
+
 /**
  * Derives the identity a completed-application lookup compares on.
  *
