@@ -90,7 +90,7 @@ export function SubmittedDocumentsPanel({
 
       {selected && (
         <PackageDetails
-          key={`${selected.id}:${selected.version ?? 0}`}
+          key={selected.id}
           applicationId={applicationId}
           pkg={selected}
           onView={onView}
@@ -160,6 +160,9 @@ function PackageDetails({
     onBusyChange(false);
     if (result.ok) {
       setSaved(true);
+      setOpen(false);
+      setChoices({ cv: '', letter: '' });
+      setTexts({ cv: '', letter: '' });
       onView(result.view);
       return;
     }

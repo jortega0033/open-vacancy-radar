@@ -182,7 +182,10 @@ export function basisSummary(
       if (hasCurrent) parts.push(`your current ${slot === 'cv' ? 'CV' : 'letter'} (it may differ from what you sent)`);
       return;
     }
-    if (!doc) return;
+    if (!doc) {
+      if (hasCurrent) parts.push(`your current ${slot === 'cv' ? 'CV' : 'letter'} (none is recorded for this application)`);
+      return;
+    }
     const label = documentLabel(doc);
     const version = doc.version ? ` version ${doc.version}` : '';
     if (doc.textState === 'available') {

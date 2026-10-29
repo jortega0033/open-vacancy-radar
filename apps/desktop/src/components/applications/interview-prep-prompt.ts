@@ -316,9 +316,9 @@ function slots(context: InterviewPrepContext): { cv: Slot; letter: Slot } {
   const plan = (recorded: SubmittedDocument | null, hasCurrent: boolean): Omit<Slot, 'ref'> => {
     if (!submitted) return { recorded: null, useCurrent: hasCurrent };
     if (recorded?.text) return { recorded, useCurrent: false };
-    // Listed without text (not known, or a file whose text this app never held): current is a labelled fallback.
-    if (recorded) return { recorded, useCurrent: hasCurrent };
-    return { recorded: null, useCurrent: false };
+    // Not recorded, or recorded without text (not known, a file whose text this app never held): the
+    // current linked document is a labelled fallback for this slot only.
+    return { recorded, useCurrent: hasCurrent };
   };
   return {
     cv: { ref: 'D1', ...plan(submitted?.cv ?? null, context.cv !== null) },
@@ -352,7 +352,7 @@ function basisBlock(context: InterviewPrepContext): string {
     else lines.push(`[${slot.ref}] ${label}: none is recorded with this application's documents.`);
     if (slot.useCurrent) {
       lines.push(
-        `[${slot.ref}-current] the candidate's current linked ${label}, used only because the recorded one has no text here; it may differ from what was sent.`,
+        `[${slot.ref}-current] the candidate's current linked ${label}, used only because no recorded text is available for it; it may differ from what was sent.`,
       );
     }
   }

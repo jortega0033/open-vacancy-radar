@@ -188,12 +188,13 @@ function chooseDefault(packages: readonly ResolvedPackage[]): Pick<InterviewCont
     if (heads.length === 1) return { defaultPackageId: heads[0]!.id, selection: sent.length === 1 ? 'single' : 'chain' };
     return { defaultPackageId: null, selection: 'choose' };
   }
-  const row = packages.find((pkg) => pkg.kind === 'row' && pkg.version !== null);
-  if (row) return { defaultPackageId: row.id, selection: 'single' };
+  const row = packages.find((pkg) => pkg.kind === 'row');
+  if (row && row.version !== null) return { defaultPackageId: row.id, selection: 'single' };
   const prepared = packages.filter((pkg) => pkg.kind === 'prepared');
   if (prepared.length === 1) return { defaultPackageId: prepared[0]!.id, selection: 'prepared' };
   if (prepared.length > 1) return { defaultPackageId: null, selection: 'choose' };
-  return { defaultPackageId: null, selection: 'none' };
+  // Nothing recorded: the row itself is shown so the person can say what they sent; it is no basis yet.
+  return { defaultPackageId: row?.id ?? null, selection: 'none' };
 }
 
 async function packageView(db: WorkspaceDb, pkg: ResolvedPackage): Promise<InterviewPackageView> {

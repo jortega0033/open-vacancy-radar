@@ -136,8 +136,13 @@ export function InterviewPrepDrawer({
     };
   }, [application.id]);
 
+  // The application this drawer shows right now: a save that finishes after a switch must not land.
+  const currentApplicationId = useRef(application.id);
+  currentApplicationId.current = application.id;
+
   // #691: one read, and every later view comes back from the save that changed it.
   const applyView = useCallback((view: InterviewContextView) => {
+    if (view.applicationId !== currentApplicationId.current) return;
     loadSeq.current += 1;
     setRecorded({ status: 'ready', view });
     setSelectedPackageId((current) =>
@@ -195,6 +200,9 @@ export function InterviewPrepDrawer({
 
   const view = recorded.status === 'ready' ? recorded.view : null;
   const selectedPackage = view?.packages.find((pkg) => pkg.id === selectedPackageId) ?? null;
+  // A package with no listed document (a hand-tracked row nobody has described yet) is no basis at all:
+  // the current documents are used, labelled as current.
+  const basisPackage = selectedPackage && selectedPackage.documents.length > 0 ? selectedPackage : null;
 
   const context = useMemo<InterviewPrepContext | null>(() => {
     const status = application.status;
@@ -216,8 +224,8 @@ export function InterviewPrepDrawer({
     const attempt = sortAttempts((attempts ?? []).filter((row) => row.applicationId === application.id))[0] ?? null;
     // #691: a selected package brings its own posting text, verified against the hash it recorded.
     const packagePosting =
-      selectedPackage && selectedPackage.posting.text && selectedPackage.posting.matches !== false
-        ? { text: selectedPackage.posting.text, complete: selectedPackage.posting.complete ?? false }
+      basisPackage && basisPackage.posting.text && basisPackage.posting.matches !== false
+        ? { text: basisPackage.posting.text, complete: basisPackage.posting.complete ?? false }
         : null;
     const fallbackPosting =
       attempt && attempt.jdSnapshot.trim().length > 0 ? { text: attempt.jdSnapshot, complete: attempt.jdComplete } : null;
@@ -233,22 +241,22 @@ export function InterviewPrepDrawer({
       savedJob: savedJob
         ? { salary: savedJob.salary, arrangement: savedJob.arrangement, verification: savedJob.verification }
         : null,
-      jdSnapshot: selectedPackage ? (selectedPackage.posting.matches === false ? null : (packagePosting ?? fallbackPosting)) : fallbackPosting,
+      jdSnapshot: basisPackage ? (basisPackage.posting.matches === false ? null : (packagePosting ?? fallbackPosting)) : fallbackPosting,
       cv: cv ? { name: cv.name, text: cv.text } : null,
       letter: letter ? { type: letter.type, body: letter.body } : null,
       ...(companyEvidence === undefined ? {} : { companyEvidence }),
       staleLinks: { cv: !!application.cvId && !cv, letter: !!application.letterId && !letter },
-      ...(selectedPackage ? { submitted: submittedBasis(selectedPackage) } : {}),
+      ...(basisPackage ? { submitted: submittedBasis(basisPackage) } : {}),
       ...(view ? { rounds: roundsForPrep(view.rounds, nextRoundId) } : {}),
     };
-  }, [application, savedJobs, cvDocuments, letters, attempts, companyEvidence, selectedPackage, view, nextRoundId]);
+  }, [application, savedJobs, cvDocuments, letters, attempts, companyEvidence, basisPackage, view, nextRoundId]);
 
   const linked = {
     cv: !!application.cvId && cvDocuments.some((doc) => doc.id === application.cvId),
     letter: !!application.letterId && letters.some((row) => row.id === application.letterId),
   };
   const priorRoundCount = view ? view.rounds.filter((round) => round.state === 'held').length : 0;
-  const basisLine = basisSummary(selectedPackage, linked, priorRoundCount);
+  const basisLine = basisSummary(basisPackage, linked, priorRoundCount);
   const mustChoose = view?.selection === 'choose' && !selectedPackage;
 
   const attemptsLoaded = attempts !== null;

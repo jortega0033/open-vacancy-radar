@@ -444,7 +444,7 @@ describe('legacy and hand-tracked applications', () => {
   it('a row tracked by hand has no basis until the person states one, then keeps it through library changes', async () => {
     const row = workspace.createApplication(db, { role: 'Data Engineer', company: 'Fabrikam', status: 'interview', cvId });
     let view = await viewOf(row.id);
-    expect(view).toMatchObject({ selection: 'none', defaultPackageId: null });
+    expect(view).toMatchObject({ selection: 'none', defaultPackageId: `application:${row.id}` });
     expect(view.packages).toHaveLength(1);
     expect(view.packages[0]).toMatchObject({ kind: 'row', version: null, documents: [], heldSlots: [] });
 
