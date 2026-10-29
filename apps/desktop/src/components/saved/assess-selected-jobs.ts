@@ -24,7 +24,8 @@ import type { CvDocument } from '../cv/types.js';
  *
  * Hard limits (`BATCH_LIMITS`): at most 5 jobs, ONE at a time, at most 2 requests per job, each request
  * stopped after 4 minutes, and no new job started after 15 minutes. A job is refused before any request
- * when it cannot be assessed (no CV, unreviewed CV, no posting text, already up to date). Cancelling stops
+ * when it cannot be assessed (no CV, unreviewed CV, no posting text, already up to date, or an earlier assessment
+ * read against another posting or an earlier CV, whose requirements are never carried forward). Cancelling stops
  * the live request and leaves every job that had not finished exactly as it was. Nothing here rescans,
  * applies a suggestion, or starts by itself.
  */

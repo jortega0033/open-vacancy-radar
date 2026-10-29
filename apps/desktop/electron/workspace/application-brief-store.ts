@@ -154,8 +154,12 @@ export interface UpsertBriefInput {
   display: { company: string; role: string; location: string };
   /** Employer-side scan facts. Null leaves what is stored alone. */
   facts: BriefSourceFacts | null;
-  /** The posting text (already reduced to the body the assessment reads). Null leaves it alone. */
-  jd: { text: string; complete: boolean } | null;
+  /**
+   * The posting text (already reduced to the body the assessment reads). Null leaves it alone.
+   * `seedOnly` marks text that is NOT the job's current posting (an application attempt's frozen
+   * snapshot): it only fills a brief that has no posting text yet, and never replaces or invalidates one.
+   */
+  jd: { text: string; complete: boolean; seedOnly?: boolean } | null;
   now: Date;
 }
 
@@ -346,7 +350,7 @@ export function upsertBrief(db: WorkspaceDb, input: UpsertBriefInput): UpsertBri
         patch.jdComplete = input.jd.complete && !clipped;
         patch.jdCapturedAt = now;
         factsVersion += 1;
-      } else if (row.jdHash !== hash) {
+      } else if (row.jdHash !== hash && input.jd.seedOnly !== true) {
         patch.jdText = text;
         patch.jdHash = hash;
         patch.jdComplete = input.jd.complete && !clipped;

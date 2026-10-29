@@ -42,6 +42,7 @@ import * as workspace from '../electron/workspace/repository.js';
 import * as schema from '../electron/workspace/schema.js';
 import { vacancyKeyFor, type CvRequirementMapping } from '../electron/workspace/cv-evidence-schema.js';
 import type { CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
+import { runAssessSelectedJobs, type AssessDeps } from '../src/components/saved/assess-selected-jobs.js';
 import * as fx from './application-brief-fixtures.js';
 import {
   AGG_ONLY_URL,
@@ -673,6 +674,170 @@ describe('assess: prepare + commit with version fencing', () => {
       await commitAssessment(makeDeps(), { savedJobId: job.id, fence: prepared.plan.fence, requirements: [], requirementCoverage: { status: 'complete', batches: 1 } }),
     ).toMatchObject({ ok: false, code: 'not_found' });
     expect(workspace.listCvEvidenceOverlays(db, cv.id)).toHaveLength(0);
+  });
+});
+
+/* ===================== review 688-1: earlier inputs never become current (changed CV, attempt snapshot) */
+
+describe('a changed CV never turns an earlier assessment into a current one', () => {
+  const bakery = (): CvSourceDocument => ({ ...SOURCE, experience: [{ ...SOURCE.experience[0]!, bullets: ['Managed a bakery.'] }] });
+  const runnerDeps = (runPrompt: AssessDeps['runPrompt']): AssessDeps => ({
+    prepare: (id) => prepareAssessment(makeDeps(), id),
+    commit: (input) => commitAssessment(makeDeps(), input),
+    loadCv: async (id) => {
+      const record = workspace.getCvDocument(db, id);
+      return { cv: { fileName: record.name, text: record.text } as never, source: record.source as never };
+    },
+    runPrompt,
+    now: () => Date.now(),
+    onUpdate: () => undefined,
+  });
+  const nothingNew = () =>
+    vi.fn(async (_prompt: string, _options: { signal: AbortSignal; timeoutMs: number }) => ({
+      ok: true as const,
+      text: JSON.stringify({ requirements: [], hasMore: false }),
+    }));
+
+  it('the real batch runner refuses a job assessed against an earlier CV: no request, nothing re-stamped, never "current"', async () => {
+    const cv = seedCv();
+    const row = world.rows.get('gh:1001')!;
+    const job = saveJob(row);
+    seedAssessment(row, cv.id);
+    expect((await view(job.id)).assessment.state).toBe('current');
+    // The person rewrites the CV: the role that evidenced TypeScript now says something else entirely.
+    workspace.updateCvDocument(db, cv.id, { source: bakery() });
+    expect((await view(job.id)).assessment.state).toBe('stale');
+    const overlaysBefore = JSON.stringify(workspace.listCvEvidenceOverlays(db, cv.id));
+    const storedBefore = JSON.stringify(briefStore.listBriefs(db)[0]!.assessment);
+
+    const runPrompt = nothingNew();
+    const snapshot = await runAssessSelectedJobs([{ id: job.id, label: 'Platform Engineer' }], runnerDeps(runPrompt), new AbortController().signal);
+
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(snapshot.requests).toBe(0);
+    expect(snapshot.jobs[0]).toMatchObject({ state: 'unassessed', requests: 0 });
+    expect(snapshot.jobs[0]!.detail).toContain('Your reviewed CV changed after this job was assessed');
+    expect(snapshot.jobs[0]!.detail).toContain('Compare with my CV');
+    expect(snapshot.summary).toBe('Finished with gaps: 0 of 1 assessed, 1 could not be assessed.');
+    // The old-CV overlay and the brief's earlier summary are byte-identical: nothing was re-stamped with the new CV.
+    expect(JSON.stringify(workspace.listCvEvidenceOverlays(db, cv.id))).toBe(overlaysBefore);
+    expect(JSON.stringify(briefStore.listBriefs(db)[0]!.assessment)).toBe(storedBefore);
+    const after = await view(job.id);
+    expect(after.assessment.state).toBe('stale');
+    expect(after.assessment.reason).toContain('reviewed CV changed');
+    // The earlier strength is still shown, but only as the earlier assessment, never as current evidence.
+    expect(after.assessment.summary?.strengths.map((strength) => strength.evidenceLabel)).toEqual(['Senior Engineer at Redwood Software']);
+    expect(await prepareAssessment(makeDeps(), job.id)).toMatchObject({ ok: false, code: 'cv_differs' });
+  });
+
+  it('commit refuses a fence that names an earlier-CV overlay, even when it carries the new CV hash', async () => {
+    const cv = seedCv();
+    const row = world.rows.get('gh:1001')!;
+    const job = saveJob(row);
+    seedAssessment(row, cv.id, JD_V1, 'partial');
+    const prepared = await prepareAssessment(makeDeps(), job.id);
+    if (!prepared.ok) throw new Error(`not ready: ${prepared.code}`);
+    expect(prepared.plan.fence.overlayId).not.toBeNull();
+    workspace.updateCvDocument(db, cv.id, { source: bakery() });
+    const overlaysBefore = JSON.stringify(workspace.listCvEvidenceOverlays(db, cv.id));
+    // A renderer that re-uses the old plan but swaps in the current CV hash (the reviewer's probe A).
+    const forged = { ...prepared.plan.fence, cvHash: hashReviewedSource(workspace.getCvDocument(db, cv.id).source) };
+    const result = await commitAssessment(makeDeps(), {
+      savedJobId: job.id,
+      fence: forged,
+      requirements: prepared.plan.existing,
+      requirementCoverage: { status: 'complete', batches: 1 },
+    });
+    expect(result).toMatchObject({ ok: false, code: 'stale' });
+    expect(JSON.stringify(workspace.listCvEvidenceOverlays(db, cv.id))).toBe(overlaysBefore);
+    expect((await view(job.id)).assessment.state).toBe('stale');
+  });
+
+  it('with the SAME CV, the runner still continues a partly read assessment and the brief becomes current', async () => {
+    const cv = seedCv();
+    const row = world.rows.get('gh:1001')!;
+    const job = saveJob(row);
+    seedAssessment(row, cv.id, JD_V1, 'partial');
+    expect((await view(job.id)).assessment.state).toBe('partial');
+    const runPrompt = nothingNew();
+    const snapshot = await runAssessSelectedJobs([{ id: job.id, label: 'Platform Engineer' }], runnerDeps(runPrompt), new AbortController().signal);
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    // The earlier requirements were read against this very CV and posting, so they are listed as already covered.
+    expect(String(runPrompt.mock.calls[0]![0])).toContain('- 5+ years of TypeScript');
+    expect(snapshot.jobs[0]).toMatchObject({ state: 'assessed' });
+    const after = await view(job.id);
+    expect(after.assessment.state).toBe('current');
+    expect(after.assessment.summary?.strengths.map((strength) => strength.text)).toEqual(['5+ years of TypeScript']);
+  });
+});
+
+describe('an attempt’s frozen posting is that attempt’s input, not the job’s current posting', () => {
+  it('V1 attempt -> V2 scan and assessment -> scan row gone: the attempt and saved views stay on V2, current, with no false change', async () => {
+    const cv = seedCv();
+    const row = world.rows.get('gh:1001')!;
+    const job = saveJob(row);
+    // Preparation started against V1 of the posting.
+    const attempt = workspace.createApplicationAttempt(db, {
+      vacancyKey: row.key, canonicalUrl: ATS_URL, company: row.company, role: row.title, sourceCvId: cv.id, sourceCvContentHash: 'cv-hash', jdSnapshot: JD_V1, jdSnapshotHash: 'jd-hash',
+    });
+    workspace.createApplicationSubmissionReceipt(db, { attemptId: attempt.id, outcome: 'user_reported', source: 'user_reported', evidenceKind: 'user_statement', detail: 'I applied.' });
+    await view(job.id);
+    expect(await pinForAttempt(makeDeps(), attempt.id)).toBe(true);
+
+    // A later scan carries V2 (a genuine change, which IS reported), and the job is assessed against V2.
+    world.clock = new Date(T0.getTime() + 2 * DAY);
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, description: JD_V2 })], '2026-10-22T08:00:00.000Z');
+    expect((await view(job.id)).posting.changedAt).toBe('2026-10-22T09:00:00.000Z');
+    seedAssessment(row, cv.id, JD_V2);
+    const current = await view(job.id);
+    expect(current.assessment.state).toBe('current');
+    const storedV2 = briefStore.listBriefs(db)[0]!;
+    const history = {
+      attempt: JSON.stringify(workspace.getApplicationAttempt(db, attempt.id)),
+      receipts: JSON.stringify(workspace.listApplicationSubmissionReceipts(db, attempt.id)),
+      pin: JSON.stringify(briefStore.getPin(db, attempt.id)),
+    };
+
+    // The next scan no longer lists the job, and the person opens the application, then the saved job.
+    world.clock = new Date(T0.getTime() + 4 * DAY);
+    world.rows = new Map();
+    const fromAttempt = await getBrief(makeDeps(), { attemptId: attempt.id });
+    const fromSaved = await view(job.id);
+    for (const brief of [fromAttempt, fromSaved]) {
+      expect(brief.assessment.state).toBe('current');
+      expect(brief.assessment.reason).toBeNull();
+      expect(brief.posting.changedAt).toBe('2026-10-22T09:00:00.000Z');
+      expect(brief.notices).toEqual(current.notices);
+    }
+    const stored = briefStore.listBriefs(db)[0]!;
+    expect(stored.jdHash).toBe(storedV2.jdHash);
+    expect(stored.jdText).toBe(storedV2.jdText);
+    expect(stored.jdChangedAt).toBe(storedV2.jdChangedAt);
+    // History is exactly as it was: the attempt still holds V1, and its pin and receipt are untouched.
+    expect(JSON.stringify(workspace.getApplicationAttempt(db, attempt.id))).toBe(history.attempt);
+    expect(JSON.stringify(workspace.listApplicationSubmissionReceipts(db, attempt.id))).toBe(history.receipts);
+    expect(JSON.stringify(briefStore.getPin(db, attempt.id))).toBe(history.pin);
+    expect(workspace.getApplicationAttempt(db, attempt.id).jdSnapshot).toBe(JD_V1);
+  });
+
+  it('still seeds a brief that has no posting text from the attempt, and a genuinely changed scan posting still invalidates', async () => {
+    const cv = seedCv();
+    const row = world.rows.get('gh:1001')!;
+    world.rows = new Map();
+    const attempt = workspace.createApplicationAttempt(db, {
+      vacancyKey: row.key, canonicalUrl: ATS_URL, company: row.company, role: row.title, sourceCvId: cv.id, sourceCvContentHash: 'cv-hash', jdSnapshot: JD_V1, jdSnapshotHash: 'jd-hash',
+    });
+    const seeded = await getBrief(makeDeps(), { attemptId: attempt.id });
+    expect(seeded.posting).toMatchObject({ hasText: true, changedAt: null });
+    expect(seeded.notices).toEqual([]);
+
+    world.clock = new Date(T0.getTime() + 2 * DAY);
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, description: JD_V2 })], '2026-10-22T08:00:00.000Z');
+    const rescanned = await getBrief(makeDeps(), { attemptId: attempt.id });
+    expect(rescanned.posting.changedAt).toBe('2026-10-22T09:00:00.000Z');
+    expect(rescanned.notices.map((notice) => notice.text)).toEqual(
+      expect.arrayContaining([expect.stringContaining('The job description changed on 2026-10-22')]),
+    );
   });
 });
 

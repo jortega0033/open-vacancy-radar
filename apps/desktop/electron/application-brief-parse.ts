@@ -413,6 +413,7 @@ const REFUSALS: readonly AssessmentRefusalCode[] = [
   'no_posting_text',
   'already_current',
   'jd_differs',
+  'cv_differs',
 ];
 
 export function parsePrepareAssessment(value: unknown): PrepareAssessmentResult {

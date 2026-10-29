@@ -45,7 +45,12 @@ Each section records what it was derived under, and a section that no longer mat
 
 - **The posting text changed**: the assessment is marked out of date ("The job description changed on ..."), the earlier result stays visible
   and labelled as earlier.
-- **Your reviewed CV changed** (or you now use another CV): the assessment is out of date.
+- **Your reviewed CV changed** (or you now use another CV): the assessment is out of date. Assess selected jobs does not carry requirements
+  read against the earlier CV forward; it skips that job without a request and points you at Compare with my CV in Search, where the existing
+  "Your CV changed" step shows what changed and updates the assessment to your current CV.
+- **The job left the latest scan**: the posting text the brief already holds stays the job's posting. The frozen copy an application took when
+  preparation started is that application's own input; it only fills a brief that has no posting text yet and never replaces newer text or
+  marks anything out of date.
 - **A preference that changes a verdict changed** (target roles, skills, location or country, working languages, relocation, salary floor): the
   sections that read it are out of date and name the preference. Editing something the score never reads (your name) changes nothing.
 - **A scan made under an older profile version**: reported as possibly out of date.
@@ -59,9 +64,11 @@ stored scan facts, the assessment and everything you already sent stay exactly a
 On the Saved jobs page, tick up to **5** jobs and choose **Assess selected jobs**. Nothing starts until you confirm, and the confirmation names
 what is sent and every limit:
 
-- the posting text and your reviewed CV details go to your chosen provider, one job at a time;
+- the posting text, your CV text (shortened to fit the request) and the roles, employers and projects from your reviewed CV details go to your
+  chosen provider, one job at a time;
 - at most **2** requests per job (**10** in total), each stopped after **4** minutes, and no new job starts after **15** minutes;
-- jobs that cannot be assessed (no CV, CV details not reviewed, no posting text, already up to date) are skipped **without a request**;
+- jobs that cannot be assessed (no CV, CV details not reviewed, no posting text, already up to date, or an earlier assessment read against a
+  different posting or an earlier CV) are skipped **without a request**;
 - you can cancel at any time: the live request is stopped, the interrupted job saves nothing and every job that was not finished is left exactly
   as it was.
 
@@ -74,13 +81,16 @@ assessed. It never rescans, never applies a suggestion and never starts by itsel
 ## What is stored
 
 `application_briefs`, `application_brief_aliases` and `application_brief_pins` in `workspace.db` (migration 0037). Public posting facts, derived
-summaries, the posting text (cut at 80,000 characters) and short out-of-date notes; no CV text, notes or letters. The pinned copy is insert-only
-and follows its application. Deleting the last saved job or application for a job removes its brief. Settings > Advanced > Reset application data
+summaries, the posting text (cut at 80,000 characters) and short out-of-date notes. The assessment summary (in the brief and in its pinned copy)
+keeps short labels derived from your CV for each strength: a role title and employer ("Senior Engineer at Redwood Software"), a project name, or
+the first 80 characters of a statement you confirmed. It keeps no other CV text, and no notes or letters. The pinned copy is insert-only and
+follows its application. Deleting the last saved job or application for a job removes its brief. Settings > Advanced > Reset application data
 deletes all three tables with counts. See [privacy.md](privacy.md).
 
 ## Limits
 
 - A desk evaluation on a fixed synthetic shortlist (reproduced by `test/application-brief-evaluation.test.ts`) counts where each decision fact lives
-  before and after. It is not a usability study and claims no time saving, decision quality or hiring gain.
+  before and after. Its "before" half is a reading of the earlier source, not a measurement, and includes the Fit check a person may have kept on
+  a saved job. It is not a usability study and claims no time saving, decision quality or hiring gain.
 - Company evidence and the posting check exist only once an application has been prepared for the job; before that the brief says so.
 - A brief can only describe what it holds: a job with no scan result and no posting text has no score and cannot be assessed.

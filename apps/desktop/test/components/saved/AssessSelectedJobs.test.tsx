@@ -146,9 +146,11 @@ describe('Assess selected jobs is an explicit, bounded action', () => {
     fireEvent.click(within(region).getByRole('button', { name: /Assess selected jobs \(2\)/u }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog).toHaveTextContent('sends each job');
-    expect(dialog).toHaveTextContent('reviewed CV details to Claude Code');
+    // The prompt carries the CV text itself as well as the reviewed roles and projects, and the dialog says so.
+    expect(dialog).toHaveTextContent('your CV text and the roles and projects from your reviewed CV details to Claude Code');
     expect(dialog).toHaveTextContent('At most 2 requests per job (4 at most in total)');
     expect(dialog).toHaveTextContent('Each request stops after 4 minutes, and no new job starts after 15 minutes');
+    expect(dialog).toHaveTextContent('assessed earlier against another description or an earlier CV) are skipped without a request');
     expect(dialog).toHaveTextContent('cancel at any time');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(bridges.agentDock.createSession).not.toHaveBeenCalled();

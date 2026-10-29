@@ -179,8 +179,8 @@ function AssessPanel({ selected, snapshot, running, onStart, onCancel, onDismiss
           message={
             <>
               <p>
-                This sends each job&apos;s description and your reviewed CV details to {providerName}, one job at a time, and saves
-                what it finds on this computer.
+                This sends each job&apos;s description, your CV text and the roles and projects from your reviewed CV details to{' '}
+                {providerName}, one job at a time, and saves what it finds on this computer.
               </p>
               <ul className="mt-2 list-disc space-y-0.5 pl-5">
                 <li>
@@ -191,7 +191,10 @@ function AssessPanel({ selected, snapshot, running, onStart, onCancel, onDismiss
                   Each request stops after {Math.round(BATCH_LIMITS.requestTimeoutMs / 60_000)} minutes, and no new job starts after{' '}
                   {Math.round(BATCH_LIMITS.totalTimeoutMs / 60_000)} minutes.
                 </li>
-                <li>Jobs that cannot be assessed (no CV details, no description, already up to date) are skipped without a request.</li>
+                <li>
+                  Jobs that cannot be assessed (no CV details, no description, already up to date, or assessed earlier against another
+                  description or an earlier CV) are skipped without a request.
+                </li>
                 <li>You can cancel at any time. A job that was not finished is left exactly as it was.</li>
               </ul>
             </>

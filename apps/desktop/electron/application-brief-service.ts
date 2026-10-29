@@ -552,6 +552,8 @@ async function build(deps: BriefServiceDeps, target: BriefTarget): Promise<Built
   const currentPreferences: PreferenceGroups | null = profile ? preferenceGroups(profile) : null;
 
   const reportRow = context.reportRow;
+  // Only the latest scan row is the job's CURRENT posting. An attempt's frozen snapshot is that
+  // attempt's own input: it may seed a brief that has no text yet, but never replaces newer text.
   const description = reportRow ? reportRow.row.description : context.attempt?.jdSnapshot || null;
   const body = description === null ? '' : jobDescriptionBody({ title: '', company: '', location: '', url: '', description });
   const complete = reportRow ? true : (context.attempt?.jdComplete ?? true);
@@ -566,7 +568,7 @@ async function build(deps: BriefServiceDeps, target: BriefTarget): Promise<Built
     aliases: context.aliases,
     display: context.display,
     facts: reportRow ? buildFacts(reportRow, profile, now) : null,
-    jd: body.length > 0 ? { text: body, complete } : null,
+    jd: body.length > 0 ? { text: body, complete, seedOnly: reportRow === null } : null,
     now,
   });
 
@@ -692,6 +694,8 @@ const REFUSAL_TEXT: Record<AssessmentRefusalCode, string> = {
   already_current: 'This job already has an up-to-date assessment.',
   jd_differs:
     'An earlier assessment of this job used a different job description. Open it in Search and use Compare with my CV to redo it.',
+  cv_differs:
+    'Your reviewed CV changed after this job was assessed, so its earlier requirement matches were read against a different CV. Open it in Search and use Compare with my CV to update the assessment to your current CV.',
 };
 
 function refuse(code: AssessmentRefusalCode): PrepareAssessmentResult {
@@ -713,8 +717,12 @@ export async function prepareAssessment(deps: BriefServiceDeps, savedJobId: stri
   if (brief.jdText === null || brief.jdHash === null) return refuse('no_posting_text');
   if (built.view.assessment.state === 'current') return refuse('already_current');
   if (overlay && (overlayMatch === 'jd_differs' || overlayMatch === 'both_differ')) return refuse('jd_differs');
+  // Requirements read against an earlier CV are not finished work for the current one: carrying them
+  // forward would let a pass that adds nothing re-stamp them with the new CV unread. The person updates
+  // them through the explicit rebase in Compare with my CV, which shows what changed.
+  if (overlay && overlayMatch === 'cv_differs') return refuse('cv_differs');
   const job = context.savedJob!;
-  const reusable = overlay && (overlayMatch === 'matches' || overlayMatch === 'cv_differs') ? overlay : null;
+  const reusable = overlay && overlayMatch === 'matches' ? overlay : null;
   return {
     ok: true,
     plan: {
@@ -758,7 +766,7 @@ export async function commitAssessment(deps: BriefServiceDeps, input: CommitAsse
     if (error instanceof WorkspaceNotFoundError) return { ok: false, code: 'not_found', message: REFUSAL_TEXT.not_found };
     throw error;
   }
-  const { brief, cv, cvHash, overlay, context } = built;
+  const { brief, cv, cvHash, overlay, overlayMatch, context } = built;
   const fence = input.fence;
   const sameInputs =
     brief.id === fence.briefId &&
@@ -770,7 +778,14 @@ export async function commitAssessment(deps: BriefServiceDeps, input: CommitAsse
     isReviewedSource(cv.source);
   if (!sameInputs || !cv || brief.jdText === null) return { ok: false, code: 'stale', message: STALE_TEXT };
   if (fence.overlayId !== null) {
-    if (!overlay || overlay.id !== fence.overlayId || overlay.caseRevision !== fence.overlayCaseRevision) {
+    // The overlay a result continues must still have been read against THIS posting and THIS reviewed
+    // CV; writing into one read against an earlier CV would re-stamp its old mappings as current.
+    if (
+      !overlay ||
+      overlayMatch !== 'matches' ||
+      overlay.id !== fence.overlayId ||
+      overlay.caseRevision !== fence.overlayCaseRevision
+    ) {
       return { ok: false, code: 'stale', message: STALE_TEXT };
     }
   } else if (overlay) {

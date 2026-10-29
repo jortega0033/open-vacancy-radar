@@ -216,9 +216,16 @@ describe('assess selected jobs: cancel, failure and partial truth', () => {
 
   it('a failed job keeps earlier work byte-identical, the batch carries on, and the summary is not "Finished"', async () => {
     const jobs = setup(3);
-    // Job 2 already has an earlier (CV-changed) assessment that must survive its failed re-run.
-    await runAssessSelectedJobs([jobs[1]!], harness(happy).deps, noAbort());
-    workspace.updateCvDocument(db, cvId, { source: { ...SOURCE, summary: 'A newly reviewed summary.' } });
+    // Job 2 already has an earlier partial read (same CV, same posting) that must survive its failed continuation.
+    // (An assessment read against an earlier CV is refused before any request instead; see application-brief.test.ts.)
+    const job2 = JOBS[1]!;
+    const partialRead = harness(async (call) =>
+      call === 1
+        ? requirementsJson([{ text: 'TypeScript', quote: job2.quote }], true)
+        : requirementsJson([{ text: 'Kubernetes', quote: job2.quote2, evidenceClass: 'unsupported' }], true),
+    );
+    await runAssessSelectedJobs([jobs[1]!], partialRead.deps, noAbort());
+    expect((await getBrief(briefDeps(), { savedJobId: jobs[1]!.id })).assessment.state).toBe('partial');
     const before = JSON.stringify(workspace.listCvEvidenceOverlays(db, cvId).map((overlay) => [overlay.id, overlay.caseRevision, overlay.requirements]));
 
     const h = harness(async (call) => (call === 1 ? { ok: false, reason: 'failed', error: 'provider rate limit reached' } : happy(call + 1)));

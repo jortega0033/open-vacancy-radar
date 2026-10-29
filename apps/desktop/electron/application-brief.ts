@@ -945,7 +945,10 @@ export interface AssessmentPlan {
   cvId: string;
   lead: { key: string; title: string; company: string; location: string; url: string; description: string };
   fence: AssessmentFence;
-  /** The requirements already saved for this posting, so a new pass continues rather than repeats. */
+  /**
+   * The requirements already saved for this posting AND this reviewed CV, so a new pass continues rather
+   * than repeats. Never requirements read against an earlier CV (that job is refused as `cv_differs`).
+   */
   existing: CvRequirementMapping[];
 }
 
@@ -955,7 +958,8 @@ export type AssessmentRefusalCode =
   | 'cv_not_reviewed'
   | 'no_posting_text'
   | 'already_current'
-  | 'jd_differs';
+  | 'jd_differs'
+  | 'cv_differs';
 
 export type PrepareAssessmentResult =
   | { ok: true; plan: AssessmentPlan }

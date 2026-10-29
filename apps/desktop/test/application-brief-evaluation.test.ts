@@ -37,8 +37,9 @@ import {
  *     `getBrief` for each, and records for each decision question whether the brief answers it, and what it
  *     says is still unknown. This part is measured from the shipped code.
  *  2. BEFORE: for the same shortlist and questions, records which screen each answer lived on at
- *     `origin/master 3b0c694`. This part is a documented READING of that code (file references below), not a
- *     measurement: master cannot be executed from this branch.
+ *     `origin/master 3b0c694`, taking the shortest path that code offered (a Fit check the person kept on the
+ *     saved job is read in the Saved jobs drawer itself, with no switch). This part is a SOURCE READING of that
+ *     code (file references below), not a runtime measurement: master cannot be executed from this branch.
  *
  * Run with OVR_688_EVALUATION_OUT=<path> to write `688-evaluation.json`; without it the assertions still run.
  */
@@ -48,8 +49,14 @@ const NOW = new Date('2026-10-29T10:00:00.000Z');
 type Question = 'why_consider' | 'strengths' | 'gaps' | 'eligibility' | 'posting_deadline' | 'company_evidence' | 'sent_history';
 const QUESTIONS: Question[] = ['why_consider', 'strengths', 'gaps', 'eligibility', 'posting_deadline', 'company_evidence', 'sent_history'];
 
+interface BeforePath {
+  surface: string;
+  reachableWhen: string;
+  source: string;
+}
+
 /** Where the answer lived at master 3b0c694, and the condition under which it was reachable at all. */
-const BEFORE: Record<Question, { surface: string; reachableWhen: string; source: string }> = {
+const BEFORE: Record<Question, BeforePath & { keptAlternative?: BeforePath }> = {
   why_consider: {
     surface: 'Search page > vacancy detail',
     reachableWhen: 'the job is still in the latest scan report (a rescan replaces it); the saved job only keeps a bare percentage',
@@ -59,11 +66,21 @@ const BEFORE: Record<Question, { surface: string; reachableWhen: string; source:
     surface: 'Search page > Compare with my CV (CV assistant)',
     reachableWhen: 'the job is still in the latest scan report (the assistant opens from the Search detail pane) and an explicit AI run for that one job',
     source: 'apps/desktop/src/components/cv/RequirementMapping.tsx; VacancyDetail "Not compared to your CV yet"',
+    keptAlternative: {
+      surface: 'Saved jobs page > drawer > Fit check (kept gap analysis), the starting screen: no switch',
+      reachableWhen: 'the person earlier ran the CV assistant gap analysis for this job and chose "Save analysis"; it is free text, not tied to the posting or CV version it was made against',
+      source: 'apps/desktop/src/components/saved/SavedJobDrawer.tsx at 3b0c694 (job.gapAnalysis / gapAnalysisAt, "Fit check" section); apps/desktop/src/components/cv/GapAnalysis.tsx ("Save analysis")',
+    },
   },
   gaps: {
     surface: 'Search page > Compare with my CV (CV assistant)',
     reachableWhen: 'the same conditions as strengths',
     source: 'apps/desktop/src/components/cv/RequirementMapping.tsx',
+    keptAlternative: {
+      surface: 'Saved jobs page > drawer > Fit check (kept gap analysis), the starting screen: no switch',
+      reachableWhen: 'the person earlier ran the CV assistant gap analysis for this job and chose "Save analysis"; it is free text, not tied to the posting or CV version it was made against',
+      source: 'apps/desktop/src/components/saved/SavedJobDrawer.tsx at 3b0c694 (job.gapAnalysis / gapAnalysisAt, "Fit check" section); apps/desktop/src/components/cv/GapAnalysis.tsx ("Save analysis")',
+    },
   },
   eligibility: {
     surface: 'Search page > vacancy detail',
@@ -111,6 +128,8 @@ interface FixtureJob {
   setup: string;
   inLatestReport: boolean;
   hasAttempt: boolean;
+  /** A gap analysis the person kept on the saved job (shown as "Fit check" in the drawer, on master and here). */
+  keptFitCheck: boolean;
 }
 
 function build(): { jobs: FixtureJob[]; savedIds: Map<string, string> } {
@@ -152,6 +171,10 @@ function build(): { jobs: FixtureJob[]; savedIds: Map<string, string> } {
   const s2 = save(j2);
   const s3 = save(j3);
   const s4 = workspace.createSavedJob(db, { role: 'Solo Role', company: 'Harbor Systems', location: 'Lisbon', sourceUrl: 'https://jobs.example/listing/solo-role-9', status: 'considering' });
+  // The person ran the CV assistant's gap analysis for J1 and J2 and chose "Save analysis" (free text, invented).
+  const keptText = 'Matched: 5+ years of TypeScript (Senior Engineer at Redwood Software). Not matched: Kubernetes is required; the CV does not show it.';
+  workspace.updateSavedJob(db, s1.id, { gapAnalysis: keptText });
+  workspace.updateSavedJob(db, s2.id, { gapAnalysis: keptText });
 
   // J1 was assessed (Search assistant) and then prepared; J3 was assessed against an OLDER posting.
   const assess = (row: ReturnType<typeof scanRow>, jd: string) => {
@@ -183,17 +206,17 @@ function build(): { jobs: FixtureJob[]; savedIds: Map<string, string> } {
 
   return {
     jobs: [
-      { id: s1.id, label: 'J1 Platform Engineer (ATS copy)', setup: 'scored 78, all eligibility answers stated, assessed against the current posting, application prepared, posting checked open with a stated deadline', inLatestReport: true, hasAttempt: true },
-      { id: s5.id, label: 'J1b Platform Engineer (aggregator copy of J1)', setup: 'the SAME requisition saved a second time through an aggregator', inLatestReport: true, hasAttempt: false },
-      { id: s2.id, label: 'J2 Platform Engineer (US)', setup: 'scored 78 but the posting says only US-based candidates; never assessed', inLatestReport: false, hasAttempt: false },
-      { id: s3.id, label: 'J3 Staff Platform Engineer', setup: 'scored 70, work country not stated, assessed against an older posting that has since changed', inLatestReport: true, hasAttempt: false },
-      { id: s4.id, label: 'J4 Solo Role (typed in by hand)', setup: 'no scan result and no posting text', inLatestReport: false, hasAttempt: false },
+      { id: s1.id, label: 'J1 Platform Engineer (ATS copy)', setup: 'scored 78, all eligibility answers stated, assessed against the current posting, a gap analysis kept as a Fit check, application prepared, posting checked open with a stated deadline', inLatestReport: true, hasAttempt: true, keptFitCheck: true },
+      { id: s5.id, label: 'J1b Platform Engineer (aggregator copy of J1)', setup: 'the SAME requisition saved a second time through an aggregator', inLatestReport: true, hasAttempt: false, keptFitCheck: false },
+      { id: s2.id, label: 'J2 Platform Engineer (US)', setup: 'scored 78 but the posting says only US-based candidates; no grounded assessment, but a gap analysis was kept as a Fit check', inLatestReport: false, hasAttempt: false, keptFitCheck: true },
+      { id: s3.id, label: 'J3 Staff Platform Engineer', setup: 'scored 70, work country not stated, assessed against an older posting that has since changed', inLatestReport: true, hasAttempt: false, keptFitCheck: false },
+      { id: s4.id, label: 'J4 Solo Role (typed in by hand)', setup: 'no scan result and no posting text', inLatestReport: false, hasAttempt: false, keptFitCheck: false },
     ],
     savedIds: new Map([['j1', s1.id], ['j1b', s5.id]]),
   };
 }
 
-function traceRow<T extends { job: string; briefId: string; before: { contextSwitches: number; questionsReachable: number }; after: { surfacesOpened: string[]; modelRequestsToView: number; questionsShownInOneSurface: number; questionsWithData: number; contextSwitches: number; answers: Record<string, { answered: boolean; evidence: string }>; remainingUnknowns: string[] } }>(row: T): T {
+function traceRow<T extends { job: string; briefId: string; before: { contextSwitches: number; questionsReachable: number; paths: Array<{ question: string; via: string }> }; after: { surfacesOpened: string[]; modelRequestsToView: number; questionsShownInOneSurface: number; questionsWithBriefData: number; questionsAnsweredOnlyByKeptFitCheck: number; contextSwitches: number; answers: Record<string, { answered: boolean; evidence: string }>; remainingUnknowns: string[] } }>(row: T): T {
   return row;
 }
 
@@ -241,14 +264,24 @@ describe('shortlist decision context: fixed-fixture desk evaluation (not a usabi
         // Score reasons, eligibility and the CV assistant all start from the job's row in the LATEST scan
         // report (the assistant is opened from the Search detail pane, and the posting text lives on that
         // row). Posting check, company evidence and sent history need an application attempt for THIS saved job.
+        // A Fit check kept on the saved job answers strengths and gaps in the drawer itself: the shortest path.
+        if (spec.keptAlternative && job.keptFitCheck) {
+          return { question, surface: 'Saved jobs page', via: spec.keptAlternative.surface, reachable: true, reachableWhen: spec.keptAlternative.reachableWhen };
+        }
         const reachable =
           question === 'why_consider' || question === 'eligibility' || question === 'strengths' || question === 'gaps'
             ? reportHasJob
             : job.hasAttempt;
-        return { question, surface: spec.surface, reachable, reachableWhen: spec.reachableWhen };
+        return { question, surface: spec.surface, via: spec.surface, reachable, reachableWhen: spec.reachableWhen };
       });
       const beforeSurfaces = new Set(['Saved jobs page', ...beforeRows.filter((row) => row.reachable).map((row) => row.surface)]);
       const answeredAfter = QUESTIONS.filter((question) => after[question].answered);
+      // The drawer still shows the kept Fit check next to the brief. Where the brief has no data for strengths or
+      // gaps, that kept free text is the only answer in the drawer; it is counted separately, never as brief data.
+      const keptOnly = job.keptFitCheck ? (['strengths', 'gaps'] as const).filter((question) => !after[question].answered) : [];
+      for (const question of keptOnly) {
+        after[question] = { answered: true, evidence: 'not from the brief: the kept Fit check text shown in the same drawer (free text, not tied to a posting or CV version)' };
+      }
       const unknowns = [
         ...view.eligibility.items.filter((item) => item.classification === 'uncertain').map((item) => `eligibility not known: ${item.label}`),
         ...(view.assessment.state !== 'current' ? [`assessment ${view.assessment.state}${view.assessment.reason ? `: ${view.assessment.reason}` : ''}`] : []),
@@ -265,15 +298,17 @@ describe('shortlist decision context: fixed-fixture desk evaluation (not a usabi
           contextSwitches: beforeSurfaces.size - 1,
           // "Reachable" = a screen for this question exists for this job. It does not mean that screen held data.
           questionsReachable: beforeRows.filter((row) => row.reachable).length,
+          paths: beforeRows.filter((row) => row.reachable).map((row) => ({ question: row.question, via: row.via })),
           unreachable: beforeRows.filter((row) => !row.reachable).map((row) => ({ question: row.question, because: row.reachableWhen })),
           modelRequestsNeededForAssessment: `at least 1 (up to ${CV_REQUIREMENT_MAX_BATCHES}) per job, started one job at a time in the Search assistant`,
         },
         after: {
           surfacesOpened: ['Saved jobs page (drawer)'],
           contextSwitches: 0,
-          // Every question has a section in the one drawer; "with data" counts the ones the brief actually fills.
+          // Every question has a section in the one drawer; "with brief data" counts the ones the brief actually fills.
           questionsShownInOneSurface: QUESTIONS.length,
-          questionsWithData: answeredAfter.length,
+          questionsWithBriefData: answeredAfter.length,
+          questionsAnsweredOnlyByKeptFitCheck: keptOnly.length,
           answers: Object.fromEntries(QUESTIONS.map((question) => [question, after[question]])),
           remainingUnknowns: unknowns,
           modelRequestsToView: 0,
@@ -293,6 +328,12 @@ describe('shortlist decision context: fixed-fixture desk evaluation (not a usabi
     expect(byLabel('J1 ').after.answers.posting_deadline?.evidence).toContain('deadline 2026-11-15');
     expect(byLabel('J2').after.answers.eligibility?.evidence).toContain('2 known mismatch');
     expect(byLabel('J2').after.remainingUnknowns.join(' ')).toContain('assessment missing');
+    // The kept Fit check path from master is counted: zero switches for strengths and gaps where one was kept.
+    expect(byLabel('J1 ').before.paths.filter((path) => path.via.startsWith('Saved jobs page > drawer > Fit check'))).toHaveLength(2);
+    expect(byLabel('J2').before.questionsReachable).toBe(2);
+    expect(byLabel('J2').before.contextSwitches).toBe(0);
+    expect(byLabel('J2').after.questionsAnsweredOnlyByKeptFitCheck).toBe(2);
+    expect(byLabel('J1 ').after.questionsAnsweredOnlyByKeptFitCheck).toBe(0);
     expect(byLabel('J3').after.remainingUnknowns.join(' ')).toContain('assessment stale');
     expect(byLabel('J4').after.answers.why_consider?.answered).toBe(false);
     expect(byLabel('J4').after.remainingUnknowns.join(' ')).toContain('assessment unavailable');
@@ -307,7 +348,8 @@ describe('shortlist decision context: fixed-fixture desk evaluation (not a usabi
       after: {
         contextSwitches: perJob.reduce((sum, row) => sum + row.after.contextSwitches, 0),
         questionsShownInOneSurface: perJob.reduce((sum, row) => sum + row.after.questionsShownInOneSurface, 0),
-        questionsWithData: perJob.reduce((sum, row) => sum + row.after.questionsWithData, 0),
+        questionsWithBriefData: perJob.reduce((sum, row) => sum + row.after.questionsWithBriefData, 0),
+        questionsAnsweredOnlyByKeptFitCheck: perJob.reduce((sum, row) => sum + row.after.questionsAnsweredOnlyByKeptFitCheck, 0),
       },
       questionsAskedPerJob: QUESTIONS.length,
       questionsAskedTotal: QUESTIONS.length * perJob.length,
@@ -321,14 +363,15 @@ describe('shortlist decision context: fixed-fixture desk evaluation (not a usabi
       repository: { baseCommit: '3b0c694', branch: 'codex/688-application-brief' },
       method: [
         'One fixed synthetic shortlist of 5 saved jobs is built in a real migrated SQLite workspace (test/application-brief-evaluation.test.ts); every employer, posting, score and requirement is invented.',
-        'AFTER (measured): the REAL getBrief is called for each saved job. A question counts as "with data" only when the brief returns data for it (a score, a CV-backed strength, an eligibility answer, a posting check, a sourced company claim, sent history); "remainingUnknowns" are what the brief itself reports as not known, not assessed, stale or unavailable.',
-        'BEFORE (documented reading, not measured): for the same questions, the screen each answer lived on at origin/master 3b0c694, with the condition for reaching it, from the files named in `beforeMap`. Master cannot be run from this branch, so this half is a reading of source, and it is conservative: it assumes the person already knows which screens to open.',
+        'AFTER (measured on this branch): the REAL getBrief is called for each saved job. A question counts as "with brief data" only when the brief returns data for it (a score, a CV-backed strength, an eligibility answer, a posting check, a sourced company claim, sent history). The Saved jobs drawer still shows a kept Fit check next to the brief; where that kept free text is the only answer to strengths or gaps it is counted separately as "answered only by the kept Fit check", never as brief data. "remainingUnknowns" are what the brief itself reports as not known, not assessed, stale or unavailable.',
+        'BEFORE (source reading of origin/master 3b0c694, not a runtime measurement): for the same questions, the screen each answer lived on, with the condition for reaching it, from the files named in `beforeMap`. Master cannot be run from this branch. The reading assumes the person already knows which screens to open and takes the shortest path master offered: where a Fit check (kept gap analysis) is on the saved job, strengths and gaps are read in the Saved jobs drawer with no switch.',
         '"Context switch" = moving to another screen or panel for one more fact about one job. Counts are per job; the Saved jobs page itself is the start, not a switch.',
         'Questions: why consider it, CV-backed strengths, material gaps, eligibility (mismatch / unknown), posting still open + deadline, sourced company evidence, what was already sent.',
       ],
       limits: [
         'Desk evaluation on 5 invented jobs. Counts show where information lives; they do not show that people decide better or faster. "Reachable" before means a screen for the question exists for that job, not that it held data; "shown in one surface" after is true by construction, which is why "with data" and "remainingUnknowns" are reported next to it.',
-        'The before-path is read from source, not run. If a screen existed that the reading missed, the before counts are too high.',
+        'The before-path is a source reading, not a runtime measurement. If a screen existed that the reading missed, the before counts are too high. The first independent review found one such miss (the kept Fit check in the Saved jobs drawer); it is now included.',
+        'The kept Fit check is free text the person chose to keep. It is not tied to the posting or CV version it was made against and is not anchored to CV evidence, so counting it as reachable or answered says only that text exists, not that it is current. The fixture gives J1 and J2 one; a real shortlist may have none, or one on every job, which would lower the before switches further.',
         'The brief does not create information: a missing assessment, an unchecked posting or absent company evidence stay "unknown" and still need an explicit action (Assess selected jobs, preparing an application).',
         'Assessment still needs model requests (capped at 2 per job and 5 jobs per action here, versus up to 8 per job in the Search assistant). The cap can leave a job partly read, which the brief says.',
         'No live provider, job site or private data was used.',
