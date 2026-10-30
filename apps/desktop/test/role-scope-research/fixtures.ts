@@ -786,8 +786,9 @@ Go and PostgreSQL.`,
 ];
 
 /**
- * Outcome records that must never become role or skill truth. Attached to some cases in the invariance check
- * only; nothing in the evaluation reads them.
+ * Outcome records that must never become role or skill truth. Attached (as `outcome` and `applicationStatus`)
+ * to these cases only in the outcome negative control (evaluate.ts `outcomeNegativeControl`), which runs them
+ * through the real pipeline step, Search sort and option B and compares the result with a clean run.
  */
 export const OUTCOME_NOISE: Readonly<Record<string, 'applied' | 'rejected' | 'no_response' | 'interview'>> = {
   F01: 'rejected',

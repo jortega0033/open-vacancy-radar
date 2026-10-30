@@ -23,7 +23,10 @@ type PlanQuery = ReturnType<typeof compileSearchPlanQueries>['queries'][number];
  * caps or a source returning nothing.
  *
  * Plans P1 and P3 are written as if a person reviewed and approved them (origin `user`). That is a fixture
- * premise, not a person's action. P3 is research only: no backend plan ships or is suggested by this work.
+ * premise, not a person's action. Their approved titles were chosen by the fixture author knowing the corpus
+ * titles (F05 "Web Platform Engineer" is P1's one deliberate miss), so their retrieval counts are true by
+ * construction: they show the approved-title/shared-filter mechanism and are an upper bound on this corpus, not an
+ * estimate of real reviewed-plan coverage. P3 is research only: no backend plan ships or is suggested by this work.
  */
 
 export type PlanId = 'P0_frontend_literal' | 'P1_frontend_reviewed_686' | 'P2_backend_literal' | 'P3_backend_research';

@@ -8,6 +8,11 @@ import { describe, expect, it } from 'vitest';
  * Every repository path the #694 memo cites in backticks must exist, every `path:line` must be inside the file, and
  * the load-bearing citations must still point at the code they describe. If a cited file moves, this fails rather
  * than leaving the memo pointing at nothing.
+ *
+ * Maintenance: the anchors below are production line numbers at the memo's base commit. A later change that moves a
+ * cited line (follow-ups #713 and #714 will, e.g. relevance.ts:67 and language.ts:137) must update the `path:line`
+ * citation in docs/role-scope-research.md and the matching ANCHORS entry here in the same PR. This is expected
+ * upkeep, not a sign the research is wrong.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -51,6 +56,8 @@ const ANCHORS: readonly [string, string][] = [
   ['packages/vacancy-engine/src/global-remote/evaluation.ts:90', 'export function classifyDiscoveryVacancy'],
   ['packages/vacancy-engine/src/pipeline/global-remote.ts:1067', 'function withApprovedTitleClassification'],
   ['apps/desktop/src/components/search/SearchResultList.tsx:47', 'deliberately does'],
+  ['packages/vacancy-engine/src/global-remote/report.ts:89', "'role_mismatch', 'non_vacancy'"],
+  ['packages/vacancy-engine/src/global-remote/report.ts:194', 'latest.audit.ndjson'],
   ['README.md:25', 'frontend-only'],
 ];
 

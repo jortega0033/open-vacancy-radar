@@ -6684,7 +6684,7 @@
     }
   },
   "preClassification": {
-    "note": "Title-only discovery gate (packages/vacancy-engine/src/global-remote/evaluation.ts). Shown as \"Discovery decision\" in the detail pane and counted in report statistics; Search neither hides nor reorders role_mismatch rows.",
+    "note": "Title-only discovery gate (packages/vacancy-engine/src/global-remote/evaluation.ts). Shown as \"Discovery decision\" in the detail pane and counted in report statistics; Search neither hides nor reorders role_mismatch rows. The discovery table of the generated HTML report omits role_mismatch and non_vacancy rows and names the full audit file (latest.audit.ndjson) instead (packages/vacancy-engine/src/global-remote/report.ts).",
     "relevantMarkedRoleMismatch": {
       "withoutPlan": ["F04", "F05", "F06", "F08", "F09", "F10", "F11", "L04"],
       "withReviewedPlan": ["F05"]
@@ -7983,50 +7983,61 @@
     }
   },
   "invariances": {
-    "outcomesNeverBecomeRoleTruth": [
-      {
-        "id": "F01",
-        "outcome": "rejected",
-        "currentUnchanged": true,
-        "optionBUnchanged": true,
-        "labelUnchanged": true
-      },
-      {
-        "id": "F07",
-        "outcome": "no_response",
-        "currentUnchanged": true,
-        "optionBUnchanged": true,
-        "labelUnchanged": true
-      },
-      {
-        "id": "M01",
-        "outcome": "interview",
-        "currentUnchanged": true,
-        "optionBUnchanged": true,
-        "labelUnchanged": true
-      },
-      {
-        "id": "B01",
-        "outcome": "applied",
-        "currentUnchanged": true,
-        "optionBUnchanged": true,
-        "labelUnchanged": true
-      },
-      {
-        "id": "S01",
-        "outcome": "rejected",
-        "currentUnchanged": true,
-        "optionBUnchanged": true,
-        "labelUnchanged": true
-      },
-      {
-        "id": "L01",
-        "outcome": "no_response",
-        "currentUnchanged": true,
-        "optionBUnchanged": true,
-        "labelUnchanged": true
-      }
-    ],
+    "outcomesNeverBecomeRoleTruth": {
+      "boundary": "audit row (+ outcome, applicationStatus) -> applyWorldwideProfileScores -> toPartialResults -> sortResults; full noised case -> option B comparator; labels vs a structuredClone taken before noise",
+      "noised": [
+        {
+          "id": "F01",
+          "outcome": "rejected"
+        },
+        {
+          "id": "F07",
+          "outcome": "no_response"
+        },
+        {
+          "id": "M01",
+          "outcome": "interview"
+        },
+        {
+          "id": "B01",
+          "outcome": "applied"
+        },
+        {
+          "id": "S01",
+          "outcome": "rejected"
+        },
+        {
+          "id": "L01",
+          "outcome": "no_response"
+        }
+      ],
+      "noiseReachedSearchRows": true,
+      "noiseReachedComparator": true,
+      "perProfile": [
+        {
+          "profile": "frontend",
+          "rowsCompared": 46,
+          "changedScores": [],
+          "changedProfileMatch": [],
+          "searchOrderUnchanged": true,
+          "changedOptionB": []
+        },
+        {
+          "profile": "backend_research",
+          "rowsCompared": 46,
+          "changedScores": [],
+          "changedProfileMatch": [],
+          "searchOrderUnchanged": true,
+          "changedOptionB": []
+        }
+      ],
+      "scoresUnchanged": true,
+      "profileMatchUnchanged": true,
+      "searchOrderUnchanged": true,
+      "optionBUnchanged": true,
+      "changedLabels": [],
+      "labelsUnchanged": true
+    },
     "unapprovedSuggestionsNeverQueried": true,
     "workCountryAnswersWithNoCandidateCountry": ["unknown"],
     "mandatoryLanguageAnswersWithNoCandidateLanguage": ["unknown"],
@@ -8034,9 +8045,9 @@
     "currentScoresForCountryCasesE01E02E03": [90, 90, 90]
   },
   "usage": {
-    "currentEvaluatorCalls": 282,
-    "pipelineScoredRows": 135,
-    "comparatorCalls": 255,
+    "currentEvaluatorCalls": 258,
+    "pipelineScoredRows": 319,
+    "comparatorCalls": 415,
     "networkCalls": 0,
     "modelCalls": 0,
     "tokens": "not_applicable: no model is called"

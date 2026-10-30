@@ -414,7 +414,8 @@ function slices(rows: readonly ScorerRow[]) {
  * The discovery pre-classification, run the way discovery runs it (no candidate languages: the language gate is
  * re-applied after discovery), and with #686's approved-title override for P1. Reported for the ROLE gate only:
  * the location and salary gates that follow are out of scope here. In Search this decision is shown in the detail
- * pane and counted in report statistics; it neither hides nor reorders a row.
+ * pane and counted in report statistics; Search neither hides nor reorders a row. The generated HTML report's
+ * discovery table does omit role_mismatch and non_vacancy rows and names the full audit file instead.
  */
 function preClassification() {
   const plan = PLANS.find((entry) => entry.id === 'P1_frontend_reviewed_686')!;
@@ -429,7 +430,7 @@ function preClassification() {
   });
   const pick = (grade: Grade, key: 'withoutPlan' | 'withReviewedPlan', gate: string) => ids(rows.filter((row) => row.grade === grade && row[key] === gate));
   return {
-    note: 'Title-only discovery gate (packages/vacancy-engine/src/global-remote/evaluation.ts). Shown as "Discovery decision" in the detail pane and counted in report statistics; Search neither hides nor reorders role_mismatch rows.',
+    note: 'Title-only discovery gate (packages/vacancy-engine/src/global-remote/evaluation.ts). Shown as "Discovery decision" in the detail pane and counted in report statistics; Search neither hides nor reorders role_mismatch rows. The discovery table of the generated HTML report omits role_mismatch and non_vacancy rows and names the full audit file (latest.audit.ndjson) instead (packages/vacancy-engine/src/global-remote/report.ts).',
     relevantMarkedRoleMismatch: { withoutPlan: pick('relevant', 'withoutPlan', 'role_mismatch'), withReviewedPlan: pick('relevant', 'withReviewedPlan', 'role_mismatch') },
     notRelevantPassingRoleGate: { withoutPlan: pick('not_relevant', 'withoutPlan', 'passed_role_gate'), withReviewedPlan: pick('not_relevant', 'withReviewedPlan', 'passed_role_gate') },
     adjacentMarkedRoleMismatch: { withoutPlan: pick('adjacent', 'withoutPlan', 'role_mismatch'), withReviewedPlan: pick('adjacent', 'withReviewedPlan', 'role_mismatch') },
@@ -474,19 +475,109 @@ function unsupportedFamilyBehaviour() {
   };
 }
 
-function invariances() {
-  // 1. Outcomes never become role truth: rows carrying application outcomes score and classify identically.
-  const outcomeRows = Object.keys(OUTCOME_NOISE).map((id) => {
-    const item = CORPUS.find((entry) => entry.id === id)!;
-    const noisy = { ...item, outcome: OUTCOME_NOISE[id], applicationStatus: OUTCOME_NOISE[id] } as CorpusCase & { outcome: string };
-    const sameCurrent = (['frontend', 'backend_research'] as const).every(
-      (profileId) => JSON.stringify(currentScore(item, PROFILES[profileId])) === JSON.stringify(currentScore(noisy, PROFILES[profileId])),
-    );
-    const sameB = (['frontend', 'backend_research'] as const).every(
-      (profileId) => JSON.stringify(comparator(item, PROFILES[profileId])) === JSON.stringify(comparator(noisy, PROFILES[profileId])),
-    );
-    return { id, outcome: OUTCOME_NOISE[id], currentUnchanged: sameCurrent, optionBUnchanged: sameB, labelUnchanged: JSON.stringify(item.expect) === JSON.stringify(CORPUS.find((entry) => entry.id === id)!.expect) };
+type OutcomeNoise = (typeof OUTCOME_NOISE)[string];
+type NoisedCase = CorpusCase & { outcome: OutcomeNoise; applicationStatus: OutcomeNoise };
+
+/** The seams the outcome negative control crosses. Real production/research functions by default. */
+export interface OutcomeControlDeps {
+  scoreStep: typeof applyWorldwideProfileScores;
+  compare: typeof compareRoleFamily;
+  corpus: readonly CorpusCase[];
+}
+
+/**
+ * Negative control: application outcomes are never role truth.
+ *
+ * No production function declares an outcome or application-status parameter, so this control does not claim an
+ * outcome "could" change a score through some field. It checks the real boundary instead: every corpus row is
+ * run twice through the production path (audit row -> applyWorldwideProfileScores -> toPartialResults ->
+ * sortResults), once clean and once with `outcome` and `applicationStatus` attached to the noised rows. The
+ * pipeline spreads the row and Search keeps it as `result.raw`, so the fields really reach the Search ordering
+ * input (`noiseReachedSearchRows`). Option B receives the full noised CorpusCase. Scores, `profileMatch`, the
+ * Search order and option B's output are compared with the clean run, and every label with a structuredClone
+ * taken before noise was attached (the noised cases share the label objects, so a label mutation shows).
+ *
+ * It fails if a future change reads those fields off a row or the comparator input, or writes labels.
+ * comparator.test.ts injects each of those faults and asserts the control reports it. It cannot see an outcome
+ * that reaches scoring through a different channel (for example a store keyed by vacancy id).
+ */
+export function outcomeNegativeControl(deps: Partial<OutcomeControlDeps> = {}) {
+  const scoreStep = deps.scoreStep ?? applyWorldwideProfileScores;
+  const compare = deps.compare ?? compareRoleFamily;
+  const corpus = deps.corpus ?? CORPUS;
+  const labelsBeforeNoise = structuredClone(corpus.map((item) => ({ id: item.id, expect: item.expect })));
+  const noised: readonly (CorpusCase | NoisedCase)[] = corpus.map((item) => {
+    const outcome = OUTCOME_NOISE[item.id];
+    return outcome === undefined ? item : { ...item, outcome, applicationStatus: outcome };
   });
+  const isNoised = (item: CorpusCase | NoisedCase): item is NoisedCase => 'outcome' in item;
+  const noisedIds = noised.filter(isNoised).map((item) => item.id);
+  const toRow = (item: CorpusCase | NoisedCase) =>
+    isNoised(item) ? { ...auditRow(item), outcome: item.outcome, applicationStatus: item.applicationStatus } : auditRow(item);
+
+  let noiseReachedSearchRows = true;
+  let noiseReachedComparator = true;
+  const perProfile = (['frontend', 'backend_research'] as const).map((profileId) => {
+    const profile = PROFILES[profileId];
+    const run = (items: readonly (CorpusCase | NoisedCase)[]) => {
+      pipelineCalls += items.length;
+      return sortResults(toPartialResults(scoreStep(items.map(toRow), profile, null)), '');
+    };
+    const clean = run(corpus);
+    const noisy = run(noised);
+    for (const result of noisy) {
+      const raw = result.raw as DiscoveryVacancyAudit & { outcome?: unknown; applicationStatus?: unknown };
+      if (noisedIds.includes(result.key) && (raw.outcome !== OUTCOME_NOISE[result.key] || raw.applicationStatus !== OUTCOME_NOISE[result.key])) {
+        noiseReachedSearchRows = false;
+      }
+    }
+    const cleanByKey = new Map(clean.map((result) => [result.key, result]));
+    const changedScores = noisy.filter((result) => cleanByKey.get(result.key)?.profileScore !== result.profileScore).map((result) => result.key);
+    const changedProfileMatch = noisy
+      .filter((result) => JSON.stringify(cleanByKey.get(result.key)?.profileMatch) !== JSON.stringify(result.profileMatch))
+      .map((result) => result.key);
+    const searchOrderUnchanged = JSON.stringify(clean.map((result) => result.key)) === JSON.stringify(noisy.map((result) => result.key));
+    const changedOptionB = noised
+      .filter((item, index) => {
+        comparatorCalls += 2;
+        const before = JSON.stringify(compare(corpus[index]!, profile));
+        // The full noised case is the argument, not a title/description pick: whatever the comparator reads, it is given.
+        const input: Parameters<typeof compareRoleFamily>[0] = item;
+        if (isNoised(item) && !('outcome' in input && 'applicationStatus' in input)) noiseReachedComparator = false;
+        return JSON.stringify(compare(input, profile)) !== before;
+      })
+      .map((item) => item.id);
+    return {
+      profile: profileId,
+      rowsCompared: noisy.length,
+      changedScores,
+      changedProfileMatch,
+      searchOrderUnchanged,
+      changedOptionB,
+    };
+  });
+  const changedLabels = [...noised, ...corpus]
+    .filter((item) => JSON.stringify(item.expect) !== JSON.stringify(labelsBeforeNoise.find((entry) => entry.id === item.id)!.expect))
+    .map((item) => item.id);
+  return {
+    boundary:
+      'audit row (+ outcome, applicationStatus) -> applyWorldwideProfileScores -> toPartialResults -> sortResults; full noised case -> option B comparator; labels vs a structuredClone taken before noise',
+    noised: noisedIds.map((id) => ({ id, outcome: OUTCOME_NOISE[id]! })),
+    noiseReachedSearchRows,
+    noiseReachedComparator,
+    perProfile,
+    scoresUnchanged: perProfile.every((entry) => entry.changedScores.length === 0),
+    profileMatchUnchanged: perProfile.every((entry) => entry.changedProfileMatch.length === 0),
+    searchOrderUnchanged: perProfile.every((entry) => entry.searchOrderUnchanged),
+    optionBUnchanged: perProfile.every((entry) => entry.changedOptionB.length === 0),
+    changedLabels: [...new Set(changedLabels)],
+    labelsUnchanged: changedLabels.length === 0,
+  };
+}
+
+function invariances() {
+  // 1. Outcomes never become role truth: a negative control at the real pipeline/Search/comparator boundary.
+  const outcomeControl = outcomeNegativeControl();
   // 2. An unapproved suggestion never reaches a query.
   const pendingNeverQueried = PLANS.every((plan) => !compilePlan(plan).compiled.pendingSuggestionsReachedQueries);
   // 3. No candidate country configured: every work-country answer stays unknown, never yes or no.
@@ -499,7 +590,7 @@ function invariances() {
   // 5. Work country never changes a score: the US-only and accepted-country cases score as their base text does.
   const countryNeutral = ['E01', 'E02', 'E03'].map((id) => currentScore(CORPUS.find((item) => item.id === id)!, PROFILES.frontend)!.deterministicScore);
   return {
-    outcomesNeverBecomeRoleTruth: outcomeRows,
+    outcomesNeverBecomeRoleTruth: outcomeControl,
     unapprovedSuggestionsNeverQueried: pendingNeverQueried,
     workCountryAnswersWithNoCandidateCountry: countryAnswersWithoutCountry,
     mandatoryLanguageAnswersWithNoCandidateLanguage: languageAnswersWithoutLanguage,

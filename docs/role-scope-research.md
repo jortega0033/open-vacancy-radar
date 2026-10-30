@@ -83,7 +83,7 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
 | Reviewed titles and languages (#686) | `approveSearchPlanDraft` (`packages/vacancy-engine/src/candidate/search-plan.ts:244`), `captureSearchPlanSnapshot` (`packages/vacancy-engine/src/candidate/search-plan.ts:322`), `compileSearchPlanQueries` (`packages/vacancy-engine/src/global-remote/search-plan.ts:123`), `vacancyMatchesRole` / `vacancyTitleMatches` (`packages/vacancy-engine/src/global-remote/focused-scan.ts:280`, `packages/vacancy-engine/src/global-remote/focused-scan.ts:288`) | Plans are approved, snapshotted and compiled exactly as a run does. Unapproved suggestions stay unapproved |
 | Eligibility (#280) | `assessWorkEligibility` with a fixed clock | Answers reported as `yes / no / unknown`, never combined |
 | Comparator / model benchmark (#412) | Not duplicated | No AI comparator, model, SDK or provider call. §9 offers this corpus as a shared fixture contract |
-| Outcome measurement (#693) | `docs/outcome-gap-research.md` conventions | Same evidence vocabulary and byte-compared evaluation. Outcome fields are proven never to become role truth (§5.7) |
+| Outcome measurement (#693) | `docs/outcome-gap-research.md` conventions | Same evidence vocabulary and byte-compared evaluation. A negative control checks that outcome fields carried through the real pipeline, Search sort and option B change nothing (§5.7) |
 | Extraction (#634) | Untouched | Not read or changed |
 | Historical #152/#153 | Context only | No deleted seam (SemanticScorer, free-text AI ranking) is revived |
 
@@ -119,8 +119,11 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
   It also has a fixed exclusion list (`packages/vacancy-engine/src/global-remote/evaluation.ts:15`). A #686-approved title
   stands in for the positive rule only (`packages/vacancy-engine/src/pipeline/global-remote.ts:1067`).
   This decision is shown as "Discovery decision" in the detail pane and counted in report statistics. Search **neither hides
-  nor reorders** a `role_mismatch` row (`apps/desktop/src/components/search/SearchResultList.tsx:47`). A `role_mismatch`
-  is therefore not a hidden result, and this research does not treat it as one.
+  nor reorders** a `role_mismatch` row (`apps/desktop/src/components/search/SearchResultList.tsx:47`), so in Search a
+  `role_mismatch` is not a hidden result, and this research does not treat it as one. The generated HTML report is different:
+  its "Discovery-board title matches" table omits `role_mismatch` and `non_vacancy` rows
+  (`packages/vacancy-engine/src/global-remote/report.ts:89`) and names the full per-listing audit file, `latest.audit.ndjson`,
+  instead (`packages/vacancy-engine/src/global-remote/report.ts:194`). A reader of that table alone does not see those rows.
 - **Queries do read target roles.** The scheduled scan searches the first target role
   (`apps/desktop/electron/vacancy-scan-query.ts:135`), and Search's default query is the first role (`apps/desktop/src/components/search/SearchPage.tsx:903`).
   The Resume Toolkit's best-fit prompt can propose stretch directions and titles outside frontend
@@ -199,8 +202,13 @@ has no management, test or game-UI awareness.
 | P2 backend literal (research) | 1 | 2 | 2 of 4 | B02 "Go Engineer", B03 "Node.js Engineer" | D02 |
 | P3 backend plan (research) | 6 | 7 | 4 of 4 | 0 | D02 |
 
-- **Retrieval is the larger lever for equivalent titles.** On this corpus, the reviewed plan changed what is kept far more than any
-  scoring difference did. The literal typed query matches title or description; approved titles match the title only.
+- **P1's 23 of 24 is true by construction.** I chose P1's ten approved titles knowing the corpus titles (Vue.js Developer,
+  Client-side Engineer, Design Systems Engineer, Frontend ontwikkelaar, Frontend-Entwickler, ...), and left F05 "Web Platform
+  Engineer" as the one deliberate miss. So 23 of 24 shows the **mechanism**: an approved title is matched by the shared title
+  filter, and an equivalent title the person did not approve is not. It is an **upper bound on this synthetic corpus**, not an
+  estimate of what a person's real reviewed plan, or any live source, would retrieve.
+- **On this corpus, by construction, retrieval is the larger lever for equivalent titles.** The reviewed plan changed what is kept
+  more than any scoring difference did. The literal typed query matches title or description; approved titles match the title only.
 - **Undiscovered jobs are unrecoverable.** D01 and D02 never reach any evaluator.
 - **Unapproved suggestions stay out.** P1's unapproved suggestion "Full-Stack Engineer" never became a query, so the adjacent
   full-stack cases M01/M03/M04 are not retrieved by P1. That is intended: a suggestion searches nothing until the person approves it.
@@ -299,18 +307,32 @@ research or in option B produces a legal or work-eligibility claim.
 
 | | Calls in one evaluation run | Network | Model | Tokens / cost |
 |---|---|---|---|---|
-| Current evaluator | 282 direct calls + 135 rows through the pipeline step | 0 | 0 | not applicable |
-| Option B | 255 | 0 | 0 | not applicable |
+| Current evaluator | 258 direct calls + 319 rows through the pipeline step | 0 | 0 | not applicable |
+| Option B | 415 | 0 | 0 | not applicable |
+
+The outcome negative control (§5.7) accounts for 184 of the pipeline rows (46 cases × 2 profiles × clean and noised runs) and
+184 of the option-B calls.
 
 Wall-clock latency is measured by the test but **not committed**, because it is not deterministic. One run on 2026-10-30
-(Windows 10.0.22000, Intel i7-2600, Node 22.23.4, under vitest, after module load) gave a median of **0.19 ms per call for the
+(Windows build 10.0.22000 from `os.release()`, Intel i7-2600, Node 22.23.4, under vitest, after module load) gave a median of **0.19 ms per call for the
 current evaluator** and **0.04 ms for option B**, 20 samples of 92 calls each. This is indicative only: different hardware will differ.
 It shows neither option has a latency problem. It is not a reason to choose one.
 
 ### 5.7 Invariances (asserted on every run)
 
-- Attaching `rejected`, `no_response`, `interview` or `applied` to six cases changes no current score, no option-B verdict and no label.
-  An outcome is never role or skill truth.
+- **Outcome negative control.** No production scoring or ordering function declares an outcome or application-status
+  parameter, so the claim is not that an outcome "could" change a score. The control checks the real boundary instead:
+  - All 46 cases run twice per profile (frontend and backend research) through the production path: audit row →
+    `applyWorldwideProfileScores` → `toPartialResults` → `sortResults`. One run is clean. In the other, six cases carry
+    `outcome` and `applicationStatus` (`rejected`, `no_response`, `interview`, `applied`). The pipeline spreads the row and
+    Search keeps it as `raw`, so the fields really reach the Search ordering input (`noiseReachedSearchRows: true`).
+  - Option B is given the full noised case, not a title/description pick.
+  - Result: no score, no `profileMatch`, no Search order position and no option-B output changes. Every label equals a
+    `structuredClone` taken before the noise was attached.
+  - The control **can fail**: `comparator.test.ts` injects a score step that reads `outcome` off the row, one that folds it into
+    the breakdown, a comparator that reads it, and a comparator that writes a label; each is reported.
+  - It cannot see an outcome reaching scoring through a different channel (for example a store keyed by vacancy id). An
+    outcome is never role or skill truth in the paths it checks.
 - An unapproved plan suggestion never reaches a query.
 - No candidate country gives `unknown` everywhere. No candidate language gives `unknown` everywhere and no cap.
 - Work country never changes a score. A preferred language never caps.
@@ -321,7 +343,7 @@ It shows neither option has a latency problem. It is not a reason to choose one.
 | | A: frontend-only (selected) | B: role-aware, + backend (research only) |
 |---|---|---|
 | Product claim | "Frontend job search", which the scorer actually measures | "Your target roles", true for two families, explicitly refused for the rest |
-| Equivalent titles | Via #686 reviewed plans: 23 of 24 here vs 10 of 24 for the literal query | Same retrieval, plus a family check |
+| Equivalent titles | Via #686 reviewed plans: 23 of 24 here (by construction, an upper bound, §5.2) vs 10 of 24 for the literal query | Same retrieval, plus a family check |
 | Frontend scorer errors on this corpus | 1 vocabulary false low (F08), 2 sparse lows, 1 misleading test role (N02) | 0 relevant missed. 3 wrong matches (N02, N03, N04) that A gets right. 18 ties |
 | Non-frontend targets | Misleading frontend ordering (§5.4) unless the UI states the boundary | Backend ordered sensibly here (8 → 1 discordant). Others refused |
 | Cost to ship | 2 small deterministic fixes (#713, #714). The scope statement already exists | A second evaluator and explanation vocabulary, backend source and query planning, backend vocabulary per stack, a labelled corpus and UI for unsupported families |
@@ -361,14 +383,15 @@ The research explanation (`role-family-explanation/0.1.0-research`) carries:
 
 - `schema`, `comparator`
 - `verdict`, `confidence` (`normal | low | none`)
-- `targetFamilies`, `unsupportedTargetRoles`
+- `targetFamilies`, `adjacentFamilies`, `unsupportedTargetRoles`
 - `titleFamily`, `vacancyFamily`, `lean`
 - `evidence` (`sufficient | sparse`)
 - the matched `signals` per family, `ignoredPreferenceSignals`, `reasonCodes`
 
 Any production explanation of role scope should keep these properties:
 
-- **Versioned.** A reader refuses an unknown major instead of coercing it.
+- **Versioned.** Requirement for a future consumer: refuse an unknown major version instead of coercing it. Nothing in this
+  research implements or tests that refusal; the research explanation only carries the version strings.
 - **States its own confidence.** Sparse text is a state, not a number.
 - **Names the signals it used and the ones it ignored** (nice-to-have lines).
 - **Carries no eligibility, salary, outcome or application field.** Those stay with their owners.
@@ -430,6 +453,9 @@ Nothing in #412, #634 or #686 is modified by this PR.
 - **#714: frontend vocabulary and test-role boundary** (F08, N02). The title rule and concept list have no Vue/Nuxt/Svelte, and
   "engineer in test" is not read as QA. This is a small deterministic fix within frontend scope, with F08 and N02 as regression
   cases.
+- **Maintenance note for both.** They will move lines this memo cites (for example `relevance.ts:67`, `language.ts:137`). When
+  they do, update the `path:line` citations here and the `ANCHORS` table in
+  `apps/desktop/test/role-scope-research/doc-references.test.ts` in the same PR. That test fails on purpose when an anchor moves.
 - **Not filed:**
   - backend or any other family support (no-go, §8)
   - an AI comparator (#412 owns it)
@@ -446,6 +472,10 @@ Nothing in #412, #634 or #686 is modified by this PR.
   to make the frontend ranking comparison non-vacuous; their labels were written from the text before they were scored.
   Nothing here is evidence that option B generalises.
 - **Retrieval is a projection** over the corpus with the production local filter. It is not live source coverage.
+- **P1 retrieval is true by construction.** P1's approved titles were chosen by the fixture author with knowledge of the corpus
+  titles, and F05 was left out on purpose. Its 23 of 24 demonstrates the approved-title/shared-filter mechanism and is an upper
+  bound on this synthetic corpus. It is not an estimate of real reviewed-plan coverage or of live-source coverage. The same
+  applies to P3 (4 of 4).
 - **Latency is one machine, indicative.** No token, cost or provider number exists because nothing metered was called.
 - **Nothing here claims** hiring outcomes, interview rates, time saved, provider or model quality, market coverage, or legal or
   work eligibility.

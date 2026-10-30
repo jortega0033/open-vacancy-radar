@@ -2,7 +2,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { compareRoleFamily, COMPARATOR_VERSION, EXPLANATION_SCHEMA_VERSION, resolveTargets, verdictTier } from './comparator.js';
-import { runEvaluation } from './evaluate.js';
+import { applyWorldwideProfileScores } from '../../../../packages/vacancy-engine/src/pipeline/global-remote.js';
+import { outcomeNegativeControl, runEvaluation } from './evaluate.js';
 import { CORPUS, PROFILES } from './fixtures.js';
 import { compilePlan, PLANS } from './plans.js';
 
@@ -70,10 +71,71 @@ describe('#694 invariances that must always hold', () => {
   const result = runEvaluation();
 
   it('never turns an application, rejection, no-response or interview into role truth', () => {
-    expect(result.invariances.outcomesNeverBecomeRoleTruth.length).toBeGreaterThan(0);
-    for (const row of result.invariances.outcomesNeverBecomeRoleTruth) {
-      expect(row, row.id).toMatchObject({ currentUnchanged: true, optionBUnchanged: true, labelUnchanged: true });
+    const control = result.invariances.outcomesNeverBecomeRoleTruth;
+    expect(control.noised.length).toBeGreaterThan(0);
+    // The noise really crossed the boundary: it is on the Search rows and in the comparator's argument.
+    expect(control.noiseReachedSearchRows).toBe(true);
+    expect(control.noiseReachedComparator).toBe(true);
+    for (const entry of control.perProfile) {
+      expect(entry.rowsCompared, entry.profile).toBe(CORPUS.length);
+      expect(entry, entry.profile).toMatchObject({ changedScores: [], changedProfileMatch: [], searchOrderUnchanged: true, changedOptionB: [] });
     }
+    expect(control).toMatchObject({ scoresUnchanged: true, profileMatchUnchanged: true, searchOrderUnchanged: true, optionBUnchanged: true, labelsUnchanged: true, changedLabels: [] });
+  });
+
+  describe('the outcome negative control can fail (injected faults)', () => {
+    type Row = Parameters<typeof applyWorldwideProfileScores>[0][number] & { outcome?: string };
+
+    it('reports a score step that reads an outcome off the row', () => {
+      const control = outcomeNegativeControl({
+        scoreStep: (rows, profile, minimum) =>
+          applyWorldwideProfileScores(rows, profile, minimum).map((row) =>
+            (row as Row).outcome === 'rejected' && row.profileScore !== null ? { ...row, profileScore: row.profileScore - 40 } : row,
+          ),
+      });
+      expect(control.scoresUnchanged).toBe(false);
+      expect(control.searchOrderUnchanged).toBe(false);
+      expect(control.perProfile[0]!.changedScores).toEqual(expect.arrayContaining(['F01', 'S01']));
+      expect(control.labelsUnchanged).toBe(true);
+    });
+
+    it('reports a score step that folds an outcome into the breakdown', () => {
+      const control = outcomeNegativeControl({
+        scoreStep: (rows, profile, minimum) =>
+          applyWorldwideProfileScores(rows, profile, minimum).map((row) =>
+            (row as Row).outcome !== undefined && row.profileMatch ? { ...row, profileMatch: { ...row.profileMatch, matchingSkills: [] } } : row,
+          ),
+      });
+      expect(control.profileMatchUnchanged).toBe(false);
+    });
+
+    it('reports a comparator that reads an outcome from its input', () => {
+      const control = outcomeNegativeControl({
+        compare: (vacancy, profile) => {
+          const explanation = compareRoleFamily(vacancy, profile);
+          return 'outcome' in vacancy && vacancy.outcome === 'interview' ? { ...explanation, verdict: 'match' } : explanation;
+        },
+      });
+      expect(control.optionBUnchanged).toBe(false);
+      expect(control.perProfile.flatMap((entry) => entry.changedOptionB)).toContain('M01');
+    });
+
+    it('reports a label written from an outcome, against the snapshot taken before noise', () => {
+      const corpus = structuredClone(CORPUS) as unknown as typeof CORPUS;
+      const control = outcomeNegativeControl({
+        corpus,
+        compare: (vacancy, profile) => {
+          if ('outcome' in vacancy && vacancy.outcome === 'rejected' && 'expect' in vacancy) {
+            (vacancy.expect as { frontend: { grade: string } }).frontend.grade = 'not_relevant';
+          }
+          return compareRoleFamily(vacancy, profile);
+        },
+      });
+      expect(control.labelsUnchanged).toBe(false);
+      expect(control.changedLabels).toEqual(expect.arrayContaining(['F01', 'S01']));
+      // The shared fixture itself is untouched: the fault ran on a clone.
+      expect(byId('F01').expect.frontend.grade).toBe('relevant');
+    });
   });
 
   it('never lets an unapproved suggestion reach a query', () => {
