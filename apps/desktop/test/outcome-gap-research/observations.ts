@@ -216,7 +216,9 @@ export function readWorkspaceObservations(db: WorkspaceDb): WorkspaceReadResult 
       const cv = cvs.find((candidate) => candidate.id === overlay.cvId) ?? null;
       cvHash = cv ? hashReviewedSource(cv.source) : null;
       const match = matchOverlay({ jdSnapshotHash: overlay.jdSnapshotHash, sourceCvContentHash: overlay.sourceCvContentHash }, { jdHash: brief?.jdHash ?? null, cvHash });
-      assessmentState = match === 'matches' ? (coverage === 'complete' ? 'current' : 'partial') : 'stale';
+      // A posting text known to be truncated (and not confirmed complete by the person) lists fewer requirements than the posting has.
+      const jdTruncated = !overlay.jdComplete && !overlay.jdConfirmedComplete;
+      assessmentState = match === 'matches' ? (coverage === 'complete' && !jdTruncated ? 'current' : 'partial') : 'stale';
       requirements = overlay.requirements
         .filter((requirement) => !requirement.excluded)
         .map((requirement) => ({ requirementId: requirement.requirementId, text: requirement.text, classification: requirement.classification, evidenceClass: requirement.evidenceClass, reviewed: requirement.reviewed, excluded: false }));

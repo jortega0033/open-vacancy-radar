@@ -414,7 +414,7 @@ export function runEvaluation() {
       'Executed: invariances (what must not change when outcomes, scores or assessments change) and a dismissal check.',
       'Executed, constructed: four simpler rules scored on the same fixture (baselines).',
       'Source reading: the manual-review side of the desk comparison.',
-      'Real-contract lane (added by workspace-evaluation.test.ts): synthetic data written through the app’s real writers into a migrated database and read back by the read-only adapter.',
+      'Real-contract lane (added by evaluation.test.ts): synthetic data written through the app’s real writers into a migrated database and read back by the read-only adapter.',
       'Review gates are author-declared and not statistically derived (GATES in contract.ts). No inference is made about any real person.',
     ],
     gates: GATES,

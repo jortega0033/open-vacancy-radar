@@ -192,4 +192,13 @@ describe('what the current workspace tables CANNOT answer (each proven on this d
     expect(Object.keys(state.dismissed)).toEqual(['x']);
     expect(snapshot()).toBe(before);
   });
+
+  it('does not pool an assessment made over a posting text known to be truncated', () => {
+    const cv = workspace.listCvDocuments(db)[0]!;
+    const overlay = workspace.listCvEvidenceOverlays(db, cv.id).find((entry) => entry.requirements.some((requirement) => requirement.text === '5+ years of TypeScript'))!;
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { jdComplete: false, jdConfirmedComplete: false } as never);
+    const read = readWorkspaceObservations(db);
+    expect(byKey(read, 'northwind:1001').assessment.state).toBe('partial');
+    expect(buildRequirements(read.observations).assessment).toMatchObject({ current: 1, partial: 1 });
+  });
 });

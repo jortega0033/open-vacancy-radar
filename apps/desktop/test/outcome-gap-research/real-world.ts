@@ -87,7 +87,8 @@ export async function buildRealWorld(db: WorkspaceDb): Promise<RealWorld> {
       jdSnapshot: JD_V1,
       jdSnapshotHash: briefStore.sha256(JD_V1),
     });
-    workspace.updateCvEvidenceOverlay(db, overlay.id, { requirements: reqs, requirementCoverage: { status: 'complete', batches: 1 } });
+    // The app's completeness heuristic flags this short synthetic posting; the person read it and confirmed it is complete.
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { requirements: reqs, requirementCoverage: { status: 'complete', batches: 1 }, jdConfirmedComplete: true });
   };
   overlayFor(j1, [
     requirement({ requirementId: 'r-ts', text: '5+ years of TypeScript', jdAnchor: 'You have 5+ years of TypeScript experience.' }),
