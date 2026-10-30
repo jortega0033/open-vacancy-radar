@@ -12,6 +12,8 @@
 //   checksum-write    Stage the installer under its GitHub asset name and write a
 //                     `sha256sum -c` compatible <asset>.sha256 next to it.
 //   checksum-verify   Re-hash a staged installer and check its .sha256 file, name and version.
+//   artifact-name     Name the run artifact that carries the installer from the build job to the
+//                     publish job (or its read-only rehearsal), unique per run attempt.
 //   notes             Write the release notes with a provenance footer (tag, commit, run, hash).
 
 import { createHash } from 'node:crypto';
@@ -186,6 +188,33 @@ export function verifyChecksum({ dir, version }) {
   return { assetPath, checksumPath, hash };
 }
 
+export const ARTIFACT_KINDS = Object.freeze(['release', 'dry-run']);
+
+/**
+ * Name of the run artifact that hands the installer and its checksum from the build job to the
+ * publish job (tag builds) or to the read-only hand-off rehearsal (dry runs).
+ *
+ * The run attempt is part of the name because an artifact name can be uploaded only once per
+ * workflow run, and artifacts of earlier attempts stay attached to the run: "Re-run all jobs" after
+ * a successful build would otherwise fail at the upload. Each build attempt therefore uploads under
+ * its own name and passes that exact name to the downstream job as a job output. "Re-run failed
+ * jobs" reruns only the downstream job, which reuses the successful build attempt's outputs and
+ * thus downloads that attempt's own artifact. The downstream job never derives a name itself.
+ */
+export function artifactName({ tag, kind, commit, runAttempt }) {
+  const version = typeof tag === 'string' && tag.startsWith('v') ? tag.slice(1) : '';
+  if (!isSemver(version)) throw new Error(`Tag "${tag}" is not v<SemVer>.`);
+  if (!ARTIFACT_KINDS.includes(kind)) {
+    throw new Error(`Artifact kind "${kind}" is not one of ${ARTIFACT_KINDS.join(', ')}.`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(commit ?? ''))
+    throw new Error(`Commit "${commit}" is not a full SHA-1.`);
+  if (!/^[1-9]\d*$/.test(String(runAttempt ?? ''))) {
+    throw new Error(`Run attempt "${runAttempt}" is not a positive integer.`);
+  }
+  return `windows-installer-${tag}-${kind}-${commit}-attempt${runAttempt}`;
+}
+
 /** Release notes as committed, followed by a provenance footer binding the assets to the commit. */
 export function renderReleaseNotes({ notes, tag, commit, runUrl, assetName, hash }) {
   if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`Commit "${commit}" is not a full SHA-1.`);
@@ -276,6 +305,17 @@ export function main(argv) {
       });
       return;
     }
+    case 'artifact-name': {
+      writeOutputs({
+        name: artifactName({
+          tag: required(flags, 'tag'),
+          kind: required(flags, 'kind'),
+          commit: required(flags, 'commit'),
+          runAttempt: required(flags, 'run-attempt'),
+        }),
+      });
+      return;
+    }
     case 'notes': {
       const rendered = renderReleaseNotes({
         notes: readFileSync(path.join(repoRoot, required(flags, 'notes')), 'utf8'),
@@ -290,7 +330,7 @@ export function main(argv) {
     }
     default:
       throw new Error(
-        `Unknown command "${command ?? ''}". Use identity, checksum-write, checksum-verify or notes.`,
+        `Unknown command "${command ?? ''}". Use identity, checksum-write, checksum-verify, artifact-name or notes.`,
       );
   }
 }

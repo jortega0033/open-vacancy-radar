@@ -10,6 +10,7 @@ import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import {
+  artifactName,
   assetFileName,
   checksumLine,
   installerFileName,
@@ -229,6 +230,40 @@ describe('renderReleaseNotes', () => {
   });
 });
 
+describe('artifactName', () => {
+  const commit = '5f368cea30d29e1d36165b8aa1150007ef27d3f8';
+
+  it('binds the artifact to the tag, run kind, full commit and run attempt', () => {
+    assert.equal(
+      artifactName({ tag: 'v0.1.5', kind: 'dry-run', commit, runAttempt: '1' }),
+      `windows-installer-v0.1.5-dry-run-${commit}-attempt1`,
+    );
+    assert.equal(
+      artifactName({ tag: 'v0.1.5', kind: 'release', commit, runAttempt: 2 }),
+      `windows-installer-v0.1.5-release-${commit}-attempt2`,
+    );
+  });
+
+  it('gives each run attempt its own name, so "Re-run all jobs" never re-uploads a name', () => {
+    const names = ['1', '2', '3'].map((runAttempt) =>
+      artifactName({ tag: 'v0.1.5', kind: 'release', commit, runAttempt }),
+    );
+    assert.equal(new Set(names).size, names.length);
+  });
+
+  it('refuses a bad tag, kind, commit or run attempt', () => {
+    const base = { tag: 'v0.1.5', kind: 'release', commit, runAttempt: '1' };
+    assert.throws(() => artifactName({ ...base, tag: '0.1.5' }), /not v<SemVer>/);
+    assert.throws(() => artifactName({ ...base, tag: 'vnext' }), /not v<SemVer>/);
+    assert.throws(() => artifactName({ ...base, kind: 'publish' }), /not one of release, dry-run/);
+    assert.throws(() => artifactName({ ...base, commit: '5f368ce' }), /full SHA-1/);
+    assert.throws(() => artifactName({ ...base, commit: undefined }), /full SHA-1/);
+    assert.throws(() => artifactName({ ...base, runAttempt: '0' }), /positive integer/);
+    assert.throws(() => artifactName({ ...base, runAttempt: '' }), /positive integer/);
+    assert.throws(() => artifactName({ ...base, runAttempt: '1; rm' }), /positive integer/);
+  });
+});
+
 describe('CLI', () => {
   it('writes identity outputs to GITHUB_OUTPUT', (t) => {
     const repo = fakeRepo();
@@ -257,9 +292,44 @@ describe('CLI', () => {
     );
   });
 
+  it('writes the artifact name to GITHUB_OUTPUT', (t) => {
+    const output = path.join(tempDir(), 'github-output');
+    writeFileSync(output, '');
+    const previous = process.env.GITHUB_OUTPUT;
+    process.env.GITHUB_OUTPUT = output;
+    t.mock.method(console, 'log', () => {});
+    const commit = '5f368cea30d29e1d36165b8aa1150007ef27d3f8';
+    try {
+      main([
+        'artifact-name',
+        '--tag',
+        'v0.1.5',
+        '--kind',
+        'dry-run',
+        '--commit',
+        commit,
+        '--run-attempt',
+        '3',
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_OUTPUT;
+      else process.env.GITHUB_OUTPUT = previous;
+    }
+    assert.equal(
+      readFileSync(output, 'utf8'),
+      `name=windows-installer-v0.1.5-dry-run-${commit}-attempt3
+`,
+    );
+  });
+
   it('rejects unknown commands and missing flag values', () => {
     assert.throws(() => main(['publish']), /Unknown command "publish"/);
     assert.throws(() => main(['identity', '--tag']), /Missing value for --tag/);
     assert.throws(() => main(['checksum-verify', '--dir', tempDir()]), /--version is required/);
+    assert.throws(
+      () =>
+        main(['artifact-name', '--tag', 'v0.1.5', '--kind', 'release', '--commit', 'a'.repeat(40)]),
+      /--run-attempt is required/,
+    );
   });
 });

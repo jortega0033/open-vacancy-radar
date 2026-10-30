@@ -83,8 +83,10 @@ publishes both. The installer is uploaded under the name GitHub serves it as
 (`Open.Vacancy.Radar-Setup-<version>.exe`, spaces become dots), and its `.sha256` file is one
 `<lowercase sha256>  <that name>` line, so `sha256sum -c Open.Vacancy.Radar-Setup-<version>.exe.sha256`
 works after download. The release tooling lives in `scripts/release-tools.mjs` and is tested by
-`node --test scripts/release-tools.test.mjs`. Nothing to do by hand here unless that workflow itself
-needs debugging -- in which case, fall back to the manual command it automates:
+`node --test scripts/release-tools.test.mjs scripts/release-workflow.test.mjs` (the second file
+checks the workflow's publish gating, permissions, action pins and hand-off rehearsal). Nothing to
+do by hand here unless that workflow itself needs debugging -- in which case, fall back to the
+manual command it automates:
 
 - [ ] Compute and record a SHA-256 for the installer:
       `Get-FileHash "dist-packages\Open Vacancy Radar-Setup-<version>.exe" -Algorithm SHA256`
@@ -96,9 +98,14 @@ needs debugging -- in which case, fall back to the manual command it automates:
       runs the same Release workflow as a dry run, and after merge
       `gh workflow run release.yml --ref master` runs it on the merged commit. A dry run builds,
       tests (including the Windows e2e run, the only place the `*-win32.png` visual baselines are
-      compared), packages, smoke-tests and checksums the installer, then uploads it as a run
-      artifact and stops. If the win32 baselines fail, the run uploads the Playwright report and the
-      actual screenshots from the release runner image for inspection.
+      compared), packages, smoke-tests and checksums the installer, and uploads it as a run
+      artifact. Its read-only "Rehearse the release hand-off (no publish)" job then downloads that
+      same-run artifact and runs the publish job's own hand-off steps: checksum re-verification
+      against the build's hash, `sha256sum -c` and the release notes with their provenance footer.
+      It uploads nothing and never calls `gh release`. The dry-run installer is rehearsal evidence,
+      not the release asset; the tag build makes its own. If the win32 baselines fail, the run
+      uploads the Playwright report and the actual screenshots from the release runner image for
+      inspection.
 - [ ] Tag the merged release commit on `master` (`git tag v<version> <sha>`), push the tag.
 - [ ] Pushing the tag triggers `.github/workflows/release.yml`. Its `build` job (read-only token)
       refuses the tag unless it is exactly `v` + the version in both `package.json` and
@@ -113,6 +120,11 @@ needs debugging -- in which case, fall back to the manual command it automates:
       pre-release part (`0.2.0-rc.1`) is published as a pre-release. Watch the workflow run to
       confirm it succeeds. The publish step is idempotent: rerunning for an existing tag updates
       its notes and replaces both assets instead of failing because the release already exists.
+      The installer artifact is named per run attempt
+      (`windows-installer-v<version>-release-<commit>-attempt<n>`) and the build passes that exact
+      name to `publish`. "Re-run failed jobs" after a failed publish reruns only `publish`, which
+      downloads the successful build attempt's artifact. "Re-run all jobs" rebuilds and uploads
+      under the new attempt's name. Neither path downloads an artifact from another run.
 - [ ] Confirm the published release: the installer and a matching `.sha256` file are both attached,
       `sha256sum -c` passes on the downloaded pair, and the notes' provenance footer names the
       commit you tagged.

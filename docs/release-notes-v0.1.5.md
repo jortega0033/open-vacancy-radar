@@ -7,15 +7,23 @@ the tagged build. These notes do not claim it was done.
 
 ## What's new since v0.1.4
 
-Built from the 25 commits between `v0.1.4` and `master` at `1255010`. Most of them are one batch
-of AI job-search changes: a dependency security fix, nine shipped features and two research
-records (tracker #683). Each of those PRs was merged only after an independent review and passed
-all ten required checks on its final head. The checks are Lint/typecheck/test/build, the Windows
-full suite (Node 22), Windows installer packaging, Electron e2e, gitleaks and CodeQL. The PR and
-merge-commit numbers below point to the full detail.
+Built from the 26 commits between `v0.1.4` and `master` at `5f368ce`. Most of them are one batch
+of AI job-search changes: two dependency security fixes, nine shipped features and two research
+records (tracker #683). Before each of those 13 PRs was merged, its exact final head passed the six
+status checks that branch protection requires on `master`: Lint/typecheck/test/build, Electron e2e,
+Windows installer packaging, the Windows full suite (Node 22), gitleaks and CodeQL. That is ten
+check runs per PR, because CodeQL runs four language analyses. Each final head also had an
+independent review by a separate Claude reviewer agent. That review is a recorded verdict, not a
+GitHub pull-request approval. The PR and merge-commit numbers below point to the full detail.
 
-**Security prerequisite**
+**Security**
 
+- The shipped Electron runtime is now 44.9.3 (was 44.0.0). It fixes GHSA-jr5w-w6x2-84p9 (high),
+  four medium and three low advisories for Electron 44. The jsPDF dependency's DOMPurify, which the
+  renderer build bundles, is now 3.4.17 (was 3.4.14). It fixes GHSA-cg2g-xh64-v4q7 (critical),
+  GHSA-mrv2-3pqr-j5jr (high) and three low advisories. This is a lockfile-only update inside the
+  existing version ranges. A desktop test fails if Electron drops below 44.9.1 or DOMPurify
+  below 3.4.17. (#716, PR #717, `5f368ce`)
 - The production dependency audit is clean again. Patched releases of `@modelcontextprotocol/sdk`
   1.32.0, `@modelcontextprotocol/client` 2.3.0, zod 4.6.6 (the zod 3 packages moved to zod 4),
   fastify 5.12.7, undici 7.30.1, fast-uri 4.2.3, ip-address 10.7.5, body-parser 2.4.0 and qs 6.17.0
@@ -98,6 +106,11 @@ merge-commit numbers below point to the full detail.
   non-publishing dry run. The `.sha256` file now names the asset as GitHub serves it, so
   `sha256sum -c` works after download. The v0.1.4 file named a path with spaces that downloads do
   not have.
+- Every dry run now also rehearses the publish hand-off without publishing. A read-only job
+  downloads the dry run's own installer artifact and re-checks it against the build's hash. It then
+  composes the release notes with their provenance footer, exactly as the publish job does. It
+  uploads nothing and cannot create a release. The installer artifact name now includes the run
+  attempt, so re-running the whole workflow does not collide with an earlier attempt's artifact.
 
 ## Safety and privacy
 
@@ -147,17 +160,20 @@ application data deletes them. See [privacy.md](privacy.md).
   report, not streamed.
 - Role scoring is still frontend-specific. Saved target roles from another field do not change
   scores.
-- Open Dependabot alerts when these notes were written:
-  - Shipped runtime: electron 44.0.0 (one high, eMudhra certificate mitigation, fixed in 44.9.1,
-    plus mediums and lows).
-  - dompurify 3.4.14 (one critical, one high), an optional dependency of jsPDF. A reading of the
-    source finds no call to `jsPDF.html()`, the path that loads it. That reading is not a security
-    assessment.
-  - Build and asset tooling only, not shipped: vite, vitest, source-map-js, brace-expansion,
-    Pillow and cairosvg.
+- Open Dependabot alerts when these notes were last updated (2026-10-30). The 13 Electron and
+  DOMPurify alerts were closed by #717, and no open alert names a package that ships in the
+  installer. Alerts remain open, some of them critical or high, for build, test and asset tooling
+  that is not packaged. This release excludes them and does not upgrade them:
+  - Pillow and CairoSVG, pinned in `scripts/assets/requirements.txt` for the maintainer asset
+    validation and icon generation scripts. CI installs them to validate the committed assets.
+    They are not part of the app.
+  - Vite, @vitest/mocker, source-map-js and brace-expansion, development dependencies used to
+    build and test the app. Dependabot classifies them as development scope. The Vite alerts
+    concern its dev server and editor launch.
 
-  The release checklist asks for none above low severity, so the maintainer decides before
-  tagging.
+  The release checklist asks for no open Dependabot alert above low severity. Because these
+  tooling alerts are open, that line is not literally met. Tagging remains the maintainer's
+  decision.
 
 ## Deferred
 
