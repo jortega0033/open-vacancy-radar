@@ -387,7 +387,7 @@ contract suite, register it. No daemon, client, or desktop changes required.
 - [docs/assets.md](docs/assets.md): brand sources, icon generation, renderer mapping and rebranding
 - [apps/desktop/DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md): the design-token rules every component follows
 - [docs/troubleshooting.md](docs/troubleshooting.md): common problems and how to diagnose them
-- [docs/release-notes-v0.1.3.md](docs/release-notes-v0.1.3.md): what shipped, known limitations, privacy implications (earlier releases: [v0.1.0](docs/release-notes-v0.1.0.md), [v0.1.1](docs/release-notes-v0.1.1.md), [v0.1.2](docs/release-notes-v0.1.2.md))
+- [docs/release-notes-v0.1.5.md](docs/release-notes-v0.1.5.md): what shipped, known limitations, privacy implications (earlier releases: [v0.1.0](docs/release-notes-v0.1.0.md), [v0.1.1](docs/release-notes-v0.1.1.md), [v0.1.2](docs/release-notes-v0.1.2.md), [v0.1.3](docs/release-notes-v0.1.3.md), [v0.1.4](docs/release-notes-v0.1.4.md))
 - [docs/privacy.md](docs/privacy.md): what data is stored, what leaves your machine and when, retention/deletion
 - [docs/release-checklist.md](docs/release-checklist.md): the repeatable pre-release verification checklist
 - [SECURITY.md](SECURITY.md): the daemon's threat model and local-auth mechanism
