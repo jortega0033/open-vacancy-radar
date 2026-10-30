@@ -275,7 +275,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
             <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Reschedule: ${label}`} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'reschedule', action, form: formFromAction(action) }); }}>
               Reschedule
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !view?.draft.available} aria-label={`Draft a message: ${label}`} title={view?.draft.reason ?? undefined} onClick={() => void draftMessage(action.id)}>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !view?.draft.available} aria-label={`Draft a message: ${label}`} onClick={() => void draftMessage(action.id)}>
               Draft a message
             </button>
             <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Edit: ${label}`} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'edit', action, form: formFromAction(action) }); }}>

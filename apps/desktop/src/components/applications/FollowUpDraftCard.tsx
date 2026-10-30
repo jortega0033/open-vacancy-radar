@@ -81,6 +81,7 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
         This app has not sent this message and cannot. Copy it and send it yourself from your own email or messaging app.
       </p>
 
+      {!sent && !discarded && dirty && <p className="mt-1 text-xs">You changed the text. Save your changes before approving it or recording that you sent it.</p>}
       {!discarded && (
         <div className="mt-2 flex flex-wrap gap-1">
           {!sent && dirty && (
@@ -98,7 +99,6 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
               type="button"
               className="btn btn-sm"
               disabled={busy || dirty}
-              title={dirty ? 'Save your changes first' : undefined}
               onClick={() => void run(() => window.applicationActions.approveDraft(target), 'Text approved. It has not been sent.')}
             >
               Approve this text
