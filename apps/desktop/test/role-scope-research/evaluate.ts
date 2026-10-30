@@ -3,6 +3,7 @@ import {
   candidateWorkLanguages,
   normalizeCountry,
   type CandidateProfile,
+  vacancyTitleMatches,
   type DiscoveryVacancyAudit,
 } from '@open-vacancy-radar/vacancy-engine';
 
@@ -16,6 +17,8 @@ import {
   type WorldwideDeterministicScore,
 } from '../../../../packages/vacancy-engine/src/filtering/index.js';
 import { applyWorldwideProfileScores } from '../../../../packages/vacancy-engine/src/pipeline/global-remote.js';
+// The discovery pre-classification (`role_mismatch` and friends), a separate, title-only gate.
+import { classifyDiscoveryVacancy } from '../../../../packages/vacancy-engine/src/global-remote/evaluation.js';
 
 import { sortResults, toPartialResults } from '../../src/components/search/results.js';
 import { compareRoleFamily, COMPARATOR_VERSION, EXPLANATION_SCHEMA_VERSION, SPARSE_WORDS, verdictTier, type RoleFamilyExplanation } from './comparator.js';
@@ -407,6 +410,33 @@ function slices(rows: readonly ScorerRow[]) {
   };
 }
 
+/**
+ * The discovery pre-classification, run the way discovery runs it (no candidate languages: the language gate is
+ * re-applied after discovery), and with #686's approved-title override for P1. Reported for the ROLE gate only:
+ * the location and salary gates that follow are out of scope here. In Search this decision is shown in the detail
+ * pane and counted in report statistics; it neither hides nor reorders a row.
+ */
+function preClassification() {
+  const plan = PLANS.find((entry) => entry.id === 'P1_frontend_reviewed_686')!;
+  const approved = plan.approvedTitles.map((title) => title.title);
+  const roleGate = (decision: string) => (decision === 'role_mismatch' ? 'role_mismatch' : decision === 'non_vacancy' ? 'non_vacancy' : 'passed_role_gate');
+  const rows = CORPUS.map((item) => {
+    const base = { title: item.title, location: item.location, annualizedMinimumUsd: null, minimumAnnualBaseUsd: null, description: item.description };
+    const withoutPlan = classifyDiscoveryVacancy(base).decision;
+    const approvedTitle = withoutPlan === 'role_mismatch' ? approved.find((title) => vacancyTitleMatches({ title: item.title }, title)) : undefined;
+    const withPlan = approvedTitle === undefined ? withoutPlan : classifyDiscoveryVacancy({ ...base, approvedTitle }).decision;
+    return { id: item.id, grade: item.expect.frontend.grade, withoutPlan: roleGate(withoutPlan), withReviewedPlan: roleGate(withPlan), approvedTitle: approvedTitle ?? null };
+  });
+  const pick = (grade: Grade, key: 'withoutPlan' | 'withReviewedPlan', gate: string) => ids(rows.filter((row) => row.grade === grade && row[key] === gate));
+  return {
+    note: 'Title-only discovery gate (packages/vacancy-engine/src/global-remote/evaluation.ts). Shown as "Discovery decision" in the detail pane and counted in report statistics; Search neither hides nor reorders role_mismatch rows.',
+    relevantMarkedRoleMismatch: { withoutPlan: pick('relevant', 'withoutPlan', 'role_mismatch'), withReviewedPlan: pick('relevant', 'withReviewedPlan', 'role_mismatch') },
+    notRelevantPassingRoleGate: { withoutPlan: pick('not_relevant', 'withoutPlan', 'passed_role_gate'), withReviewedPlan: pick('not_relevant', 'withReviewedPlan', 'passed_role_gate') },
+    adjacentMarkedRoleMismatch: { withoutPlan: pick('adjacent', 'withoutPlan', 'role_mismatch'), withReviewedPlan: pick('adjacent', 'withReviewedPlan', 'role_mismatch') },
+    rows,
+  };
+}
+
 /** What today's evaluator does with targets outside frontend: the core coherence gap of #694. */
 function unsupportedFamilyBehaviour() {
   const available = CORPUS.filter((item) => item.availability === 'in_configured_source');
@@ -484,8 +514,11 @@ export function runEvaluation() {
   pipelineCalls = 0;
   const frontendRows = scorerRows('frontend');
   const backendRows = scorerRows('backend_research');
-  const retrieval = Object.fromEntries(PLANS.map((plan) => [plan.id, retrievalFor(plan.id)]));
-  const ranking = Object.fromEntries(PLANS.map((plan) => [plan.id, rankingFor(plan.id, retrieval[plan.id]!.retrievedIds)]));
+  const retrieval = Object.fromEntries(PLANS.map((plan) => [plan.id, retrievalFor(plan.id)])) as Record<PlanId, ReturnType<typeof retrievalFor>>;
+  const ranking = Object.fromEntries(PLANS.map((plan) => [plan.id, rankingFor(plan.id, retrieval[plan.id].retrievedIds)])) as Record<
+    PlanId,
+    ReturnType<typeof rankingFor>
+  >;
   const result = {
     evaluation: EVALUATION_VERSION,
     issue: 694,
@@ -536,6 +569,7 @@ export function runEvaluation() {
       note: 'Only the rows each plan retrieved. Ties in the current evaluator are real score ties; the production sort breaks them by date (all equal here), then title, then key.',
       ...ranking,
     },
+    preClassification: preClassification(),
     slices: slices(frontendRows),
     unsupportedFamily: unsupportedFamilyBehaviour(),
     invariances: invariances(),

@@ -6683,6 +6683,345 @@
       }
     }
   },
+  "preClassification": {
+    "note": "Title-only discovery gate (packages/vacancy-engine/src/global-remote/evaluation.ts). Shown as \"Discovery decision\" in the detail pane and counted in report statistics; Search neither hides nor reorders role_mismatch rows.",
+    "relevantMarkedRoleMismatch": {
+      "withoutPlan": ["F04", "F05", "F06", "F08", "F09", "F10", "F11", "L04"],
+      "withReviewedPlan": ["F05"]
+    },
+    "notRelevantPassingRoleGate": {
+      "withoutPlan": ["N02", "N04"],
+      "withReviewedPlan": ["N02", "N04"]
+    },
+    "adjacentMarkedRoleMismatch": {
+      "withoutPlan": ["M01", "M03", "M04"],
+      "withReviewedPlan": ["M01", "M03", "M04"]
+    },
+    "rows": [
+      {
+        "id": "F01",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "F02",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "F03",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "F04",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": "Design Systems Engineer"
+      },
+      {
+        "id": "F05",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "F06",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": "Frontend ontwikkelaar"
+      },
+      {
+        "id": "F07",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "F08",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": "Vue.js Developer"
+      },
+      {
+        "id": "F09",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": "Client-side Engineer"
+      },
+      {
+        "id": "F10",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": "Web Engineer"
+      },
+      {
+        "id": "F11",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": "Frontend-Entwickler"
+      },
+      {
+        "id": "M01",
+        "grade": "adjacent",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "M02",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "M03",
+        "grade": "adjacent",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "M04",
+        "grade": "adjacent",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "A01",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "A02",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "O01",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "O02",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "O03",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "B01",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "B02",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "B03",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "B04",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "S01",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "S02",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "S03",
+        "grade": null,
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "S04",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "L01",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "L02",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "L03",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "L05",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "L06",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "L04",
+        "grade": "relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": "Frontend ontwikkelaar"
+      },
+      {
+        "id": "E01",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "E02",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "E03",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "R01",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "R02",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "R03",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "N01",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      },
+      {
+        "id": "N02",
+        "grade": "not_relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "N03",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": "Frontend Engineer"
+      },
+      {
+        "id": "N04",
+        "grade": "not_relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "D01",
+        "grade": "relevant",
+        "withoutPlan": "passed_role_gate",
+        "withReviewedPlan": "passed_role_gate",
+        "approvedTitle": null
+      },
+      {
+        "id": "D02",
+        "grade": "not_relevant",
+        "withoutPlan": "role_mismatch",
+        "withReviewedPlan": "role_mismatch",
+        "approvedTitle": null
+      }
+    ]
+  },
   "slices": {
     "sparse": [
       {
