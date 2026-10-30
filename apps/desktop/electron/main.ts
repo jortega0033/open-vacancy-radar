@@ -69,6 +69,7 @@ import { createApplicationActionsHandlers } from './application-actions-ipc.js';
 import { cancelAllFollowUps } from './follow-up-runs.js';
 import { cancelAllCritiques, type CritiqueDeps } from './application-critique-service.js';
 import { readPostingVerification } from './application-posting-verification.js';
+import { createPostingLivenessService, POSTING_LIVENESS_READ_LIMIT } from './vacancy-posting-liveness.js';
 import { runCompanyResearchSession } from './company-evidence-research.js';
 import { createCompanyEvidenceHandlers } from './company-evidence-ipc.js';
 import { CompanyEvidenceRuns, getView as companyEvidenceView, proseEvidence, type CompanyEvidenceDeps } from './company-evidence-service.js';
@@ -2233,7 +2234,10 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
     // #687: the one bounded live check, through the same shared safe-HTTP client the on-demand
     // description fetch uses. Built lazily so an app that never prepares anything never opens the engine DB.
     async verifyPosting(input) {
-      return createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+      const observation = await createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+      // #720: a result whose application check found it closed (or open) says so in the search list.
+      postingLiveness.remember(input.url, observation);
+      return observation;
     },
     // #689: the drafting stage reads only what the support policy already approved from the local
     // store. It never starts research and never fetches.
@@ -2375,6 +2379,33 @@ guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) 
     if (result.ok) void applicationPipelineTick.runOnce();
     return result;
   });
+});
+
+// #720: plain liveness for search results. Reading never touches the network; a check is one
+// bounded request for one selected result, through the same verifier and source policy as preparation.
+const postingLiveness = createPostingLivenessService({
+  resolveUrl: (vacancyKey) => resolvePipelineVacancy(vacancyKey)?.applyUrl || null,
+  async verify(input) {
+    return createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+  },
+  log: (message, meta) => console.warn(`[posting-liveness] ${message}`, meta ?? {}),
+});
+
+function parseVacancyKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((key): key is string => typeof key === 'string' && key.length > 0 && key.length <= 512)
+    .slice(0, POSTING_LIVENESS_READ_LIMIT);
+}
+
+guardedIpc.handle('application-pipeline:posting-liveness', (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return postingLiveness.read(parseVacancyKeys(source.vacancyKeys));
+});
+
+guardedIpc.handle('application-pipeline:check-posting-liveness', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return postingLiveness.check(parseId(source.vacancyKey, 'vacancyKey'));
 });
 
 // #687: reading the stored posting check never touches the network.

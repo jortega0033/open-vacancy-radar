@@ -2,6 +2,8 @@ import { Fragment, memo, useLayoutEffect, useRef } from 'react';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { EmptyState } from '../shell/index.js';
+import type { PostingLivenessView } from '../../window.js';
+import { livenessFor, LivenessChip } from './posting-liveness.js';
 import {
   descriptionExcerpt,
   formatDate,
@@ -20,6 +22,8 @@ export interface SearchResultRowProps {
   saved: boolean;
   /** Whether a scan is running right now. A provisional row only reads "Live" while this is true. */
   scanActive?: boolean;
+  /** What is known about whether this posting is open (#720). Absent = "Not checked yet". */
+  liveness?: PostingLivenessView;
 }
 
 /** Chip for a detected on-site or hybrid hint. Remote and unknown get none, to keep rows quiet. */
@@ -36,8 +40,19 @@ export const SearchResultRow = memo(function SearchResultRow({
   onSelect,
   saved,
   scanActive = false,
+  liveness,
 }: SearchResultRowProps) {
   const stale = isStalePosting(result.postedAt);
+  // #720: no fit score without a plain liveness state beside it. A row with no score shows the state
+  // only once a check actually answered (open or closed), so unscored rows stay quiet.
+  const live = liveness ?? livenessFor(result.key, undefined);
+  const showLiveness = result.profileScore != null || live.state === 'open' || live.state === 'closed';
+  // A short window keeps one line of chips. With a liveness state to show, score and liveness win and
+  // the arrangement, employment-type and salary chips step aside (all stay in the detail pane).
+  const arrangementText = arrangementChip(result)?.text;
+  const shortHidden = (text: string): boolean =>
+    (text === result.employmentType && result.salary !== null) ||
+    (showLiveness && (text === arrangementText || text === result.employmentType || text === result.salary));
   const excerpt = descriptionExcerpt(result.description);
   // Verification has the identical "not available" tone on almost every row (the pipeline has no
   // per-employer verification step for most vacancies), so the badge would carry zero per-row
@@ -96,7 +111,7 @@ export const SearchResultRow = memo(function SearchResultRow({
 
         {excerpt && <p className="mt-1 line-clamp-2 text-xs text-base-content/60 short:hidden">{excerpt}</p>}
 
-        {(result.profileScore != null || badges.length > 0) && (
+        {(result.profileScore != null || showLiveness || badges.length > 0) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1 short:mt-1 short:flex-nowrap short:overflow-hidden">
           {result.profileScore != null && (
             <span
@@ -107,10 +122,11 @@ export const SearchResultRow = memo(function SearchResultRow({
               <span className="sr-only">{profileFitSpoken(result.profileScore)}</span>
             </span>
           )}
+          {showLiveness && <LivenessChip view={live} size="xs" />}
           {badges.map((badge) => (
             <span
               key={badge.text}
-              className={`badge badge-sm flex-none whitespace-nowrap font-normal ${badge.text === result.employmentType && result.salary ? 'short:hidden' : ''} ${
+              className={`badge badge-sm flex-none whitespace-nowrap font-normal ${shortHidden(badge.text) ? 'short:hidden' : ''} ${
                 badge.tone === 'success'
                   ? 'badge-success badge-soft'
                   : badge.tone === 'warning'
@@ -137,6 +153,8 @@ export interface SearchResultListProps {
   onSelect: (result: SearchResult) => void;
   /** `vacancyKey`s already in the workspace database, so a saved row can say so. */
   savedKeys: ReadonlySet<string>;
+  /** What is known about each result's posting (#720), by result key. */
+  liveness?: ReadonlyMap<string, PostingLivenessView>;
   summary: string;
   /** Whether a scan is running right now; passed through to each row's "Live" badge. */
   scanActive?: boolean;
@@ -161,6 +179,7 @@ export const SearchResultList = memo(function SearchResultList({
   selectedKey,
   onSelect,
   savedKeys,
+  liveness,
   summary,
   scanActive = false,
   checkedCount,
@@ -222,6 +241,7 @@ export const SearchResultList = memo(function SearchResultList({
                 onSelect={onSelect}
                 saved={savedKeys.has(result.key)}
                 scanActive={scanActive}
+                liveness={livenessFor(result.key, liveness)}
               />
             </Fragment>
           ))

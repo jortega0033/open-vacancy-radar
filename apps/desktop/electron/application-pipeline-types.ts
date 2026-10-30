@@ -136,6 +136,27 @@ export interface PostingVerificationView {
   actions: PostingVerificationAction[];
 }
 
+/**
+ * Plain liveness of one search result's posting (#720), shown beside every fit score. Never invented:
+ * `open` and `closed` come only from a real check (with its time), `unverifiable` is either a check
+ * that could not answer or a link no check can reach, and `not_checked` is exactly that.
+ */
+export type PostingLivenessState = 'open' | 'not_checked' | 'unverifiable' | 'closed';
+
+export interface PostingLivenessView {
+  vacancyKey: string;
+  state: PostingLivenessState;
+  /** ISO-8601 time the posting's job system was contacted; null when nothing was checked. */
+  checkedAt: string | null;
+  /** Checking source (`ashby`, `lever`, ...), or null. */
+  source: string | null;
+  /** Host and route shape only (no ids), or null. */
+  sourceRef: string | null;
+  reason: PostingVerificationReasonCode | null;
+  /** The link has an authoritative route, so a check can be asked for. */
+  checkable: boolean;
+}
+
 export interface ApplicationPipelineBridge {
   /**
    * Records an application attempt for one saved job and hands it to the daemon queue. Returns as
@@ -170,6 +191,16 @@ export interface ApplicationPipelineBridge {
    * choice deletes the package prepared from the earlier text; Keep never does.
    */
   refreshFromPosting(attemptId: string): Promise<RestartApplicationTailoringResult>;
+  /**
+   * What is known now about whether these results' postings are open (#720). Makes no request; main
+   * resolves each link from the latest report, the renderer sends only vacancy keys.
+   */
+  postingLiveness?(vacancyKeys: string[]): Promise<PostingLivenessView[]>;
+  /**
+   * One bounded check of one selected result's posting (#720), through the same verifier, envelope
+   * and freshness windows as preparation. A fresh answer is reused; a link with no route costs nothing.
+   */
+  checkPostingLiveness?(vacancyKey: string): Promise<PostingLivenessView>;
   /** Links the letter just saved from the review hand-off to this attempt. Main finds the letter. */
   attachLetter(attemptId: string): Promise<{ ok: boolean; attemptId: string; detail?: string }>;
 }

@@ -92,6 +92,11 @@ const UNABLE_REASON: Record<string, string> = {
   check_failed: 'The check could not start on this computer.',
 };
 
+/** The plain sentence for why a check could not answer (#720 shares it with search results). */
+export function unableReasonText(reason: string | null): string {
+  return UNABLE_REASON[reason ?? ''] ?? 'The check did not finish.';
+}
+
 export type PostingNoticeTone = 'quiet' | 'warning' | 'info';
 
 export interface PostingNoticeText {

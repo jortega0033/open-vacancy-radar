@@ -3,7 +3,7 @@ import { ArrowLeft, Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile, GlobalRemoteReport, SearchPlan } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
-import type { SavedJobInput, VacancyEngineStatus } from '../../window.js';
+import type { PostingLivenessView, SavedJobInput, VacancyEngineStatus } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
@@ -383,6 +383,18 @@ export function SearchPage({
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [prepareStates, setPrepareStates] = useState<Record<string, PrepareState>>({});
+  // #720: plain liveness per result key, as main knows it. Read for the visible page without any
+  // request; the one result shown in the detail pane is checked once (bounded, same verifier).
+  const [liveness, setLiveness] = useState<ReadonlyMap<string, PostingLivenessView>>(() => new Map());
+  const [livenessChecking, setLivenessChecking] = useState<string | null>(null);
+  const mergeLiveness = useCallback((views: readonly PostingLivenessView[]) => {
+    if (views.length === 0) return;
+    setLiveness((current) => {
+      const next = new Map(current);
+      for (const view of views) next.set(view.vacancyKey, view);
+      return next;
+    });
+  }, []);
   const [prepareErrors, setPrepareErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
   // Which CLI the gap-analysis offer below actually runs through (issue #400): the effective
@@ -896,6 +908,47 @@ export function SearchPage({
     [pageItems, selectedKey],
   );
 
+  const livenessPageKeys = useMemo(
+    () => pageItems.filter((result) => !result.provisional).map((result) => result.key).join('\n'),
+    [pageItems],
+  );
+  useEffect(() => {
+    const read = window.applicationPipeline?.postingLiveness;
+    if (typeof read !== 'function' || livenessPageKeys.length === 0) return;
+    let cancelled = false;
+    read(livenessPageKeys.split('\n'))
+      .then((views) => {
+        if (!cancelled) mergeLiveness(views);
+      })
+      .catch(() => {
+        // Nothing known is "Not checked yet", which is what the rows already say.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [livenessPageKeys, mergeLiveness]);
+
+  const selectedLivenessKey = selected && !selected.provisional ? selected.key : null;
+  useEffect(() => {
+    const check = window.applicationPipeline?.checkPostingLiveness;
+    if (typeof check !== 'function' || selectedLivenessKey === null) return;
+    let cancelled = false;
+    setLivenessChecking(selectedLivenessKey);
+    check(selectedLivenessKey)
+      .then((view) => {
+        if (!cancelled) mergeLiveness([view]);
+      })
+      .catch(() => {
+        // A check that could not run changes nothing shown; preparation checks again before AI work.
+      })
+      .finally(() => {
+        if (!cancelled) setLivenessChecking((current) => (current === selectedLivenessKey ? null : current));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLivenessKey, mergeLiveness]);
+
   const reportHasOnlyUnscoredRows =
     worldwideReport !== null && savedResults.length > 0 && savedResults.every((r) => r.profileScore === null);
   const currentProfileConfigured =
@@ -1307,12 +1360,16 @@ export function SearchPage({
     }
   }, [onSavedJobsChanged, selected]);
 
-  const handlePrepare = useCallback(async () => {
+  const handlePrepare = useCallback(async (options: { anyway?: boolean } = {}) => {
     // Gated on the selected row's own `provisional` flag, not the page-level scanning state
     // (issue #363): a provisional row must never start application preparation, whether it's
     // provisional because no report has loaded yet or because the user is viewing a rescan's live
     // rows while an old report still exists.
     if (!selected || selected.provisional) return;
+    // #720: a posting a check found closed never starts from the primary action. "Prepare anyway" is
+    // the explicit secondary path; main checks again before any AI work and, if it is still closed,
+    // waits for Get ready anyway, which is recorded with its time.
+    if (liveness.get(selected.key)?.state === 'closed' && options.anyway !== true) return;
     const key = selected.key;
     setPrepareStates((current) => ({ ...current, [key]: 'preparing' }));
     setPrepareErrors((current) => {
@@ -1336,7 +1393,7 @@ export function SearchPage({
     } finally {
       setPrepareStates((current) => ({ ...current, [key]: 'idle' }));
     }
-  }, [onSavedJobsChanged, onViewApplicationAttempt, selected]);
+  }, [liveness, onSavedJobsChanged, onViewApplicationAttempt, selected]);
 
   const saveState: SaveState = selected
     ? (saveStates[selected.key] ?? (savedKeys.has(selected.key) ? 'saved' : 'idle'))
@@ -1707,6 +1764,7 @@ export function SearchPage({
                 selectedKey={selectedKey}
                 onSelect={handleSelect}
                 savedKeys={savedKeys}
+                liveness={liveness}
                 summary={summary}
                 scanActive={scanning}
                 checkedCount={worldwideReport?.statistics.rawRowsFetched ?? worldwideReport?.statistics.discoveryListings}
@@ -1743,6 +1801,9 @@ export function SearchPage({
                 {...(prepareError ? { prepareError } : {})}
                 onSave={() => void handleSave()}
                 onPrepare={() => void handlePrepare()}
+                onPrepareAnyway={() => void handlePrepare({ anyway: true })}
+                {...(liveness.has(selected.key) ? { liveness: liveness.get(selected.key)! } : {})}
+                livenessChecking={livenessChecking === selected.key}
                 assistantOpen={assistantForKey === selected.key}
                 onToggleAssistant={() =>
                   setAssistantForKey((current) => (current === selected.key ? null : selected.key))

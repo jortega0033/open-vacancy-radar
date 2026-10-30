@@ -12,8 +12,24 @@ does it still say what it said when it was read? This page records exactly what 
 | A stopped or failed application is resumed | The same check runs again, but a result younger than the freshness window is reused with no request. |
 | A prepared application is reopened for review | The review dialog asks main for the check first; main only contacts the posting when the stored result is stale. |
 | The person presses **Check again** | A forced check, regardless of the window. It is only offered for links that can actually be checked. |
+| A search result is shown in the detail pane (#720) | One bounded check of **that one** posting, through the same verifier, envelope and source policy. A result younger than the freshness window (15 minutes for "could not check") is reused with no request; a link with no route costs no request. |
 
-Searching never checks postings. There is no whole-feed refresh, no browser crawling and no scheduled recheck.
+Searching itself never checks postings: the list of results is not checked as a whole. There is no whole-feed
+refresh, no browser crawling and no scheduled recheck.
+
+### Liveness beside every fit score (#720)
+
+Every result card that shows a fit score shows one of four plain states directly beside it: **Open**,
+**Not checked yet**, **Couldn't check**, or **Closed/removed**. The detail pane adds when it was checked, and
+**How we know** shows the exact time and which job system answered (or why it could not). Nothing is invented:
+"Open" and "Closed/removed" come only from a real check with its time; a result nobody checked says "Not checked
+yet"; a link no check can reach says "Couldn't check". A result whose application check found it closed (or open)
+says so too. These summaries live in memory only (no posting text, nothing about the person) and are bounded; after
+a restart results honestly read "Not checked yet" again.
+
+A result a check found **closed** cannot use the primary **Get ready to apply**. The secondary **Prepare anyway**
+starts the application without any AI work: preparation checks the posting again and, if it is still closed, stops
+at the closed finding, where **Get ready anyway** is the explicit override that is recorded with its time.
 
 ## Which postings can be checked
 
