@@ -99,7 +99,10 @@ function textOf(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocument): Pick<Int
   return { text: null, textTruncated: false, textState: 'not_stored' };
 }
 
-async function documentView(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocument): Promise<InterviewDocumentView> {
+type DocumentBasis = Omit<InterviewDocumentView, 'fileState'>;
+
+/** Everything about a document that is read from the database; the file check (async) is added by `documentView`. */
+function documentBasis(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocument): DocumentBasis {
   return {
     slot: doc.slot,
     kind: doc.kind,
@@ -111,8 +114,11 @@ async function documentView(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocumen
     fileName: doc.fileName,
     statedAt: doc.statedAt,
     ...textOf(db, doc),
-    fileState: await fileState(db, doc),
   };
+}
+
+async function documentView(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocument): Promise<InterviewDocumentView> {
+  return { ...documentBasis(db, doc), fileState: await fileState(db, doc) };
 }
 
 interface ResolvedPackage {
@@ -197,7 +203,7 @@ function chooseDefault(packages: readonly ResolvedPackage[]): Pick<InterviewCont
   return { defaultPackageId: row?.id ?? null, selection: 'none' };
 }
 
-async function packageView(db: WorkspaceDb, pkg: ResolvedPackage): Promise<InterviewPackageView> {
+function packageBasis(db: WorkspaceDb, pkg: ResolvedPackage): Omit<InterviewPackageView, 'documents'> & { documents: DocumentBasis[] } {
   const attempt = pkg.attempt;
   const jdText = attempt?.jdSnapshot.trim() ? attempt.jdSnapshot : null;
   const recordedJd = pkg.content.posting.jdHash;
@@ -228,11 +234,30 @@ async function packageView(db: WorkspaceDb, pkg: ResolvedPackage): Promise<Inter
       reviewedEvidenceHash: pkg.content.candidate.reviewedEvidenceHash,
       reviewedEvidenceFrom: pkg.content.candidate.reviewedEvidenceFrom,
     },
-    documents: await Promise.all(pkg.content.documents.map((doc) => documentView(db, doc))),
+    documents: pkg.content.documents.map((doc) => documentBasis(db, doc)),
     heldSlots: [...new Set(pkg.prepared.map((doc) => doc.slot))],
     supersedesAttemptId: attempt?.supersedesAttemptId ?? null,
     createdAt: pkg.createdAt,
   };
+}
+
+async function packageView(db: WorkspaceDb, pkg: ResolvedPackage): Promise<InterviewPackageView> {
+  const basis = packageBasis(db, pkg);
+  return { ...basis, documents: await Promise.all(pkg.content.documents.map((doc) => documentView(db, doc))) };
+}
+
+/**
+ * The package choice and each package's documents as the database holds them right now, with no file read.
+ * Synchronous on purpose: a caller inside a write transaction (the follow-up draft write, #692) can compare
+ * the exact recorded basis it wrote from at the moment it writes, with nothing awaited in between.
+ */
+export type InterviewContextBasis = Pick<InterviewContextView, 'applicationId' | 'defaultPackageId' | 'selection'> & {
+  packages: Array<Omit<InterviewPackageView, 'documents'> & { documents: DocumentBasis[] }>;
+};
+
+export function getInterviewContextBasis(db: WorkspaceDb, applicationId: string): InterviewContextBasis {
+  const { packages } = resolvePackages(db, applicationId);
+  return { applicationId, packages: packages.map((pkg) => packageBasis(db, pkg)), ...chooseDefault(packages) };
 }
 
 export async function getInterviewContextView(deps: Pick<InterviewContextDeps, 'db'>, applicationId: string): Promise<InterviewContextView> {

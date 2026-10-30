@@ -163,6 +163,10 @@ describe('settings', () => {
       applicationDocumentDrafts: 0,
       submissionPackages: 0,
       interviewRounds: 0,
+      // #692: counted explicitly (seeded and asserted in application-actions.test.ts / application-follow-up.test.ts).
+      applicationActions: 0,
+      applicationActionPrefs: 0,
+      followUpDrafts: 0,
     });
     expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null, mcpEndpointEnabled: false });
     expect(workspace.listSavedJobs(db)).toEqual([]);

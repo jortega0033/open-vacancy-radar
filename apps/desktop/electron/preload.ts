@@ -26,6 +26,7 @@ import type { CompanyEvidenceBridge } from './company-evidence.js';
 import type { ApplicationBriefBridge } from './application-brief.js';
 import { parseCritiqueResult, type ApplicationCritiqueBridge } from './application-critique-types.js';
 import { parseInterviewContextResult, type InterviewContextBridge } from './interview-context-types.js';
+import { parseActionsResult, parseOverviewResult, type ApplicationActionsBridge } from './application-actions-types.js';
 import { parseBriefResult, parseCommitAssessment, parseOkResult, parsePrepareAssessment } from './application-brief-parse.js';
 import { parseCancelResult, parseCompanyEvidenceProse, parseCompanyEvidenceResult } from './company-evidence-parse.js';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
@@ -2234,3 +2235,57 @@ const interviewContextApi: InterviewContextBridge = {
 };
 
 contextBridge.exposeInMainWorld('interviewContext', interviewContextApi);
+
+/**
+ * #692. The fifteenth namespace: local due actions on an application. Every result is REBUILT from known
+ * fields (parseActionsResult, fail closed). Arguments are ids, the version the page was showing and what
+ * the person typed (a due date or time WITH an explicit time zone); never a basis, a provider or a path.
+ * Only generateDraft can start a model session, and only from the person's explicit button; no call here
+ * sends a message, makes a request, shows a notification or starts a timer.
+ */
+const applicationActionsApi: ApplicationActionsBridge = {
+  async get(applicationId) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:get', { applicationId }));
+  },
+  async overview() {
+    return parseOverviewResult(await ipcRenderer.invoke('application-actions:overview', {}));
+  },
+  async create(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:create', { ...input }));
+  },
+  async update(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:update', { ...input }));
+  },
+  async reschedule(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:reschedule', { ...input }));
+  },
+  async complete(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:complete', { ...input }));
+  },
+  async dismiss(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:dismiss', { ...input }));
+  },
+  async setSuppressed(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:set-suppressed', { ...input }));
+  },
+  async generateDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-generate', { ...input }));
+  },
+  async cancelDraft(applicationId) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-cancel', { applicationId }));
+  },
+  async editDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-edit', { ...input }));
+  },
+  async approveDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-approve', { ...input }));
+  },
+  async discardDraft(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-discard', { ...input }));
+  },
+  async reportDraftSent(input) {
+    return parseActionsResult(await ipcRenderer.invoke('application-actions:draft-report-sent', { ...input }));
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationActions', applicationActionsApi);

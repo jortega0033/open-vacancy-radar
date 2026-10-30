@@ -1045,6 +1045,10 @@ export interface ApplicationDataResetResult {
     /** #691: the submitted-document manifests and the recorded interview rounds. */
     submissionPackages: number;
     interviewRounds: number;
+    /** #692: local due actions, the per-application suggestion switches and the follow-up drafts. */
+    applicationActions: number;
+    applicationActionPrefs: number;
+    followUpDrafts: number;
   };
 }
 

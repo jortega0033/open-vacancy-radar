@@ -17,6 +17,8 @@ import { ApplicationReviewSession } from './ApplicationReviewSession.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
 import { InterviewPrepDrawer } from './InterviewPrepDrawer.js';
+import { FollowUpsDrawer } from './FollowUpsDrawer.js';
+import { indexOverview, totalsFor, type OverviewItem } from './follow-ups-overview.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
 import type { SelectedVacancy } from '../letters/types.js';
@@ -109,6 +111,11 @@ export function ApplicationsPage({
 
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
   const [interviewPrepTarget, setInterviewPrepTarget] = useState<ApplicationRecord | null>(null);
+  // #692: local follow-ups per row. Reading them makes no request and starts no model session.
+  const [followUpsTarget, setFollowUpsTarget] = useState<ApplicationRecord | null>(null);
+  const [followUps, setFollowUps] = useState<ReadonlyMap<string, OverviewItem>>(new Map());
+  const [followUpsVersion, setFollowUpsVersion] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const [deleteTarget, setDeleteTarget] = useState<ApplicationRecord | null>(null);
   const [actionError, setActionError] = useState<string>();
@@ -322,6 +329,9 @@ export function ApplicationsPage({
   const openCreateDrawer = useCallback(() => setDrawerState({ mode: 'create' }), []);
   const openEditDrawer = useCallback((record: ApplicationRecord) => setDrawerState({ mode: 'edit', record }), []);
   const closeDrawer = useCallback(() => setDrawerState(null), []);
+  const openFollowUpsDrawer = useCallback((record: ApplicationRecord) => setFollowUpsTarget(record), []);
+  const closeFollowUpsDrawer = useCallback(() => setFollowUpsTarget(null), []);
+  const handleFollowUpsChanged = useCallback(() => setFollowUpsVersion((version) => version + 1), []);
   const openInterviewPrepDrawer = useCallback((record: ApplicationRecord) => setInterviewPrepTarget(record), []);
   const closeInterviewPrepDrawer = useCallback(() => setInterviewPrepTarget(null), []);
 
@@ -448,6 +458,35 @@ export function ApplicationsPage({
     }
   }, [pendingUndo, onApplicationsChanged]);
 
+  // Re-read the follow-ups whenever the list or a follow-up changed. A failed or missing read leaves the
+  // table exactly as it was before this feature: no summary, nothing guessed.
+  useEffect(() => {
+    if (typeof window.applicationActions?.overview !== 'function') return undefined;
+    let cancelled = false;
+    void window.applicationActions
+      .overview()
+      .then((result) => {
+        if (!cancelled) setFollowUps(indexOverview(result));
+      })
+      .catch(() => {
+        if (!cancelled) setFollowUps(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [applications, followUpsVersion]);
+
+  // The page is open: a minute tick only re-renders which follow-ups are overdue.
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const followUpTotals = useMemo(
+    () => totalsFor(followUps, (applications ?? []).map((row) => row.id), nowMs),
+    [followUps, applications, nowMs],
+  );
+
   const isInProgressTab = activeTab === 'in_progress';
   const isLoading = applications === null;
   const isEmpty = !isLoading && sortedApplications.length === 0;
@@ -487,6 +526,19 @@ export function ApplicationsPage({
         <>
           {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
           {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
+
+          {followUpTotals.overdue + followUpTotals.dueToday > 0 && (
+            <p className="mt-4 text-sm" role="status" data-testid="follow-ups-banner">
+              <span className="font-semibold">Follow-ups:</span>{' '}
+              {[
+                followUpTotals.overdue > 0 ? `${followUpTotals.overdue} overdue` : '',
+                followUpTotals.dueToday > 0 ? `${followUpTotals.dueToday} due today` : '',
+              ]
+                .filter(Boolean)
+                .join(', ')}
+              . These are your own reminders; nothing was sent.
+            </p>
+          )}
 
           {isLoading && !loadError && <PageLoading label="Loading applications…" />}
 
@@ -528,6 +580,9 @@ export function ApplicationsPage({
                 onDelete={requestDelete}
                 onPrepareInterview={openInterviewPrepDrawer}
                 onOpenAttempt={handleOpenAttemptFromRow}
+                followUps={followUps}
+                nowMs={nowMs}
+                onOpenFollowUps={openFollowUpsDrawer}
               />
             </div>
           )}
@@ -574,6 +629,10 @@ export function ApplicationsPage({
 
       {openAttempt && (
         <ApplicationAttemptDrawer attempt={openAttempt} onClose={closeAttemptDrawer} onChanged={handleAttemptRecovered} />
+      )}
+
+      {followUpsTarget && (
+        <FollowUpsDrawer application={followUpsTarget} onClose={closeFollowUpsDrawer} onChanged={handleFollowUpsChanged} />
       )}
 
       {interviewPrepTarget && (

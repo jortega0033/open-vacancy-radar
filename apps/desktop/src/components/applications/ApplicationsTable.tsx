@@ -1,3 +1,11 @@
+import {
+  actionSummaryLine,
+  describeDue,
+  dueStateOf,
+  summarizeOpenActions,
+  systemZone,
+} from '../../../electron/application-actions-core.js';
+import type { OverviewItem } from './follow-ups-overview.js';
 import type { ApplicationRecord, ApplicationStatus } from '../../window.js';
 import { NotSet } from '../shell/NotSet.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
@@ -20,6 +28,11 @@ export interface ApplicationsTableProps {
   onPrepareInterview?: (record: ApplicationRecord) => void;
   /** Opens the linked attempt in the Review queue (#444). Without it the attempt state is shown but not linked. */
   onOpenAttempt?: (attemptId: string) => void;
+  /** #692: the local follow-ups on each row (open actions and whether a prompt may be offered), and the
+   * clock they are judged against. Shown beside the person's own Next step text, never in place of it. */
+  followUps?: ReadonlyMap<string, OverviewItem>;
+  nowMs?: number;
+  onOpenFollowUps?: (record: ApplicationRecord) => void;
 }
 
 /** How a row linked to an attempt says it got where it is, with the source of a sent state kept visible. */
@@ -49,7 +62,11 @@ export function ApplicationsTable({
   onDelete,
   onPrepareInterview,
   onOpenAttempt,
+  followUps,
+  nowMs = Date.now(),
+  onOpenFollowUps,
 }: ApplicationsTableProps) {
+  const viewerZone = systemZone();
   return (
     <div
       className="ovr-responsive-table overflow-x-auto"
@@ -75,16 +92,16 @@ export function ApplicationsTable({
               key={application.id}
               className={`ovr-row ${application.archived ? 'opacity-60' : ''}`}
             >
-              <td className="ovr-responsive-table__cell font-semibold" data-label="Role">
+              <td className="ovr-responsive-table__cell font-semibold wrap-anywhere" data-label="Role">
                 {application.role}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Company">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Company">
                 {application.company}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Location">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Location">
                 {application.location || <NotSet />}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Sponsor check">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Sponsor check">
                 {application.verification || <NotSet label="Not checked" />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Status">
@@ -124,14 +141,57 @@ export function ApplicationsTable({
               <td className="ovr-responsive-table__cell whitespace-nowrap" data-label="Applied">
                 {formatAppliedDate(application.appliedAt) ?? <NotSet />}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Next step">
-                {application.nextStep || <NotSet label="None" />}
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Next step">
+                <div className="min-w-0">
+                  {application.nextStep || <NotSet label="None" />}
+                  {(() => {
+                    const item = followUps?.get(application.id);
+                    if (!item) return null;
+                    const facts = item.openActions.map((action) => ({
+                      id: action.id,
+                      state: action.state,
+                      dueKind: action.dueKind,
+                      dueDate: action.dueDate,
+                      dueLocal: action.dueLocal,
+                      dueTimeZone: action.dueTimeZone,
+                      dueAtMs: Date.parse(action.dueAt),
+                    }));
+                    const summary = summarizeOpenActions(facts, nowMs);
+                    const line = actionSummaryLine(summary);
+                    const next = item.openActions.find((action) => action.id === summary.next?.id);
+                    if (!line || !next) {
+                      return item.suggestion.eligible ? (
+                        <p className="mt-1 text-xs text-base-content/70" data-testid="follow-up-summary">No follow-up planned.</p>
+                      ) : null;
+                    }
+                    const state = dueStateOf(facts.find((fact) => fact.id === next.id)!, nowMs);
+                    const due = describeDue({ ...facts.find((fact) => fact.id === next.id)!, dueUtcOffsetMinutes: next.dueUtcOffsetMinutes }, viewerZone);
+                    return (
+                      <p className="mt-1 text-xs" data-testid="follow-up-summary">
+                        <span className={state === 'overdue' ? 'font-semibold text-error' : 'font-medium'}>Follow-ups: {line}.</span>{' '}
+                        <span className="text-base-content/70">Next {state === 'overdue' ? 'was due' : 'due'} {due.primary}</span>
+                      </p>
+                    );
+                  })()}
+                  {onOpenFollowUps && (
+                    <div className="mt-1">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs -ml-1.5 px-1.5"
+                        onClick={() => onOpenFollowUps(application)}
+                        aria-label={`Follow-ups for ${application.role} at ${application.company}`}
+                      >
+                        Follow-ups
+                      </button>
+                    </div>
+                  )}
+                </div>
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Contact">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Contact">
                 {application.contact || <NotSet label="None" />}
               </td>
               <td
-                className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
+                className="ovr-responsive-table__cell ovr-responsive-table__actions text-right"
                 data-label="Actions"
               >
                 {onPrepareInterview && INTERVIEW_PREPARABLE_STATUSES.has(application.status) && (

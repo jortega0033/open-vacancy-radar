@@ -60,6 +60,7 @@ import { deleteAllApplicationBriefs, pruneUnreferencedBriefs } from './applicati
 import { deleteAllCritiques } from './application-critique-store.js';
 import { bindSubmissionPackage, deleteAllSubmissionPackages } from './submission-package-store.js';
 import { deleteAllInterviewRounds } from './interview-round-store.js';
+import { deleteAllApplicationActions } from './application-action-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -3092,6 +3093,8 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       // #691: the submitted-document manifests and the recorded interview rounds.
       ...deleteAllSubmissionPackages(tx),
       ...deleteAllInterviewRounds(tx),
+      // #692: the local due actions, the suggestion switches and the follow-up drafts.
+      ...deleteAllApplicationActions(tx),
     };
 
     tx.delete(applicationAttempts).run();

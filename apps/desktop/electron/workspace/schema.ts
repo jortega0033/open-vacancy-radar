@@ -25,6 +25,7 @@ import type { PreparedApplicationFields } from './types.js';
 import type { BriefNotice, BriefSourceFacts, FrozenBrief, StoredAssessment } from '../application-brief.js';
 import type { DraftContent, InputFence, RefusedFinding, StoredFinding, StoredProposal } from '../application-critique.js';
 import type { PackageManifestContent } from '../submitted-package.js';
+import type { FollowUpDraftBasis } from '../application-actions-core.js';
 
 /**
  * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
@@ -1127,4 +1128,93 @@ export const applicationInterviewRounds = sqliteTable('application_interview_rou
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 }, (table) => [
   index('application_interview_rounds_application_idx').on(table.applicationId),
+]);
+
+/* ================================================================================ #692 ===== */
+
+/**
+ * #692: a structured, local next action on one Applications row. It never replaces `applications.next_step`
+ * or `notes` (the person's own text, untouched by anything here). Due fields follow
+ * `application-actions-core.ts`: a named IANA zone always, `due_at` (UTC ms) is what overdue is judged
+ * against. `request_id` makes a retried create return the same row; `version` fences stale edits.
+ */
+export const applicationActions = sqliteTable('application_actions', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  applicationId: text('application_id')
+    .notNull()
+    .references(() => applications.id, { onDelete: 'cascade' }),
+  requestId: text('request_id').notNull(),
+  kind: text('kind', { enum: ['follow_up', 'thank_you', 'send_information', 'prepare', 'other'] }).notNull(),
+  title: text('title').notNull().default(''),
+  note: text('note').notNull().default(''),
+  channel: text('channel', {
+    enum: ['email', 'phone', 'linkedin', 'portal', 'in_person', 'other', 'unspecified'],
+  }).notNull().default('unspecified'),
+  contactDetail: text('contact_detail').notNull().default(''),
+  dueKind: text('due_kind', { enum: ['date', 'datetime'] }).notNull(),
+  dueDate: text('due_date'),
+  dueLocal: text('due_local'),
+  dueTimeZone: text('due_time_zone').notNull(),
+  dueUtcOffsetMinutes: integer('due_utc_offset_minutes'),
+  dueResolution: text('due_resolution', { enum: ['unique', 'earlier', 'later'] }),
+  dueAt: integer('due_at', { mode: 'timestamp_ms' }).notNull(),
+  firstDueAt: integer('first_due_at', { mode: 'timestamp_ms' }).notNull(),
+  rescheduleCount: integer('reschedule_count').notNull().default(0),
+  state: text('state', { enum: ['open', 'completed', 'dismissed'] }).notNull().default('open'),
+  /** `user`: the person created it. `suggestion_accepted`: they accepted the offered "Plan a follow-up". */
+  origin: text('origin', { enum: ['user', 'suggestion_accepted'] }).notNull().default('user'),
+  /** How the row's "sent" state was known when this was created (SubmissionClass). */
+  basisClass: text('basis_class').notNull(),
+  version: integer('version').notNull().default(1),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  dismissedAt: integer('dismissed_at', { mode: 'timestamp_ms' }),
+}, (table) => [
+  uniqueIndex('application_actions_request_idx').on(table.applicationId, table.requestId),
+  index('application_actions_application_idx').on(table.applicationId),
+]);
+
+/** #692: the person's own switch to stop suggesting follow-ups for one application. */
+export const applicationActionPrefs = sqliteTable('application_action_prefs', {
+  applicationId: text('application_id')
+    .primaryKey()
+    .references(() => applications.id, { onDelete: 'cascade' }),
+  suggestionsSuppressed: integer('suggestions_suppressed', { mode: 'boolean' }).notNull().default(false),
+  suppressedAt: integer('suppressed_at', { mode: 'timestamp_ms' }),
+});
+
+/**
+ * #692: a follow-up draft. Preparing/approving a draft and the person REPORTING that they sent it are
+ * separate columns: nothing in this app sends a message, so `send_state` only ever becomes
+ * `user_reported_sent` through the person's own confirmation. `generated_body` is the model's text
+ * (immutable); `body` is what the person edited and approved.
+ */
+export const applicationFollowUpDrafts = sqliteTable('application_follow_up_drafts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  applicationId: text('application_id')
+    .notNull()
+    .references(() => applications.id, { onDelete: 'cascade' }),
+  actionId: text('action_id').references(() => applicationActions.id, { onDelete: 'set null' }),
+  requestId: text('request_id').notNull(),
+  kind: text('kind', { enum: ['follow_up', 'thank_you', 'send_information', 'prepare', 'other'] }).notNull(),
+  basis: text('basis', { mode: 'json' }).notNull().$type<FollowUpDraftBasis>(),
+  subject: text('subject').notNull().default(''),
+  generatedBody: text('generated_body').notNull(),
+  body: text('body').notNull(),
+  generatedHash: text('generated_hash').notNull(),
+  bodyHash: text('body_hash').notNull(),
+  status: text('status', { enum: ['prepared', 'approved', 'discarded'] }).notNull().default('prepared'),
+  approvedAt: integer('approved_at', { mode: 'timestamp_ms' }),
+  sendState: text('send_state', { enum: ['not_sent', 'user_reported_sent'] }).notNull().default('not_sent'),
+  sentReportedAt: integer('sent_reported_at', { mode: 'timestamp_ms' }),
+  sentOn: text('sent_on'),
+  provider: text('provider').notNull(),
+  usage: text('usage', { mode: 'json' }).$type<{ inputTokens?: number; outputTokens?: number } | null>(),
+  version: integer('version').notNull().default(1),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('application_follow_up_drafts_request_idx').on(table.applicationId, table.requestId),
+  index('application_follow_up_drafts_application_idx').on(table.applicationId),
 ]);

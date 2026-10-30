@@ -282,6 +282,17 @@ stored in the local workspace database and goes nowhere else.
   you delete the application (rounds and your statements for an application with no prepared documents), delete
   the attempt it belongs to (its document record), delete `workspace.db`, or use Settings > Advanced > Reset
   application data (which deletes both tables). See [interview-context.md](interview-context.md).
+- **Follow-ups and follow-up drafts** (#692): the next steps you add to an application (kind, title, note, contact
+  channel and who or where, a due date or time with its named time zone, done or dismissed, and when each happened),
+  a per-application switch that turns follow-up suggestions off, and the message drafts you ask for. A draft holds the
+  model's text, your edited text, which recorded documents it was written from (ids, version numbers and a hash), and
+  your own report of whether you sent it. Adding or viewing a follow-up makes no request. A draft is written only when
+  you press "Draft a message", in one separate no-network, no-tool session with your chosen provider; the request
+  carries the role, company, the date you applied (when recorded), that step's title, note and contact text, and the
+  recorded letter text or your current linked letter. Your Notes and Next step text are not sent. Nothing is sent to
+  an employer, read from email or written to a calendar, and "sent" is only ever your own statement. Retained until
+  you delete the application, delete `workspace.db`, or use Settings > Advanced > Reset application data (which
+  deletes all three tables). See [follow-ups.md](follow-ups.md).
 - **Application brief** (#688): one decision record per job, kept in `workspace.db`: the scan's own score and
   reasons, work-eligibility answers with their sources, every original source link of the job, the posting text
   saved with it (cut at 80,000 characters), a summary of the CV assessment with the versions it was made under, and
