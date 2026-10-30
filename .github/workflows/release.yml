@@ -5,27 +5,60 @@ name: Release
 # push/PR, compute its SHA-256, and publish both as a GitHub Release. This does not replace the
 # rest of the checklist (versioning, the clean build, the installed-app smoke test) -- those still
 # happen by hand, on the commit being tagged, before the tag is pushed.
+#
+# The same build also runs as a NON-PUBLISHING dry run: on a pull request that touches the release
+# surfaces below, and on demand (`gh workflow run release.yml --ref <branch>`). A dry run builds,
+# tests (including the win32 e2e visual baselines, which no other workflow compares) and packages
+# exactly as a tag build does, then uploads the installer and checksum as a run artifact. Its
+# `rehearse-publish` job then downloads that same-run artifact and runs the publish job's own
+# hand-off steps (checksum re-verification against the build's hash, release notes with the
+# provenance footer) with a read-only token, uploading nothing and never calling `gh release`.
+# Only the `publish` job writes to the repository, and it only runs for a pushed v* tag.
+# scripts/release-workflow.test.mjs asserts this structure.
 
 on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/release-tools.mjs'
+      - 'scripts/release-tools.test.mjs'
+      - 'scripts/release-workflow.test.mjs'
+      - 'docs/release-notes-v*.md'
+  workflow_dispatch:
 
+# Read-only by default. The build job runs third-party install scripts and the whole test suite,
+# so it never holds a write token; the publish job below asks for contents: write on its own.
 permissions:
-  contents: write # beyond the default read-only GITHUB_TOKEN: creating a release needs this
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false # never cancel a release build mid-publish
+  # Never cancel a tag build mid-publish; a superseded pull-request dry run can go.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  release:
-    name: Build and publish the Windows installer
+  build:
+    name: Build the Windows installer
     # node-gyp 11 does not recognize the Visual Studio 18 image currently behind windows-latest.
     runs-on: windows-2022
     timeout-minutes: 60
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      notes_path: ${{ steps.identity.outputs.notes_path }}
+      asset_name: ${{ steps.identity.outputs.asset_name }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      sha256: ${{ steps.checksum.outputs.sha256 }}
+      artifact: ${{ steps.artifact.outputs.name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, so a tag build can prove its commit is already on master.
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
@@ -33,6 +66,37 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+
+      # Fail in seconds, before the long build, when the release tooling or this workflow's
+      # publish gating, permissions and pins are broken.
+      - name: Release tooling tests
+        run: node --test scripts/release-tools.test.mjs scripts/release-workflow.test.mjs
+
+      # Root and desktop versions agree and are SemVer, docs/release-notes-v<version>.md exists, and
+      # for a tag build the tag is exactly v<version>. The installer name comes from
+      # apps/desktop/package.json, so a mismatched tag would otherwise publish the wrong build.
+      - name: Verify release identity
+        id: identity
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        shell: pwsh
+        run: |
+          $toolArgs = @('scripts/release-tools.mjs', 'identity')
+          if ($env:RELEASE_TAG) { $toolArgs += @('--tag', $env:RELEASE_TAG) }
+          node @toolArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # A public release is cut only from a commit that already passed review and landed on master.
+      - name: Verify the tagged commit is on master
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          git merge-base --is-ancestor "$env:GITHUB_SHA" origin/master
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Tagged commit $env:GITHUB_SHA is not on origin/master. Tag the merged release commit."
+            exit 1
+          }
+          Write-Host "Tagged commit $env:GITHUB_SHA is on origin/master."
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -49,8 +113,24 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # The only place the committed *-win32.png visual baselines are compared (e2e.yml runs on
+      # ubuntu against the -linux ones), so a dry run here is what catches a stale win32 baseline
+      # before a tag is pushed.
       - name: Electron end-to-end tests
         run: pnpm --filter @agent-dock/desktop test:e2e
+
+      # On failure, keep the report and the actual win32 screenshots from this runner image, so a
+      # stale baseline can be inspected and, if the change is intended, replaced by the real image.
+      - name: Upload e2e report on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-e2e-report-win32
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Package (electron-builder, NSIS)
         run: pnpm package:win
@@ -58,6 +138,8 @@ jobs:
       # Same check package-windows.yml runs on every push/PR: pnpm package:win can exit 0 without
       # electron-builder actually having produced an installer.
       - name: Verify installer was produced
+        env:
+          INSTALLER_NAME: ${{ steps.identity.outputs.installer_name }}
         shell: pwsh
         run: |
           $installer = Get-ChildItem -Path "dist-packages" -Filter "Open Vacancy Radar-Setup-*.exe" -ErrorAction SilentlyContinue
@@ -65,70 +147,213 @@ jobs:
             Write-Error "No NSIS installer found matching dist-packages/Open Vacancy Radar-Setup-*.exe"
             exit 1
           }
-          Write-Host "Found installer: $($installer.FullName)"
-
-      - name: Compute SHA-256
-        id: hash
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem -Path "dist-packages" -Filter "Open Vacancy Radar-Setup-*.exe"
-          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash
-          "$hash  $($installer.Name)" | Out-File -Encoding ascii "$($installer.FullName).sha256"
-          Write-Host "SHA-256: $hash"
-
-      # Uses the checklist's own release-notes file when the tag's version has one, so a release cut
-      # by hand still gets its written notes attached rather than gh's auto-generated commit list.
-      - name: Resolve release notes
-        id: notes
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: pwsh
-        run: |
-          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
-            Write-Error "Release tag must be a semantic version beginning with v."
+          if (@($installer).Count -ne 1 -or $installer.Name -ne $env:INSTALLER_NAME) {
+            Write-Error "Expected exactly dist-packages/$env:INSTALLER_NAME; found: $(@($installer).Name -join ', ')"
             exit 1
           }
-          $version = $env:RELEASE_TAG -replace '^v', ''
-          $notesPath = "docs/release-notes-v$version.md"
-          if (Test-Path $notesPath) {
-            Write-Host "Using $notesPath"
-            "path=$notesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } else {
-            Write-Host "No $notesPath found; gh release create will auto-generate notes instead."
-            "path=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          }
+          Write-Host "Found installer: $($installer.FullName)"
 
+      # The same packaged-app gates package-windows.yml runs, here on the exact binary this run
+      # publishes rather than on a separate build of the same commit (see docs/packaging.md).
+      - name: Packaged app smoke (unpacked output)
+        run: node scripts/packaged-smoke.mjs dist-packages/win-unpacked
+
+      - name: Packaged installer lifecycle smoke (silent NSIS)
+        env:
+          INSTALLER_NAME: ${{ steps.identity.outputs.installer_name }}
+        shell: pwsh
+        run: |
+          node scripts/packaged-smoke.mjs --installer (Join-Path "dist-packages" $env:INSTALLER_NAME)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Stages the installer under the name GitHub serves it as (spaces become dots) and writes a
+      # `sha256sum -c` compatible checksum naming that same file, then re-checks both.
+      - name: Compute SHA-256
+        id: checksum
+        env:
+          INSTALLER_NAME: ${{ steps.identity.outputs.installer_name }}
+          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+        shell: pwsh
+        run: |
+          node scripts/release-tools.mjs checksum-write --installer (Join-Path "dist-packages" $env:INSTALLER_NAME) --version "$env:RELEASE_VERSION" --out-dir release-assets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/release-tools.mjs checksum-verify --dir release-assets --version "$env:RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # One name per run attempt (tag, run kind, full commit, attempt), passed to the downstream
+      # job as `outputs.artifact`: "Re-run all jobs" uploads under a new name instead of colliding
+      # with the earlier attempt's artifact, and "Re-run failed jobs" reuses this attempt's output
+      # and therefore downloads this attempt's own artifact. See artifactName() in release-tools.
+      - name: Name the installer artifact
+        id: artifact
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          RUN_KIND: ${{ github.event_name == 'push' && 'release' || 'dry-run' }}
+        shell: pwsh
+        run: |
+          node scripts/release-tools.mjs artifact-name --tag "$env:RELEASE_TAG" --kind "$env:RUN_KIND" --commit "$env:GITHUB_SHA" --run-attempt "$env:GITHUB_RUN_ATTEMPT"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload installer and checksum
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: release-assets/
+          retention-days: 14
+          if-no-files-found: error
+
+  # Dry runs only. Exercises the publish job's artifact hand-off before a tag ever needs it: the
+  # same checkout, download of this run's artifact by the exact name the build exported, checksum
+  # re-verification against the build's hash and release-notes composition as `publish` below
+  # (kept byte-identical by scripts/release-workflow.test.mjs). Read-only token, no GH_TOKEN, no
+  # upload and no `gh release` call: nothing leaves the run.
+  rehearse-publish:
+    name: Rehearse the release hand-off (no publish)
+    needs: build
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Download the installer and checksum built above
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: release-assets
+
+      # Re-check after the artifact round trip, and that it is still the hash the build recorded.
+      - name: Re-verify the checksum
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          BUILD_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          hash="$(node scripts/release-tools.mjs checksum-verify --dir release-assets --version "$RELEASE_VERSION" | sed -n 's/^sha256=//p')"
+          if [ "$hash" != "$BUILD_SHA256" ]; then
+            echo "Downloaded installer hash $hash differs from the build's $BUILD_SHA256." >&2
+            exit 1
+          fi
+          (cd release-assets && sha256sum -c -- *.sha256)
+
+      - name: Compose release notes with build provenance
+        env:
+          NOTES_PATH: ${{ needs.build.outputs.notes_path }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          ASSET_NAME: ${{ needs.build.outputs.asset_name }}
+          BUILD_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: >-
+          node scripts/release-tools.mjs notes
+          --notes "$NOTES_PATH"
+          --tag "$RELEASE_TAG"
+          --commit "$GITHUB_SHA"
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          --asset-name "$ASSET_NAME"
+          --sha256 "$BUILD_SHA256"
+          --out "$RUNNER_TEMP/release-notes.md"
+
+      # The composed notes must carry this run's commit and the build's hash, exactly what the
+      # real publish would attach to the release. Shown in the job summary for review.
+      - name: Check the rehearsed release notes
+        env:
+          BUILD_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          grep -qxF -- "- Built from commit: \`$GITHUB_SHA\`" "$notes"
+          grep -qF -- "SHA-256: \`$BUILD_SHA256\`" "$notes"
+          {
+            echo "### Release hand-off rehearsal (nothing published)"
+            echo
+            cat "$notes"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Hand-off rehearsal passed for $GITHUB_SHA ($BUILD_SHA256); nothing was uploaded or published."
+
+  publish:
+    name: Publish the GitHub Release
+    needs: build
+    # Never on a pull request or a manual dry run: only a pushed v* tag publishes.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create or edit the release and upload its assets
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Download the installer and checksum built above
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: release-assets
+
+      # Re-check after the artifact round trip, and that it is still the hash the build recorded.
+      - name: Re-verify the checksum
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          BUILD_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          hash="$(node scripts/release-tools.mjs checksum-verify --dir release-assets --version "$RELEASE_VERSION" | sed -n 's/^sha256=//p')"
+          if [ "$hash" != "$BUILD_SHA256" ]; then
+            echo "Downloaded installer hash $hash differs from the build's $BUILD_SHA256." >&2
+            exit 1
+          fi
+          (cd release-assets && sha256sum -c -- *.sha256)
+
+      - name: Compose release notes with build provenance
+        env:
+          NOTES_PATH: ${{ needs.build.outputs.notes_path }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          ASSET_NAME: ${{ needs.build.outputs.asset_name }}
+          BUILD_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: >-
+          node scripts/release-tools.mjs notes
+          --notes "$NOTES_PATH"
+          --tag "$RELEASE_TAG"
+          --commit "$GITHUB_SHA"
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          --asset-name "$ASSET_NAME"
+          --sha256 "$BUILD_SHA256"
+          --out "$RUNNER_TEMP/release-notes.md"
+
+      # Idempotent: rerunning for an existing tag updates its notes and replaces both assets instead
+      # of failing because the release already exists. --verify-tag makes gh refuse to create a tag
+      # of its own, so the release can only attach to the tag that triggered this build.
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          NOTES_PATH: ${{ steps.notes.outputs.path }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: pwsh
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          ASSET_NAME: ${{ needs.build.outputs.asset_name }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: |
-          # PowerShell does not glob-expand a bare "*" the way a POSIX shell would, so the
-          # installer and its checksum are resolved to real paths here rather than passed as a
-          # literal wildcard string gh would fail to match.
-          $installer = (Get-ChildItem -Path "dist-packages" -Filter "Open Vacancy Radar-Setup-*.exe").FullName
-          $checksum = "$installer.sha256"
-
-          $tag = $env:RELEASE_TAG
-          gh release view $tag *> $null
-          $releaseExists = $LASTEXITCODE -eq 0
-
-          if ($releaseExists) {
-            $args = @('release', 'edit', $tag, '--title', $tag)
-            if ($env:NOTES_PATH -ne '') {
-              $args += @('--notes-file', $env:NOTES_PATH)
-            }
-            gh @args
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            gh release upload $tag $installer $checksum --clobber
-          } else {
-            $args = @('release', 'create', $tag, $installer, $checksum, '--title', $tag)
-            if ($env:NOTES_PATH -ne '') {
-              $args += @('--notes-file', $env:NOTES_PATH)
-            } else {
-              $args += '--generate-notes'
-            }
-            gh @args
-          }
+          set -euo pipefail
+          if [ "$RELEASE_TAG" != "$GITHUB_REF_NAME" ]; then
+            echo "Build identity $RELEASE_TAG does not match the pushed tag $GITHUB_REF_NAME." >&2
+            exit 1
+          fi
+          notes="$RUNNER_TEMP/release-notes.md"
+          assets=("release-assets/$ASSET_NAME" "release-assets/$ASSET_NAME.sha256")
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$notes" "${flags[@]}"
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --title "$RELEASE_TAG" --notes-file "$notes" "${flags[@]}"
+          fi

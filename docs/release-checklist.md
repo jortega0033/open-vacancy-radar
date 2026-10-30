@@ -5,8 +5,10 @@ Repeatable steps for cutting a release of Open Vacancy Radar. Windows-only for n
 
 ## 1. Versioning
 
-- [ ] Bump `version` in the root [package.json](../package.json) (and any workspace package that
-      needs its own bump).
+- [ ] Bump `version` in the root [package.json](../package.json) and in
+      [apps/desktop/package.json](../apps/desktop/package.json) to the same value (the installer
+      name and the About section come from the desktop one; the release workflow refuses a
+      mismatch). Other workspace packages keep their own versions.
 - [ ] Add a `docs/release-notes-v<version>.md`, following the shape of
       [release-notes-v0.1.0.md](release-notes-v0.1.0.md): what's in, known limitations, privacy
       implications, deferred items.
@@ -77,8 +79,14 @@ Exercise the golden paths a real user would hit first, on the installed build sp
 
 Automated by [.github/workflows/release.yml](../.github/workflows/release.yml) as of this section's
 last update: pushing the tag in step 7 builds the installer fresh, computes its SHA-256, and
-publishes both. Nothing to do by hand here unless that workflow itself needs debugging -- in which
-case, fall back to the manual command it automates:
+publishes both. The installer is uploaded under the name GitHub serves it as
+(`Open.Vacancy.Radar-Setup-<version>.exe`, spaces become dots), and its `.sha256` file is one
+`<lowercase sha256>  <that name>` line, so `sha256sum -c Open.Vacancy.Radar-Setup-<version>.exe.sha256`
+works after download. The release tooling lives in `scripts/release-tools.mjs` and is tested by
+`node --test scripts/release-tools.test.mjs scripts/release-workflow.test.mjs` (the second file
+checks the workflow's publish gating, permissions, action pins and hand-off rehearsal). Nothing to
+do by hand here unless that workflow itself needs debugging -- in which case, fall back to the
+manual command it automates:
 
 - [ ] Compute and record a SHA-256 for the installer:
       `Get-FileHash "dist-packages\Open Vacancy Radar-Setup-<version>.exe" -Algorithm SHA256`
@@ -86,17 +94,40 @@ case, fall back to the manual command it automates:
 
 ## 7. Tag and publish
 
-- [ ] Tag the release commit (`git tag v<version>`), push the tag.
-- [ ] Pushing the tag triggers `.github/workflows/release.yml`, which builds the installer on a
-      fresh checkout of that exact commit, verifies it was produced (the same check
-      `package-windows.yml` runs on every push/PR), computes its SHA-256, and publishes both as a
-      GitHub Release -- using `docs/release-notes-v<version>.md` from step 1 as the release notes
-      if that file exists, or `gh`'s auto-generated notes otherwise. Watch the workflow run to
+- [ ] Rehearse first, without publishing: the release PR that adds `docs/release-notes-v<version>.md`
+      runs the same Release workflow as a dry run, and after merge
+      `gh workflow run release.yml --ref master` runs it on the merged commit. A dry run builds,
+      tests (including the Windows e2e run, the only place the `*-win32.png` visual baselines are
+      compared), packages, smoke-tests and checksums the installer, and uploads it as a run
+      artifact. Its read-only "Rehearse the release hand-off (no publish)" job then downloads that
+      same-run artifact and runs the publish job's own hand-off steps: checksum re-verification
+      against the build's hash, `sha256sum -c` and the release notes with their provenance footer.
+      It uploads nothing and never calls `gh release`. The dry-run installer is rehearsal evidence,
+      not the release asset; the tag build makes its own. If the win32 baselines fail, the run
+      uploads the Playwright report and the actual screenshots from the release runner image for
+      inspection.
+- [ ] Tag the merged release commit on `master` (`git tag v<version> <sha>`), push the tag.
+- [ ] Pushing the tag triggers `.github/workflows/release.yml`. Its `build` job (read-only token)
+      refuses the tag unless it is exactly `v` + the version in both `package.json` and
+      `apps/desktop/package.json`, `docs/release-notes-v<version>.md` exists, and the tagged commit
+      is on `origin/master`. It then builds the installer on a fresh checkout of that exact commit,
+      verifies it was produced, runs the packaged-app and silent-install smoke tests on that same
+      binary, and computes its SHA-256. The separate `publish` job (the only one with
+      `contents: write`) re-verifies the checksum after the artifact hand-off and publishes both
+      files as a GitHub Release. Its notes are `docs/release-notes-v<version>.md` plus a
+      "Build provenance" footer with the tag, the full commit SHA, the workflow run and the hash.
+      `gh release create --verify-tag` cannot create a tag of its own, and a version with a
+      pre-release part (`0.2.0-rc.1`) is published as a pre-release. Watch the workflow run to
       confirm it succeeds. The publish step is idempotent: rerunning for an existing tag updates
       its notes and replaces both assets instead of failing because the release already exists.
+      The installer artifact is named per run attempt
+      (`windows-installer-v<version>-release-<commit>-attempt<n>`) and the build passes that exact
+      name to `publish`. "Re-run failed jobs" after a failed publish reruns only `publish`, which
+      downloads the successful build attempt's artifact. "Re-run all jobs" rebuilds and uploads
+      under the new attempt's name. Neither path downloads an artifact from another run.
 - [ ] Confirm the published release: the installer and a matching `.sha256` file are both attached,
-      and the release notes are what step 1 wrote (not the auto-generated fallback, unless that was
-      intended).
+      `sha256sum -c` passes on the downloaded pair, and the notes' provenance footer names the
+      commit you tagged.
 - [ ] Link the release from any relevant open issue (e.g. the release-readiness epic).
 
 ## Rollback
