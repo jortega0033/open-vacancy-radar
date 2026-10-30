@@ -121,14 +121,40 @@ export interface VersionStamp {
 
 export type AssessmentState = 'none' | 'current' | 'partial' | 'stale' | 'unavailable';
 
+export type RequirementClassification = 'required' | 'preferred' | 'unclear';
+export type RequirementEvidenceClass = 'direct' | 'transferable' | 'unsupported' | 'needs_verification' | 'candidate_confirmed_gap';
+
+/**
+ * Who produced the evidence class, derived from what the overlay stores (it does not store WHO chose the final class):
+ *  person_statement                `candidate_confirmed_gap`: only the person can set it; no extraction or proposal path accepts it.
+ *  model_proposed_person_reviewed  direct / transferable / unsupported / needs_verification, proposed by the mapping model, and the person marked it reviewed
+ *                                  (the record does not say whether the person changed the class).
+ *  model_proposed_unreviewed       the same classes, not yet looked at.
+ */
+export type EvidenceOrigin = 'person_statement' | 'model_proposed_person_reviewed' | 'model_proposed_unreviewed';
+
+export function evidenceOriginOf(requirement: Pick<RequirementRecord, 'evidenceClass' | 'reviewed'>): EvidenceOrigin {
+  if (requirement.evidenceClass === 'candidate_confirmed_gap') return 'person_statement';
+  return requirement.reviewed ? 'model_proposed_person_reviewed' : 'model_proposed_unreviewed';
+}
+
 /** A recorded requirement from "Compare with my CV" (an overlay). Text is the JD's wording; `evidenceClass` is the recorded mapping. */
 export interface RequirementRecord {
   requirementId: string;
   text: string;
-  classification: 'required' | 'preferred' | 'unclear';
-  evidenceClass: 'direct' | 'transferable' | 'unsupported' | 'needs_verification' | 'candidate_confirmed_gap';
+  /** `required` / `preferred` / `unclear` as the posting words it. A JD-side fact; never merged and never an input to the fit score. */
+  classification: RequirementClassification;
+  evidenceClass: RequirementEvidenceClass;
   reviewed: boolean;
   excluded: boolean;
+  /** The verbatim quote from the JD this requirement was read from (`CvRequirementMapping.jdAnchor`), so a reviewer can find it in the posting. */
+  jdAnchor: string;
+  /** The JD revision the quote was verified against (`CvRequirementMapping.jdRevisionId`); '' when the overlay has none. */
+  jdRevisionId: string;
+  /** Half-open character span of `jdAnchor` inside that revision, or null when the overlay could not locate it (stored as -1). */
+  quoteSpan: { start: number; end: number } | null;
+  /** True when the PERSON added the requirement rather than the extraction finding it (`CvRequirementMapping.candidateAdded`). */
+  candidateAdded: boolean;
 }
 
 /** A recorded eligibility answer (the brief's six questions); only these produce a preference/eligibility mismatch. */
@@ -143,13 +169,25 @@ export interface JobObservation {
   /** Stable id for the observation (fixture id in tests; never a database id in an output file). */
   id: string;
   requisition: RequisitionKey;
-  /** All the places this requisition was seen: the evidence that copies were collapsed. */
-  copies: number;
+  /**
+   * Saved-job rows (copies the person saved) merged into this requisition. One of TWO copy measures, kept apart:
+   * the other is `contributions` (source copies the brief's aliases merged BEFORE the job was saved). A saved copy and
+   * a contribution may be the same copy seen twice, so they are never added; `copiesSeenOf` takes the larger.
+   */
+  savedRows: number;
   contributions: SourceContribution[];
   /** The person selected it (saved it or tracks an application). Date of the first selection; null when not recorded. */
   selectedAt: string | null;
   /** The evaluator's opinion of fit. Context only; never an input to a requirement, a gap or a suggestion. */
   score: ScoreOpinion;
+  /**
+   * What the job is called, and what the scorer said about it. Both are stored by production (the saved job's role;
+   * `BriefSourceFacts.match.matchingSkills` / `gaps`) and are read here for ONE reason: so a test can plant the word
+   * "Kubernetes" in them and prove nothing is computed from them. They are NEVER an input to a requirement row, a lane,
+   * a recurrence count, a gap or a suggestion. The scorer's `gaps` compare the job to the person's stated preferences
+   * (seniority, language, salary, "no explicit skill match"); they are not skill gaps.
+   */
+  hints?: { title: string | null; scorerMatchingSkills: string[]; scorerGaps: string[] };
   /** Applications rows for this requisition, newest-sent last. More than one = reapplication(s). */
   applications: ApplicationObservation[];
   assessment: { state: AssessmentState; requirements: RequirementRecord[]; coverage: 'complete' | 'partial' | 'not_run' };
@@ -157,6 +195,11 @@ export interface JobObservation {
   versions: VersionStamp;
   /** Per field: where it came from. The adapter fills it; the fixtures for the projected lane declare it. */
   availability: Record<string, Availability>;
+}
+
+/** The honest number of distinct copies of a requisition that were seen: the larger of the two overlapping measures (never their sum). */
+export function copiesSeenOf(observation: Pick<JobObservation, 'savedRows' | 'contributions'>): number {
+  return Math.max(1, observation.savedRows, observation.contributions.length);
 }
 
 export interface ApplicationObservation {
@@ -184,7 +227,7 @@ export const GATES = {
   maxUnknownOutcomeShare: 0.5,
   /** More than this share of requisitions keyed only by the weak semantic tier (or not at all) = identity too weak. */
   maxWeakKeyShare: 0.25,
-  /** More than this share of source rows being extra copies of an already-seen requisition = duplicates dominate. */
+  /** More than this share of the copies seen (`copiesSeenOf`: the larger of saved rows and alias-merged source contributions) being extra copies of an already-seen requisition = duplicates dominate. */
   maxCopyShare: 0.5,
   /** A requirement must recur in at least this many distinct assessed requisitions to be suggested. */
   minRecurrence: 3,

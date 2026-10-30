@@ -1,9 +1,12 @@
 import {
   COMPATIBLE_ASSESSMENT_WORKFLOW,
   GATES,
+  evidenceOriginOf,
+  type EvidenceOrigin,
   type JobObservation,
   type NoGoReason,
   type RecordedOutcome,
+  type RequirementClassification,
   type RequirementRecord,
   type Verdict,
 } from './contract.js';
@@ -21,6 +24,14 @@ import { outcomeOfApplication, sentApplicationsOf } from './funnel.js';
  *   unreviewed                    the person has not looked at the mapping yet (and it is not their own gap statement).
  *  and, from the eligibility answers (not from requirement text):
  *   preference_or_eligibility_mismatch   a recorded `known_mismatch` (work country, mandatory language, visa).
+ *
+ * Preferred vs mandatory is kept explicit. Every supporting job carries the posting's own `classification`
+ * (required / preferred / unclear) and every row and suggestion splits its count by it (`byClassification`).
+ * DECISION: the recurrence threshold counts ALL assessed appearances in a lane whatever their class, because
+ * "this keeps appearing in the jobs you chose and your CV does not show it" is a frequency fact that holds for a
+ * nice-to-have too; but the wording is class-aware (suggestions.ts) and a row whose appearances are all preferred
+ * can never receive mandatory-style wording. The class is the posting's wording as read by the extraction (a JD-side
+ * fact the person may edit); it is independent of the evaluator's fit score and of outcomes.
  *
  * What it will NOT do: infer a requirement or a gap from a title, a score, a rejection, a non-response or the
  * absence of an assessment. A job without a current, compatible assessment is reported as "not assessed"
@@ -44,7 +55,15 @@ export interface SupportingJob {
   requisitionKey: string;
   lane: RequirementLane;
   evidenceClass: RequirementRecord['evidenceClass'];
-  classification: RequirementRecord['classification'];
+  /** Who produced the evidence class (see `EvidenceOrigin`). */
+  evidenceOrigin: EvidenceOrigin;
+  classification: RequirementClassification;
+  /** The JD wording this was read from, and where, so a reviewer can find it in the posting. */
+  jdAnchor: string;
+  jdRevisionId: string;
+  quoteSpan: { start: number; end: number } | null;
+  /** The person added this requirement (true) rather than the extraction finding it (false). */
+  candidateAdded: boolean;
   /** Context only. Null = unscored (missing), never zero. */
   evaluatorScore: number | null;
   outcome: RecordedOutcome | 'not_sent';
@@ -56,6 +75,8 @@ export interface RequirementRow {
   /** Distinct assessed requisitions that list it, any lane. */
   jobsPresent: number;
   byLane: Record<RequirementLane, number>;
+  /** Distinct assessed requisitions by the posting's own class for the entry kept for that job. Sums to `jobsPresent`; never merged into one "required" count. */
+  byClassification: Record<RequirementClassification, number>;
   supportingJobs: SupportingJob[];
   /** Raw denominators the row is a fraction of. */
   denominators: { assessedUsable: number; selected: number };
@@ -115,6 +136,13 @@ function emptyLanes(): Record<RequirementLane, number> {
   return { recorded_missing_experience: 0, cv_evidence_not_recorded: 0, supported_by_cv: 0, unreviewed: 0 };
 }
 
+export function emptyClassifications(): Record<RequirementClassification, number> {
+  return { required: 0, preferred: 0, unclear: 0 };
+}
+
+/** Within one lane a job that lists a requirement twice keeps the stronger posting class: required over preferred over unclear. */
+const CLASSIFICATION_PRIORITY: RequirementClassification[] = ['required', 'preferred', 'unclear'];
+
 export function outcomeContextOf(job: JobObservation): RecordedOutcome | 'not_sent' {
   const sent = sentApplicationsOf(job);
   return sent.length === 0 ? 'not_sent' : outcomeOfApplication(sent[sent.length - 1]!);
@@ -162,23 +190,33 @@ export function buildRequirements(observations: readonly JobObservation[], optio
       const lane = laneOf(requirement);
       const existing = perJob.get(key);
       // A job lists a requirement once: keep the lane that carries the most information about it.
-      if (!existing || LANE_PRIORITY.indexOf(lane) < LANE_PRIORITY.indexOf(existing.lane)) perJob.set(key, { label: aliased?.label ?? requirement.text.trim(), requirement, lane });
+      const better =
+        !existing ||
+        LANE_PRIORITY.indexOf(lane) < LANE_PRIORITY.indexOf(existing.lane) ||
+        (lane === existing.lane && CLASSIFICATION_PRIORITY.indexOf(requirement.classification) < CLASSIFICATION_PRIORITY.indexOf(existing.requirement.classification));
+      if (better) perJob.set(key, { label: aliased?.label ?? requirement.text.trim(), requirement, lane });
     }
     const outcome = outcomeContextOf(job);
     for (const [key, entry] of perJob) {
       let row = rows.get(key);
       if (!row) {
-        row = { key, label: entry.label, jobsPresent: 0, byLane: emptyLanes(), supportingJobs: [], denominators: { assessedUsable: usable.length, selected }, smallSample: true };
+        row = { key, label: entry.label, jobsPresent: 0, byLane: emptyLanes(), byClassification: emptyClassifications(), supportingJobs: [], denominators: { assessedUsable: usable.length, selected }, smallSample: true };
         rows.set(key, row);
       }
       row.jobsPresent += 1;
       row.byLane[entry.lane] += 1;
+      row.byClassification[entry.requirement.classification] += 1;
       row.supportingJobs.push({
         jobId: job.id,
         requisitionKey: job.requisition.key,
         lane: entry.lane,
         evidenceClass: entry.requirement.evidenceClass,
+        evidenceOrigin: evidenceOriginOf(entry.requirement),
         classification: entry.requirement.classification,
+        jdAnchor: entry.requirement.jdAnchor,
+        jdRevisionId: entry.requirement.jdRevisionId,
+        quoteSpan: entry.requirement.quoteSpan,
+        candidateAdded: entry.requirement.candidateAdded,
         evaluatorScore: job.score.value,
         outcome,
       });
@@ -242,6 +280,7 @@ export function buildRequirements(observations: readonly JobObservation[], optio
       'Jobs without a current, version-compatible assessment are counted as not assessed (unknown), never as having no requirements.',
       'Requirement wording is the posting’s own text. Two wordings become one row only through a person-confirmed alias; nothing is merged by similarity, so recurrence can be under-counted.',
       'A requirement the CV cannot evidence is not a missing skill: it may be real experience the CV does not show.',
+      'The recurrence threshold counts every assessed appearance whatever its class (required, preferred or unclear); each row and suggestion states the split, and a row that is only preferred or unclear never gets mandatory wording.',
     ],
   };
 }

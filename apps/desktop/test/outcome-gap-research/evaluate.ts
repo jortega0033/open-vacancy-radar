@@ -1,5 +1,5 @@
 import { CONTRACT_VERSION, GATES, deepFreeze, type JobObservation } from './contract.js';
-import { AS_OF, PORTFOLIOS, RICH_EXPOSURE, manualSurfaces, richObservations, type Expected, type Portfolio } from './fixtures.js';
+import { AS_OF, PORTFOLIOS, RICH_EXPOSURE, manualSurfaces, richObservations, type Expected, type ManualSurface, type Portfolio } from './fixtures.js';
 import { buildFunnel, cellLabelsOf, sentApplicationsOf, type FunnelView } from './funnel.js';
 import { buildRequirements, laneOf, type RequirementsView } from './requirements.js';
 import { buildSuggestions, dismiss, partition, EMPTY_REVIEW_STATE, type SuggestionSet } from './suggestions.js';
@@ -52,6 +52,11 @@ function compare(label: string, observed: { funnelOutcome: string; funnelReasons
   return { label, mismatches };
 }
 
+/** Unassessed requisitions whose own title or scorer hints satisfy the test: the cases where a rule that read them WOULD produce a gap. */
+function unassessedWith(observations: readonly JobObservation[], test: (hints: JobObservation['hints']) => boolean): number {
+  return observations.filter((observation) => observation.assessment.state !== 'current' && test(observation.hints)).length;
+}
+
 export function evaluatePortfolio(portfolio: Portfolio) {
   const frozen = deepFreeze(structuredClone(portfolio.observations));
   const before = JSON.stringify(frozen);
@@ -89,7 +94,11 @@ export function evaluatePortfolio(portfolio: Portfolio) {
     what: portfolio.what,
     rawCounts: {
       requisitions: f.distinctRequisitions,
-      sourceRowsRead: f.sourceRowsRead,
+      savedRowsRead: f.savedRowsRead,
+      savedRowsCollapsed: f.savedRowsCollapsed,
+      sourceContributions: f.sourceContributions,
+      aliasContributionsMerged: f.aliasContributionsMerged,
+      copiesSeen: f.copiesSeen,
       copiesCollapsed: f.copiesCollapsed,
       sourceCellOverlap: f.overlap,
       weakKeyRequisitions: f.weakKeyRequisitions,
@@ -105,6 +114,8 @@ export function evaluatePortfolio(portfolio: Portfolio) {
       assessmentPartial: a.partial,
       assessmentStale: a.stale,
       assessmentNone: a.none,
+      unassessedTitledKubernetes: unassessedWith(portfolio.observations, (hints) => /kubernetes/iu.test(hints?.title ?? '')),
+      unassessedWithKubernetesScorerHint: unassessedWith(portfolio.observations, (hints) => [...(hints?.scorerMatchingSkills ?? []), ...(hints?.scorerGaps ?? [])].some((hint) => /kubernetes/iu.test(hint))),
       excludedIncompatible: a.excludedIncompatible,
       requirementRows: result.requirements.requirements.length,
       eligibilityMismatchRows: result.requirements.eligibility.length,
@@ -115,7 +126,9 @@ export function evaluatePortfolio(portfolio: Portfolio) {
       requirements: result.requirements.verdict,
       suggestionsWithheld: result.suggestions.withheld,
     },
-    suggestionIds: result.suggestions.suggestions.map((suggestion) => ({ id: suggestion.id, kind: suggestion.kind, subject: suggestion.subject, count: suggestion.support.count, smallSample: suggestion.uncertainty.smallSample })),
+    suggestionIds: result.suggestions.suggestions.map((suggestion) => ({ id: suggestion.id, kind: suggestion.kind, subject: suggestion.subject, count: suggestion.support.count, byClassification: suggestion.support.byClassification, classificationMix: suggestion.support.classificationMix, smallSample: suggestion.uncertainty.smallSample })),
+    requirementClassification: result.requirements.requirements.map((row) => ({ label: row.label, jobsPresent: row.jobsPresent, byLane: row.byLane, byClassification: row.byClassification })),
+    queryVariantCells: result.funnels.queryVariant.cells.filter((cell) => cell.via !== null && cell.label !== '(query variant not recorded)').map((cell) => ({ label: cell.label, requisitions: cell.requisitions, via: cell.via, selectedOfExposed: cell.selectedOfExposed })),
     expected: portfolio.expected,
     expectedWithAliases: portfolio.expectedWithAliases ?? null,
     checks,
@@ -137,6 +150,26 @@ function withScores(observations: readonly JobObservation[], value: number | nul
     ...observation,
     score: value === null ? { state: 'unscored' as const, value: null, roleFamily: null } : { state: 'scored' as const, value, roleFamily: observation.score.roleFamily },
   }));
+}
+
+/** Plant the word "Kubernetes" in every title and every scorer hint, or blank them all: neither may change anything computed. */
+function withHints(observations: readonly JobObservation[], mode: 'kubernetes' | 'blank'): JobObservation[] {
+  return observations.map((observation) => ({
+    ...observation,
+    hints: mode === 'kubernetes' ? { title: 'Kubernetes Platform Engineer', scorerMatchingSkills: ['Kubernetes'], scorerGaps: ['Kubernetes is the main skill requested'] } : { title: null, scorerMatchingSkills: [], scorerGaps: [] },
+  }));
+}
+
+/** A deliberately LEAKY adapter, used only to show the invariance can fail: it turns a Kubernetes title or hint on an unassessed job into an assessment. */
+function leakyFromTitlesAndHints(observations: readonly JobObservation[]): JobObservation[] {
+  return observations.map((observation) => {
+    const says = /kubernetes/iu.test(observation.hints?.title ?? '') || [...(observation.hints?.scorerMatchingSkills ?? []), ...(observation.hints?.scorerGaps ?? [])].some((hint) => /kubernetes/iu.test(hint));
+    if (observation.assessment.state === 'current' || !says) return observation;
+    return {
+      ...observation,
+      assessment: { state: 'current' as const, coverage: 'complete' as const, requirements: [{ requirementId: 'leak', text: 'Kubernetes', classification: 'required' as const, evidenceClass: 'unsupported' as const, reviewed: true, excluded: false, jdAnchor: '', jdRevisionId: '', quoteSpan: null, candidateAdded: false }] },
+    };
+  });
 }
 
 function withoutAssessments(observations: readonly JobObservation[]): JobObservation[] {
@@ -163,6 +196,12 @@ export function invariances() {
   const scoresZero = run(withScores(base, 0), { exposure: RICH_EXPOSURE });
   const scoresHigh = run(withScores(base, 99), { exposure: RICH_EXPOSURE });
   const noAssessment = run(withoutAssessments(base), { exposure: RICH_EXPOSURE });
+  const hintsKubernetes = run(withHints(base, 'kubernetes'), { exposure: RICH_EXPOSURE });
+  const hintsBlank = run(withHints(base, 'blank'), { exposure: RICH_EXPOSURE });
+  const leaky = run(leakyFromTitlesAndHints(base), { exposure: RICH_EXPOSURE });
+  const titlesOnlyPortfolio = PORTFOLIOS.find((portfolio) => portfolio.id === 'titles_only_no_assessment')!;
+  const titlesOnlyRun = run(titlesOnlyPortfolio.observations);
+  const leakyTitlesOnly = run(leakyFromTitlesAndHints(titlesOnlyPortfolio.observations));
   return {
     outcomesFlipped: {
       claim: 'Making every sent application rejected, or every one an interview, changes no requirement row, no lane count, no eligibility row and no suggestion; only the labelled outcome context moves.',
@@ -181,7 +220,42 @@ export function invariances() {
       requirementSuggestions: noAssessment.suggestions.suggestions.filter((suggestion) => suggestion.kind === 'add_cv_evidence' || suggestion.kind === 'consider_learning_priority').length,
       verdict: noAssessment.requirements.verdict,
     },
+    titlesAndScorerHintsChanged: {
+      claim: 'Planting "Kubernetes" in every job title and every scorer hint, or blanking them all, changes no requirement row, no lane count and no suggestion. The unassessed jobs stay unknown.',
+      coreIdenticalWhenEveryTitleAndHintSaysKubernetes: JSON.stringify(core(hintsKubernetes)) === JSON.stringify(core(reference)),
+      coreIdenticalWhenEveryTitleAndHintIsBlank: JSON.stringify(core(hintsBlank)) === JSON.stringify(core(reference)),
+    },
+    titleOnlyNegativeControl: {
+      claim: 'The titles_only_no_assessment portfolio contains jobs TITLED Kubernetes with Kubernetes scorer hints and no assessment. The prototype yields no requirement row and no requirement suggestion and counts every job as not assessed; a leaky rule that read titles or hints would not.',
+      jobsTitledKubernetes: titlesOnlyPortfolio.observations.filter((observation) => /kubernetes/iu.test(observation.hints?.title ?? '')).length,
+      jobsWithKubernetesScorerHint: titlesOnlyPortfolio.observations.filter((observation) => [...(observation.hints?.scorerMatchingSkills ?? []), ...(observation.hints?.scorerGaps ?? [])].some((hint) => /kubernetes/iu.test(hint))).length,
+      jobsNotAssessed: titlesOnlyRun.requirements.assessment.none,
+      prototypeRequirementRows: titlesOnlyRun.requirements.requirements.length,
+      prototypeRequirementSuggestions: titlesOnlyRun.suggestions.suggestions.filter((suggestion) => suggestion.kind === 'add_cv_evidence' || suggestion.kind === 'consider_learning_priority').length,
+      leakyRuleWouldProduceRows: leakyTitlesOnly.requirements.requirements.length,
+      invarianceDetectsALeakyRule: JSON.stringify(core(leaky)) !== JSON.stringify(core(reference)),
+    },
+    classificationMatters: classificationCheck(base),
     dismissal: dismissalCheck(reference),
+  };
+}
+
+/** Preferred stays preferred: the same rows with every class forced to required read differently, and an all-preferred row never gets mandatory wording. */
+function classificationCheck(base: readonly JobObservation[]) {
+  const reference = run(base, { exposure: RICH_EXPOSURE });
+  const forced = run(
+    base.map((observation) => ({ ...observation, assessment: { ...observation.assessment, requirements: observation.assessment.requirements.map((requirement) => ({ ...requirement, classification: 'required' as const })) } })),
+    { exposure: RICH_EXPOSURE },
+  );
+  const onCall = reference.suggestions.suggestions.find((suggestion) => suggestion.subject === 'On-call rota');
+  const kubernetes = reference.suggestions.suggestions.find((suggestion) => suggestion.kind === 'add_cv_evidence' && suggestion.subject === 'Kubernetes');
+  return {
+    claim: 'The recurrence threshold counts every assessed appearance whatever its class; every row and suggestion states the required / preferred / unclear split; a row that is only preferred never gets mandatory wording; the split is a posting-side fact and moves no row, lane or threshold when changed.',
+    thresholdCountsAllClasses: onCall !== undefined && onCall.support.count === GATES.minRecurrence && onCall.support.byClassification?.required === 0,
+    allPreferredRow: onCall ? { subject: onCall.subject, byClassification: onCall.support.byClassification, classificationMix: onCall.support.classificationMix, statement: onCall.statement, statementUsesMandatoryWording: /required|mandatory|must/iu.test(onCall.statement) } : null,
+    mixedRow: kubernetes ? { subject: kubernetes.subject, byClassification: kubernetes.support.byClassification, classificationMix: kubernetes.support.classificationMix, statement: kubernetes.statement } : null,
+    forcingEveryClassToRequiredChangesTheWording: JSON.stringify(forced.suggestions.suggestions.map((suggestion) => suggestion.statement)) !== JSON.stringify(reference.suggestions.suggestions.map((suggestion) => suggestion.statement)),
+    forcingEveryClassToRequiredChangesNoRowCountOrLane: JSON.stringify(core(forced)) === JSON.stringify(core(reference)),
   };
 }
 
@@ -228,12 +302,15 @@ export function baselines() {
       if (laneOf(requirement) === 'supported_by_cv') wronglyCalledGap += 1;
     }
   }
-  // (2) Title-keyword gap: call "Kubernetes" a gap for every job whose title mentions it and that was not assessed.
-  const titled = base.filter((observation) => observation.assessment.state === 'none');
+  // (2) Title-keyword gap: call "Kubernetes" a gap for every UNASSESSED job whose own title mentions it (titles are the fixture's real ones).
+  const unassessedJobs = base.filter((observation) => observation.assessment.state !== 'current');
+  const titled = unassessedJobs.filter((observation) => /kubernetes/iu.test(observation.hints?.title ?? ''));
+  // (2b) Scorer-hint gap: treat a Kubernetes mention in the scorer's matching skills or "gaps" of an unassessed job as a requirement gap.
+  const hinted = unassessedJobs.filter((observation) => [...(observation.hints?.scorerMatchingSkills ?? []), ...(observation.hints?.scorerGaps ?? [])].some((hint) => /kubernetes/iu.test(hint)));
   // (3) Cells summed as if they partitioned the jobs.
   const naiveSum = src.cells.reduce((sum, cell) => sum + cell.requisitions, 0);
   // (4) Counting copies as jobs.
-  const rowsRead = src.totals.sourceRowsRead;
+  const rowsRead = src.totals.copiesSeen;
   // (5) Rate among known outcomes only.
   const distinctMature = src.totals.matureSent;
   const uniqueProgressed = base.filter((observation) => {
@@ -249,7 +326,8 @@ export function baselines() {
   return {
     note: 'Constructed comparisons on the rich_projected portfolio only. Each is a simpler rule someone might write; none is shipped behaviour.',
     rejectionAsGap: { requirementJobPairsInRejectedApplications: pairs, calledGapButSupportedByCv: wronglyCalledGap, prototypeAttributionsFromRejection: 0 },
-    titleKeywordGap: { jobsWithNoAssessment: titled.length, gapsAttributedByRule: titled.length, gapsAttributedByPrototype: 0 },
+    titleKeywordGap: { unassessedJobs: unassessedJobs.length, ofWhichTitleSaysKubernetes: titled.length, gapsAttributedByRule: titled.length, gapsAttributedByPrototype: 0, note: 'Computed from the fixture titles: only unassessed jobs whose own title says Kubernetes. Unassessed jobs with other titles are unknown, not title-derived.' },
+    scorerHintGap: { unassessedJobs: unassessedJobs.length, ofWhichScorerHintMentionsKubernetes: hinted.length, gapsAttributedByRule: hinted.length, gapsAttributedByPrototype: 0, note: 'The scorer’s matching skills and "gaps" compare a job with the person’s stated profile and preferences; they are not skill gaps and are never read as requirements.' },
     cellsSummedAsPartition: { distinctRequisitions: src.totals.distinctRequisitions, sumOfSourceCells: naiveSum, impossibleExcess: naiveSum - src.totals.distinctRequisitions },
     copiesCountedAsJobs: { jobsCountedByRule: rowsRead, distinctRequisitions: src.totals.distinctRequisitions },
     rateAmongKnownOutcomesOnly: {
@@ -264,11 +342,17 @@ export function baselines() {
 
 // ----------------------------------------------------------------------------------------------- desk comparison
 
+/** Real surfaces a person has today (each path exists in the repo at this head; the manual side is SOURCE READING of them). */
 const SOURCES = {
-  fitCheck: 'apps/desktop/src/components/saved/SavedJobDrawer.tsx ("Fit check": job.gapAnalysis, free text, saved by the person)',
-  brief: 'apps/desktop/src/components/brief/ApplicationBriefPanel.tsx (strengths / gaps / open questions, capped at BRIEF_LIST_CAP = 5 per list; eligibility; "Where this came from")',
-  table: 'apps/desktop/src/components/applications/ApplicationsTable.tsx (status, Next step column)',
-  drawer: 'apps/desktop/src/components/applications/ApplicationDrawer.tsx (notes, next step, contact)',
+  savedJobDrawer:
+    'apps/desktop/src/components/saved/SavedJobDrawer.tsx: ONE drawer per saved job shows the kept "Fit check" free text AND the brief panel (requirement evidence, recorded-gap vs open-question lists capped at BRIEF_LIST_CAP = 5, eligibility, "Where this came from"). Opening it once answers Q1, Q2, Q3 and the source half of Q4.',
+  brief: 'apps/desktop/src/components/brief/ApplicationBriefPanel.tsx (the brief panel inside that drawer)',
+  gapAnalysis:
+    'apps/desktop/src/components/cv/GapAnalysis.tsx + gap-analysis-store.ts (saveGapAnalysis): the CV-assistant flow that PRODUCES the kept Fit check. It runs the person’s own CLI/model once per job and "Save analysis" stores the free text on the saved job, with no posting or CV version. That run is the origin of the kept Fit check and is not counted below; the prototype runs no model.',
+  table: 'apps/desktop/src/components/applications/ApplicationsTable.tsx (ONE screen lists every application with its status and Next step)',
+  applicationDrawer: 'apps/desktop/src/components/applications/ApplicationDrawer.tsx (notes, next step, contact; one drawer per application)',
+  interviewRounds: 'apps/desktop/src/components/applications/InterviewRoundsPanel.tsx, shown in InterviewPrepDrawer.tsx (#691): per-round state, feedback and open topics, free text',
+  followUps: 'apps/desktop/src/components/applications/FollowUpsDrawer.tsx and FollowUpDraftCard.tsx (#692): dated follow-up actions (title, note) and drafts, free text',
   found: 'apps/desktop/src/components/search/VacancyDetail.tsx ("Found with": queries, shown only for a lead in the latest scan report)',
 };
 
@@ -281,16 +365,32 @@ export function deskComparison() {
   const freeTextOnly = unassessed.filter((observation) => surfaces[observation.id]?.keptFitCheck);
   const sent = observations.filter((observation) => sentApplicationsOf(observation).length > 0);
   const withEligibility = observations.filter((observation) => observation.eligibility.length > 0);
-  const notesJobs = observations.filter((observation) => (surfaces[observation.id]?.notes ?? '') !== '' || (surfaces[observation.id]?.nextStep ?? '') !== '');
   const keptJobs = observations.filter((observation) => surfaces[observation.id]?.keptFitCheck);
   const keptAmbiguous = assessed.filter((observation) => surfaces[observation.id]?.keptFitCheck);
+  const text = (observation: JobObservation, field: keyof ManualSurface) => ((surfaces[observation.id]?.[field] as string | null | undefined) ?? '') !== '';
+  const notesJobs = observations.filter((observation) => text(observation, 'notes') || text(observation, 'nextStep'));
+  const roundJobs = observations.filter((observation) => text(observation, 'roundNotes'));
+  const followUpJobs = observations.filter((observation) => text(observation, 'followUpText'));
+
+  // DISTINCT RECORDS a person opens by hand. One saved-job drawer serves Q1-Q3 and the source half of Q4, so it is ONE record, not three.
+  const drawer = (observation: JobObservation) => `saved-job-drawer:${observation.id}`;
+  const forQuestion = {
+    q1: observations.map(drawer),
+    q2: observations.map(drawer),
+    q3: observations.map(drawer),
+    q4: ['applications-table', ...sent.map(drawer)],
+    q5: [...notesJobs.map((observation) => `application-drawer:${observation.id}`), ...roundJobs.map((observation) => `interview-rounds:${observation.id}`), ...followUpJobs.map((observation) => `follow-ups:${observation.id}`)],
+  };
+  const union = new Set(Object.values(forQuestion).flat());
+  const naiveSum = Object.values(forQuestion).reduce((total, records) => total + records.length, 0);
 
   return {
     method: [
-      'Fixture: the rich_projected portfolio (30 requisitions) with invented free text on some jobs (Fit check, next step, notes).',
+      'Fixture: the rich_projected portfolio (30 requisitions) with invented free text on some jobs (kept Fit check, next step, notes, #691 round notes, #692 follow-up text).',
       'MANUAL side = SOURCE READING of what the current screens show (file citations below). Nothing was executed on the manual side and no person was observed.',
-      'PROTOTYPE side = EXECUTED: the views run on the same fixture.',
-      'Unit = counted operations (one job record opened = 1). It is not time, effort, accuracy or a usability result. No human labels were collected; the "better" column is the fixture author’s reading.',
+      'PROTOTYPE side = EXECUTED: one run of the views on the same fixture.',
+      'Unit = DISTINCT RECORDS a person would open or screens they would read. A record is counted once however many questions it answers (a saved-job drawer opened once answers Q1, Q2 and Q3); per-question counts are shown separately and are NOT added into a headline. It is not time, effort, accuracy or a usability result. No human labels were collected; the "better" column is the fixture author’s reading.',
+      'Like-for-like: the prototype can only answer a question for a job that was ALREADY assessed ("Compare with my CV"); the structured part of the brief needs the same prerequisite. The assessments, and the model run behind each kept Fit check, are not counted on either side. The prototype therefore saves no assessment work and these counts are not a time or usability saving.',
       'The rich portfolio is projected data. Where the answer needs a field production does not record, the row says so and the comparison is of design capability, not of what the app does today.',
     ],
     surfaces: SOURCES,
@@ -299,8 +399,8 @@ export function deskComparison() {
         id: 'q1_recurring_requirements',
         question: 'Which requirements recur across the jobs I chose, and how often?',
         manual: {
-          operations: observations.length,
-          opensWhat: 'each saved job’s drawer: the brief’s strengths/gaps/open-questions lists plus any kept Fit check',
+          distinctRecords: new Set(forQuestion.q1).size,
+          opensWhat: 'each saved job’s drawer (opened once, shared with Q2 and Q3): the brief’s requirement evidence and lists plus any kept Fit check',
           jobsWithStructuredAnswer: assessed.length,
           jobsOnlyAnsweredByFreeTextFitCheck: freeTextOnly.length,
           jobsWithNoAnswerAtAll: observations.length - assessed.length - freeTextOnly.length,
@@ -308,9 +408,9 @@ export function deskComparison() {
           listCapExercised: false,
         },
         prototype: {
-          operations: 1,
+          runs: 1,
           requirementRows: result.requirements.requirements.length,
-          topRows: result.requirements.requirements.slice(0, 4).map((row) => ({ label: row.label, jobsPresent: row.jobsPresent, of: row.denominators.assessedUsable })),
+          topRows: result.requirements.requirements.slice(0, 4).map((row) => ({ label: row.label, jobsPresent: row.jobsPresent, of: row.denominators.assessedUsable, byClassification: row.byClassification })),
           notAssessedReportedAsUnknown: unassessed.length,
           traceableToJobs: true,
           blindSpot: `${freeTextOnly.length} job(s) have the finding only as kept free text ("Terraform"), which the structured view cannot read; they are reported as not assessed, not guessed.`,
@@ -322,7 +422,8 @@ export function deskComparison() {
         id: 'q2_gap_versus_missing_evidence',
         question: 'Is a recurring missing item a gap I recorded, or just something my CV does not show?',
         manual: {
-          operations: observations.length,
+          distinctRecords: new Set(forQuestion.q2).size,
+          opensWhat: 'the same saved-job drawers as Q1 (no additional record)',
           perJobDistinctionExists: 'yes: the brief lists "gaps" and "open questions" separately for an assessed job',
           jobsWhereOnlyFreeTextFitCheckExists: keptJobs.length,
           freeTextFitCheckDistinguishesRecordedGapFromMissingEvidence: false,
@@ -330,7 +431,7 @@ export function deskComparison() {
           aggregationDone: 'by the person, by hand',
         },
         prototype: {
-          operations: 1,
+          runs: 1,
           lanesNeverMerged: ['recorded_missing_experience', 'cv_evidence_not_recorded', 'supported_by_cv', 'unreviewed'],
           example: result.requirements.requirements.find((row) => row.key === 'kubernetes')?.byLane ?? null,
         },
@@ -341,12 +442,13 @@ export function deskComparison() {
         id: 'q3_preference_conflicts',
         question: 'Do the jobs I chose repeatedly conflict with something I said I need?',
         manual: {
-          operations: observations.length,
+          distinctRecords: new Set(forQuestion.q3).size,
+          opensWhat: 'the same saved-job drawers as Q1 (no additional record)',
           jobsWithAnEligibilityAnswer: withEligibility.length,
           aggregationDone: 'by the person, by hand',
         },
         prototype: {
-          operations: 1,
+          runs: 1,
           rows: result.requirements.eligibility.map((row) => ({ key: row.key, jobsKnownMismatch: row.jobsKnownMismatch, ofAnswered: row.jobsAnswered, unknown: row.jobsUnknown, of: row.denominators.selected })),
         },
         betterForCountingAcrossJobs: 'prototype',
@@ -356,15 +458,15 @@ export function deskComparison() {
         id: 'q4_source_and_variant_outcomes',
         question: 'Which source or search variant do my sent applications come from, and what happened to them?',
         manual: {
-          operations: sent.length * 2,
-          opensWhat: 'each sent application’s row (status) and its saved-job drawer (“Where this came from”)',
+          distinctRecords: new Set(forQuestion.q4).size,
+          opensWhat: `the applications table once (status for every application) plus the saved-job drawer of each of the ${sent.length} sent applications for “Where this came from” (those drawers are the ones already opened for Q1-Q3, so they add no new record)`,
           sourceReadable: 'yes per job (brief: provider and link of each copy)',
           queryVariantReadable: 'no for a saved job: "Found with" appears only on a lead in the latest scan report and the variant is not stored with the saved job (proved in workspace-contract.test.ts)',
           outcomeReadable: 'status only: no date, source or reason',
           aggregationDone: 'by the person, by hand',
         },
         prototype: {
-          operations: 1,
+          runs: 1,
           requiresProjectedFields: ['query attribution carried into the brief (follow-up B)', 'dated status events (follow-up A)', 'lead exposure digest (not filed)'],
           sourceCells: result.funnels.source.cells.map((cell) => ({ label: cell.label, requisitions: cell.requisitions, matureSent: cell.matureSent, unknown: cell.outcomes.no_recorded_outcome })),
           outcomeVerdict: result.funnels.source.metrics.outcomeDistribution,
@@ -374,26 +476,51 @@ export function deskComparison() {
         betterForPerJobDetail: 'manual for source; neither for variant',
       },
       {
-        id: 'q5_context_only_in_notes',
-        question: 'What did a recruiter or contact say that bears on my search?',
-        manual: { operations: notesJobs.length, opensWhat: 'the application’s next step (table) and notes (drawer)', jobsWithSuchText: notesJobs.length },
-        prototype: { operations: 1, answer: 'none: notes and next-step text are deliberately not read, parsed or aggregated', blindSpot: `${notesJobs.length} job(s) hold context only in free text` },
+        id: 'q5_context_only_in_free_text',
+        question: 'What did a recruiter, interviewer or contact say that bears on my search?',
+        manual: {
+          distinctRecords: new Set(forQuestion.q5).size,
+          opensWhat: 'per application with text: its drawer (notes, next step), its interview rounds (#691 feedback and open topics) and its follow-up actions and drafts (#692)',
+          applicationDrawersWithText: notesJobs.length,
+          interviewRoundPanelsWithText: roundJobs.length,
+          followUpDrawersWithText: followUpJobs.length,
+        },
+        prototype: { runs: 0, answer: 'none: notes, next-step, round feedback and follow-up text are deliberately not read, parsed or aggregated', blindSpot: `${new Set(forQuestion.q5).size} record(s) hold context only in free text` },
         betterForCountingAcrossJobs: 'manual (the prototype cannot see it by design)',
         betterForPerJobDetail: 'manual',
       },
     ],
     totals: {
-      manualOperationsAcrossQuestions: observations.length * 3 + sent.length * 2 + notesJobs.length,
-      prototypeOperationsAcrossQuestions: 5,
-      note: 'Counted record opens, not time. The prototype also needs the underlying data to exist; on today’s data q4 is a no-go and q1–q3 depend on how many jobs the person assessed.',
+      distinctRecordsOpenedByHand: union.size,
+      distinctRecordsByKind: {
+        savedJobDrawers: [...union].filter((record) => record.startsWith('saved-job-drawer:')).length,
+        applicationsTableScreens: [...union].filter((record) => record === 'applications-table').length,
+        applicationDrawers: [...union].filter((record) => record.startsWith('application-drawer:')).length,
+        interviewRoundPanels: [...union].filter((record) => record.startsWith('interview-rounds:')).length,
+        followUpDrawers: [...union].filter((record) => record.startsWith('follow-ups:')).length,
+      },
+      perQuestionDistinctRecords: Object.fromEntries(Object.entries(forQuestion).map(([question, records]) => [question, new Set(records).size])),
+      overlapIfPerQuestionCountsWereAdded: { naiveSum, distinctUnion: union.size, doubleCounted: naiveSum - union.size },
+      prototypeRuns: 1,
+      prototypeViewsRead: ['funnel by source', 'funnel by query variant', 'requirements and eligibility rows', 'suggestions'],
+      prototypeQuestionsNotAnswered: ['q5_context_only_in_free_text'],
+      prerequisiteForPrototype: `${assessed.length} of ${observations.length} jobs had to be assessed ("Compare with my CV") first; ${unassessed.length} are reported as unknown`,
+      note: 'Distinct records and screens, not time. A prototype run reads data that must already exist, so on today’s data q4 is a no-go and q1-q3 depend on how many jobs the person assessed. These counts are not a time or usability saving and no single "N by hand versus M by prototype" ratio is offered.',
     },
     limits: [
       'No human did any of this; the manual side is a reading of the source, the prototype side is a run on constructed data.',
       'A person with 3 saved jobs does not need an aggregate: the counted advantage only appears as the number of jobs grows.',
-      'Free text can carry the decisive fact. The prototype ignores it on purpose, so it is complementary to manual review, not a replacement.',
+      'Free text (notes, next step, round feedback, follow-up text, the kept Fit check) can carry the decisive fact. The prototype ignores it on purpose, so it is complementary to manual review, not a replacement.',
+      'The assessments the prototype needs, and the model run behind each kept Fit check, are real work that this comparison does not count on either side.',
       'No claim is made about decision quality, time saved, hiring outcomes or user preference.',
     ],
-    cases: { jobsInFixture: observations.length, assessed: assessed.length, withKeptFitCheck: keptJobs.length, withFreeTextContext: notesJobs.length, sentApplications: sent.length },
+    cases: {
+      jobsInFixture: observations.length,
+      assessed: assessed.length,
+      withKeptFitCheck: keptJobs.length,
+      withFreeTextContext: new Set(forQuestion.q5.map((record) => record.split(':')[1])).size,
+      sentApplications: sent.length,
+    },
   };
 }
 
@@ -412,7 +539,7 @@ export function runEvaluation() {
     method: [
       'Executed: the prototype functions in apps/desktop/test/outcome-gap-research run on the portfolios in fixtures.ts. Expected verdicts, reasons and suggestion sets were declared by the fixture author from the written rules before the code was run.',
       'Executed: invariances (what must not change when outcomes, scores or assessments change) and a dismissal check.',
-      'Executed, constructed: four simpler rules scored on the same fixture (baselines).',
+      'Executed, constructed: five simpler rules scored on the same fixture (baselines).',
       'Source reading: the manual-review side of the desk comparison.',
       'Real-contract lane (added by evaluation.test.ts): synthetic data written through the app’s real writers into a migrated database and read back by the read-only adapter.',
       'Review gates are author-declared and not statistically derived (GATES in contract.ts). No inference is made about any real person.',
@@ -442,7 +569,9 @@ export function runEvaluation() {
       'No provider, token, latency or cost telemetry was collected or is claimed: nothing in the prototype calls a model.',
     ],
     limits: [
-      'Selected jobs are survivorship-filtered: deleted saved jobs are gone.',
+      'Selected jobs are survivorship-filtered: the aggregate describes the jobs and applications the person KEPT. Deleting a saved job removes it only when no application row still keeps the requisition; deleting the application as well removes it entirely.',
+      'The recurrence threshold counts required, preferred and unclear appearances alike; the split is always shown, but a posting-side class is still the extraction’s reading of the posting, not a verified fact.',
+      'Evidence classes direct / transferable / unsupported / needs_verification are model-proposed and then person-reviewed (the record does not say whether the person changed the class); only candidate_confirmed_gap is the person’s own statement.',
       'Correlation between a requirement and an outcome is never presented as cause; outcomes are context only.',
       'A requirement a CV cannot evidence is not a missing skill.',
       'The conclusion is about whether automated calibration is supportable (it is not), not about hiring outcomes.',

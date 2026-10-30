@@ -72,7 +72,10 @@ export function job(
   id: string,
   over: {
     requisition?: RequisitionKey;
-    copies?: number;
+    savedRows?: number;
+    title?: string | null;
+    scorerMatchingSkills?: string[];
+    scorerGaps?: string[];
     contributions?: SourceContribution[];
     score?: ScoreOpinion;
     applications?: ApplicationObservation[];
@@ -86,10 +89,11 @@ export function job(
   return {
     id,
     requisition: over.requisition ?? key('requisition', `ats:${id}`),
-    copies: over.copies ?? 1,
+    savedRows: over.savedRows ?? 1,
     contributions: over.contributions ?? [contribution('ats_roster_greenhouse')],
     selectedAt: over.selectedAt === undefined ? '2026-08-01T00:00:00.000Z' : over.selectedAt,
     score: over.score ?? score(75, 'Platform Engineer'),
+    hints: { title: over.title === undefined ? 'Platform Engineer' : over.title, scorerMatchingSkills: over.scorerMatchingSkills ?? [], scorerGaps: over.scorerGaps ?? [] },
     applications: over.applications ?? [],
     assessment: { state: over.assessment?.state ?? 'none', requirements: over.assessment?.requirements ?? [], coverage: over.assessment?.coverage ?? (over.assessment?.state && over.assessment.state !== 'none' ? 'complete' : 'not_run') },
     eligibility: over.eligibility ?? [],
@@ -98,12 +102,19 @@ export function job(
   };
 }
 
-export const req = (id: string, text: string, evidenceClass: RequirementRecord['evidenceClass'], over: Partial<RequirementRecord> = {}): RequirementRecord => ({
-  requirementId: id,
-  text,
-  classification: 'required',
-  evidenceClass,
-  reviewed: true,
-  excluded: false,
-  ...over,
-});
+export const req = (id: string, text: string, evidenceClass: RequirementRecord['evidenceClass'], over: Partial<RequirementRecord> = {}): RequirementRecord => {
+  const jdAnchor = over.jdAnchor ?? `${text} is listed in the posting.`;
+  return {
+    requirementId: id,
+    text,
+    classification: 'required',
+    evidenceClass,
+    reviewed: true,
+    excluded: false,
+    jdAnchor,
+    jdRevisionId: 'jdrev-1',
+    quoteSpan: { start: 40, end: 40 + jdAnchor.length },
+    candidateAdded: false,
+    ...over,
+  };
+};

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { ELIGIBILITY_LABEL, type EligibilityKey } from '../../electron/application-brief.js';
-import { GATES, type NoGoReason, type RecordedOutcome } from './contract.js';
+import { GATES, type EvidenceOrigin, type NoGoReason, type RecordedOutcome, type RequirementClassification } from './contract.js';
 import type { FunnelView } from './funnel.js';
-import { OUTCOME_CONTEXT_CAVEAT, type RequirementsView } from './requirements.js';
+import { OUTCOME_CONTEXT_CAVEAT, emptyClassifications, type RequirementsView } from './requirements.js';
 
 /**
  * Reviewable suggestions. A suggestion is a pure value derived from the two views; it has no handle on the
@@ -21,7 +21,20 @@ export interface SupportItem {
   jobId: string;
   requisitionKey: string;
   detail: string;
+  /** Present on requirement suggestions: the posting's class and where in the JD the wording was read, so the claim can be checked against the posting. */
+  evidence?: {
+    classification: RequirementClassification;
+    evidenceClass: string;
+    evidenceOrigin: EvidenceOrigin;
+    jdAnchor: string;
+    jdRevisionId: string;
+    quoteSpan: { start: number; end: number } | null;
+    candidateAdded: boolean;
+  };
 }
+
+/** How the supporting jobs split by the posting's own class. `all_*` mixes never receive wording stronger than the posting used. */
+export type ClassificationMix = 'all_required' | 'all_preferred' | 'all_unclear' | 'mixed';
 
 export interface Suggestion {
   id: string;
@@ -31,6 +44,9 @@ export interface Suggestion {
   support: {
     items: SupportItem[];
     count: number;
+    /** Requirement suggestions: the supporting jobs split by required / preferred / unclear. Sums to `count`. Null for suggestions that are not about a requirement. */
+    byClassification: Record<RequirementClassification, number> | null;
+    classificationMix: ClassificationMix | null;
     denominators: { label: string; value: number }[];
     window: { firstSelectedAt: string | null; lastSelectedAt: string | null; asOf: string };
     versionClass: string | null;
@@ -53,6 +69,29 @@ const LIMITS_COMMON = [
   'Thresholds are author-declared review gates, not statistically derived.',
   'This is how often something appears in the jobs you chose; it does not say why any employer decided anything.',
 ];
+
+export function classificationMixOf(counts: Record<RequirementClassification, number>): ClassificationMix {
+  const total = counts.required + counts.preferred + counts.unclear;
+  if (total > 0 && counts.required === total) return 'all_required';
+  if (total > 0 && counts.preferred === total) return 'all_preferred';
+  if (total > 0 && counts.unclear === total) return 'all_unclear';
+  return 'mixed';
+}
+
+/** What the postings said about how much the requirement matters, in the postings' own strength and never stronger. */
+export function describeClassification(counts: Record<RequirementClassification, number>): string {
+  const total = counts.required + counts.preferred + counts.unclear;
+  switch (classificationMixOf(counts)) {
+    case 'all_required':
+      return `listed as required in all ${total}`;
+    case 'all_preferred':
+      return `listed only as preferred, a nice-to-have, in all ${total}`;
+    case 'all_unclear':
+      return `in all ${total} the posting did not make clear how much it matters`;
+    default:
+      return [`required in ${counts.required}`, `preferred in ${counts.preferred}`, `unclear in ${counts.unclear}`].filter((part) => !/ in 0$/u.test(part)).join(', ');
+  }
+}
 
 function outcomeCounts(outcomes: (RecordedOutcome | 'not_sent')[]): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -83,18 +122,30 @@ export function buildSuggestions(input: {
         const count = row.byLane[lane];
         if (count < GATES.minRecurrence) continue;
         const jobs = row.supportingJobs.filter((job) => job.lane === lane);
+        const byClassification = emptyClassifications();
+        for (const job of jobs) byClassification[job.classification] += 1;
+        const mix = classificationMixOf(byClassification);
+        const phrase = describeClassification(byClassification);
+        const optional = mix === 'all_preferred' ? ' The postings list it only as a nice-to-have, so how much it matters is for you to judge.' : '';
         const statement =
           kind === 'add_cv_evidence'
-            ? `“${row.label}” appears in ${count} of the ${row.denominators.assessedUsable} assessed jobs you chose, and your CV has no recorded evidence for it in those. If you have this experience, you may want to add it to your CV yourself; if you do not, that is for you to decide.`
-            : `“${row.label}” appears in ${count} of the ${row.denominators.assessedUsable} assessed jobs you chose, and you recorded that you lack this experience in each. Whether it is worth learning is your decision.`;
+            ? `“${row.label}” appears in ${count} of the ${row.denominators.assessedUsable} assessed jobs you chose (${phrase}), and your CV has no recorded evidence for it in those. If you have this experience, you may want to add it to your CV yourself; if you do not, that is for you to decide.${optional}`
+            : `“${row.label}” appears in ${count} of the ${row.denominators.assessedUsable} assessed jobs you chose (${phrase}), and you recorded that you lack this experience in each. Whether it is worth learning is your decision.${optional}`;
         suggestions.push({
           id: idOf(kind, row.key),
           kind,
           subject: row.label,
           statement,
           support: {
-            items: jobs.map((job) => ({ jobId: job.jobId, requisitionKey: job.requisitionKey, detail: `${job.classification} requirement, recorded as ${job.evidenceClass}` })),
+            items: jobs.map((job) => ({
+              jobId: job.jobId,
+              requisitionKey: job.requisitionKey,
+              detail: `${job.classification === 'required' ? 'required' : job.classification === 'preferred' ? 'preferred (not mandatory)' : 'unclear whether required'}, recorded as ${job.evidenceClass} (${job.evidenceOrigin}${job.candidateAdded ? ', added by you' : ''})`,
+              evidence: { classification: job.classification, evidenceClass: job.evidenceClass, evidenceOrigin: job.evidenceOrigin, jdAnchor: job.jdAnchor, jdRevisionId: job.jdRevisionId, quoteSpan: job.quoteSpan, candidateAdded: job.candidateAdded },
+            })),
             count,
+            byClassification,
+            classificationMix: mix,
             denominators: [
               { label: 'assessed jobs with a current, compatible assessment', value: row.denominators.assessedUsable },
               { label: 'jobs you selected', value: row.denominators.selected },
@@ -119,6 +170,8 @@ export function buildSuggestions(input: {
         support: {
           items: row.supportingJobs.map((job) => ({ jobId: job.jobId, requisitionKey: job.requisitionKey, detail: `known mismatch (source: ${job.source})` })),
           count: row.jobsKnownMismatch,
+          byClassification: null,
+          classificationMix: null,
           denominators: [{ label: 'jobs you selected', value: row.denominators.selected }, { label: 'jobs where the posting answered', value: row.jobsAnswered }],
           window: windowOf(row.supportingJobs.map((job) => job.jobId)),
           versionClass: null,
@@ -148,11 +201,13 @@ export function buildSuggestions(input: {
           support: {
             items: [],
             count: exposed.selected,
-            denominators: [{ label: 'distinct leads shown for this variant (projected digest, not recorded today)', value: exposed.exposed }],
+            byClassification: null,
+            classificationMix: null,
+            denominators: [{ label: 'distinct leads the source returned for this variant (projected digest, not recorded today)', value: exposed.exposed }],
             window: { firstSelectedAt: null, lastSelectedAt: null, asOf },
             versionClass: null,
           },
-          uncertainty: { smallSample: exposed.exposed < GATES.minExposed * 2, limits: [...LIMITS_COMMON, 'Shown leads overlap across variants; this is one variant’s share, not a ranking.'] },
+          uncertainty: { smallSample: exposed.exposed < GATES.minExposed * 2, limits: [...LIMITS_COMMON, 'Shown leads overlap across variants; this is one variant’s share, not a ranking.', 'Only jobs the source received this query for count as selected; jobs that only the local filter matched are reported separately and not included.'] },
           outcomeContext: null,
           effect: 'none',
           actions: ['dismiss'],

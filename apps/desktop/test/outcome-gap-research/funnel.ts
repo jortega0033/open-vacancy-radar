@@ -1,6 +1,7 @@
 import {
   GATES,
   SENT_CLASSES,
+  copiesSeenOf,
   outcomeOfStatus,
   type ApplicationObservation,
   type EvidenceType,
@@ -15,7 +16,14 @@ import {
  *
  * Rules (each is covered by a test):
  *  - The unit is a DISTINCT REQUISITION (`JobObservation`), never a source row. Syndicated copies were
- *    collapsed before this point; their number is reported (`copiesCollapsed`) so the collapse is visible.
+ *    collapsed before this point and TWO overlapping measures of that are reported, never added:
+ *    saved-job rows merged (`savedRowsCollapsed`) and source contributions that brief aliases merged before the
+ *    job was saved (`aliasContributionsMerged`). The duplicate gate uses `copiesSeen` = per requisition the larger
+ *    of the two, a stated lower bound (a saved copy and a contribution can be the same copy).
+ *  - Query variants: a variant cell also splits its requisitions by `QueryRef.via`: `fetchedUpstream` = the source
+ *    received that query at least once for this requisition; `matchedLocallyOnly` = only the shared local filter
+ *    found it under that variant. Pooling the two would credit a variant the source never saw, so the projected
+ *    selected-of-exposed ratio counts fetchedUpstream only. (`QueryRef.field` title/description is carried, not split.)
  *  - A requisition seen through several sources/variants is counted in EACH of those cells, so the cells
  *    overlap by design. Every table carries the distinct total and `overlap = sum(cells) - distinct`; the
  *    cells are never presented as a partition. No "first source wins" partition is offered because no
@@ -51,6 +59,8 @@ export interface Bounds {
 export interface FunnelCell {
   label: string;
   requisitions: number;
+  /** Query-variant cells only (null for source / role family): how the requisitions in this cell reached the variant. Sums to `requisitions`. */
+  via: { fetchedUpstream: number; matchedLocallyOnly: number } | null;
   withApplicationRow: number;
   sent: number;
   sentByEvidence: Record<Exclude<EvidenceType, 'app_recorded' | 'derived_at_read' | 'not_recorded'>, number>;
@@ -77,7 +87,14 @@ export interface FunnelView {
     distinctRequisitions: number;
     sumOfCells: number;
     overlap: number;
-    sourceRowsRead: number;
+    /** Saved-job rows read, and how many of them were extra copies of a requisition already counted. */
+    savedRowsRead: number;
+    savedRowsCollapsed: number;
+    /** Distinct source contributions (provider + link) the brief aliases carry, and how many were merged into a requisition before saving. */
+    sourceContributions: number;
+    aliasContributionsMerged: number;
+    /** The larger of the two per requisition, summed (never their sum), and the extra copies it implies. The duplicate gate reads these. */
+    copiesSeen: number;
     copiesCollapsed: number;
     weakKeyRequisitions: number;
     sentRequisitions: number;
@@ -109,6 +126,15 @@ export function boundsOf(known: number, unknown: number, n: number): Bounds {
 
 function emptyOutcomes(): Record<RecordedOutcome, number> {
   return { no_recorded_outcome: 0, reply_recorded: 0, offer_recorded: 0, rejected_recorded: 0, withdrawn_recorded: 0 };
+}
+
+/** For a query-variant label: did the source receive this variant's query for the requisition (`fetched_upstream`), or did only the local filter find it? */
+export function viaOfVariant(observation: JobObservation, variantId: string): 'fetched_upstream' | 'matched_locally_only' {
+  for (const contribution of observation.contributions) {
+    if (contribution.queryRefs === 'not_recorded') continue;
+    if (contribution.queryRefs.some((ref) => ref.variantId === variantId && ref.via === 'fetched_upstream')) return 'fetched_upstream';
+  }
+  return 'matched_locally_only';
 }
 
 export function cellLabelsOf(observation: JobObservation, dimension: FunnelDimension): string[] {
@@ -148,6 +174,7 @@ export function buildFunnel(observations: readonly JobObservation[], options: Fu
       cell = {
         label,
         requisitions: 0,
+        via: options.dimension === 'queryVariant' ? { fetchedUpstream: 0, matchedLocallyOnly: 0 } : null,
         withApplicationRow: 0,
         sent: 0,
         sentByEvidence: { receipt_observed: 0, user_reported: 0, user_stated: 0 },
@@ -171,7 +198,11 @@ export function buildFunnel(observations: readonly JobObservation[], options: Fu
     distinctRequisitions: observations.length,
     sumOfCells: 0,
     overlap: 0,
-    sourceRowsRead: 0,
+    savedRowsRead: 0,
+    savedRowsCollapsed: 0,
+    sourceContributions: 0,
+    aliasContributionsMerged: 0,
+    copiesSeen: 0,
     copiesCollapsed: 0,
     weakKeyRequisitions: 0,
     sentRequisitions: 0,
@@ -184,8 +215,12 @@ export function buildFunnel(observations: readonly JobObservation[], options: Fu
   let anyOutcomeWithoutTime = false;
 
   for (const observation of observations) {
-    totals.sourceRowsRead += observation.copies;
-    totals.copiesCollapsed += Math.max(0, observation.copies - 1);
+    totals.savedRowsRead += observation.savedRows;
+    totals.savedRowsCollapsed += Math.max(0, observation.savedRows - 1);
+    totals.sourceContributions += observation.contributions.length;
+    totals.aliasContributionsMerged += Math.max(0, observation.contributions.length - 1);
+    totals.copiesSeen += copiesSeenOf(observation);
+    totals.copiesCollapsed += copiesSeenOf(observation) - 1;
     const weak = observation.requisition.strength === 'weak' || observation.requisition.strength === 'none';
     if (weak) totals.weakKeyRequisitions += 1;
 
@@ -211,6 +246,10 @@ export function buildFunnel(observations: readonly JobObservation[], options: Fu
     for (const label of cellLabelsOf(observation, options.dimension)) {
       const cell = cellFor(label);
       cell.requisitions += 1;
+      if (cell.via) {
+        if (viaOfVariant(observation, label) === 'fetched_upstream') cell.via.fetchedUpstream += 1;
+        else cell.via.matchedLocallyOnly += 1;
+      }
       if (weak) cell.weakKeyRequisitions += 1;
       if (observation.applications.length > 0) cell.withApplicationRow += 1;
       if (primary) {
@@ -233,7 +272,8 @@ export function buildFunnel(observations: readonly JobObservation[], options: Fu
     cell.rejectedRecorded = boundsOf(cell.outcomes.rejected_recorded, unknown, cell.matureSent);
     cell.smallSample = cell.requisitions < GATES.minRequisitionsPerCell || cell.matureSent < GATES.minRequisitionsPerCell;
     if (options.exposure && options.exposure[cell.label] !== undefined) {
-      cell.selectedOfExposed = { exposed: options.exposure[cell.label]!, selected: cell.requisitions };
+      // The projected digest counts leads the SOURCE returned for the variant, so only requisitions it actually fetched are comparable.
+      cell.selectedOfExposed = { exposed: options.exposure[cell.label]!, selected: cell.via ? cell.via.fetchedUpstream : cell.requisitions };
     }
   }
 
@@ -246,7 +286,7 @@ export function buildFunnel(observations: readonly JobObservation[], options: Fu
   if (totals.matureSent < GATES.minMatureSent) common.push('too_few_mature_sent');
   if (totals.matureSent > 0 && totals.unknownOutcomes / totals.matureSent > GATES.maxUnknownOutcomeShare) common.push('unknown_outcomes_dominate');
   if (totals.distinctRequisitions > 0 && totals.weakKeyRequisitions / totals.distinctRequisitions > GATES.maxWeakKeyShare) common.push('weak_identity_dominates');
-  if (totals.sourceRowsRead > 0 && totals.copiesCollapsed / totals.sourceRowsRead > GATES.maxCopyShare) common.push('duplicate_copies_dominate');
+  if (totals.copiesSeen > 0 && totals.copiesCollapsed / totals.copiesSeen > GATES.maxCopyShare) common.push('duplicate_copies_dominate');
 
   const unattributed = UNATTRIBUTED[options.dimension];
   const attributedCells = ordered.filter((cell) => cell.label !== unattributed);
@@ -278,6 +318,8 @@ export function buildFunnel(observations: readonly JobObservation[], options: Fu
     },
     notes: [
       'Cells count distinct requisitions and overlap when a requisition was seen through more than one source or variant; the distinct total is totals.distinctRequisitions.',
+      'Copies are reported as two overlapping measures (saved rows; alias-merged source contributions) and the duplicate gate uses the larger per requisition, a lower bound; they are never added.',
+      'A query-variant cell splits fetched_upstream (the source received the query) from matched_locally_only; the projected selected-of-exposed ratio uses fetched_upstream only.',
       'no_recorded_outcome is not a rejection, an ineligibility or a failed delivery. Bounds assume nothing about it: lower treats every unknown as "no", upper as "yes".',
       `Maturity (${maturityDays} days) is a view parameter with no empirical basis; younger sent applications are censored, not counted as no outcome.`,
       'Prepared, handed-off, failed and unconfirmed applications are not sent and are never in an outcome denominator.',

@@ -69,14 +69,18 @@ export async function buildRealWorld(db: WorkspaceDb): Promise<RealWorld> {
   const j2 = withProvenance(scanRow({ key: 'gh:1002', url: ATS_URL_OTHER_REQ, title: 'Platform Engineer', eligibility: { ...ELIGIBILITY, candidateWorkCountry: { ...ELIGIBILITY.candidateWorkCountry, answer: 'no', detail: 'Only candidates based in the United States.' } } }));
   const j3 = withProvenance(scanRow({ key: 'gh:1003', url: 'https://job-boards.greenhouse.io/northwind/jobs/1003', title: 'Staff Platform Engineer', description: JD_V1, profileScore: 70 }));
   const j5 = withProvenance(scanRow({ key: 'gh:1005', url: 'https://job-boards.greenhouse.io/northwind/jobs/1005', title: 'Release Engineer', description: JD_V1, profileScore: null }));
-  setScan(world, [j1, j1Copy, j2, j3, j5], '2026-10-19T08:00:00.000Z');
+  // A job whose TITLE, posting text and scorer hints all say Kubernetes but that the person never assessed ("Compare with my CV" was not run):
+  // the negative control for "no requirement or gap is ever derived from a title, a posting or a scorer hint". It has no overlay and no application.
+  const j6 = withProvenance(scanRow({ key: 'gh:1006', url: 'https://job-boards.greenhouse.io/northwind/jobs/1006', title: 'Kubernetes Platform Engineer', description: JD_V1, profileScore: 82 }));
+  Object.assign(j6.profileMatch as object, { matchingSkills: ['Kubernetes', 'TypeScript'], gaps: ['No Kubernetes production experience listed', 'Kubernetes is the main skill requested'] });
+  setScan(world, [j1, j1Copy, j2, j3, j5, j6], '2026-10-19T08:00:00.000Z');
 
   const save = (row: ReturnType<typeof scanRow>) =>
     workspace.createSavedJob(db, { role: row.title, company: row.company, location: row.location, vacancyKey: row.key, matchPercent: row.profileScore, sourceUrl: row.url, status: 'considering' });
-  const sj = { j1: save(j1), j1b: save(j1Copy), j2: save(j2), j3: save(j3), j5: save(j5) };
+  const sj = { j1: save(j1), j1b: save(j1Copy), j2: save(j2), j3: save(j3), j5: save(j5), k8s: save(j6) };
   const solo = workspace.createSavedJob(db, { role: 'Solo Role', company: 'Harbor Systems', location: 'Lisbon', sourceUrl: 'https://jobs.example/listing/solo-role-9', status: 'considering' });
   const deps = () => makeDeps(db, world);
-  for (const job of [sj.j1, sj.j1b, sj.j2, sj.j3, sj.j5, solo]) await getBrief(deps(), { savedJobId: job.id });
+  for (const job of [sj.j1, sj.j1b, sj.j2, sj.j3, sj.j5, sj.k8s, solo]) await getBrief(deps(), { savedJobId: job.id });
 
   // Requirement-level evidence exists only where the person ran "Compare with my CV" (an overlay).
   const overlayFor = (row: ReturnType<typeof scanRow>, reqs: CvRequirementMapping[]) => {
@@ -95,7 +99,8 @@ export async function buildRealWorld(db: WorkspaceDb): Promise<RealWorld> {
     requirement({ requirementId: 'r-k8s', text: 'Kubernetes', jdAnchor: 'Experience with Kubernetes is required.', evidenceClass: 'unsupported', anchorParentId: '' }),
   ]);
   overlayFor(j3, [
-    requirement({ requirementId: 'r-k8s', text: 'Kubernetes', jdAnchor: 'Experience with Kubernetes is required.', evidenceClass: 'candidate_confirmed_gap', anchorParentId: '' }),
+    // The person added this one themselves (candidateAdded) and said they lack it; it is preferred, not mandatory, in this posting.
+    requirement({ requirementId: 'r-k8s', text: 'Kubernetes', jdAnchor: 'Experience with Kubernetes is required.', evidenceClass: 'candidate_confirmed_gap', anchorParentId: '', candidateAdded: true, classification: 'preferred' }),
   ]);
 
   const attemptIds: Record<string, string> = {};
@@ -141,5 +146,5 @@ export async function buildRealWorld(db: WorkspaceDb): Promise<RealWorld> {
   const a6 = workspace.createApplication(db, { role: 'Solo Role', company: 'Harbor Systems', location: 'Lisbon', savedJobId: solo.id, status: 'applied', appliedAt: null });
   applicationIds.a6 = a6.id;
 
-  return { world, savedIds: { j1: sj.j1.id, j1b: sj.j1b.id, j2: sj.j2.id, j3: sj.j3.id, j5: sj.j5.id, solo: solo.id }, applicationIds, attemptIds, cvId: cv.id };
+  return { world, savedIds: { j1: sj.j1.id, j1b: sj.j1b.id, j2: sj.j2.id, j3: sj.j3.id, j5: sj.j5.id, k8s: sj.k8s.id, solo: solo.id }, applicationIds, attemptIds, cvId: cv.id };
 }

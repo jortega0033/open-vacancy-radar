@@ -35,7 +35,7 @@ import { collapseByRequisition, keyFromBrief, keyFromFields, NO_KEY } from './re
 
 export interface WorkspaceReadResult {
   observations: JobObservation[];
-  /** Rows read, before collapsing to requisitions: the evidence for the copy accounting. */
+  /** Rows read, before collapsing to requisitions: the evidence for the copy accounting (saved rows; alias-merged source copies are in each observation's `contributions`). */
   sourceRows: { savedJobs: number; applications: number; attempts: number; briefs: number; overlays: number };
   /** Things the production data cannot answer, each with the check that proved it on THIS database. */
   unrecoverable: { code: string; detail: string }[];
@@ -171,6 +171,8 @@ export function readWorkspaceObservations(db: WorkspaceDb): WorkspaceReadResult 
 
     const savedJob = group.map((entry) => entry.savedJob).find((hit): hit is SavedJobRecord => hit !== null) ?? null;
     availability.selectedAt = savedJob ? 'recorded' : 'not_recorded';
+    availability.displayTitle = 'recorded';
+    availability.scorerHints = facts?.match ? 'recorded' : 'not_recorded';
 
     const applicationRows = group.flatMap((entry) => entry.rows);
     const observed: ApplicationObservation[] = applicationRows.map(({ app, attempts: rowAttempts }) => {
@@ -221,7 +223,18 @@ export function readWorkspaceObservations(db: WorkspaceDb): WorkspaceReadResult 
       assessmentState = match === 'matches' ? (coverage === 'complete' && !jdTruncated ? 'current' : 'partial') : 'stale';
       requirements = overlay.requirements
         .filter((requirement) => !requirement.excluded)
-        .map((requirement) => ({ requirementId: requirement.requirementId, text: requirement.text, classification: requirement.classification, evidenceClass: requirement.evidenceClass, reviewed: requirement.reviewed, excluded: false }));
+        .map((requirement) => ({
+          requirementId: requirement.requirementId,
+          text: requirement.text,
+          classification: requirement.classification,
+          evidenceClass: requirement.evidenceClass,
+          reviewed: requirement.reviewed,
+          excluded: false,
+          jdAnchor: requirement.jdAnchor,
+          jdRevisionId: requirement.jdRevisionId,
+          quoteSpan: requirement.quoteStart >= 0 && requirement.quoteEnd >= requirement.quoteStart ? { start: requirement.quoteStart, end: requirement.quoteEnd } : null,
+          candidateAdded: requirement.candidateAdded,
+        }));
     }
     for (const field of ASSESSMENT_FIELDS) availability[field] = overlay ? 'recorded' : 'not_recorded';
 
@@ -233,10 +246,12 @@ export function readWorkspaceObservations(db: WorkspaceDb): WorkspaceReadResult 
     return {
       id: `obs-${String(position + 1).padStart(3, '0')}`,
       requisition: head.requisition,
-      copies: Math.max(1, group.filter((entry) => entry.savedJob !== null).length),
+      savedRows: group.filter((entry) => entry.savedJob !== null).length,
       contributions,
       selectedAt: savedJob?.savedAt ?? null,
       score,
+      // Read so a test can plant a skill in them and prove nothing downstream uses them (see `JobObservation.hints`).
+      hints: { title: savedJob?.role ?? head.display.role, scorerMatchingSkills: facts?.match?.matchingSkills ?? [], scorerGaps: facts?.match?.gaps ?? [] },
       applications: observed,
       assessment: { state: assessmentState, requirements, coverage },
       eligibility,
@@ -257,7 +272,7 @@ export function readWorkspaceObservations(db: WorkspaceDb): WorkspaceReadResult 
     { code: 'query_attribution', detail: 'No workspace table or brief column stores which query variant produced a saved job (LeadQueryProvenance exists only in the scan report JSON).' },
     { code: 'exposure_denominator', detail: 'Leads shown, skipped or ignored are not stored; only jobs the person saved or applied to exist.' },
     { code: 'status_timestamp', detail: 'applications.status is one mutable value with no change time, source or reason; the only application date is applied_at.' },
-    { code: 'deleted_saved_jobs', detail: 'Deleting a saved job removes its row (and an unreferenced brief): jobs the person dropped are invisible, so "selected" is survivorship-filtered.' },
+    { code: 'deleted_saved_jobs', detail: 'Deleting a saved job removes its row (and a brief nothing else references). An application row made from it survives (applications.saved_job_id is set to null) and keeps the requisition; only when the application is deleted too does the requisition disappear. If no attempt references the brief it goes with the saved job and the surviving application is re-keyed from its stored text (weak tier). What the person dropped is therefore invisible, so "selected" describes the jobs and applications the person kept.' },
     { code: 'cv_text_history', detail: 'cv_documents keeps no version history; a CV or JD version is only a hash, so compatibility is hash equality, not a diff.' },
   ];
   return {

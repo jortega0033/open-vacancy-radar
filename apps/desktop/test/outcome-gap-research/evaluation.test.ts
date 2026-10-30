@@ -27,6 +27,7 @@ const { buildRequirements } = await import('./requirements.js');
 const { buildSuggestions } = await import('./suggestions.js');
 const { runEvaluation, invariances, baselines, deskComparison } = await import('./evaluate.js');
 const { PORTFOLIOS } = await import('./fixtures.js');
+const { evidenceOriginOf } = await import('./contract.js');
 import type { WorkspaceDb } from '../../electron/workspace/client.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -61,11 +62,25 @@ async function realContractLane() {
   };
   const requirements = buildRequirements(observations);
   const suggestions = buildSuggestions({ asOf: REAL_AS_OF, requirements, variantFunnel: funnels.queryVariant, selectedAtByJob: {} });
+  // Negative control: unassessed jobs whose title / scorer hints say Kubernetes must change no requirement row.
+  const unassessedTitled = observations.filter((o) => o.assessment.state === 'none' && /kubernetes/iu.test(o.hints?.title ?? ''));
+  const withoutTitled = buildRequirements(observations.filter((o) => !unassessedTitled.includes(o)));
+  const rowShape = (view: ReturnType<typeof buildRequirements>) => JSON.stringify(view.requirements.map((r) => ({ key: r.key, jobsPresent: r.jobsPresent, byLane: r.byLane, byClassification: r.byClassification, jobs: r.supportingJobs.map((j) => j.requisitionKey) })));
+  const negativeControl = {
+    titledJobs: unassessedTitled.length,
+    jobs: unassessedTitled.map((o) => ({ key: o.requisition.key, title: o.hints?.title ?? null, scorerMatchingSkills: o.hints?.scorerMatchingSkills ?? [], scorerGaps: o.hints?.scorerGaps ?? [], score: o.score, assessmentState: o.assessment.state, requirements: o.assessment.requirements.length, applications: o.applications.length })),
+    requirementRowsIdentical: rowShape(requirements) === rowShape(withoutTitled),
+    selectedWithJobs: requirements.selected,
+    selectedWithoutJobs: withoutTitled.selected,
+    notAssessedWithJobs: requirements.assessment.none,
+    notAssessedWithoutJobs: withoutTitled.assessment.none,
+    requirementSuggestions: suggestions.suggestions.filter((entry) => entry.kind === 'add_cv_evidence' || entry.kind === 'consider_learning_priority').length,
+  };
   const sentApps = observations.flatMap((o) => o.applications).filter((a) => a.submission === 'receipt_backed' || a.submission === 'user_reported' || a.submission === 'user_stated');
 
   const answerability: { question: string; status: Status; evidence: string; code: string }[] = [
     { question: 'How many distinct requisitions did the person select?', status: 'answerable', evidence: `${n} requisitions from ${read.sourceRows.savedJobs} saved jobs and ${read.sourceRows.applications} application rows (${read.sourceRows.briefs} briefs)`, code: 'application_briefs.identity_key + application_brief_aliases (#688)' },
-    { question: 'Which saved copies are the same requisition?', status: statusOf(n, count((o) => o.requisition.origin === 'brief_identity')), evidence: `${count((o) => o.requisition.origin === 'brief_identity')} of ${n} keyed by a stored brief identity; ${count((o) => o.copies > 1)} had more than one saved copy`, code: 'brief aliases (saved:<id>, attempt:<id>, source copies)' },
+    { question: 'Which saved copies are the same requisition?', status: statusOf(n, count((o) => o.requisition.origin === 'brief_identity')), evidence: `${count((o) => o.requisition.origin === 'brief_identity')} of ${n} keyed by a stored brief identity; ${count((o) => o.savedRows > 1)} had more than one saved copy`, code: 'brief aliases (saved:<id>, attempt:<id>, source copies)' },
     { question: 'Which provider returned each copy?', status: statusOf(n, count((o) => o.contributions.some((c) => c.provider !== null))), evidence: `${count((o) => o.contributions.some((c) => c.provider !== null))} of ${n} have at least one provider recorded (a hand-entered job has a link but no provider)`, code: 'application_brief_aliases.provider' },
     { question: 'Which query variant found it?', status: statusOf(n, count((o) => o.availability.queryAttribution === 'recorded')), evidence: `${count((o) => o.availability.queryAttribution === 'recorded')} of ${n}: #686 queryProvenance reached the scan rows but no workspace table or brief column stores it`, code: 'not stored (LeadQueryProvenance lives in the scan report JSON only)' },
     { question: 'What role family is it?', status: statusOf(n, count((o) => o.score.roleFamily !== null)), evidence: `${count((o) => o.score.roleFamily !== null)} of ${n}: only a scored job has the deterministic scorer’s primary fit; unscored jobs stay unclassified`, code: 'application_briefs.source_facts.match.primaryFit' },
@@ -78,7 +93,9 @@ async function realContractLane() {
     { question: 'Does the job conflict with a stated preference or eligibility?', status: statusOf(n, count((o) => o.eligibility.length > 0)), evidence: `${count((o) => o.eligibility.length > 0)} of ${n} carry scan eligibility answers; ${observations.flatMap((o) => o.eligibility).filter((e) => e.classification === 'known_mismatch').length} known mismatch(es)`, code: 'application_briefs.source_facts.eligibility + classifyEligibility' },
     { question: 'Which JD, CV and rule version was an assessment made under?', status: 'partial', evidence: 'hashes only (JD hash, reviewed-CV hash, brief workflow version); no CV or JD text history, so compatibility is hash equality', code: 'cv_evidence_overlays hashes; assessment.inputs.workflowVersion' },
     { question: 'How many leads were shown but not selected?', status: 'not_recorded', evidence: 'no table stores leads that were not saved', code: 'not stored' },
-    { question: 'Which jobs did the person drop?', status: 'not_recorded', evidence: 'deleting a saved job deletes it (and an unreferenced brief): selection is survivorship-filtered', code: 'not stored' },
+    { question: 'Which jobs did the person drop?', status: 'not_recorded', evidence: 'deleting a saved job removes it unless an application row still keeps the requisition (applications.saved_job_id is set to null); deleting the application too removes it. What the person dropped is invisible, so the data describes the jobs and applications the person kept', code: 'not stored' },
+    { question: 'Which JD wording and revision was each requirement read from, and did the person add it?', status: statusOf(observations.flatMap((o) => o.assessment.requirements).length, observations.flatMap((o) => o.assessment.requirements).filter((r) => r.jdAnchor !== '').length), evidence: `${observations.flatMap((o) => o.assessment.requirements).filter((r) => r.jdAnchor !== '').length} of ${observations.flatMap((o) => o.assessment.requirements).length} requirements carry their verbatim JD quote; ${observations.flatMap((o) => o.assessment.requirements).filter((r) => r.candidateAdded).length} were added by the person; classes direct / transferable / unsupported / needs_verification are model-proposed and person-reviewed, candidate_confirmed_gap is the person's own statement`, code: 'cv_evidence_overlays.requirements jdAnchor / jdRevisionId / quoteStart / candidateAdded' },
+    { question: 'Is the title or a scorer hint on an unassessed job ever read as a requirement?', status: 'answerable', evidence: `no: ${negativeControl.titledJobs} unassessed job(s) carry a Kubernetes title, posting text and scorer hint; requirement rows, lane totals and requirement suggestions are identical with and without them (${negativeControl.requirementRowsIdentical})`, code: 'workspace-contract.test.ts negative control' },
   ];
 
   return {
@@ -89,12 +106,19 @@ async function realContractLane() {
       key: o.requisition.key,
       tier: o.requisition.tier,
       keyOrigin: o.requisition.origin,
-      savedCopies: o.copies,
+      savedCopies: o.savedRows,
+      sourceContributions: o.contributions.length,
+      displayTitle: o.hints?.title ?? null,
+      scorerHints: { matchingSkills: o.hints?.scorerMatchingSkills ?? [], gaps: o.hints?.scorerGaps ?? [] },
       providers: o.contributions.map((c) => c.provider).sort(),
       queryRefs: [...new Set(o.contributions.map((c) => (c.queryRefs === 'not_recorded' ? 'not_recorded' : 'recorded')))],
       score: o.score,
       applications: o.applications.map((a) => ({ submission: a.submission, evidence: a.evidence, sentAt: a.sentAt, status: a.status, heldRounds: a.heldRounds, isReapplication: a.reapplicationOf !== null, statusHistory: a.statusHistory })),
-      assessment: { state: o.assessment.state, requirements: o.assessment.requirements.map((r) => `${r.text}:${r.evidenceClass}`) },
+      assessment: {
+        state: o.assessment.state,
+        requirements: o.assessment.requirements.map((r) => `${r.text}:${r.evidenceClass}`),
+        requirementEvidence: o.assessment.requirements.map((r) => ({ text: r.text, classification: r.classification, evidenceClass: r.evidenceClass, evidenceOrigin: evidenceOriginOf(r), reviewed: r.reviewed, candidateAdded: r.candidateAdded, jdAnchor: r.jdAnchor, jdRevisionRecorded: r.jdRevisionId !== '', quoteSpan: r.quoteSpan })),
+      },
       eligibilityKnownMismatch: o.eligibility.filter((e) => e.classification === 'known_mismatch').map((e) => e.key),
     })),
     funnel: {
@@ -106,8 +130,9 @@ async function realContractLane() {
     },
     // The reviewed-CV hash changes on every run (the writer stamps a review time into the CV source), so it is reported as a
     // stable label per distinct hash instead of the hash itself.
-    requirements: { selected: requirements.selected, assessment: { ...requirements.assessment, versionClasses: requirements.assessment.versionClasses.map((entry, index) => ({ ...entry, versionClass: entry.versionClass.replace(/\|[0-9a-f]{64}$/u, `|cv-version-${index + 1}`) })) }, verdict: requirements.verdict, rows: requirements.requirements.map((r) => ({ label: r.label, jobsPresent: r.jobsPresent, byLane: r.byLane })), eligibility: requirements.eligibility.map((r) => ({ key: r.key, jobsKnownMismatch: r.jobsKnownMismatch })) },
+    requirements: { selected: requirements.selected, assessment: { ...requirements.assessment, versionClasses: requirements.assessment.versionClasses.map((entry, index) => ({ ...entry, versionClass: entry.versionClass.replace(/\|[0-9a-f]{64}$/u, `|cv-version-${index + 1}`) })) }, verdict: requirements.verdict, rows: requirements.requirements.map((r) => ({ label: r.label, jobsPresent: r.jobsPresent, byLane: r.byLane, byClassification: r.byClassification })), eligibility: requirements.eligibility.map((r) => ({ key: r.key, jobsKnownMismatch: r.jobsKnownMismatch })) },
     suggestions: { produced: suggestions.suggestions.length, withheld: suggestions.withheld },
+    negativeControl,
     answerability,
     unrecoverable: read.unrecoverable,
   };
@@ -145,14 +170,28 @@ describe('#693 evaluation', () => {
     expect(result.scoresChanged.evaluatorOpinionCounts.allMissing).toMatchObject({ scored: 0, unscored: 30 });
     expect(result.scoresChanged.evaluatorOpinionCounts.allZero).toMatchObject({ scored: 30, unscored: 0 });
     expect(result.noAssessmentMeansNoRequirements).toMatchObject({ requirementRows: 0, requirementSuggestions: 0 });
+    // Non-vacuous negative control: the portfolio really contains Kubernetes titles and hints, and still yields nothing.
+    expect(result.titleOnlyNegativeControl).toMatchObject({ jobsTitledKubernetes: 8, jobsWithKubernetesScorerHint: 8, jobsNotAssessed: 12, prototypeRequirementRows: 0, prototypeRequirementSuggestions: 0, invarianceDetectsALeakyRule: true });
+    expect(result.titleOnlyNegativeControl.leakyRuleWouldProduceRows).toBeGreaterThan(0);
+    expect(result.titlesAndScorerHintsChanged).toMatchObject({ coreIdenticalWhenEveryTitleAndHintSaysKubernetes: true, coreIdenticalWhenEveryTitleAndHintIsBlank: true });
+    // Preferred stays preferred.
+    expect(result.classificationMatters).toMatchObject({ thresholdCountsAllClasses: true, forcingEveryClassToRequiredChangesTheWording: true, forcingEveryClassToRequiredChangesNoRowCountOrLane: true });
+    expect(result.classificationMatters.allPreferredRow).toMatchObject({ subject: 'On-call rota', classificationMix: 'all_preferred', statementUsesMandatoryWording: false });
+    expect(result.classificationMatters.mixedRow).toMatchObject({ classificationMix: 'mixed', byClassification: { required: 3, preferred: 1, unclear: 1 } });
     expect(result.dismissal).toMatchObject({ startedWith: 6, visibleAfterDismiss: 5, stillListedAsDismissed: 1, stateChanged: true, staysDismissedAfterTwoMoreSupportingJobs: true, newSupportReported: 2, allEffectsNone: true, everySuggestionCarriesEvidence: true, everyRequirementSuggestionNamesItsJobs: true });
   });
 
   it('shows what the simpler rules get wrong on the same fixture', () => {
     const result = baselines();
     expect(result.rejectionAsGap.calledGapButSupportedByCv).toBeGreaterThan(0);
-    expect(result.titleKeywordGap.gapsAttributedByRule).toBeGreaterThan(0);
+    // Derived from the fixture's own titles, not from "every unassessed job".
+    expect(result.titleKeywordGap.gapsAttributedByRule).toBe(result.titleKeywordGap.ofWhichTitleSaysKubernetes);
+    expect(result.titleKeywordGap.ofWhichTitleSaysKubernetes).toBeGreaterThan(0);
+    expect(result.titleKeywordGap.ofWhichTitleSaysKubernetes).toBeLessThan(result.titleKeywordGap.unassessedJobs);
     expect(result.titleKeywordGap.gapsAttributedByPrototype).toBe(0);
+    expect(result.scorerHintGap.gapsAttributedByRule).toBe(result.scorerHintGap.ofWhichScorerHintMentionsKubernetes);
+    expect(result.scorerHintGap.ofWhichScorerHintMentionsKubernetes).toBeLessThan(result.scorerHintGap.unassessedJobs);
+    expect(result.scorerHintGap.gapsAttributedByPrototype).toBe(0);
     expect(result.cellsSummedAsPartition.impossibleExcess).toBeGreaterThan(0);
     expect(result.copiesCountedAsJobs.jobsCountedByRule).toBeGreaterThan(result.copiesCountedAsJobs.distinctRequisitions);
     expect(result.rateAmongKnownOutcomesOnly.ruleRate).not.toBeNull();
@@ -164,10 +203,45 @@ describe('#693 evaluation', () => {
     expect(desk.method.join(' ')).toMatch(/SOURCE READING/u);
     expect(desk.method.join(' ')).toMatch(/not time/iu);
     expect(desk.questions.some((q) => /manual/u.test(q.betterForPerJobDetail) || /manual/u.test(q.betterForCountingAcrossJobs))).toBe(true);
-    expect(desk.questions.find((q) => q.id === 'q5_context_only_in_notes')!.betterForCountingAcrossJobs).toMatch(/^manual/u);
-    expect(desk.totals.prototypeOperationsAcrossQuestions).toBe(5);
+    expect(desk.questions.find((q) => q.id === 'q5_context_only_in_free_text')!.betterForCountingAcrossJobs).toMatch(/^manual/u);
     expect(desk.limits.join(' ')).toMatch(/No human did any of this/u);
     expect(JSON.stringify(desk)).not.toMatch(/human.validated|participants|user study found/iu);
+  });
+
+  it('counts the manual side by distinct records: one saved-job drawer answers Q1-Q3 and is counted once, with no headline that multiplies it', () => {
+    const desk = deskComparison();
+    const perQuestion = desk.totals.perQuestionDistinctRecords;
+    // The same 30 drawers serve Q1, Q2 and Q3.
+    expect(perQuestion.q1).toBe(30);
+    expect(perQuestion.q2).toBe(30);
+    expect(perQuestion.q3).toBe(30);
+    // Q4 adds the applications table once; its sent-application drawers are the ones already opened.
+    expect(perQuestion.q4).toBe(1 + desk.cases.sentApplications);
+    // The union is smaller than the per-question sum: the overlap is reported, never summed into a headline.
+    expect(desk.totals.overlapIfPerQuestionCountsWereAdded.distinctUnion).toBe(desk.totals.distinctRecordsOpenedByHand);
+    expect(desk.totals.overlapIfPerQuestionCountsWereAdded.naiveSum).toBeGreaterThan(desk.totals.distinctRecordsOpenedByHand);
+    expect(desk.totals.overlapIfPerQuestionCountsWereAdded.doubleCounted).toBe(desk.totals.overlapIfPerQuestionCountsWereAdded.naiveSum - desk.totals.distinctRecordsOpenedByHand);
+    const kinds = desk.totals.distinctRecordsByKind;
+    expect(kinds.savedJobDrawers).toBe(30);
+    expect(Object.values(kinds).reduce((sum, value) => sum + value, 0)).toBe(desk.totals.distinctRecordsOpenedByHand);
+    // The old inflated headline is gone, and no ratio of hand-opens to prototype runs is offered.
+    const text = JSON.stringify(desk);
+    expect(text).not.toMatch(/manualOperationsAcrossQuestions|prototypeOperationsAcrossQuestions|\b143\b/u);
+    expect(desk.totals.prototypeRuns).toBe(1);
+    expect(desk.totals.prerequisiteForPrototype).toMatch(/had to be assessed/u);
+    expect(desk.totals.note).toMatch(/not a time or usability saving/u);
+    expect(desk.method.join(' ')).toMatch(/saves no assessment work/u);
+  });
+
+  it('lists the surfaces the first version left out: #691 round notes, #692 follow-ups and drafts, and the GapAnalysis origin of the Fit check', () => {
+    const desk = deskComparison();
+    expect(desk.surfaces.interviewRounds).toMatch(/InterviewRoundsPanel.*#691/u);
+    expect(desk.surfaces.followUps).toMatch(/FollowUpsDrawer.*FollowUpDraftCard.*#692/u);
+    expect(desk.surfaces.gapAnalysis).toMatch(/GapAnalysis\.tsx.*saveGapAnalysis.*PRODUCES the kept Fit check/u);
+    const q5 = desk.questions.find((q) => q.id === 'q5_context_only_in_free_text')!;
+    expect(q5.manual).toMatchObject({ applicationDrawersWithText: 3, interviewRoundPanelsWithText: 2, followUpDrawersWithText: 2, distinctRecords: 7 });
+    expect(q5.prototype.runs).toBe(0);
+    expect(desk.totals.prototypeQuestionsNotAnswered).toEqual(['q5_context_only_in_free_text']);
   });
 
   it('matches the checked-in evaluation byte for byte, and can regenerate it', async () => {
@@ -180,6 +254,11 @@ describe('#693 evaluation', () => {
       expect.arrayContaining(['Which query variant found it?', 'How many leads were shown but not selected?', 'Which jobs did the person drop?']),
     );
     expect(report.realContractLane.suggestions.produced).toBe(0);
+    // The real-database negative control: an unassessed job titled, worded and hinted Kubernetes changes nothing.
+    expect(report.realContractLane.negativeControl).toMatchObject({ titledJobs: 1, requirementRowsIdentical: true, requirementSuggestions: 0 });
+    expect(report.realContractLane.negativeControl.selectedWithJobs - report.realContractLane.negativeControl.selectedWithoutJobs).toBe(1);
+    expect(report.realContractLane.negativeControl.notAssessedWithJobs - report.realContractLane.negativeControl.notAssessedWithoutJobs).toBe(1);
+    expect(report.realContractLane.negativeControl.jobs[0]).toMatchObject({ assessmentState: 'none', requirements: 0, applications: 0 });
     expect(existsSync(committedPath), `the evaluation is not checked in at ${committedPath}; run with OVR_EVAL_OUT to create it`).toBe(true);
     expect(readFileSync(committedPath, 'utf8').replace(/\r\n/gu, '\n')).toBe(text);
   });

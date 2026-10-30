@@ -71,14 +71,20 @@ function richJob(i: number): JobObservation {
   } else if (i <= 27) apps.push(app(`a-${id('j', i)}`, 'prepared', { status: 'preparing' }));
   else apps.push(app(`a-${id('j', i)}`, 'not_recorded', { status: 'preparing' }));
 
+  // The posting's own class varies on purpose: Kubernetes is mostly required but preferred/unclear in some jobs; Terraform is mixed;
+  // On-call rota is ONLY preferred (so it must never get mandatory wording); one gap statement was added by the person.
   const requirements: RequirementRecord[] = [];
   if (i <= 12) requirements.push(req('r1', 'TypeScript', 'direct'));
-  if (i <= 5) requirements.push(req('r2', 'Kubernetes', 'unsupported'));
-  else if (i <= 9) requirements.push(req('r2', 'Kubernetes', 'candidate_confirmed_gap'));
+  if (i <= 5) requirements.push(req('r2', 'Kubernetes', 'unsupported', { classification: i === 4 ? 'preferred' : i === 5 ? 'unclear' : 'required' }));
+  else if (i <= 9) requirements.push(req('r2', 'Kubernetes', 'candidate_confirmed_gap', { classification: i === 9 ? 'preferred' : 'required', candidateAdded: i === 7 }));
   else if (i <= 12) requirements.push(req('r2', 'Kubernetes', 'direct'));
-  if (i >= 13 && i <= 16) requirements.push(req('r3', 'Terraform', 'needs_verification'));
-  if (i >= 17 && i <= 19) requirements.push(req('r4', 'On-call rota', 'unsupported'));
+  if (i >= 13 && i <= 16) requirements.push(req('r3', 'Terraform', 'needs_verification', { classification: i === 16 ? 'preferred' : i === 15 ? 'unclear' : 'required' }));
+  if (i >= 17 && i <= 19) requirements.push(req('r4', 'On-call rota', 'unsupported', { classification: 'preferred' }));
   if (i === 3 || i === 14) requirements.push(req('r5', 'Go', 'unsupported'));
+
+  // Titles and scorer hints that SAY Kubernetes on some jobs, including unassessed ones (21, 25, 29): nothing may be derived from them.
+  const kubernetesTitled = i % 4 === 1;
+  const title = kubernetesTitled ? 'Kubernetes Platform Engineer' : i % 2 === 1 ? 'Platform Engineer' : 'Site Reliability Engineer';
 
   const elig: EligibilityRecord[] = [];
   if (i <= 20) elig.push(eligibility('candidateWorkCountry', i >= 7 && i <= 11 ? 'no' : 'yes'));
@@ -86,8 +92,11 @@ function richJob(i: number): JobObservation {
 
   return job(id('j', i), {
     requisition: key('requisition', `ats:acme:${i}`),
-    copies: i <= 4 ? 2 : 1,
+    savedRows: i <= 4 ? 2 : 1,
     contributions,
+    title,
+    scorerMatchingSkills: kubernetesTitled ? ['Kubernetes'] : ['TypeScript'],
+    scorerGaps: kubernetesTitled ? ['Kubernetes is the main skill requested'] : ['No explicit candidate skill match found'],
     score: i % 7 === 0 ? score(null) : score(60 + ((i * 3) % 35), i % 2 === 1 ? 'Platform Engineer' : 'Site Reliability Engineer'),
     applications: apps,
     assessment: i <= 20 ? { state: 'current', requirements } : { state: 'none' },
@@ -119,7 +128,7 @@ function sentJobs(count: number, make: (i: number) => Partial<Parameters<typeof 
 /** Today's production shape: no query attribution, status history is the current value only, no exposure. */
 function smallCurrentShape(): JobObservation[] {
   const jobs: JobObservation[] = [];
-  jobs.push(job('c1', { requisition: key('requisition', 'ats:northwind:1001'), copies: 2, contributions: [contribution('ats_roster_greenhouse'), contribution('remotive')], applications: [app('a1', 'receipt_backed', { sentAt: '2026-09-01T09:00:00.000Z', status: 'interview', heldRounds: 1 }), app('a1b', 'user_reported', { sentAt: '2026-10-05T09:00:00.000Z', status: 'applied', reapplicationOf: 'a1' })], assessment: { state: 'current', requirements: [req('r1', 'TypeScript', 'direct'), req('r2', 'Kubernetes', 'unsupported')] } }));
+  jobs.push(job('c1', { requisition: key('requisition', 'ats:northwind:1001'), savedRows: 2, contributions: [contribution('ats_roster_greenhouse'), contribution('remotive')], applications: [app('a1', 'receipt_backed', { sentAt: '2026-09-01T09:00:00.000Z', status: 'interview', heldRounds: 1 }), app('a1b', 'user_reported', { sentAt: '2026-10-05T09:00:00.000Z', status: 'applied', reapplicationOf: 'a1' })], assessment: { state: 'current', requirements: [req('r1', 'TypeScript', 'direct'), req('r2', 'Kubernetes', 'unsupported')] } }));
   jobs.push(job('c2', { requisition: key('requisition', 'ats:northwind:1002'), applications: [app('a2', 'user_stated', { sentAt: '2026-09-05T09:00:00.000Z', status: 'rejected' })], eligibility: [eligibility('candidateWorkCountry', 'no')] }));
   jobs.push(job('c3', { requisition: key('requisition', 'ats:northwind:1003'), applications: [app('a3', 'prepared', { status: 'preparing' })], assessment: { state: 'current', requirements: [req('r2', 'Kubernetes', 'candidate_confirmed_gap')] } }));
   jobs.push(job('c4', { requisition: key('requisition', 'ats:northwind:1005'), score: score(null), applications: [app('a5', 'user_stated', { sentAt: RECENT, status: 'applied' })] }));
@@ -131,8 +140,18 @@ function smallCurrentShape(): JobObservation[] {
 }
 
 function titleOnly(): JobObservation[] {
-  // Titles say "Kubernetes" and scores are high, but nothing was assessed: there is no requirement evidence at all.
-  return range(1, 12).map((i) => job(id('t', i), { requisition: key('requisition', `ats:titles:${i}`), score: score(90, 'Platform Engineer'), applications: [app(`a-${id('t', i)}`, 'user_stated', { sentAt: OLD, status: 'rejected' })] }));
+  // Titles and scorer hints say "Kubernetes" and scores are high, but nothing was assessed: there is no requirement evidence at all.
+  // 8 of the 12 are titled Kubernetes and carry a Kubernetes scorer hint, so a rule that read titles or hints WOULD produce a gap here.
+  return range(1, 12).map((i) =>
+    job(id('t', i), {
+      requisition: key('requisition', `ats:titles:${i}`),
+      title: i <= 8 ? 'Kubernetes Platform Engineer' : 'Platform Engineer',
+      scorerMatchingSkills: i <= 8 ? ['Kubernetes'] : ['TypeScript'],
+      scorerGaps: i <= 8 ? ['No Kubernetes production experience listed'] : [],
+      score: score(90, 'Platform Engineer'),
+      applications: [app(`a-${id('t', i)}`, 'user_stated', { sentAt: OLD, status: 'rejected' })],
+    }),
+  );
 }
 
 function mixedVersions(): JobObservation[] {
@@ -197,9 +216,17 @@ export const PORTFOLIOS: Portfolio[] = [
   {
     id: 'duplicates_dominate',
     lane: 'projected_instrumentation',
-    title: 'Syndicated copies dominate',
-    what: '22 mature sends, each seen as 4 copies (88 rows read for 22 requisitions).',
-    observations: sentJobs(22, () => ({ copies: 4 }), (i) => (i % 2 ? 'interview' : 'rejected')),
+    title: 'Saved copies dominate',
+    what: '22 mature sends, each saved 4 times by the person (88 saved rows for 22 requisitions: savedRowsCollapsed 66, aliasContributionsMerged 0).',
+    observations: sentJobs(22, () => ({ savedRows: 4 }), (i) => (i % 2 ? 'interview' : 'rejected')),
+    expected: { funnelOutcome: 'no_go', funnelOutcomeReasons: ['duplicate_copies_dominate'], requirements: 'no_go', requirementReasons: ['too_few_assessed', 'unassessed_dominate', 'no_recurring_requirement'], suggestions: [] },
+  },
+  {
+    id: 'alias_copies_dominate',
+    lane: 'projected_instrumentation',
+    title: 'Source copies merged before saving dominate',
+    what: '22 mature sends, each saved ONCE but merged from 4 source copies by brief aliases (22 saved rows, 88 source contributions): savedRowsCollapsed 0, aliasContributionsMerged 66, copiesSeen 88. The duplicate gate fires without claiming that any of those copies was a saved copy.',
+    observations: sentJobs(22, () => ({ savedRows: 1, contributions: [contribution('greenhouse'), contribution('lever'), contribution('remotive'), contribution('careers_page')] }), (i) => (i % 2 ? 'interview' : 'rejected')),
     expected: { funnelOutcome: 'no_go', funnelOutcomeReasons: ['duplicate_copies_dominate'], requirements: 'no_go', requirementReasons: ['too_few_assessed', 'unassessed_dominate', 'no_recurring_requirement'], suggestions: [] },
   },
   {
@@ -222,7 +249,7 @@ export const PORTFOLIOS: Portfolio[] = [
     id: 'titles_only_no_assessment',
     lane: 'current_shape',
     title: 'Titles say Kubernetes, nothing was assessed',
-    what: '12 jobs with a high score and a Kubernetes-flavoured title, no assessment: there is no requirement evidence, so there must be no requirement row and no suggestion.',
+    what: '12 unassessed jobs with a high score; 8 are TITLED "Kubernetes Platform Engineer" and carry a Kubernetes scorer hint (matching skill and gap). There is no requirement evidence, so there must be no requirement row and no suggestion, and the unassessed jobs are counted as unknown.',
     observations: titleOnly(),
     expected: { funnelOutcome: 'no_go', funnelOutcomeReasons: ['too_few_mature_sent'], requirements: 'no_go', requirementReasons: ['too_few_assessed', 'unassessed_dominate', 'no_recurring_requirement'], suggestions: [] },
   },
@@ -269,12 +296,16 @@ export interface ManualSurface {
   keptFitCheck: string | null;
   nextStep: string;
   notes: string;
+  /** #691: free-text feedback / open topics on an interview round of this job's application (InterviewRoundsPanel), or ''. */
+  roundNotes: string;
+  /** #692: the title/note of a follow-up action or follow-up draft on this job's application (FollowUpsDrawer), or ''. */
+  followUpText: string;
 }
 
 /** Synthetic free text a person might have written on the rich portfolio's jobs. Invented. */
 export function manualSurfaces(): Record<string, ManualSurface> {
   const out: Record<string, ManualSurface> = {};
-  for (let i = 1; i <= 30; i += 1) out[id('j', i)] = { keptFitCheck: null, nextStep: '', notes: '' };
+  for (let i = 1; i <= 30; i += 1) out[id('j', i)] = { keptFitCheck: null, nextStep: '', notes: '', roundNotes: '', followUpText: '' };
   // Kept Fit checks (free text) on some assessed jobs, and on two jobs that have NO structured assessment.
   for (const i of [1, 2, 6, 7, 13, 17]) out[id('j', i)]!.keptFitCheck = 'Matched: TypeScript. Not matched: Kubernetes is required; the CV does not show it.';
   out[id('j', 22)]!.keptFitCheck = 'Not matched: Terraform and a security clearance.';
@@ -283,5 +314,10 @@ export function manualSurfaces(): Record<string, ManualSurface> {
   out[id('j', 8)]!.notes = 'Recruiter said they would pay more for Go experience.';
   out[id('j', 9)]!.nextStep = 'Ask about Kubernetes training budget';
   out[id('j', 15)]!.notes = 'Hiring manager is ex-colleague; strong referral.';
+  // Context that lives only in #691 round notes and #692 follow-up text; the structured views cannot read either, on purpose.
+  out[id('j', 2)]!.roundNotes = 'Round 1: asked how I would run Kubernetes upgrades; open topic: on-call expectations.';
+  out[id('j', 3)]!.roundNotes = 'Panel interview feedback: strong on TypeScript, wants Go.';
+  out[id('j', 9)]!.followUpText = 'Follow-up draft: ask the recruiter about the training budget.';
+  out[id('j', 12)]!.followUpText = 'Due Friday: send portfolio link.';
   return out;
 }

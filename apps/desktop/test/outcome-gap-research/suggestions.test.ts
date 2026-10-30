@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { job, key, req } from './builders.js';
 import { GATES, deepFreeze } from './contract.js';
 import { evaluatePortfolio, run } from './evaluate.js';
 import { AS_OF, PORTFOLIOS, RICH_EXPOSURE, richObservations } from './fixtures.js';
@@ -137,5 +138,78 @@ describe('no mutation', () => {
     expect(keys(result)).toHaveLength(6);
     expect(Object.keys(buildSuggestions).length).toBe(0);
     for (const suggestion of result.suggestions.suggestions) expect(Object.keys(suggestion).sort()).toEqual(['actions', 'effect', 'id', 'kind', 'outcomeContext', 'statement', 'subject', 'support', 'uncertainty']);
+  });
+});
+
+describe('suggestion wording never outranks the posting’s own class (finding: preferred vs mandatory)', () => {
+  const withClasses = (classes: ('required' | 'preferred' | 'unclear')[], evidenceClass: Parameters<typeof req>[2] = 'unsupported') => {
+    const jobs = Array.from({ length: 8 }, (_, index) =>
+      job(`j${index + 1}`, {
+        requisition: key('requisition', `ats:w:${index + 1}`),
+        assessment: { state: 'current', requirements: [index < classes.length ? req('r', 'Kubernetes', evidenceClass, { classification: classes[index]!, candidateAdded: index === 0 }) : req('x', 'TypeScript', 'direct')] },
+      }),
+    );
+    return run(jobs).suggestions.suggestions.filter((suggestion) => suggestion.subject === 'Kubernetes');
+  };
+
+  it('says "required in all N" only when every supporting job lists it as required', () => {
+    const [suggestion] = withClasses(['required', 'required', 'required']);
+    expect(suggestion!.support.classificationMix).toBe('all_required');
+    expect(suggestion!.support.byClassification).toEqual({ required: 3, preferred: 0, unclear: 0 });
+    expect(suggestion!.statement).toContain('listed as required in all 3');
+  });
+
+  it('states the required / preferred / unclear split for a mixed row, and counts the preferred appearance toward the threshold', () => {
+    const [suggestion] = withClasses(['required', 'preferred', 'unclear']);
+    expect(suggestion!.support.count).toBe(3);
+    expect(suggestion!.support.classificationMix).toBe('mixed');
+    expect(suggestion!.support.byClassification).toEqual({ required: 1, preferred: 1, unclear: 1 });
+    expect(suggestion!.statement).toContain('required in 1, preferred in 1, unclear in 1');
+    expect(suggestion!.statement).not.toContain('listed as required in all');
+  });
+
+  it('gives an all-preferred row no mandatory-style wording at all, for the CV-evidence and the learning suggestion alike', () => {
+    for (const [evidenceClass, kind] of [['unsupported', 'add_cv_evidence'], ['candidate_confirmed_gap', 'consider_learning_priority']] as const) {
+      const [suggestion] = withClasses(['preferred', 'preferred', 'preferred'], evidenceClass);
+      expect(suggestion!.kind).toBe(kind);
+      expect(suggestion!.support.classificationMix).toBe('all_preferred');
+      expect(suggestion!.statement).toMatch(/listed only as preferred, a nice-to-have, in all 3/u);
+      expect(suggestion!.statement).toMatch(/for you to judge/u);
+      expect(suggestion!.statement).not.toMatch(/required|mandatory|must|essential/iu);
+      expect(suggestion!.support.items.every((item) => item.detail.startsWith('preferred (not mandatory)'))).toBe(true);
+    }
+  });
+
+  it('says the posting was unclear when every supporting job is unclear, never required', () => {
+    const [suggestion] = withClasses(['unclear', 'unclear', 'unclear']);
+    expect(suggestion!.support.classificationMix).toBe('all_unclear');
+    expect(suggestion!.statement).toContain('did not make clear how much it matters');
+    expect(suggestion!.statement).not.toMatch(/required in all|mandatory/iu);
+  });
+
+  it('changes the wording when the class changes (mutation check: forcing preferred to required is visible)', () => {
+    const preferred = withClasses(['preferred', 'preferred', 'preferred'])[0]!;
+    const required = withClasses(['required', 'required', 'required'])[0]!;
+    expect(preferred.statement).not.toBe(required.statement);
+    expect(preferred.id).toBe(required.id); // same subject and kind: the same suggestion, honestly re-worded
+  });
+
+  it('gives every supporting job the JD quote, revision, span and who added it, so it can be checked against the posting', () => {
+    const [suggestion] = withClasses(['required', 'preferred', 'required']);
+    for (const item of suggestion!.support.items) {
+      expect(item.evidence).toMatchObject({ evidenceClass: 'unsupported', evidenceOrigin: 'model_proposed_person_reviewed', jdAnchor: 'Kubernetes is listed in the posting.', jdRevisionId: 'jdrev-1' });
+      expect(item.evidence!.quoteSpan).toEqual({ start: 40, end: 40 + 'Kubernetes is listed in the posting.'.length });
+    }
+    expect(suggestion!.support.items.map((item) => item.evidence!.candidateAdded)).toEqual([true, false, false]);
+    expect(suggestion!.support.items[0]!.detail).toContain('added by you');
+  });
+
+  it('keeps frequency apart from opinion: scores and outcomes still move no row while the class split is shown', () => {
+    const reference = rich();
+    const kubernetes = reference.suggestions.suggestions.find((suggestion) => suggestion.kind === 'add_cv_evidence' && suggestion.subject === 'Kubernetes')!;
+    expect(kubernetes.support.byClassification).toEqual({ required: 3, preferred: 1, unclear: 1 });
+    const onCall = reference.suggestions.suggestions.find((suggestion) => suggestion.subject === 'On-call rota')!;
+    expect(onCall.support.classificationMix).toBe('all_preferred');
+    expect(onCall.statement).not.toMatch(/required|mandatory/iu);
   });
 });

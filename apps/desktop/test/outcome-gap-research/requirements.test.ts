@@ -185,3 +185,79 @@ describe('purity', () => {
     expect(GATES.minAssessed).toBeGreaterThan(0);
   });
 });
+
+describe('preferred and mandatory stay explicit (finding: preferred vs mandatory)', () => {
+  const classed = (classes: ('required' | 'preferred' | 'unclear')[], evidenceClass: Parameters<typeof req>[2] = 'unsupported') =>
+    assessed(8, (i) => (i <= classes.length ? [req('r', 'Kubernetes', evidenceClass, { classification: classes[i - 1]! })] : [req('x', 'TypeScript', 'direct')]));
+
+  it('splits a row by the posting’s own class, never into one pooled "required" count, and the split sums to the jobs present', () => {
+    const row = buildRequirements(classed(['required', 'required', 'preferred', 'unclear'])).requirements.find((entry) => entry.key === 'kubernetes')!;
+    expect(row.jobsPresent).toBe(4);
+    expect(row.byClassification).toEqual({ required: 2, preferred: 1, unclear: 1 });
+    expect(row.supportingJobs.map((entry) => entry.classification)).toEqual(['required', 'required', 'preferred', 'unclear']);
+    expect(Object.values(row.byClassification).reduce((a, b) => a + b, 0)).toBe(row.jobsPresent);
+  });
+
+  it('keeps an all-preferred row all-preferred, and an all-unclear row all-unclear', () => {
+    const preferred = buildRequirements(classed(['preferred', 'preferred', 'preferred'])).requirements.find((entry) => entry.key === 'kubernetes')!;
+    expect(preferred.byClassification).toEqual({ required: 0, preferred: 3, unclear: 0 });
+    const unclear = buildRequirements(classed(['unclear', 'unclear', 'unclear'])).requirements.find((entry) => entry.key === 'kubernetes')!;
+    expect(unclear.byClassification).toEqual({ required: 0, preferred: 0, unclear: 3 });
+  });
+
+  it('counts a preferred appearance toward recurrence (documented decision) while still reporting it as preferred', () => {
+    // One required + two preferred reach the threshold of 3 together; the row says exactly that instead of calling all three mandatory.
+    const row = buildRequirements(classed(['required', 'preferred', 'preferred'])).requirements.find((entry) => entry.key === 'kubernetes')!;
+    expect(row.jobsPresent).toBe(GATES.minRecurrence);
+    expect(row.smallSample).toBe(false);
+    expect(row.byClassification).toEqual({ required: 1, preferred: 2, unclear: 0 });
+  });
+
+  it('keeps the stronger posting class when one job lists the same requirement twice in the same lane', () => {
+    const jobs = assessed(8, () => [req('a', 'Kubernetes', 'unsupported', { classification: 'preferred' }), req('b', 'kubernetes.', 'unsupported', { classification: 'required' })]);
+    const row = buildRequirements(jobs).requirements[0]!;
+    expect(row.jobsPresent).toBe(8);
+    expect(row.byClassification).toEqual({ required: 8, preferred: 0, unclear: 0 });
+  });
+
+  it('is independent of the class for lanes and presence: forcing every class to required moves no row and no lane', () => {
+    const mixed = classed(['required', 'preferred', 'unclear', 'preferred']);
+    const forced = mixed.map((observation) => ({ ...observation, assessment: { ...observation.assessment, requirements: observation.assessment.requirements.map((entry) => ({ ...entry, classification: 'required' as const })) } }));
+    const shape = (view: ReturnType<typeof buildRequirements>) => view.requirements.map((row) => ({ key: row.key, present: row.jobsPresent, lanes: row.byLane }));
+    expect(shape(buildRequirements(forced))).toEqual(shape(buildRequirements(mixed)));
+    expect(buildRequirements(forced).requirements.find((row) => row.key === 'kubernetes')!.byClassification).not.toEqual(buildRequirements(mixed).requirements.find((row) => row.key === 'kubernetes')!.byClassification);
+  });
+});
+
+describe('a title or a scorer hint is never a requirement (finding: vacuous negative)', () => {
+  const unassessed = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      job(`t${index}`, { requisition: key('requisition', `ats:titled:${index}`), title: 'Kubernetes Platform Engineer', scorerMatchingSkills: ['Kubernetes'], scorerGaps: ['No Kubernetes production experience listed'], score: score(95, 'Platform Engineer'), assessment: { state: 'none' } }),
+    );
+
+  it('produces no row, lane count or suggestion from Kubernetes titles and Kubernetes scorer hints on unassessed jobs, and counts them as not assessed', () => {
+    const jobs = [...assessed(8, () => [req('a', 'TypeScript', 'direct')]), ...unassessed(10)];
+    const view = buildRequirements(jobs);
+    expect(view.requirements.map((row) => row.key)).toEqual(['typescript']);
+    expect(view.assessment).toMatchObject({ current: 8, none: 10 });
+    expect(view.selected).toBe(18);
+  });
+
+  it('is unmoved when every title and hint is rewritten to say Kubernetes, or blanked', () => {
+    const base = assessed(8, () => [req('a', 'Kubernetes', 'unsupported')]);
+    const plant = (mode: 'say' | 'blank') => base.map((observation) => ({ ...observation, hints: mode === 'say' ? { title: 'Kubernetes Platform Engineer', scorerMatchingSkills: ['Kubernetes'], scorerGaps: ['Kubernetes'] } : { title: null, scorerMatchingSkills: [], scorerGaps: [] } }));
+    const pick = (view: ReturnType<typeof buildRequirements>) => JSON.stringify(view);
+    expect(pick(buildRequirements(plant('say')))).toBe(pick(buildRequirements(plant('blank'))));
+  });
+
+  it('would catch a leaky rule: the same comparison FAILS when a title is allowed to become a requirement (mutation check)', () => {
+    const jobs = [...assessed(8, () => [req('a', 'TypeScript', 'direct')]), ...unassessed(4)];
+    const leaky = jobs.map((observation) =>
+      observation.assessment.state === 'current' || !/kubernetes/iu.test(observation.hints?.title ?? '')
+        ? observation
+        : { ...observation, assessment: { state: 'current' as const, coverage: 'complete' as const, requirements: [req('leak', 'Kubernetes', 'unsupported')] } },
+    );
+    const keys = (view: ReturnType<typeof buildRequirements>) => view.requirements.map((row) => row.key);
+    expect(keys(buildRequirements(leaky))).not.toEqual(keys(buildRequirements(jobs)));
+  });
+});
