@@ -92,16 +92,16 @@ export function ApplicationsTable({
               key={application.id}
               className={`ovr-row ${application.archived ? 'opacity-60' : ''}`}
             >
-              <td className="ovr-responsive-table__cell font-semibold" data-label="Role">
+              <td className="ovr-responsive-table__cell font-semibold wrap-anywhere" data-label="Role">
                 {application.role}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Company">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Company">
                 {application.company}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Location">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Location">
                 {application.location || <NotSet />}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Sponsor check">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Sponsor check">
                 {application.verification || <NotSet label="Not checked" />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Status">
@@ -141,7 +141,7 @@ export function ApplicationsTable({
               <td className="ovr-responsive-table__cell whitespace-nowrap" data-label="Applied">
                 {formatAppliedDate(application.appliedAt) ?? <NotSet />}
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Next step">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Next step">
                 <div className="min-w-0">
                   {application.nextStep || <NotSet label="None" />}
                   {(() => {
@@ -187,11 +187,11 @@ export function ApplicationsTable({
                   )}
                 </div>
               </td>
-              <td className="ovr-responsive-table__cell" data-label="Contact">
+              <td className="ovr-responsive-table__cell wrap-anywhere" data-label="Contact">
                 {application.contact || <NotSet label="None" />}
               </td>
               <td
-                className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
+                className="ovr-responsive-table__cell ovr-responsive-table__actions text-right"
                 data-label="Actions"
               >
                 {onPrepareInterview && INTERVIEW_PREPARABLE_STATUSES.has(application.status) && (
