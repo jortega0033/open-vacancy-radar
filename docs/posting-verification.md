@@ -25,6 +25,13 @@ Only links with an official, read-only single-posting route on a job-board host 
 | Lever | `api.lever.co` or `api.eu.lever.co` `/v0/postings/{site}/{id}` |
 | Workable | `apply.workable.com/api/v2/accounts/{account}/jobs/{id}` (an account-less short link is looked up first) |
 | Jobgether | `jobgether.com/astroapi/offer/{id}.json` |
+| Ashby (#720) | `api.ashbyhq.com/posting-api/job-board/{board}` — the employer's whole official board, the same URL the Ashby adapter reads; the posting is looked up in it by its job id |
+
+Ashby has no public single-posting route, so its evidence is the board itself. A job that a successful,
+well-formed board read does not list (or lists as unlisted) is **closed/removed**. A board that answers 404/410 is
+"could not check" (the board may have moved; that is not proof the posting closed), and so is anything else that is
+not a well-formed board. The board request is `no-store` and sends no validators, so a check always asks the board
+now and never answers from the scan's cached copy. Only the matched job's markup is parsed, inside the same budget.
 
 Every other link costs **no request**: it is reported as "could not check" and the person is offered
 **Open the posting** so they can look themselves (no **Check again**, which could never ask anyone). No new source,
@@ -68,7 +75,7 @@ The posting text is untrusted remote content handled in the Electron main proces
 | Confirmed open | The posting was returned and is not materially different from the text the work was prepared from. | Reuses all existing work. One quiet line, no extra screen. |
 | Confirmed closed | The posting's job system said it does not exist: HTTP 404/410 from the single-posting route, Workable's `/oops`, or a payload that is nothing but an unqualified closure notice. | Before preparing: stops before any AI work. On a prepared package: takes it out of review (see below). Either way the same explicit choice: **Get ready anyway**, **Open the posting**, **Check again**. |
 | Materially changed | The posting is open but requirement-bearing text changed, or at least a fifth of it was rewritten. | Before preparing: stops before any AI work. On a prepared package: takes it out of review. Shows what changed; **Refresh from the updated posting** or **Keep my application**. |
-| Could not check | Timeout, 401/403/login wall, rate limit, server error, network failure, off-site or too many redirects, unreadable or too-large answer, an unsupported source, or the check itself could not start. | Preparation continues on the stored text. The notice says this does **not** mean the posting is closed. |
+| Could not check | Timeout, 401/403/login wall, rate limit, server error, network failure, off-site or too many redirects, unreadable or too-large answer, a missing Ashby board, an unsupported source, or the check itself could not start. | Before preparing (#720): stops **before any AI work** unless an open answer from the last 24 hours, an explicit **Get ready anyway**, or the person's own **It's open** from the last 24 hours stands behind the posting. The person opens the posting and presses **It's open**; that is recorded with its time and shown under **How we know**, and preparation then continues on the stored text. The notice says this does **not** mean the posting is closed. On a prepared package nothing changes. |
 
 A failed attempt to read a posting is never treated as proof that it closed, is never retried through another route,
 and never tries to get around a denial or a sign-in.
@@ -172,7 +179,11 @@ sent even when the live posting later changes or closes.
 ## Limits
 
 - A closed posting behind a sign-in, a denial or an unsupported source is not detected.
-- Only the four sources above can be checked automatically.
+- Only the five sources above can be checked automatically.
+- For an Ashby posting, closure means "absent from the employer's official board". A board that drops a live
+  posting by mistake would read as closed; the person can still **Open the posting** and **Get ready anyway**.
+- **It's open** is the person's own statement. It is never written by a check, it is kept for 24 hours as
+  evidence, and a later check that finds the posting closed still stops preparation.
 - Requirement detection is a token and section heuristic. A requirement change worded with no requirement signal,
   outside a requirements section, and under a fifth of the posting is not flagged; unusual employer copy using
   requirement words (for example "salary" in a blurb) can be flagged.

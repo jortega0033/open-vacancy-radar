@@ -98,6 +98,13 @@ export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, on
           if (!result.ok) throw new Error(result.detail ?? 'We could not prepare this application.');
           if (!mounted.current) return;
           onDone?.('resumed');
+        } else if (action === 'confirm_open') {
+          // #720: the person looked at the posting and says it is open. Main records it with the time
+          // and queues preparation, which checks the posting again before any AI work.
+          const result = await window.applicationPipeline.resume(attemptId, { resolution: 'confirm_open' });
+          if (!result.ok) throw new Error(result.detail ?? 'We could not record that. Try again.');
+          if (!mounted.current) return;
+          onDone?.(result.continued === 'recorded' ? 'recorded' : 'resumed');
         } else if (action === 'keep_current' || action === 'prepare_anyway') {
           const result = await window.applicationPipeline.resume(attemptId, { resolution: action });
           if (!result.ok) throw new Error(result.detail ?? 'We could not continue with this application.');
@@ -181,6 +188,17 @@ export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, on
         </details>
       )}
 
+      {text.howWeKnow.length > 0 && (
+        <details className="mt-1" data-testid="posting-how-we-know">
+          <summary className="cursor-pointer text-xs text-base-content/70">How we know</summary>
+          {text.howWeKnow.map((line) => (
+            <p key={line} className="mt-0.5 text-xs text-base-content/70">
+              {line}
+            </p>
+          ))}
+        </details>
+      )}
+
       {error && (
         <p className="mt-2 text-xs text-error" role="alert">
           {error}
@@ -194,7 +212,7 @@ export function PostingVerificationNotice({ attemptId, postingUrl, reloadKey, on
               key={action}
               type="button"
               className={
-                action === 'refresh' || action === 'prepare_anyway' || action === 'prepare_now'
+                action === 'refresh' || action === 'prepare_anyway' || action === 'prepare_now' || action === 'confirm_open'
                   ? 'btn btn-primary btn-sm'
                   : action === 'check_again' && !warning
                     ? 'btn btn-ghost btn-xs'

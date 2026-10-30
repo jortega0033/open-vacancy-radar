@@ -1947,7 +1947,9 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
   },
   async resume(attemptId, options): Promise<RestartApplicationTailoringResult> {
     const resolution =
-      options?.resolution === 'prepare_anyway' || options?.resolution === 'keep_current' ? options.resolution : undefined;
+      options?.resolution === 'prepare_anyway' || options?.resolution === 'keep_current' || options?.resolution === 'confirm_open'
+        ? options.resolution
+        : undefined;
     const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', {
       attemptId,
       ...(resolution === undefined ? {} : { resolution }),
@@ -1992,6 +1994,8 @@ const POSTING_ACTIONS: readonly PostingVerificationAction[] = [
   'refresh',
   'keep_current',
   'prepare_anyway',
+  'prepare_now',
+  'confirm_open',
 ];
 const POSTING_RESOLUTIONS = ['refreshed', 'prepare_anyway', 'keep_current'] as const;
 const POSTING_CHANGE_KINDS = ['requirements', 'text'] as const;
@@ -2019,6 +2023,7 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
   const recheck = source ? asRecord(source.recheck) : undefined;
   const recheckAt = recheck ? optionalString(recheck, 'checkedAt') : undefined;
   const recheckReason = recheck ? optionalString(recheck, 'reason') : undefined;
+  const personConfirmedAt = source ? optionalString(source, 'personConfirmedAt') : undefined;
   const actions = Array.isArray(source?.actions)
     ? (source.actions as unknown[]).filter((action): action is PostingVerificationAction =>
         (POSTING_ACTIONS as readonly unknown[]).includes(action),
@@ -2046,6 +2051,8 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
     resolution: (POSTING_RESOLUTIONS as readonly unknown[]).includes(resolution)
       ? (resolution as PostingVerificationView['resolution'])
       : null,
+    // #720: present only when the person actually recorded "It's open"; a malformed time is dropped.
+    ...(known && personConfirmedAt !== undefined && !Number.isNaN(Date.parse(personConfirmedAt)) ? { personConfirmedAt } : {}),
     reused: known && source?.reused === true,
     stale: !known || source?.stale !== false,
     invalidated: known && source?.invalidated === true,

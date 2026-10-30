@@ -2364,7 +2364,9 @@ guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) 
   return applicationDataResetGate.runMutation(async () => {
     const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
     const resolution =
-      source.resolution === 'prepare_anyway' || source.resolution === 'keep_current' ? source.resolution : undefined;
+      source.resolution === 'prepare_anyway' || source.resolution === 'keep_current' || source.resolution === 'confirm_open'
+        ? source.resolution
+        : undefined;
     const result = await resumeApplicationAttempt(
       await applicationPipelineDeps(),
       parseId(source.attemptId, 'attemptId'),
