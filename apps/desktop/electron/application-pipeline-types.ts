@@ -54,6 +54,9 @@ export interface RestartApplicationTailoringResult {
   continued?: 'queued' | 'restored' | 'recorded';
 }
 
+/** The person's explicit decisions about a posting (#687, #720). Each is recorded with its time. */
+export type PostingDecision = 'prepare_anyway' | 'keep_current' | 'confirm_open';
+
 /** What a posting check currently says about one attempt (#687). */
 export type PostingVerificationStatus =
   /** No check has been made for this attempt (or no verifier is available). */
@@ -73,10 +76,16 @@ export type PostingVerificationAction =
   | 'keep_current'
   | 'prepare_anyway'
   /** Preparation stopped on a closed/changed finding that a later definitive check settled: prepare it now. */
-  | 'prepare_now';
+  | 'prepare_now'
+  /**
+   * Preparation stopped because the posting could not be checked automatically (#720): the person
+   * looked at it and records "It's open" (with the time) before any AI work starts.
+   */
+  | 'confirm_open';
 
 export type PostingVerificationReasonCode =
   | 'verified_open' | 'not_modified' | 'not_found' | 'gone' | 'closure_notice' | 'account_not_found'
+  | 'not_listed' | 'board_not_found'
   | 'no_authoritative_source' | 'timeout' | 'denied' | 'rate_limited' | 'server_error' | 'network_error'
   | 'login_wall' | 'redirected_elsewhere' | 'unexpected_response' | 'empty_content' | 'content_too_large' | 'check_failed';
 
@@ -107,6 +116,11 @@ export interface PostingVerificationView {
    */
   changeKind: 'requirements' | 'text' | null;
   resolution: 'refreshed' | 'prepare_anyway' | 'keep_current' | null;
+  /**
+   * ISO-8601 time the person last recorded "It's open" for a posting that could not be checked
+   * automatically (#720), or null. Shown under "How we know"; never written by a check.
+   */
+  personConfirmedAt?: string | null;
   /** This call reused a stored check and made no request. */
   reused: boolean;
   /** Older than the freshness window (or never checked). */
@@ -120,6 +134,27 @@ export interface PostingVerificationView {
   /** A later check of an undecided finding could not reach the posting (the finding still stands). */
   recheck: { checkedAt: string; reason: PostingVerificationReasonCode } | null;
   actions: PostingVerificationAction[];
+}
+
+/**
+ * Plain liveness of one search result's posting (#720), shown beside every fit score. Never invented:
+ * `open` and `closed` come only from a real check (with its time), `unverifiable` is either a check
+ * that could not answer or a link no check can reach, and `not_checked` is exactly that.
+ */
+export type PostingLivenessState = 'open' | 'not_checked' | 'unverifiable' | 'closed';
+
+export interface PostingLivenessView {
+  vacancyKey: string;
+  state: PostingLivenessState;
+  /** ISO-8601 time the posting's job system was contacted; null when nothing was checked. */
+  checkedAt: string | null;
+  /** Checking source (`ashby`, `lever`, ...), or null. */
+  source: string | null;
+  /** Host and route shape only (no ids), or null. */
+  sourceRef: string | null;
+  reason: PostingVerificationReasonCode | null;
+  /** The link has an authoritative route, so a check can be asked for. */
+  checkable: boolean;
 }
 
 export interface ApplicationPipelineBridge {
@@ -140,9 +175,10 @@ export interface ApplicationPipelineBridge {
   /**
    * Re-runs a needs-user preparation after the person addresses its blocker. `resolution` records the
    * person's explicit decision about a posting finding first (#687): `prepare_anyway` for a posting
-   * reported closed, `keep_current` for one whose requirements changed.
+   * reported closed, `keep_current` for one whose requirements changed, and `confirm_open` (#720) for
+   * one that could not be checked automatically and that the person looked at and found open.
    */
-  resume(attemptId: string, options?: { resolution?: 'prepare_anyway' | 'keep_current' }): Promise<RestartApplicationTailoringResult>;
+  resume(attemptId: string, options?: { resolution?: PostingDecision }): Promise<RestartApplicationTailoringResult>;
   /** Reads the stored posting check for this attempt. Makes no request. */
   postingVerification(attemptId: string): Promise<PostingVerificationView>;
   /**
@@ -155,6 +191,16 @@ export interface ApplicationPipelineBridge {
    * choice deletes the package prepared from the earlier text; Keep never does.
    */
   refreshFromPosting(attemptId: string): Promise<RestartApplicationTailoringResult>;
+  /**
+   * What is known now about whether these results' postings are open (#720). Makes no request; main
+   * resolves each link from the latest report, the renderer sends only vacancy keys.
+   */
+  postingLiveness?(vacancyKeys: string[]): Promise<PostingLivenessView[]>;
+  /**
+   * One bounded check of one selected result's posting (#720), through the same verifier, envelope
+   * and freshness windows as preparation. A fresh answer is reused; a link with no route costs nothing.
+   */
+  checkPostingLiveness?(vacancyKey: string): Promise<PostingLivenessView>;
   /** Links the letter just saved from the review hand-off to this attempt. Main finds the letter. */
   attachLetter(attemptId: string): Promise<{ ok: boolean; attemptId: string; detail?: string }>;
 }

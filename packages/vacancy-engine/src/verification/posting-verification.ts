@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AtsResponseError, type AtsHttpClient, type AtsHttpRequestOptions, type AtsHttpResponse } from '../ats/http.js';
 import { decodeEscapedMarkup, htmlToText } from '../ats/shared.js';
+import { ashbyJobDescription, isListedAshbyJob } from '../ats/ashby.js';
 import { isCrawlerHttpError } from '../crawler/errors.js';
 import { jobgetherOfferIdFromUrl, workableJobReferenceFromUrl } from '../global-remote/structured-discovery.js';
 
@@ -62,7 +63,7 @@ export const POSTING_REQUEST_ENVELOPE = {
   deadlineMs: POSTING_VERIFY_TIMEOUT_MS,
 } as const;
 
-export type PostingSource = 'greenhouse' | 'lever' | 'workable' | 'jobgether';
+export type PostingSource = 'greenhouse' | 'lever' | 'workable' | 'jobgether' | 'ashby';
 export type PostingObservationOutcome = 'open' | 'closed' | 'unable';
 
 export type PostingObservationReason =
@@ -72,6 +73,10 @@ export type PostingObservationReason =
   | 'gone'
   | 'closure_notice'
   | 'account_not_found'
+  /** A successful read of the employer's whole official board does not list this posting (Ashby, #720). */
+  | 'not_listed'
+  /** The employer's official board itself was not found; the posting is not judged from that. Never closure. */
+  | 'board_not_found'
   | 'no_authoritative_source'
   | 'timeout'
   | 'denied'
@@ -127,6 +132,12 @@ export interface PostingProbe {
   endpoint: string | null;
   allowedOrigin: string;
   cache: 'default' | 'no-store';
+  /**
+   * Set when the provider has no single-posting route but publishes the employer's whole official
+   * board (Ashby): the endpoint is that board and the posting is looked up in it by this id. Listed =
+   * open; absent from a successful, well-formed board read = closed (`not_listed`).
+   */
+  boardJobId?: string;
 }
 
 const GREENHOUSE_HOSTS = new Set(['boards.greenhouse.io', 'job-boards.greenhouse.io']);
@@ -135,6 +146,17 @@ const LEVER_HOSTS = new Map([
   ['jobs.eu.lever.co', 'https://api.eu.lever.co'],
 ]);
 const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+/** Ashby board names are decoded path segments and may contain single spaces ("IT Labs"). */
+const ASHBY_BOARD = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,127}$/u;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function decodedSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+}
 
 function parseHttps(url: string): URL | null {
   try {
@@ -192,13 +214,30 @@ export function resolvePostingProbe(url: string): PostingProbe | null {
   const leverOrigin = LEVER_HOSTS.get(host);
   if (leverOrigin !== undefined && segments.length >= 2) {
     const [site = '', id = ''] = segments;
-    if (SAFE_TOKEN.test(site) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(id)) {
+    if (SAFE_TOKEN.test(site) && UUID.test(id)) {
       return {
         source: 'lever',
         sourceRef: `${new URL(leverOrigin).host}/v0/postings/{site}/{id}`,
         endpoint: `${leverOrigin}/v0/postings/${encodeURIComponent(site)}/${encodeURIComponent(id)}`,
         allowedOrigin: leverOrigin,
         cache: 'default',
+      };
+    }
+  }
+  if (host === 'jobs.ashbyhq.com' && segments.length >= 2) {
+    // Ashby has no public single-posting route; the official board the Ashby adapter already reads
+    // (same URL, same origin) is the authority. `no-store`: a check must ask the board now, never be
+    // answered from the scan's cached copy, and board validators say nothing about one posting.
+    const board = decodedSegment(segments[0] ?? '');
+    const id = segments[1] ?? '';
+    if (board !== null && ASHBY_BOARD.test(board) && !/ {2}|\s$/u.test(board) && UUID.test(id)) {
+      return {
+        source: 'ashby',
+        sourceRef: 'api.ashbyhq.com/posting-api/job-board/{board}',
+        endpoint: `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(board)}?includeCompensation=true`,
+        allowedOrigin: 'https://api.ashbyhq.com',
+        cache: 'no-store',
+        boardJobId: id,
       };
     }
   }
@@ -693,7 +732,13 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
-type ParsedPosting = { text: string | null; shapeOk: boolean; tooLarge?: boolean };
+type ParsedPosting = {
+  text: string | null;
+  shapeOk: boolean;
+  tooLarge?: boolean;
+  /** A well-formed board payload that does not list the posting (board-list probes only). */
+  notListed?: boolean;
+};
 
 /**
  * The HTML parser shared with the adapters (so list and single-posting text stay identical) costs
@@ -725,7 +770,7 @@ class MarkupBudget {
   }
 }
 
-function parsePosting(source: PostingSource, body: string): ParsedPosting {
+function parsePosting(probe: PostingProbe, body: string): ParsedPosting {
   let root: unknown;
   try {
     root = JSON.parse(body) as unknown;
@@ -740,12 +785,28 @@ function parsePosting(source: PostingSource, body: string): ParsedPosting {
     const text = htmlToText(decodeEscapedMarkup(html));
     return text.length > 0 ? text : null;
   };
-  const parsed = parseFields(source, object, clean);
+  const parsed =
+    probe.source === 'ashby'
+      ? parseBoardJob(object, probe.boardJobId ?? '', budget)
+      : parseFields(probe.source, object, clean);
   return budget.exceeded ? { text: null, shapeOk: true, tooLarge: true } : parsed;
 }
 
+/**
+ * Looks one posting up in an employer's whole official board (Ashby). Only the matched job's markup
+ * is charged to the parsing budget and parsed; the rest of the board is never converted. The text is
+ * built by the adapter's own `ashbyJobDescription`, so it is the same text the scan stored.
+ */
+function parseBoardJob(object: Record<string, unknown>, jobId: string, budget: MarkupBudget): ParsedPosting {
+  if (!Array.isArray(object.jobs)) return { text: null, shapeOk: false };
+  const job = record(object.jobs.find((entry) => isListedAshbyJob(entry, jobId)));
+  if (job === null) return { text: null, shapeOk: true, notListed: true };
+  const text = ashbyJobDescription(job, (html) => (budget.charge(html) ? htmlToText(html) : ''));
+  return { text: text !== null && text.trim().length > 0 ? text : null, shapeOk: true };
+}
+
 function parseFields(
-  source: PostingSource,
+  source: Exclude<PostingSource, 'ashby'>,
   object: Record<string, unknown>,
   clean: (html: string | null) => string | null,
 ): ParsedPosting {
@@ -840,6 +901,16 @@ function classifyError(error: unknown): Classified {
     return { outcome: 'unable', reason: 'timeout', httpStatus: null };
   }
   return { outcome: 'unable', reason: 'network_error', httpStatus: null };
+}
+
+/**
+ * A 404/410 from a whole-board route says the BOARD is missing (renamed, moved or removed), not that
+ * this posting closed, so it is never closure: only a successful board read that omits the posting is.
+ */
+function boardStatus(probe: PostingProbe, classified: Classified): Classified {
+  return probe.boardJobId !== undefined && classified.outcome === 'closed'
+    ? { outcome: 'unable', reason: 'board_not_found', httpStatus: classified.httpStatus }
+    : classified;
 }
 
 /** The abort reason of a check whose deadline passed; classified as `timeout`. */
@@ -951,14 +1022,17 @@ async function observeWith(
       endpoint = resolved.endpoint;
     }
     // The shared cache (greenhouse, lever) attaches stored validators itself. Sources that bypass the
-    // cache keep their existing no-store policy and send the validators this app stored instead.
+    // cache keep their existing no-store policy and send the validators this app stored instead. A
+    // whole-board read (Ashby) sends none: the board's validators say nothing about one posting.
+    const boardRead = probe.boardJobId !== undefined;
     counter.logical += 1;
     const response = await http.get(
       endpoint,
       requestOptions(
         {
           allowedOrigins: [probe.allowedOrigin],
-          headers: probe.cache === 'no-store' ? conditionalHeaders(options.validators) : { Accept: 'application/json' },
+          headers:
+            probe.cache === 'no-store' && !boardRead ? conditionalHeaders(options.validators) : { Accept: 'application/json' },
           cache: probe.cache,
           maxRetries: POSTING_REQUEST_ENVELOPE.maxRetries,
           maxRedirects: POSTING_REQUEST_ENVELOPE.detailMaxRedirects,
@@ -966,6 +1040,10 @@ async function observeWith(
         options.signal,
       ),
     );
+    if (response.status === 304 && boardRead) {
+      // No validators were sent, so a bare 304 carries no board to look the posting up in.
+      return result(now, probe, { outcome: 'unable', reason: 'unexpected_response', httpStatus: 304 }, counter);
+    }
     if (response.status === 304) {
       return result(now, probe, { outcome: 'open', reason: 'not_modified', httpStatus: 304 }, counter, {
         notModified: true,
@@ -973,16 +1051,19 @@ async function observeWith(
       });
     }
     const failure = classifyStatus(response.status);
-    if (failure !== null) return result(now, probe, failure, counter);
+    if (failure !== null) return result(now, probe, boardStatus(probe, failure), counter);
     if (looksLikeLoginWall(response, endpoint)) {
       return result(now, probe, { outcome: 'unable', reason: 'login_wall', httpStatus: response.status }, counter);
     }
-    const parsed = parsePosting(probe.source, response.body);
+    const parsed = parsePosting(probe, response.body);
     if (!parsed.shapeOk) {
       return result(now, probe, { outcome: 'unable', reason: 'unexpected_response', httpStatus: response.status }, counter);
     }
     if (parsed.tooLarge === true) {
       return result(now, probe, { outcome: 'unable', reason: 'content_too_large', httpStatus: response.status }, counter);
+    }
+    if (parsed.notListed === true) {
+      return result(now, probe, { outcome: 'closed', reason: 'not_listed', httpStatus: response.status }, counter);
     }
     if (parsed.text === null) {
       return result(now, probe, { outcome: 'unable', reason: 'empty_content', httpStatus: response.status }, counter);
@@ -1009,7 +1090,10 @@ async function observeWith(
     const classified =
       options.signal?.aborted === true
         ? classifyError(options.signal.reason instanceof PostingCheckDeadline ? options.signal.reason : new PostingCheckDeadline(0))
-        : classifyError(error);
+        : boardStatus(probe, classifyError(error));
+    if (classified.reason === 'not_modified' && probe.boardJobId !== undefined) {
+      return result(now, probe, { outcome: 'unable', reason: 'unexpected_response', httpStatus: 304 }, counter);
+    }
     if (classified.reason === 'not_modified') {
       return result(now, probe, classified, counter, { notModified: true, validators: options.validators ?? null });
     }
