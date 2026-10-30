@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -83,7 +84,9 @@ describe.skipIf(!isWindows)('Windows Claude target resolution, real where + Job 
 
   beforeEach(async () => {
     savedPath = process.env.PATH;
-    temp = await mkdtemp(join(tmpdir(), 'ovr claude resolution '));
+    // Canonical long form: a runner's tmpdir() can be an 8.3 short path (`C:\Users\RUNNER~1\...`)
+    // or go through a junction, while the real `where` reports the long final path.
+    temp = realpathSync.native(await mkdtemp(join(tmpdir(), 'ovr claude resolution ')));
   });
 
   afterEach(async () => {
