@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcessByStdio } from 'node:child_process';
+import { win32 } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { Readable, Writable } from 'node:stream';
 import { buildProviderEnvironment } from '../providers/common/provider-environment.js';
@@ -98,8 +99,28 @@ export interface SpawnOptions {
    * directories, since `where`/`which` themselves could no longer run. Short utility commands don't
    * need process-tree protection in the first place (they're bounded by `execCapture`'s own timeout
    * and don't legitimately spawn a tree of their own), so bypassing the host for them costs nothing.
+   *
+   * **Ignored for a `.cmd` command** (#719): see `isWindowsCommandScript`. A `.cmd` cannot be spawned
+   * directly without a shell, so it always goes through the host.
    */
   useJobHostOnWindows?: boolean;
+}
+
+/**
+ * Whether `command` is a Windows command script that Node cannot spawn shell-free (#719).
+ *
+ * Since the CVE-2024-27980 hardening Node refuses `.cmd`/`.bat` under `shell: false` (`EINVAL`), and
+ * `shell: true` is exactly the string-interpolated launch this package exists to avoid. The Job
+ * Host already owns the one reviewed way to run a `.cmd`: an absolute `%SystemRoot%\System32\cmd.exe`
+ * with `/d /v:off /s /c`, every argument escaped twice for cmd's two parsing passes, CR/LF rejected
+ * (`BuildCmdCommandLine` / `SafeCmdValue` in `AgentDock.JobHost.cs`). Routing through it also
+ * keeps a bounded probe's timeout meaningful: killing the host closes the Job Object, which reaps
+ * the real CLI that `cmd.exe` started, whereas killing a directly spawned `cmd.exe` would leave that
+ * grandchild running. `.bat` is deliberately not included: the host rejects it, and
+ * `findExecutable` never selects one.
+ */
+function isWindowsCommandScript(command: string): boolean {
+  return win32.extname(command).toLowerCase() === '.cmd';
 }
 
 async function bounded<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -332,7 +353,8 @@ function publicWindowsProcess(child: NativeProcess): SpawnedProcess {
  */
 export function spawnProcess(command: string, args: string[], opts: SpawnOptions): SpawnResult {
   const platform = opts.platform ?? process.platform;
-  const usesWindowsJobHost = platform === 'win32' && opts.useJobHostOnWindows !== false;
+  const usesWindowsJobHost =
+    platform === 'win32' && (opts.useJobHostOnWindows !== false || isWindowsCommandScript(command));
   const actualCommand = usesWindowsJobHost ? resolveWindowsJobHostPath(opts.windowsJobHostPath) : command;
   const actualArgs = usesWindowsJobHost
     ? encodeWindowsJobHostArguments({ ownerPid: process.pid, executable: command, cwd: opts.cwd, args })

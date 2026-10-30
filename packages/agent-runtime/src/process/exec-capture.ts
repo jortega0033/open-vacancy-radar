@@ -31,6 +31,8 @@ export async function execCapture(
     // or a CLI invoked only for a quick version/auth check) that relies on the OS's own PATH
     // search, which the Job Host cannot do (it requires an already-absolute path). See
     // `SpawnOptions.useJobHostOnWindows`'s doc comment for the detection breakage this avoids.
+    // A resolved `.cmd` target (#719) is the exception `spawnProcess` makes itself: it still goes
+    // through the host, which is the only shell-free way to run one.
     useJobHostOnWindows: false,
   });
 
