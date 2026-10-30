@@ -36,6 +36,21 @@ interactive login shell's, especially on macOS. It:
    `~/.npm-global/bin` on macOS; `~/.local/bin`, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`,
    `%APPDATA%\npm` on Windows; `~/.local/bin`, `/usr/local/bin`, `/usr/bin` on Linux.
 
+On Windows the result must also be launchable without a shell (#719). An npm global install makes
+`where claude` list the extensionless `sh` shim (`%APPDATA%\npm\claude`) *before* `claude.cmd`, and
+neither Node's shell-free `spawn` nor the Job Host can run that file. So on Windows every `where`
+line is considered and the first usable native `.exe` wins, otherwise the first usable `.cmd`. A
+usable candidate is an absolute path to an existing regular file. Extensionless shims, `.ps1`,
+`.bat`, stale paths and directories are skipped. The fallback directories probe only `.exe` then
+`.cmd`, in directory order. POSIX keeps the first `which` line.
+
+A selected `.cmd` is never handed to a shell. `spawnProcess()` always launches it through the
+shipped Job Host, including for the short `--version` / `auth status` probes that otherwise bypass
+the host. The host runs it with an absolute `System32\cmd.exe /d /v:off /s /c` command line, with
+every argument escaped for cmd's two parsing passes and CR/LF rejected. Every Node spawn stays
+`shell: false`. The provider environment allowlist applies unchanged. A probe timeout or session
+cancel tears down the Job Object, which also reaps the real CLI that `cmd.exe` started.
+
 This was verified against real local installs during development: on this project's dev machine,
 `claude` resolved to `~/.local/bin/claude.exe` and `codex` to
 `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`, neither of which is a path you'd want to

@@ -150,12 +150,19 @@ describe.skipIf(!isWindows)('Windows Claude target resolution, real where + Job 
     const pidFile = join(temp, 'grandchild.pid');
     const startedAt = Date.now();
 
-    const result = await execCapture(cmd, ['hang'], { cwd: temp, timeoutMs: 1_500 });
-
-    expect(result.timedOut).toBe(true);
-    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    // Generous timeout so the grandchild provably exists before it fires, even on a loaded runner
+    // (a cold `cmd.exe` -> `node.exe` start can take seconds there); the assertion below is about
+    // what the timeout reaps, not how fast it fires.
+    const probe = execCapture(cmd, ['hang'], { cwd: temp, timeoutMs: 10_000 });
+    await waitUntil(async () => (await readFile(pidFile, 'utf8').catch(() => '')).length > 0, 9_000);
     const pid = Number(await readFile(pidFile, 'utf8'));
     expect(pid).toBeGreaterThan(0);
+    expect(alive(pid)).toBe(true);
+
+    const result = await probe;
+
+    expect(result.timedOut).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(20_000);
     await waitUntil(() => !alive(pid));
   }, 30_000);
 });

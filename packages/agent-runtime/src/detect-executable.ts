@@ -60,7 +60,7 @@ export async function findExecutable(
 
 /**
  * The only file types a provider can be launched from on Windows, in preference order. `.exe` is
- * spawned natively; `.cmd` is launched through the Job Host's quoted `cmd.exe /d /s /c` path (see
+ * spawned natively; `.cmd` is launched through the Job Host's quoted `cmd.exe /d /v:off /s /c` path (see
  * `spawnProcess`). Anything else -- the extensionless npm `sh` shim, `.ps1`, `.bat` -- is not
  * launchable shell-free and is skipped rather than returned and failed on later.
  */
