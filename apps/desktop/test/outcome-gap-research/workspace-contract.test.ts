@@ -19,6 +19,8 @@ const workspace = await import('../../electron/workspace/repository.js');
 const { buildRealWorld, AS_OF } = await import('./real-world.js');
 const { readWorkspaceObservations } = await import('./observations.js');
 const { buildFunnel } = await import('./funnel.js');
+const { buildRequirements } = await import('./requirements.js');
+const { buildSuggestions, dismiss, EMPTY_REVIEW_STATE } = await import('./suggestions.js');
 import type { WorkspaceDb } from '../../electron/workspace/client.js';
 import type { RealWorld } from './real-world.js';
 
@@ -165,5 +167,29 @@ describe('what the current workspace tables CANNOT answer (each proven on this d
     const second = JSON.stringify(readWorkspaceObservations(db));
     expect(second).toBe(first);
     expect(briefStore.listBriefs(db)).toHaveLength(5);
+  });
+
+  it('changes no candidate, CV, preference, saved job, application, brief or assessment when the whole pipeline runs and a suggestion is dismissed', () => {
+    const snapshot = () =>
+      JSON.stringify({
+        savedJobs: workspace.listSavedJobs(db),
+        applications: workspace.listApplications(db, 'all'),
+        attempts: workspace.listApplicationAttempts(db),
+        cvs: workspace.listCvDocuments(db),
+        settings: workspace.getSettings(db),
+        briefs: briefStore.listBriefs(db),
+        overlays: workspace.listCvDocuments(db).flatMap((cv) => workspace.listCvEvidenceOverlays(db, cv.id)),
+      });
+    const before = snapshot();
+    const read = readWorkspaceObservations(db);
+    const funnel = buildFunnel(read.observations, { dimension: 'source', asOf: AS_OF });
+    const requirements = buildRequirements(read.observations);
+    const suggestions = buildSuggestions({ asOf: AS_OF, requirements, variantFunnel: buildFunnel(read.observations, { dimension: 'queryVariant', asOf: AS_OF }), selectedAtByJob: {} });
+    // Today's data supports no suggestion, so exercise dismissal on a hand-made one as well: it is only ever a value.
+    const state = dismiss(EMPTY_REVIEW_STATE, { id: 'x', support: { count: 3 } as never }, AS_OF);
+    expect(funnel.totals.distinctRequisitions).toBe(5);
+    expect(suggestions.suggestions).toEqual([]);
+    expect(Object.keys(state.dismissed)).toEqual(['x']);
+    expect(snapshot()).toBe(before);
   });
 });

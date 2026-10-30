@@ -194,6 +194,10 @@ export const GATES = {
   maxUnassessedShare: 0.5,
   /** More than this share of assessed requisitions outside the dominant version class = incompatible versions dominate. */
   maxIncompatibleShare: 0.34,
+  /** A search variant is only reviewed when at least this many distinct leads were shown for it (needs the projected exposure digest). */
+  minExposed: 20,
+  /** ... and the person selected no more than this share of what was shown for it. A fact about the person's own selection, not about hiring. */
+  maxSelectedShareForVariantReview: 0.1,
   /** Days after sending before an application counts as "mature" for the no-recorded-outcome count. A view parameter with NO empirical basis. */
   defaultMaturityDays: 28,
 } as const;

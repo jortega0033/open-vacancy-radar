@@ -1,0 +1,1859 @@
+{
+  "issue": 693,
+  "contractVersion": "0.1.0-research",
+  "asOf": "2026-10-30T00:00:00.000Z",
+  "kind": "constructed synthetic portfolios with fixture-author expectations; no human labels",
+  "method": [
+    "Executed: the prototype functions in apps/desktop/test/outcome-gap-research run on the portfolios in fixtures.ts. Expected verdicts, reasons and suggestion sets were declared by the fixture author from the written rules before the code was run.",
+    "Executed: invariances (what must not change when outcomes, scores or assessments change) and a dismissal check.",
+    "Executed, constructed: four simpler rules scored on the same fixture (baselines).",
+    "Source reading: the manual-review side of the desk comparison.",
+    "Real-contract lane (added by workspace-evaluation.test.ts): synthetic data written through the app’s real writers into a migrated database and read back by the read-only adapter.",
+    "Review gates are author-declared and not statistically derived (GATES in contract.ts). No inference is made about any real person."
+  ],
+  "gates": {
+    "minRequisitionsPerCell": 5,
+    "minMatureSent": 20,
+    "maxUnknownOutcomeShare": 0.5,
+    "maxWeakKeyShare": 0.25,
+    "maxCopyShare": 0.5,
+    "minRecurrence": 3,
+    "minAssessed": 8,
+    "maxUnassessedShare": 0.5,
+    "maxIncompatibleShare": 0.34,
+    "minExposed": 20,
+    "maxSelectedShareForVariantReview": 0.1,
+    "defaultMaturityDays": 28
+  },
+  "portfolios": [
+    {
+      "id": "rich_projected",
+      "lane": "projected_instrumentation",
+      "title": "Enough data, if follow-ups A and B existed",
+      "what": "30 requisitions: 34 source rows (4 syndicated pairs), 3 sources and 3 query variants recorded, 22 mature sends with 8 unknown outcomes, 20 current assessments, a lead-exposure digest and dated status events. NOT what the app records today.",
+      "rawCounts": {
+        "requisitions": 30,
+        "sourceRowsRead": 34,
+        "copiesCollapsed": 4,
+        "sourceCellOverlap": 4,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 25,
+        "matureSent": 22,
+        "censoredSent": 3,
+        "undatedSent": 0,
+        "unknownOutcomes": 8,
+        "reapplicationRows": 0,
+        "selected": 30,
+        "assessmentCurrent": 20,
+        "assessmentUsable": 20,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 10,
+        "excludedIncompatible": 0,
+        "requirementRows": 5,
+        "eligibilityMismatchRows": 2,
+        "suggestions": 6
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "go_review",
+            "reasons": []
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "go_review",
+            "reasons": []
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "go_review",
+            "reasons": []
+          }
+        },
+        "requirements": {
+          "verdict": "go_review",
+          "reasons": []
+        },
+        "suggestionsWithheld": {
+          "requirements": null,
+          "searchVariants": null
+        }
+      },
+      "suggestionIds": [
+        {
+          "id": "042c92b498a7b23c",
+          "kind": "add_cv_evidence",
+          "subject": "Kubernetes",
+          "count": 5,
+          "smallSample": true
+        },
+        {
+          "id": "7ec7ee869ce3caac",
+          "kind": "add_cv_evidence",
+          "subject": "Terraform",
+          "count": 4,
+          "smallSample": true
+        },
+        {
+          "id": "bf3ac8fe55e3cc45",
+          "kind": "add_cv_evidence",
+          "subject": "On-call rota",
+          "count": 3,
+          "smallSample": true
+        },
+        {
+          "id": "fd623d5658071914",
+          "kind": "consider_learning_priority",
+          "subject": "Kubernetes",
+          "count": 4,
+          "smallSample": true
+        },
+        {
+          "id": "f385ad6e0093e9d3",
+          "kind": "review_preference_conflict",
+          "subject": "candidateWorkCountry",
+          "count": 5,
+          "smallSample": true
+        },
+        {
+          "id": "a7cf9e28753772a7",
+          "kind": "review_search_variant",
+          "subject": "t2-platform",
+          "count": 10,
+          "smallSample": false
+        }
+      ],
+      "expected": {
+        "funnelOutcome": "go_review",
+        "funnelOutcomeReasons": [],
+        "requirements": "go_review",
+        "requirementReasons": [],
+        "suggestions": [
+          "add_cv_evidence:Kubernetes",
+          "add_cv_evidence:On-call rota",
+          "add_cv_evidence:Terraform",
+          "consider_learning_priority:Kubernetes",
+          "review_preference_conflict:candidateWorkCountry",
+          "review_search_variant:t2-platform"
+        ]
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "rich_projected (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "small_current_shape",
+      "lane": "current_shape",
+      "title": "What today’s records look like",
+      "what": "8 requisitions in the exact shape the real adapter returns: no query attribution, current-value status, no exposure, 3 assessments (1 stale), 1 prepared-only, 1 too-recent send, 1 undated send.",
+      "rawCounts": {
+        "requisitions": 8,
+        "sourceRowsRead": 9,
+        "copiesCollapsed": 1,
+        "sourceCellOverlap": 1,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 4,
+        "matureSent": 1,
+        "censoredSent": 2,
+        "undatedSent": 1,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 1,
+        "selected": 8,
+        "assessmentCurrent": 2,
+        "assessmentUsable": 2,
+        "assessmentPartial": 0,
+        "assessmentStale": 1,
+        "assessmentNone": 5,
+        "excludedIncompatible": 0,
+        "requirementRows": 2,
+        "eligibilityMismatchRows": 1,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "too_few_mature_sent"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "unassessed_dominate",
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "small_current_shape (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "duplicates_dominate",
+      "lane": "projected_instrumentation",
+      "title": "Syndicated copies dominate",
+      "what": "22 mature sends, each seen as 4 copies (88 rows read for 22 requisitions).",
+      "rawCounts": {
+        "requisitions": 22,
+        "sourceRowsRead": 88,
+        "copiesCollapsed": 66,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 22,
+        "matureSent": 22,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 0,
+        "selected": 22,
+        "assessmentCurrent": 0,
+        "assessmentUsable": 0,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 22,
+        "excludedIncompatible": 0,
+        "requirementRows": 0,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "duplicate_copies_dominate"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "duplicate_copies_dominate"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "duplicate_copies_dominate"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "unassessed_dominate",
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "duplicates_dominate (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "unknown_outcomes_dominate",
+      "lane": "projected_instrumentation",
+      "title": "Most outcomes are unknown",
+      "what": "24 mature sends, 20 with no recorded outcome.",
+      "rawCounts": {
+        "requisitions": 24,
+        "sourceRowsRead": 24,
+        "copiesCollapsed": 0,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 24,
+        "matureSent": 24,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 20,
+        "reapplicationRows": 0,
+        "selected": 24,
+        "assessmentCurrent": 0,
+        "assessmentUsable": 0,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 24,
+        "excludedIncompatible": 0,
+        "requirementRows": 0,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "unknown_outcomes_dominate"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "unknown_outcomes_dominate"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "unknown_outcomes_dominate"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "unassessed_dominate",
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "unknown_outcomes_dominate (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "weak_identity_dominates",
+      "lane": "projected_instrumentation",
+      "title": "Identity is mostly the weak tier",
+      "what": "22 mature sends keyed only by company/title/location text.",
+      "rawCounts": {
+        "requisitions": 22,
+        "sourceRowsRead": 22,
+        "copiesCollapsed": 0,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 22,
+        "sentRequisitions": 22,
+        "matureSent": 22,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 0,
+        "selected": 22,
+        "assessmentCurrent": 0,
+        "assessmentUsable": 0,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 22,
+        "excludedIncompatible": 0,
+        "requirementRows": 0,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "weak_identity_dominates"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "weak_identity_dominates"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "weak_identity_dominates"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "unassessed_dominate",
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "weak_identity_dominates (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "titles_only_no_assessment",
+      "lane": "current_shape",
+      "title": "Titles say Kubernetes, nothing was assessed",
+      "what": "12 jobs with a high score and a Kubernetes-flavoured title, no assessment: there is no requirement evidence, so there must be no requirement row and no suggestion.",
+      "rawCounts": {
+        "requisitions": 12,
+        "sourceRowsRead": 12,
+        "copiesCollapsed": 0,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 12,
+        "matureSent": 12,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 0,
+        "selected": 12,
+        "assessmentCurrent": 0,
+        "assessmentUsable": 0,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 12,
+        "excludedIncompatible": 0,
+        "requirementRows": 0,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent",
+              "nothing_to_compare"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "unassessed_dominate",
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "too_few_mature_sent"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "unassessed_dominate",
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "titles_only_no_assessment (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "mixed_cv_versions",
+      "lane": "current_shape",
+      "title": "Assessments made against three different CV versions",
+      "what": "12 current assessments over CV hashes 5/4/3: the evidence classes are not comparable across CV versions.",
+      "rawCounts": {
+        "requisitions": 12,
+        "sourceRowsRead": 12,
+        "copiesCollapsed": 0,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 0,
+        "matureSent": 0,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 0,
+        "selected": 12,
+        "assessmentCurrent": 12,
+        "assessmentUsable": 5,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 0,
+        "excludedIncompatible": 7,
+        "requirementRows": 1,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent",
+              "nothing_to_compare"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "go_review",
+            "reasons": []
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "version_incompatible_dominates"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "version_incompatible_dominates"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "too_few_mature_sent"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "version_incompatible_dominates"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "mixed_cv_versions (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "older_rule_version",
+      "lane": "current_shape",
+      "title": "Assessments summarised under another rule version or an unknown one",
+      "what": "12 current assessments: 3 under the current rules, 6 under an older rule version, 3 with no recorded version.",
+      "rawCounts": {
+        "requisitions": 12,
+        "sourceRowsRead": 12,
+        "copiesCollapsed": 0,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 0,
+        "matureSent": 0,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 0,
+        "selected": 12,
+        "assessmentCurrent": 12,
+        "assessmentUsable": 0,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 0,
+        "excludedIncompatible": 12,
+        "requirementRows": 0,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent",
+              "nothing_to_compare"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "go_review",
+            "reasons": []
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "version_incompatible_dominates",
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "version_incompatible_dominates",
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "too_few_mature_sent"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "version_incompatible_dominates",
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "older_rule_version (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "alias_merge",
+      "lane": "current_shape",
+      "title": "Kubernetes / K8s: merged only by the person",
+      "what": "10 current assessments; \"Kubernetes\" in 2, \"K8s\" in 2, \"Kube\" in 1. Without a person-confirmed alias no wording reaches the recurrence threshold of 3; the person confirming that they are one thing makes it 5.",
+      "rawCounts": {
+        "requisitions": 10,
+        "sourceRowsRead": 10,
+        "copiesCollapsed": 0,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 0,
+        "matureSent": 0,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 0,
+        "selected": 10,
+        "assessmentCurrent": 10,
+        "assessmentUsable": 10,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 0,
+        "excludedIncompatible": 0,
+        "requirementRows": 4,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent",
+              "nothing_to_compare"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "go_review",
+            "reasons": []
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "too_few_mature_sent"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "too_few_mature_sent"
+        ],
+        "requirements": "go_review",
+        "requirementReasons": [],
+        "suggestions": [
+          "add_cv_evidence:Kubernetes"
+        ]
+      },
+      "checks": [
+        {
+          "label": "alias_merge (no alias)",
+          "mismatches": []
+        },
+        {
+          "label": "alias_merge (person-confirmed alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    },
+    {
+      "id": "role_and_reapplication_isolation",
+      "lane": "current_shape",
+      "title": "Two roles at one employer and a reapplication",
+      "what": "3 requisitions at the same employer; one was applied for twice. Each role keeps its own requirement lane and outcome.",
+      "rawCounts": {
+        "requisitions": 3,
+        "sourceRowsRead": 3,
+        "copiesCollapsed": 0,
+        "sourceCellOverlap": 0,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 3,
+        "matureSent": 3,
+        "censoredSent": 0,
+        "undatedSent": 0,
+        "unknownOutcomes": 1,
+        "reapplicationRows": 1,
+        "selected": 3,
+        "assessmentCurrent": 3,
+        "assessmentUsable": 3,
+        "assessmentPartial": 0,
+        "assessmentStale": 0,
+        "assessmentNone": 0,
+        "excludedIncompatible": 0,
+        "requirementRows": 1,
+        "eligibilityMismatchRows": 0,
+        "suggestions": 0
+      },
+      "verdicts": {
+        "funnel": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent",
+              "nothing_to_compare"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        },
+        "requirements": {
+          "verdict": "no_go",
+          "reasons": [
+            "too_few_assessed",
+            "no_recurring_requirement"
+          ]
+        },
+        "suggestionsWithheld": {
+          "requirements": [
+            "too_few_assessed",
+            "no_recurring_requirement"
+          ],
+          "searchVariants": [
+            "no_exposure_denominator"
+          ]
+        }
+      },
+      "suggestionIds": [],
+      "expected": {
+        "funnelOutcome": "no_go",
+        "funnelOutcomeReasons": [
+          "too_few_mature_sent"
+        ],
+        "requirements": "no_go",
+        "requirementReasons": [
+          "too_few_assessed",
+          "no_recurring_requirement"
+        ],
+        "suggestions": []
+      },
+      "expectedWithAliases": null,
+      "checks": [
+        {
+          "label": "role_and_reapplication_isolation (no alias)",
+          "mismatches": []
+        }
+      ],
+      "inputUnchanged": true
+    }
+  ],
+  "summary": {
+    "portfolios": 10,
+    "checks": 11,
+    "checksWithMismatch": 0,
+    "mismatchDetail": [],
+    "noGoPortfolios": [
+      "small_current_shape",
+      "duplicates_dominate",
+      "unknown_outcomes_dominate",
+      "weak_identity_dominates",
+      "titles_only_no_assessment",
+      "mixed_cv_versions",
+      "older_rule_version",
+      "alias_merge",
+      "role_and_reapplication_isolation"
+    ],
+    "goReviewPortfolios": [
+      "rich_projected"
+    ],
+    "portfoliosWithMultiSourceRequisitions": [
+      "rich_projected",
+      "small_current_shape"
+    ]
+  },
+  "invariances": {
+    "outcomesFlipped": {
+      "claim": "Making every sent application rejected, or every one an interview, changes no requirement row, no lane count, no eligibility row and no suggestion; only the labelled outcome context moves.",
+      "coreIdenticalAcrossRejectedInterviewAndActual": true,
+      "outcomeContextDiffers": true,
+      "rejectedEverywhereSuggestionKeys": [
+        "add_cv_evidence:Kubernetes",
+        "add_cv_evidence:On-call rota",
+        "add_cv_evidence:Terraform",
+        "consider_learning_priority:Kubernetes",
+        "review_preference_conflict:candidateWorkCountry",
+        "review_search_variant:t2-platform"
+      ]
+    },
+    "scoresChanged": {
+      "claim": "Setting every fit score to missing, to 0, or to 99 changes no requirement row and no suggestion. A score of 0 is a recorded score and is counted as scored; missing is counted as unscored.",
+      "coreIdenticalAcrossNullZeroHigh": true,
+      "evaluatorOpinionCounts": {
+        "actual": {
+          "scored": 26,
+          "unscored": 4,
+          "note": "An evaluator opinion about fit. It is not a requirement, a gap or an outcome, and it is not used to compute any row here."
+        },
+        "allMissing": {
+          "scored": 0,
+          "unscored": 30,
+          "note": "An evaluator opinion about fit. It is not a requirement, a gap or an outcome, and it is not used to compute any row here."
+        },
+        "allZero": {
+          "scored": 30,
+          "unscored": 0,
+          "note": "An evaluator opinion about fit. It is not a requirement, a gap or an outcome, and it is not used to compute any row here."
+        }
+      }
+    },
+    "noAssessmentMeansNoRequirements": {
+      "claim": "Removing every assessment leaves the same job titles, scores and outcomes but no requirement row and no requirement suggestion; nothing is inferred from the rest.",
+      "requirementRows": 0,
+      "requirementSuggestions": 0,
+      "verdict": {
+        "verdict": "no_go",
+        "reasons": [
+          "too_few_assessed",
+          "unassessed_dominate"
+        ]
+      }
+    },
+    "dismissal": {
+      "claim": "A dismissed suggestion leaves the visible list, stays inspectable, does not return when more supporting jobs arrive (it reports how many newer ones), and dismissing changes no suggestion and no input.",
+      "startedWith": 6,
+      "visibleAfterDismiss": 5,
+      "stillListedAsDismissed": 1,
+      "stateChanged": true,
+      "staysDismissedAfterTwoMoreSupportingJobs": true,
+      "newSupportReported": 2,
+      "allEffectsNone": true,
+      "everySuggestionCarriesEvidence": true,
+      "everyRequirementSuggestionNamesItsJobs": true,
+      "emptyStateIsStillEmpty": true
+    }
+  },
+  "baselines": {
+    "note": "Constructed comparisons on the rich_projected portfolio only. Each is a simpler rule someone might write; none is shipped behaviour.",
+    "rejectionAsGap": {
+      "requirementJobPairsInRejectedApplications": 13,
+      "calledGapButSupportedByCv": 9,
+      "prototypeAttributionsFromRejection": 0
+    },
+    "titleKeywordGap": {
+      "jobsWithNoAssessment": 10,
+      "gapsAttributedByRule": 10,
+      "gapsAttributedByPrototype": 0
+    },
+    "cellsSummedAsPartition": {
+      "distinctRequisitions": 30,
+      "sumOfSourceCells": 34,
+      "impossibleExcess": 4
+    },
+    "copiesCountedAsJobs": {
+      "jobsCountedByRule": 34,
+      "distinctRequisitions": 30
+    },
+    "rateAmongKnownOutcomesOnly": {
+      "matureSent": 22,
+      "progressed": 6,
+      "unknown": 8,
+      "ruleRate": 0.429,
+      "prototypeBounds": {
+        "lower": 0.273,
+        "upper": 0.636
+      }
+    }
+  },
+  "deskComparison": {
+    "method": [
+      "Fixture: the rich_projected portfolio (30 requisitions) with invented free text on some jobs (Fit check, next step, notes).",
+      "MANUAL side = SOURCE READING of what the current screens show (file citations below). Nothing was executed on the manual side and no person was observed.",
+      "PROTOTYPE side = EXECUTED: the views run on the same fixture.",
+      "Unit = counted operations (one job record opened = 1). It is not time, effort, accuracy or a usability result. No human labels were collected; the \"better\" column is the fixture author’s reading.",
+      "The rich portfolio is projected data. Where the answer needs a field production does not record, the row says so and the comparison is of design capability, not of what the app does today."
+    ],
+    "surfaces": {
+      "fitCheck": "apps/desktop/src/components/saved/SavedJobDrawer.tsx (\"Fit check\": job.gapAnalysis, free text, saved by the person)",
+      "brief": "apps/desktop/src/components/brief/ApplicationBriefPanel.tsx (strengths / gaps / open questions, capped at BRIEF_LIST_CAP = 5 per list; eligibility; \"Where this came from\")",
+      "table": "apps/desktop/src/components/applications/ApplicationsTable.tsx (status, Next step column)",
+      "drawer": "apps/desktop/src/components/applications/ApplicationDrawer.tsx (notes, next step, contact)",
+      "found": "apps/desktop/src/components/search/VacancyDetail.tsx (\"Found with\": queries, shown only for a lead in the latest scan report)"
+    },
+    "questions": [
+      {
+        "id": "q1_recurring_requirements",
+        "question": "Which requirements recur across the jobs I chose, and how often?",
+        "manual": {
+          "operations": 30,
+          "opensWhat": "each saved job’s drawer: the brief’s strengths/gaps/open-questions lists plus any kept Fit check",
+          "jobsWithStructuredAnswer": 20,
+          "jobsOnlyAnsweredByFreeTextFitCheck": 2,
+          "jobsWithNoAnswerAtAll": 8,
+          "aggregationDone": "by the person, by hand: nothing counts across jobs",
+          "listCapExercised": false
+        },
+        "prototype": {
+          "operations": 1,
+          "requirementRows": 5,
+          "topRows": [
+            {
+              "label": "Kubernetes",
+              "jobsPresent": 12,
+              "of": 20
+            },
+            {
+              "label": "TypeScript",
+              "jobsPresent": 12,
+              "of": 20
+            },
+            {
+              "label": "Terraform",
+              "jobsPresent": 4,
+              "of": 20
+            },
+            {
+              "label": "On-call rota",
+              "jobsPresent": 3,
+              "of": 20
+            }
+          ],
+          "notAssessedReportedAsUnknown": 10,
+          "traceableToJobs": true,
+          "blindSpot": "2 job(s) have the finding only as kept free text (\"Terraform\"), which the structured view cannot read; they are reported as not assessed, not guessed."
+        },
+        "betterForCountingAcrossJobs": "prototype",
+        "betterForPerJobDetail": "manual (the brief shows that job’s requirement text and CV evidence label; the aggregate shows rows and links)"
+      },
+      {
+        "id": "q2_gap_versus_missing_evidence",
+        "question": "Is a recurring missing item a gap I recorded, or just something my CV does not show?",
+        "manual": {
+          "operations": 30,
+          "perJobDistinctionExists": "yes: the brief lists \"gaps\" and \"open questions\" separately for an assessed job",
+          "jobsWhereOnlyFreeTextFitCheckExists": 8,
+          "freeTextFitCheckDistinguishesRecordedGapFromMissingEvidence": false,
+          "jobsWithKeptFitCheckAndAssessment": 6,
+          "aggregationDone": "by the person, by hand"
+        },
+        "prototype": {
+          "operations": 1,
+          "lanesNeverMerged": [
+            "recorded_missing_experience",
+            "cv_evidence_not_recorded",
+            "supported_by_cv",
+            "unreviewed"
+          ],
+          "example": {
+            "recorded_missing_experience": 4,
+            "cv_evidence_not_recorded": 5,
+            "supported_by_cv": 3,
+            "unreviewed": 0
+          }
+        },
+        "betterForCountingAcrossJobs": "prototype",
+        "betterForPerJobDetail": "tie (both separate the two for one job)"
+      },
+      {
+        "id": "q3_preference_conflicts",
+        "question": "Do the jobs I chose repeatedly conflict with something I said I need?",
+        "manual": {
+          "operations": 30,
+          "jobsWithAnEligibilityAnswer": 21,
+          "aggregationDone": "by the person, by hand"
+        },
+        "prototype": {
+          "operations": 1,
+          "rows": [
+            {
+              "key": "candidateWorkCountry",
+              "jobsKnownMismatch": 5,
+              "ofAnswered": 20,
+              "unknown": 0,
+              "of": 30
+            },
+            {
+              "key": "mandatoryLanguage",
+              "jobsKnownMismatch": 2,
+              "ofAnswered": 2,
+              "unknown": 0,
+              "of": 30
+            }
+          ]
+        },
+        "betterForCountingAcrossJobs": "prototype",
+        "betterForPerJobDetail": "tie"
+      },
+      {
+        "id": "q4_source_and_variant_outcomes",
+        "question": "Which source or search variant do my sent applications come from, and what happened to them?",
+        "manual": {
+          "operations": 50,
+          "opensWhat": "each sent application’s row (status) and its saved-job drawer (“Where this came from”)",
+          "sourceReadable": "yes per job (brief: provider and link of each copy)",
+          "queryVariantReadable": "no for a saved job: \"Found with\" appears only on a lead in the latest scan report and the variant is not stored with the saved job (proved in workspace-contract.test.ts)",
+          "outcomeReadable": "status only: no date, source or reason",
+          "aggregationDone": "by the person, by hand"
+        },
+        "prototype": {
+          "operations": 1,
+          "requiresProjectedFields": [
+            "query attribution carried into the brief (follow-up B)",
+            "dated status events (follow-up A)",
+            "lead exposure digest (not filed)"
+          ],
+          "sourceCells": [
+            {
+              "label": "greenhouse",
+              "requisitions": 12,
+              "matureSent": 12,
+              "unknown": 0
+            },
+            {
+              "label": "remotive",
+              "requisitions": 12,
+              "matureSent": 4,
+              "unknown": 0
+            },
+            {
+              "label": "lever",
+              "requisitions": 10,
+              "matureSent": 10,
+              "unknown": 8
+            }
+          ],
+          "outcomeVerdict": {
+            "verdict": "go_review",
+            "reasons": []
+          },
+          "onTodaysData": "no_go: query variant not recorded, too few mature sends (see the real-contract lane)"
+        },
+        "betterForCountingAcrossJobs": "prototype, only if the projected fields exist; on today’s data neither side can name the variant",
+        "betterForPerJobDetail": "manual for source; neither for variant"
+      },
+      {
+        "id": "q5_context_only_in_notes",
+        "question": "What did a recruiter or contact say that bears on my search?",
+        "manual": {
+          "operations": 3,
+          "opensWhat": "the application’s next step (table) and notes (drawer)",
+          "jobsWithSuchText": 3
+        },
+        "prototype": {
+          "operations": 1,
+          "answer": "none: notes and next-step text are deliberately not read, parsed or aggregated",
+          "blindSpot": "3 job(s) hold context only in free text"
+        },
+        "betterForCountingAcrossJobs": "manual (the prototype cannot see it by design)",
+        "betterForPerJobDetail": "manual"
+      }
+    ],
+    "totals": {
+      "manualOperationsAcrossQuestions": 143,
+      "prototypeOperationsAcrossQuestions": 5,
+      "note": "Counted record opens, not time. The prototype also needs the underlying data to exist; on today’s data q4 is a no-go and q1–q3 depend on how many jobs the person assessed."
+    },
+    "limits": [
+      "No human did any of this; the manual side is a reading of the source, the prototype side is a run on constructed data.",
+      "A person with 3 saved jobs does not need an aggregate: the counted advantage only appears as the number of jobs grows.",
+      "Free text can carry the decisive fact. The prototype ignores it on purpose, so it is complementary to manual review, not a replacement.",
+      "No claim is made about decision quality, time saved, hiring outcomes or user preference."
+    ],
+    "cases": {
+      "jobsInFixture": 30,
+      "assessed": 20,
+      "withKeptFitCheck": 8,
+      "withFreeTextContext": 3,
+      "sentApplications": 25
+    }
+  },
+  "unknowns": [
+    "No human labels: every expected value was written by the implementer. Nothing here is human validated.",
+    "No real job search was used. The portfolios say nothing about how often these patterns occur for a real person, employer or ATS.",
+    "Nothing is known about whether any suggestion would be useful, understood or acted on; no usability study was run.",
+    "The rich portfolio relies on fields production does not record (query attribution, status events, exposure counts); its go_review verdicts describe the contract, not the app.",
+    "The review gates (counts and shares) are author-declared. They were not tuned or validated on data and could be wrong in either direction.",
+    "Maturity (28 days) has no empirical basis; employers answer on very different time scales and many never answer.",
+    "Exact-text recurrence under-counts spelling variants; person-confirmed aliases fix that only for wordings the person notices.",
+    "No provider, token, latency or cost telemetry was collected or is claimed: nothing in the prototype calls a model."
+  ],
+  "limits": [
+    "Selected jobs are survivorship-filtered: deleted saved jobs are gone.",
+    "Correlation between a requirement and an outcome is never presented as cause; outcomes are context only.",
+    "A requirement a CV cannot evidence is not a missing skill.",
+    "The conclusion is about whether automated calibration is supportable (it is not), not about hiring outcomes."
+  ],
+  "realContractLane": {
+    "kind": "synthetic data written through the app’s real writers into a migrated SQLite database, read by the read-only adapter; deterministic fields only",
+    "asOf": "2026-10-30T10:00:00.000Z",
+    "sourceRows": {
+      "savedJobs": 6,
+      "applications": 6,
+      "attempts": 3,
+      "briefs": 5,
+      "overlays": 2
+    },
+    "requisitions": [
+      {
+        "key": "rk1:req:greenhouse:northwind:1001",
+        "tier": "requisition",
+        "keyOrigin": "brief_identity",
+        "savedCopies": 2,
+        "providers": [
+          "ats_roster_greenhouse",
+          "remotive"
+        ],
+        "queryRefs": [
+          "not_recorded"
+        ],
+        "score": {
+          "state": "scored",
+          "value": 78,
+          "roleFamily": "Platform Engineer"
+        },
+        "applications": [
+          {
+            "submission": "receipt_backed",
+            "evidence": "receipt_observed",
+            "sentAt": "2026-09-01T09:00:00.000Z",
+            "status": "interview",
+            "heldRounds": 1,
+            "isReapplication": false,
+            "statusHistory": "current_value_only"
+          },
+          {
+            "submission": "user_reported",
+            "evidence": "user_reported",
+            "sentAt": "2026-10-05T09:00:00.000Z",
+            "status": "applied",
+            "heldRounds": 0,
+            "isReapplication": true,
+            "statusHistory": "current_value_only"
+          }
+        ],
+        "assessment": {
+          "state": "current",
+          "requirements": [
+            "5+ years of TypeScript:direct",
+            "Kubernetes:unsupported"
+          ]
+        },
+        "eligibilityKnownMismatch": []
+      },
+      {
+        "key": "rk1:req:greenhouse:northwind:1002",
+        "tier": "requisition",
+        "keyOrigin": "brief_identity",
+        "savedCopies": 1,
+        "providers": [
+          "ats_roster_greenhouse"
+        ],
+        "queryRefs": [
+          "not_recorded"
+        ],
+        "score": {
+          "state": "scored",
+          "value": 78,
+          "roleFamily": "Platform Engineer"
+        },
+        "applications": [
+          {
+            "submission": "user_stated",
+            "evidence": "user_stated",
+            "sentAt": "2026-09-05T09:00:00.000Z",
+            "status": "rejected",
+            "heldRounds": 0,
+            "isReapplication": false,
+            "statusHistory": "current_value_only"
+          }
+        ],
+        "assessment": {
+          "state": "none",
+          "requirements": []
+        },
+        "eligibilityKnownMismatch": [
+          "candidateWorkCountry",
+          "visaSponsorship"
+        ]
+      },
+      {
+        "key": "rk1:req:greenhouse:northwind:1003",
+        "tier": "requisition",
+        "keyOrigin": "brief_identity",
+        "savedCopies": 1,
+        "providers": [
+          "ats_roster_greenhouse"
+        ],
+        "queryRefs": [
+          "not_recorded"
+        ],
+        "score": {
+          "state": "scored",
+          "value": 70,
+          "roleFamily": "Platform Engineer"
+        },
+        "applications": [
+          {
+            "submission": "prepared",
+            "evidence": "app_recorded",
+            "sentAt": null,
+            "status": "preparing",
+            "heldRounds": 0,
+            "isReapplication": false,
+            "statusHistory": "current_value_only"
+          }
+        ],
+        "assessment": {
+          "state": "current",
+          "requirements": [
+            "Kubernetes:candidate_confirmed_gap"
+          ]
+        },
+        "eligibilityKnownMismatch": []
+      },
+      {
+        "key": "rk1:req:greenhouse:northwind:1005",
+        "tier": "requisition",
+        "keyOrigin": "brief_identity",
+        "savedCopies": 1,
+        "providers": [
+          "ats_roster_greenhouse"
+        ],
+        "queryRefs": [
+          "not_recorded"
+        ],
+        "score": {
+          "state": "unscored",
+          "value": null,
+          "roleFamily": null
+        },
+        "applications": [
+          {
+            "submission": "user_stated",
+            "evidence": "user_stated",
+            "sentAt": "2026-10-20T09:00:00.000Z",
+            "status": "applied",
+            "heldRounds": 0,
+            "isReapplication": false,
+            "statusHistory": "current_value_only"
+          }
+        ],
+        "assessment": {
+          "state": "none",
+          "requirements": []
+        },
+        "eligibilityKnownMismatch": []
+      },
+      {
+        "key": "rk1:url:https://jobs.example/listing/solo-role-9",
+        "tier": "canonical_url",
+        "keyOrigin": "brief_identity",
+        "savedCopies": 1,
+        "providers": [
+          null
+        ],
+        "queryRefs": [
+          "not_recorded"
+        ],
+        "score": {
+          "state": "unscored",
+          "value": null,
+          "roleFamily": null
+        },
+        "applications": [
+          {
+            "submission": "user_stated",
+            "evidence": "user_stated",
+            "sentAt": null,
+            "status": "applied",
+            "heldRounds": 0,
+            "isReapplication": false,
+            "statusHistory": "current_value_only"
+          }
+        ],
+        "assessment": {
+          "state": "none",
+          "requirements": []
+        },
+        "eligibilityKnownMismatch": []
+      }
+    ],
+    "funnel": {
+      "totals": {
+        "distinctRequisitions": 5,
+        "sumOfCells": 6,
+        "overlap": 1,
+        "sourceRowsRead": 6,
+        "copiesCollapsed": 1,
+        "weakKeyRequisitions": 0,
+        "sentRequisitions": 4,
+        "matureSent": 1,
+        "censoredSent": 2,
+        "undatedSent": 1,
+        "unknownOutcomes": 0,
+        "reapplicationRows": 1
+      },
+      "verdicts": {
+        "source": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        },
+        "queryVariant": {
+          "outcomeDistribution": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent"
+            ]
+          },
+          "perCellOutcomeComparison": {
+            "verdict": "no_go",
+            "reasons": [
+              "too_few_mature_sent",
+              "no_query_attribution"
+            ]
+          },
+          "leadToSelected": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_exposure_denominator"
+            ]
+          },
+          "timeToReply": {
+            "verdict": "no_go",
+            "reasons": [
+              "no_status_timestamps"
+            ]
+          }
+        }
+      },
+      "cellsBySource": [
+        {
+          "label": "ats_roster_greenhouse",
+          "requisitions": 4,
+          "sent": 3,
+          "matureSent": 1,
+          "censoredSent": 2,
+          "undatedSent": 0
+        },
+        {
+          "label": "(source not recorded)",
+          "requisitions": 1,
+          "sent": 1,
+          "matureSent": 0,
+          "censoredSent": 0,
+          "undatedSent": 1
+        },
+        {
+          "label": "remotive",
+          "requisitions": 1,
+          "sent": 1,
+          "matureSent": 0,
+          "censoredSent": 1,
+          "undatedSent": 0
+        }
+      ],
+      "cellsByQueryVariant": [
+        {
+          "label": "(query variant not recorded)",
+          "requisitions": 5
+        }
+      ],
+      "cellsByRoleFamily": [
+        {
+          "label": "Platform Engineer",
+          "requisitions": 3
+        },
+        {
+          "label": "(not scored: role family unknown)",
+          "requisitions": 2
+        }
+      ]
+    },
+    "requirements": {
+      "selected": 5,
+      "assessment": {
+        "current": 2,
+        "usable": 2,
+        "partial": 0,
+        "stale": 0,
+        "unavailable": 0,
+        "none": 3,
+        "excludedIncompatible": 0,
+        "versionClasses": [
+          {
+            "versionClass": "application-brief-v1|cv-version-1",
+            "jobs": 2,
+            "dominant": true
+          }
+        ]
+      },
+      "verdict": {
+        "verdict": "no_go",
+        "reasons": [
+          "too_few_assessed",
+          "unassessed_dominate",
+          "no_recurring_requirement"
+        ]
+      },
+      "rows": [
+        {
+          "label": "Kubernetes",
+          "jobsPresent": 2,
+          "byLane": {
+            "recorded_missing_experience": 1,
+            "cv_evidence_not_recorded": 1,
+            "supported_by_cv": 0,
+            "unreviewed": 0
+          }
+        },
+        {
+          "label": "5+ years of TypeScript",
+          "jobsPresent": 1,
+          "byLane": {
+            "recorded_missing_experience": 0,
+            "cv_evidence_not_recorded": 0,
+            "supported_by_cv": 1,
+            "unreviewed": 0
+          }
+        }
+      ],
+      "eligibility": [
+        {
+          "key": "candidateWorkCountry",
+          "jobsKnownMismatch": 1
+        },
+        {
+          "key": "visaSponsorship",
+          "jobsKnownMismatch": 1
+        }
+      ]
+    },
+    "suggestions": {
+      "produced": 0,
+      "withheld": {
+        "requirements": [
+          "too_few_assessed",
+          "unassessed_dominate",
+          "no_recurring_requirement"
+        ],
+        "searchVariants": [
+          "no_exposure_denominator"
+        ]
+      }
+    },
+    "answerability": [
+      {
+        "question": "How many distinct requisitions did the person select?",
+        "status": "answerable",
+        "evidence": "5 requisitions from 6 saved jobs and 6 application rows (5 briefs)",
+        "code": "application_briefs.identity_key + application_brief_aliases (#688)"
+      },
+      {
+        "question": "Which saved copies are the same requisition?",
+        "status": "answerable",
+        "evidence": "5 of 5 keyed by a stored brief identity; 1 had more than one saved copy",
+        "code": "brief aliases (saved:<id>, attempt:<id>, source copies)"
+      },
+      {
+        "question": "Which provider returned each copy?",
+        "status": "answerable",
+        "evidence": "5 of 5 have at least one provider recorded (a hand-entered job has none)",
+        "code": "application_brief_aliases.provider"
+      },
+      {
+        "question": "Which query variant found it?",
+        "status": "not_recorded",
+        "evidence": "0 of 5: #686 queryProvenance reached the scan rows but no workspace table or brief column stores it",
+        "code": "not stored (LeadQueryProvenance lives in the scan report JSON only)"
+      },
+      {
+        "question": "What role family is it?",
+        "status": "partial",
+        "evidence": "3 of 5: only a scored job has the deterministic scorer’s primary fit; unscored jobs stay unclassified",
+        "code": "application_briefs.source_facts.match.primaryFit"
+      },
+      {
+        "question": "Was it sent, and on what evidence?",
+        "status": "answerable",
+        "evidence": "5 sent application rows: 1 receipt-observed, 1 user-reported, 3 user-stated",
+        "code": "classifySubmission (#692) over applications + application_attempts"
+      },
+      {
+        "question": "When was it sent?",
+        "status": "partial",
+        "evidence": "4 of 5 sent rows have a date",
+        "code": "applications.applied_at / application_attempts.submitted_at"
+      },
+      {
+        "question": "What happened to it, and when did that change?",
+        "status": "partial",
+        "evidence": "the current status only: no change time, no source, no reason; \"applied\" with nothing later is an unobserved outcome, not a recorded one",
+        "code": "applications.status (one mutable value)"
+      },
+      {
+        "question": "Were interviews held?",
+        "status": "answerable",
+        "evidence": "1 application row(s) with a held round recorded",
+        "code": "application_interview_rounds (#691)"
+      },
+      {
+        "question": "What requirements did the posting list, and how does the CV evidence each?",
+        "status": "partial",
+        "evidence": "2 of 5 have a current assessment; 3 have none",
+        "code": "cv_evidence_overlays.requirements (only where \"Compare with my CV\" was run)"
+      },
+      {
+        "question": "Did the person record that they lack an experience?",
+        "status": "partial",
+        "evidence": "answerable only where assessed: 1 candidate_confirmed_gap requirement(s)",
+        "code": "CvRequirementMapping.evidenceClass = candidate_confirmed_gap"
+      },
+      {
+        "question": "Does the job conflict with a stated preference or eligibility?",
+        "status": "partial",
+        "evidence": "4 of 5 carry scan eligibility answers; 2 known mismatch(es)",
+        "code": "application_briefs.source_facts.eligibility + classifyEligibility"
+      },
+      {
+        "question": "Which JD, CV and rule version was an assessment made under?",
+        "status": "partial",
+        "evidence": "hashes only (JD hash, reviewed-CV hash, brief workflow version); no CV or JD text history, so compatibility is hash equality",
+        "code": "cv_evidence_overlays hashes; assessment.inputs.workflowVersion"
+      },
+      {
+        "question": "How many leads were shown but not selected?",
+        "status": "not_recorded",
+        "evidence": "no table stores leads that were not saved",
+        "code": "not stored"
+      },
+      {
+        "question": "Which jobs did the person drop?",
+        "status": "not_recorded",
+        "evidence": "deleting a saved job deletes it (and an unreferenced brief): selection is survivorship-filtered",
+        "code": "not stored"
+      }
+    ],
+    "unrecoverable": [
+      {
+        "code": "query_attribution",
+        "detail": "No workspace table or brief column stores which query variant produced a saved job (LeadQueryProvenance exists only in the scan report JSON)."
+      },
+      {
+        "code": "exposure_denominator",
+        "detail": "Leads shown, skipped or ignored are not stored; only jobs the person saved or applied to exist."
+      },
+      {
+        "code": "status_timestamp",
+        "detail": "applications.status is one mutable value with no change time, source or reason; the only application date is applied_at."
+      },
+      {
+        "code": "deleted_saved_jobs",
+        "detail": "Deleting a saved job removes its row (and an unreferenced brief): jobs the person dropped are invisible, so \"selected\" is survivorship-filtered."
+      },
+      {
+        "code": "cv_text_history",
+        "detail": "cv_documents keeps no version history; a CV or JD version is only a hash, so compatibility is hash equality, not a diff."
+      }
+    ]
+  }
+}
