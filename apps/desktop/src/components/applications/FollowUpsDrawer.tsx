@@ -37,6 +37,24 @@ type Editing =
   | { mode: 'edit'; action: ActionView; form: ActionForm }
   | { mode: 'reschedule'; action: ActionView; form: ActionForm };
 
+/**
+ * Where keyboard focus goes when a control disappears. Every control that can be the target carries a
+ * `data-focus-key`; a request lists keys in order of preference and the first one that is on screen and
+ * enabled gets focus, so a person who pressed Dismiss, Cancel or Save never lands on the page behind the
+ * dialog. The key of the control that opened a form or a confirmation comes first.
+ */
+const ADD_KEY = 'add-followup';
+const PLAN_KEY = 'plan-followup';
+const FORM_FIRST_KEY = 'form-first';
+const SUBMIT_KEY = 'form-submit';
+const rowKey = (verb: string, id: string): string => `${verb}:${id}`;
+const returnKeyOf = (editing: Editing): string =>
+  editing.mode === 'create'
+    ? editing.origin === 'suggestion_accepted'
+      ? PLAN_KEY
+      : ADD_KEY
+    : rowKey(editing.mode === 'edit' ? 'edit' : 'reschedule', editing.action.id);
+
 const STATE_LABEL: Record<Exclude<DueState, 'closed'>, string> = {
   overdue: 'Overdue',
   due_today: 'Due today',
@@ -77,6 +95,32 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
   currentId.current = application.id;
   const loadSeq = useRef(0);
   const viewerZone = useMemo(() => systemZone(), []);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<readonly string[] | null>(null);
+  const [, requestFocusRender] = useState(0);
+
+  /** Ask for focus once the next render has put the right controls on screen. */
+  function focusSoon(...keys: string[]): void {
+    pendingFocus.current = keys;
+    requestFocusRender((count) => count + 1);
+  }
+
+  useEffect(() => {
+    const keys = pendingFocus.current;
+    const body = bodyRef.current;
+    if (!keys || !body) return;
+    pendingFocus.current = null;
+    const candidates = Array.from(body.querySelectorAll<HTMLElement>('[data-focus-key]'));
+    for (const key of keys) {
+      const target = candidates.find((element) => element.dataset.focusKey === key);
+      if (target && !(target as HTMLButtonElement).disabled) {
+        target.focus();
+        return;
+      }
+    }
+    // Nothing named is left (the step moved to the history): stay inside the dialog, not on the page behind it.
+    body.focus();
+  });
 
   // Closing the drawer while a draft is being written cancels it: the person left, so nothing should be
   // saved behind their back into a list they are no longer looking at.
@@ -136,7 +180,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
     };
   }, [application.id]);
 
-  async function run(task: () => Promise<ActionsResult>, done?: string): Promise<boolean> {
+  async function run(task: () => Promise<ActionsResult>, done?: string, focusKeys?: readonly string[]): Promise<boolean> {
     setBusy(true);
     setNotice(undefined);
     let result: ActionsResult;
@@ -148,10 +192,11 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
     setBusy(false);
     const worked = land(result);
     if (worked && done) setNotice(done);
+    if (focusKeys && focusKeys.length > 0) focusSoon(...focusKeys);
     return worked;
   }
 
-  async function draftMessage(actionId: string | null): Promise<void> {
+  async function draftMessage(actionId: string | null, triggerKey: string): Promise<void> {
     if (!view || drafting) return;
     if (draftRequest.current?.actionId !== actionId) draftRequest.current = { actionId, requestId: requestId() };
     const request = draftRequest.current;
@@ -170,12 +215,22 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
       draftRequest.current = null;
       setNotice('Draft ready to review. Nothing was sent.');
     }
+    focusSoon(triggerKey, ADD_KEY);
   }
 
   function startCreate(origin: 'user' | 'suggestion_accepted'): void {
     setError(undefined);
     setDueFailure(null);
     setEditing({ mode: 'create', requestId: requestId(), origin, form: emptyForm(Date.now()) });
+    focusSoon(FORM_FIRST_KEY);
+  }
+
+  function closeForm(): void {
+    const keys = editing ? [returnKeyOf(editing), ADD_KEY] : [ADD_KEY];
+    setEditing(null);
+    setError(undefined);
+    setDueFailure(null);
+    focusSoon(...keys);
   }
 
   async function submit(): Promise<void> {
@@ -207,7 +262,13 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
         due,
       });
     }, editing.mode === 'create' ? 'Follow-up added.' : editing.mode === 'reschedule' ? 'Follow-up rescheduled.' : 'Follow-up saved.');
-    if (worked) setEditing(null);
+    if (worked) {
+      const keys = [returnKeyOf(editing), ADD_KEY];
+      setEditing(null);
+      focusSoon(...keys);
+    } else {
+      focusSoon(SUBMIT_KEY);
+    }
   }
 
   const patch = (change: Partial<ActionForm>): void =>
@@ -269,30 +330,61 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
         </p>
         {action.state === 'open' && (
           <div className="mt-2 flex flex-wrap gap-1">
-            <button type="button" className="btn btn-sm" disabled={busy} aria-label={`Mark done: ${label}`} onClick={() => void run(() => window.applicationActions.complete({ applicationId: action.applicationId, actionId: action.id, expectedVersion: action.version }), 'Marked done.')}>
+            <button type="button" className="btn btn-sm" disabled={busy} aria-label={`Mark done: ${label}`} data-focus-key={rowKey('done', action.id)} onClick={() => void run(() => window.applicationActions.complete({ applicationId: action.applicationId, actionId: action.id, expectedVersion: action.version }), 'Marked done.', [rowKey('done', action.id), ADD_KEY])}>
               Mark done
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Reschedule: ${label}`} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'reschedule', action, form: formFromAction(action) }); }}>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Reschedule: ${label}`} data-focus-key={rowKey('reschedule', action.id)} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'reschedule', action, form: formFromAction(action) }); focusSoon(FORM_FIRST_KEY); }}>
               Reschedule
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !view?.draft.available} aria-label={`Draft a message: ${label}`} onClick={() => void draftMessage(action.id)}>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !view?.draft.available} aria-label={`Draft a message: ${label}`} data-focus-key={rowKey('draft', action.id)} onClick={() => void draftMessage(action.id, rowKey('draft', action.id))}>
               Draft a message
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Edit: ${label}`} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'edit', action, form: formFromAction(action) }); }}>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Edit: ${label}`} data-focus-key={rowKey('edit', action.id)} onClick={() => { setError(undefined); setDueFailure(null); setEditing({ mode: 'edit', action, form: formFromAction(action) }); focusSoon(FORM_FIRST_KEY); }}>
               Edit
             </button>
             {confirmDismiss === action.id ? (
-              <span className="flex items-center gap-1" role="group" aria-label={`Confirm dismiss: ${label}`}>
+              <span className="flex flex-wrap items-center gap-1" role="group" aria-label={`Confirm dismiss: ${label}`}>
                 <span className="text-xs">Dismiss it? It stays in your history.</span>
-                <button type="button" className="btn btn-sm btn-warning" disabled={busy} onClick={() => { setConfirmDismiss(null); void run(() => window.applicationActions.dismiss({ applicationId: action.applicationId, actionId: action.id, expectedVersion: action.version }), 'Dismissed.'); }}>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-warning"
+                  disabled={busy}
+                  data-focus-key={rowKey('confirm-dismiss', action.id)}
+                  onClick={() => {
+                    setConfirmDismiss(null);
+                    void run(
+                      () => window.applicationActions.dismiss({ applicationId: action.applicationId, actionId: action.id, expectedVersion: action.version }),
+                      'Dismissed.',
+                      [rowKey('dismiss', action.id), ADD_KEY],
+                    );
+                  }}
+                >
                   Dismiss
                 </button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmDismiss(null)}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  data-focus-key={rowKey('keep', action.id)}
+                  onClick={() => {
+                    setConfirmDismiss(null);
+                    focusSoon(rowKey('dismiss', action.id));
+                  }}
+                >
                   Keep
                 </button>
               </span>
             ) : (
-              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} aria-label={`Dismiss: ${label}`} onClick={() => setConfirmDismiss(action.id)}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={busy}
+                aria-label={`Dismiss: ${label}`}
+                data-focus-key={rowKey('dismiss', action.id)}
+                onClick={() => {
+                  setConfirmDismiss(action.id);
+                  focusSoon(rowKey('confirm-dismiss', action.id));
+                }}
+              >
                 Dismiss
               </button>
             )}
@@ -322,7 +414,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
             <div className="grid grid-cols-2 gap-2">
               <label className="block" htmlFor={field('kind')}>
                 <span className="mb-1 block ovr-eyebrow">What</span>
-                <select id={field('kind')} aria-label="What" className="select select-sm w-full" value={f.kind} onChange={(e) => patch({ kind: e.target.value as ActionForm['kind'] })}>
+                <select id={field('kind')} aria-label="What" data-focus-key={FORM_FIRST_KEY} className="select select-sm w-full" value={f.kind} onChange={(e) => patch({ kind: e.target.value as ActionForm['kind'] })}>
                   {KIND_OPTIONS.map((kind) => (
                     <option key={kind} value={kind}>{ACTION_KIND_LABEL[kind]}</option>
                   ))}
@@ -355,7 +447,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
           <legend className="mb-1 block ovr-eyebrow">When</legend>
           <div className="flex gap-3">
             <label className="flex items-center gap-1 text-xs">
-              <input type="radio" aria-label="Any time that day" name={field('mode')} className="radio radio-xs" checked={f.dueMode === 'date'} onChange={() => patch({ dueMode: 'date' })} />
+              <input type="radio" aria-label="Any time that day" name={field('mode')} data-focus-key={dueOnly ? FORM_FIRST_KEY : undefined} className="radio radio-xs" checked={f.dueMode === 'date'} onChange={() => patch({ dueMode: 'date' })} />
               Any time that day
             </label>
             <label className="flex items-center gap-1 text-xs">
@@ -410,10 +502,10 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
           )}
         </fieldset>
         <div className="flex gap-2">
-          <button type="submit" className="btn btn-primary btn-sm" disabled={busy}>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={busy} data-focus-key={SUBMIT_KEY}>
             {form.mode === 'create' ? 'Add follow-up' : 'Save'}
           </button>
-          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setEditing(null); setError(undefined); setDueFailure(null); }}>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={closeForm}>
             Cancel
           </button>
         </div>
@@ -437,7 +529,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
         </button>
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+      <div ref={bodyRef} tabIndex={-1} className="flex-1 space-y-4 overflow-y-auto px-5 py-4 outline-none">
         <p className="text-sm text-base-content/60">
           Your own list, kept on this computer. Nothing here sends a message, contacts anyone or changes the application.
         </p>
@@ -445,7 +537,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
         {loadError && <ErrorBanner>{loadError}</ErrorBanner>}
         {!view && !loadError && <p className="text-sm" role="status">Loading follow-ups.</p>}
         {error && <ErrorBanner>{error}</ErrorBanner>}
-        <div role="status" aria-live="polite" className="text-xs text-success-content/80 empty:hidden">{notice}</div>
+        <div role="status" aria-live="polite" className="text-xs text-base-content/80 empty:hidden" data-testid="follow-up-notice">{notice}</div>
 
         {view && (
           <>
@@ -457,7 +549,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
               <p className="mt-1 text-xs text-base-content/70" data-testid="follow-up-suggestion-line">{view.suggestion.line}</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {view.suggestion.eligible && !editing && (
-                  <button type="button" className="btn btn-sm" disabled={busy} onClick={() => startCreate('suggestion_accepted')}>
+                  <button type="button" className="btn btn-sm" disabled={busy} data-focus-key={PLAN_KEY} onClick={() => startCreate('suggestion_accepted')}>
                     Plan a follow-up
                   </button>
                 )}
@@ -466,7 +558,8 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
                   className="btn btn-ghost btn-sm"
                   disabled={busy}
                   aria-pressed={view.suppressed}
-                  onClick={() => void run(() => window.applicationActions.setSuppressed({ applicationId: view.applicationId, suppressed: !view.suppressed }), view.suppressed ? 'Suggestions are back on.' : 'Suggestions are off for this application.')}
+                  data-focus-key="suppress"
+                  onClick={() => void run(() => window.applicationActions.setSuppressed({ applicationId: view.applicationId, suppressed: !view.suppressed }), view.suppressed ? 'Suggestions are back on.' : 'Suggestions are off for this application.', ['suppress'])}
                 >
                   {view.suppressed ? 'Allow follow-up suggestions' : 'Stop suggesting follow-ups'}
                 </button>
@@ -476,7 +569,7 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
             {editing ? (
               renderForm(editing)
             ) : (
-              <button type="button" className="btn btn-sm" disabled={busy} onClick={() => startCreate('user')}>
+              <button type="button" className="btn btn-sm" disabled={busy} data-focus-key={ADD_KEY} onClick={() => startCreate('user')}>
                 Add a follow-up
               </button>
             )}
@@ -512,7 +605,8 @@ export function FollowUpsDrawer({ application, onClose, onChanged }: FollowUpsDr
                 type="button"
                 className="btn btn-sm"
                 disabled={busy || !view.draft.available || view.running || drafting !== null}
-                onClick={() => void draftMessage(null)}
+                data-focus-key="draft-general"
+                onClick={() => void draftMessage(null, 'draft-general')}
               >
                 Draft a message
               </button>

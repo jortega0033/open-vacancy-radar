@@ -59,8 +59,26 @@ const NEXT_STEP = '  Call Priya on Tuesday – bring the Q3 numbers  ';
 const NOTES = 'PRIVATE-NOTE-MARKER the recruiter hinted at a reorg.\r\nLine two   \n';
 const ROLE_A_BULLETS = [fx.SOURCE.experience[0]!.bullets[0]!, fx.SOURCE.experience[0]!.bullets[1]!];
 
+/**
+ * Runs once, right before the NEXT write goes to the database. A draft write is awaited behind the reset gate,
+ * so this is the exact window after the late-result fence's first look and before the transaction that saves
+ * the draft: a deterministic stand-in for "something changed in that gap".
+ */
+let beforeNextWrite: (() => void | Promise<void>) | null = null;
+
 function handlers() {
-  return createApplicationActionsHandlers(async () => actionsDeps({ db, gate, now: () => new Date(nowMs), model }));
+  return createApplicationActionsHandlers(async () => {
+    const deps = actionsDeps({ db, gate, now: () => new Date(nowMs), model });
+    return {
+      ...deps,
+      mutate: async (task) => {
+        const hook = beforeNextWrite;
+        beforeNextWrite = null;
+        await hook?.();
+        return deps.mutate(task);
+      },
+    };
+  });
 }
 async function call(channel: string, payload: unknown): Promise<ActionsResult> {
   const raw = await handlers()[channel]!(JSON.parse(JSON.stringify(payload)));
@@ -136,6 +154,7 @@ beforeEach(() => {
   ({ db, close: closeDb } = createWorkspaceDb(dir));
   model = modelStub();
   model.reply = (prompt) => goodReply(prompt);
+  beforeNextWrite = null;
 });
 
 afterEach(() => {
@@ -354,6 +373,29 @@ describe('the recorded submission is the basis when #691 names one', () => {
     await generate(applicationId);
     expect(model.calls[1]!.prompt).not.toContain('REWRITTEN-AFTER-SENDING');
     expect(model.calls[1]!.prompt).toContain(fx.USER_LETTER_BODY.slice(0, 40));
+  });
+
+  it('the recorded package gaining a newer version after the first look and before the commit saves no draft', async () => {
+    const { attemptId, applicationId } = await prepared();
+    recordReceipt(attemptId);
+    const { stateDocuments, getInterviewContextView } = await import('../electron/interview-context-service.js');
+    const before = await getInterviewContextView({ db }, applicationId);
+    const pkg = before.packages.find((candidate) => candidate.attemptId === attemptId)!;
+    beforeNextWrite = async () => {
+      // The person states which letter they sent: a new package version, so a new manifest hash.
+      const stated = await stateDocuments(
+        { db, now: () => new Date(nowMs), mutate: (task) => gate.runMutation(task) },
+        { applicationId, packageId: pkg.id, expectedVersion: pkg.version, statements: [{ slot: 'letter', choice: 'prepared_file' }] },
+      );
+      expect(stated.ok).toBe(true);
+    };
+    expect(await generate(applicationId)).toMatchObject({ ok: false, code: 'discarded' });
+    expect(draftsIn()).toEqual([]);
+
+    // The next press rests on the new version and is saved.
+    const saved = newest(okView(await generate(applicationId)));
+    expect(saved.basis).toMatchObject({ mode: 'submitted_package', packageVersion: 2 });
+    expect(draftsIn()).toHaveLength(1);
   });
 
   it('a user-reported send is a different, weaker basis than an observed receipt', async () => {
@@ -597,6 +639,56 @@ describe('failures, cancellation and stale results keep the truth', () => {
     release();
     expect(await pending).toMatchObject({ ok: false, code: 'discarded' });
     expect(draftsIn()).toEqual([]);
+  });
+});
+
+describe('the late-result fence is decided inside the write', () => {
+  it('a linked letter edited after the first look and before the commit saves no draft; the next press works', async () => {
+    const letter = workspace.createLetter(db, { title: 'Letter', company: 'Fabrikam', role: 'Platform Engineer', type: 'cover_letter', tone: 'formal', length: 'standard', status: 'final', vacancyKey: 'vac-1', body: 'ORIGINAL-LETTER-TEXT' });
+    const id = sentRow({ letterId: letter.id });
+    beforeNextWrite = () => {
+      workspace.updateLetter(db, letter.id, { body: 'EDITED-IN-THE-GAP-TEXT' });
+    };
+    expect(await generate(id)).toMatchObject({ ok: false, code: 'discarded' });
+    expect(draftsIn()).toEqual([]);
+    expect(beforeNextWrite).toBeNull();
+
+    // Nothing is stuck: the next press reads the edited letter and saves normally.
+    const retry = newest(okView(await generate(id)));
+    expect(retry.basis.mode).toBe('current_context');
+    expect(model.calls.at(-1)!.prompt).toContain('EDITED-IN-THE-GAP-TEXT');
+    expect(draftsIn()).toHaveLength(1);
+  });
+
+  it('the application row changing in the gap saves no draft', async () => {
+    const id = sentRow();
+    beforeNextWrite = () => {
+      workspace.updateApplication(db, id, { location: 'Rotterdam' });
+    };
+    expect(await generate(id)).toMatchObject({ ok: false, code: 'discarded' });
+    expect(draftsIn()).toEqual([]);
+  });
+
+  it('the planned step edited in the gap saves no draft', async () => {
+    const id = sentRow();
+    const action = (await createAction(id)).actions[0]!;
+    beforeNextWrite = async () => {
+      await call('application-actions:update', { applicationId: id, actionId: action.id, expectedVersion: 1, fields: { kind: 'follow_up', title: 'Changed in the gap', note: '', channel: 'phone', contactDetail: '' } });
+    };
+    expect(await generate(id, { actionId: action.id })).toMatchObject({ ok: false, code: 'discarded' });
+    expect(draftsIn()).toEqual([]);
+  });
+
+  it('with nothing changed in the gap the draft is saved, and a retry of that request returns it without a second call', async () => {
+    const id = sentRow();
+    const requestId = rid();
+    beforeNextWrite = () => undefined;
+    const first = await generate(id, { requestId });
+    expect(first.ok).toBe(true);
+    const retry = await generate(id, { requestId });
+    expect(retry).toMatchObject({ ok: true, unchanged: true });
+    expect(model.calls).toHaveLength(1);
+    expect(draftsIn()).toHaveLength(1);
   });
 });
 

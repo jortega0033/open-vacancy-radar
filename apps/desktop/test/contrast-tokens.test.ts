@@ -105,3 +105,46 @@ describe('reduced motion (issue #497)', () => {
     expect(block).toMatch(/scroll-behavior:\s*auto\s*!important/);
   });
 });
+
+/**
+ * Visible status notices (#692). The follow-ups drawer announces every outcome ("Follow-up added.", "Draft ready to
+ * review. Nothing was sent.") in a live region. The text colour is read from the component's own class list, so the
+ * exact text/surface pair that ships is the one checked, in both themes. A `*-content` token is the colour of text
+ * ON a filled `bg-*` of the same name, so on the plain drawer surface it is white-on-white or dark-on-dark.
+ */
+const NOTICE_SOURCES = [
+  ['follow-ups drawer notice', resolve(__dirname, '../src/components/applications/FollowUpsDrawer.tsx'), 'data-testid="follow-up-notice"'],
+] as const;
+
+function noticeTextColor(source: string, marker: string): { token: string; alpha: number } {
+  const line = source.split(/\r?\n/).find((candidate) => candidate.includes(marker));
+  expect(line, `the element marked ${marker} is in the source`).toBeDefined();
+  const classes = (/className="([^"]*)"/.exec(line ?? '')?.[1] ?? '').split(/\s+/);
+  const colors = classes
+    .map((name) => /^text-([a-z]+(?:-[a-z]+)*)(?:\/(\d+))?$/.exec(name))
+    .filter((match): match is RegExpExecArray => match !== null && !/^(xs|sm|base|lg|xl|left|right|center|start|end|wrap|nowrap|balance|pretty|ellipsis|clip)$/.test(match[1] ?? ''));
+  expect(colors, 'exactly one text colour class').toHaveLength(1);
+  return { token: colors[0]![1] as string, alpha: colors[0]![2] ? Number(colors[0]![2]) / 100 : 1 };
+}
+
+describe.each(['openvacancyradar', 'openvacancyradar-dark'])('%s theme: status notice text', (name) => {
+  const tokens = themeTokens(name);
+  it.each(NOTICE_SOURCES)('%s is readable (4.5:1 or more) on the page and card surfaces', (_label, file, marker) => {
+    const { token, alpha } = noticeTextColor(readFileSync(file, 'utf8'), marker);
+    expect(tokens[token], `token ${token} exists in ${name}`).toBeDefined();
+    for (const surface of ['base-100', 'base-200'] as const) {
+      const background = tokens[surface] as Rgb;
+      const text = over(tokens[token] as Rgb, alpha, background);
+      expect(contrast(text, background), `${token}/${Math.round(alpha * 100)} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+it('the status notice contrast check fails for the text-on-fill token the drawer used before', () => {
+  // Guards the check itself: success-content on base-100 is the pair that made the notice invisible.
+  for (const name of ['openvacancyradar', 'openvacancyradar-dark']) {
+    const tokens = themeTokens(name);
+    const background = tokens['base-100'] as Rgb;
+    expect(contrast(over(tokens['success-content'] as Rgb, 0.8, background), background)).toBeLessThan(4.5);
+  }
+});

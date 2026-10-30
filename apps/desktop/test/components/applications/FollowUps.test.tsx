@@ -435,6 +435,123 @@ describe('reviewed follow-up drafts as a person meets them', () => {
     expect(model.calls).toHaveLength(0);
   });
 });
+describe('keyboard focus stays in the drawer through every step that removes the control that was focused', () => {
+  /** Pressing a button with the keyboard: focus it, then activate it (Enter/Space dispatch a click on a button). */
+  const press = (button: HTMLElement): void => {
+    act(() => button.focus());
+    expect(button).toHaveFocus();
+    act(() => button.click());
+  };
+  const focusIn = (dialog: HTMLElement): void => {
+    expect(document.activeElement).not.toBe(document.body);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  };
+  async function withStep(title = 'First'): Promise<HTMLElement> {
+    row();
+    renderPage();
+    const dialog = await openDrawer('Fabrikam');
+    press(within(dialog).getByRole('button', { name: 'Add a follow-up' }));
+    fireEvent.change(within(dialog).getByLabelText('Short title'), { target: { value: title } });
+    fillWhen(dialog, { date: '2030-11-06', zone: 'Europe/Amsterdam' });
+    press(within(dialog).getByRole('button', { name: 'Add follow-up' }));
+    await within(dialog).findByTestId('follow-up-action');
+    return dialog;
+  }
+
+  it('Dismiss moves focus to the confirmation, Keep returns it to Dismiss, and confirming lands on Add a follow-up', async () => {
+    const dialog = await withStep();
+    // Submitting the form returned focus to the button that opened it.
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Add a follow-up' })).toHaveFocus());
+
+    press(within(dialog).getByRole('button', { name: 'Dismiss: Follow up: First' }));
+    const group = within(dialog).getByRole('group', { name: 'Confirm dismiss: Follow up: First' });
+    const [first] = within(group).getAllByRole('button');
+    await waitFor(() => expect(first).toHaveFocus());
+    expect(first).toHaveTextContent('Dismiss');
+
+    press(within(group).getByRole('button', { name: 'Keep' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Dismiss: Follow up: First' })).toHaveFocus());
+    expect(within(dialog).queryByRole('group', { name: /Confirm dismiss/ })).toBeNull();
+
+    press(within(dialog).getByRole('button', { name: 'Dismiss: Follow up: First' }));
+    const again = within(dialog).getByRole('group', { name: 'Confirm dismiss: Follow up: First' });
+    await waitFor(() => expect(within(again).getAllByRole('button')[0]).toHaveFocus());
+    press(within(again).getAllByRole('button')[0]!);
+    // The step moved to the history, so its own Dismiss button is gone: focus is still inside the drawer.
+    await waitFor(() => expect(within(dialog).getByText('History (1)')).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Add a follow-up' })).toHaveFocus());
+    focusIn(dialog);
+  });
+
+  it('Mark done leaves focus inside the drawer, on Add a follow-up, not on the page behind it', async () => {
+    const dialog = await withStep();
+    press(within(dialog).getByRole('button', { name: 'Mark done: Follow up: First' }));
+    await waitFor(() => expect(within(dialog).getByText('History (1)')).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Add a follow-up' })).toHaveFocus());
+    focusIn(dialog);
+  });
+
+  it('opening the form puts focus in it; Cancel returns it to the button that opened it', async () => {
+    row();
+    renderPage();
+    const dialog = await openDrawer('Fabrikam');
+    press(within(dialog).getByRole('button', { name: 'Plan a follow-up' }));
+    const form = within(dialog).getByRole('form', { name: 'New follow-up' });
+    await waitFor(() => expect(within(form).getByLabelText('What')).toHaveFocus());
+    press(within(form).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Plan a follow-up' })).toHaveFocus());
+    expect(within(dialog).queryByRole('form')).toBeNull();
+
+    press(within(dialog).getByRole('button', { name: 'Add a follow-up' }));
+    await waitFor(() => expect(within(within(dialog).getByRole('form', { name: 'New follow-up' })).getByLabelText('What')).toHaveFocus());
+    press(within(within(dialog).getByRole('form', { name: 'New follow-up' })).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Add a follow-up' })).toHaveFocus());
+  });
+
+  it('Edit and Reschedule return focus to their own row button after Cancel and after Save', async () => {
+    const dialog = await withStep();
+    const edit = () => within(dialog).getByRole('button', { name: 'Edit: Follow up: First' });
+    const reschedule = () => within(dialog).getByRole('button', { name: 'Reschedule: Follow up: First' });
+
+    press(edit());
+    const editForm = within(dialog).getByRole('form', { name: 'Edit follow-up' });
+    await waitFor(() => expect(within(editForm).getByLabelText('What')).toHaveFocus());
+    press(within(editForm).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(edit()).toHaveFocus());
+
+    press(reschedule());
+    const form = within(dialog).getByRole('form', { name: 'Reschedule follow-up' });
+    await waitFor(() => expect(within(form).getByLabelText('Any time that day')).toHaveFocus());
+    fillWhen(dialog, { date: '2030-11-20', zone: 'Europe/Amsterdam' });
+    press(within(form).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(within(dialog).getByTestId('follow-up-action')).toHaveTextContent('Moved 1 time'));
+    await waitFor(() => expect(reschedule()).toHaveFocus());
+    focusIn(dialog);
+  });
+
+  it('a refused save keeps focus on the form, on its Save button', async () => {
+    row();
+    renderPage();
+    const dialog = await openDrawer('Fabrikam');
+    press(within(dialog).getByRole('button', { name: 'Add a follow-up' }));
+    fillWhen(dialog, { date: '2030-02-30', zone: 'Europe/Amsterdam' });
+    press(within(dialog).getByRole('button', { name: 'Add follow-up' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Add follow-up' })).toHaveFocus());
+    expect(within(dialog).getByRole('form', { name: 'New follow-up' })).toBeInTheDocument();
+  });
+
+  it('"I sent this" moves focus into its confirmation and "Not yet" brings it back', async () => {
+    const dialog = await withStep('Chase');
+    press(within(dialog).getByRole('button', { name: 'Draft a message: Follow up: Chase' }));
+    const card = await within(dialog).findByTestId('follow-up-draft');
+    press(within(card).getByRole('button', { name: 'I sent this' }));
+    await waitFor(() => expect(within(card).getByLabelText('I sent this message myself')).toHaveFocus());
+    press(within(card).getByRole('button', { name: 'Not yet' }));
+    await waitFor(() => expect(within(card).getByRole('button', { name: 'I sent this' })).toHaveFocus());
+    focusIn(dialog);
+  });
+});
+
 describe('a build without the bridge keeps the page as it was', () => {
   it('shows no follow-up summary and the drawer says it is unavailable', async () => {
     row();

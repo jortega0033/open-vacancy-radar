@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ACTION_KIND_LABEL } from '../../../electron/application-actions-core.js';
 import type { ActionsResult, DraftView } from '../../../electron/application-actions-types.js';
 
@@ -7,7 +7,7 @@ export interface FollowUpDraftCardProps {
   /** Another request is in flight; every control waits. */
   busy: boolean;
   /** Runs a request through the drawer, which lands its view and errors. Resolves true when it worked. */
-  run: (task: () => Promise<ActionsResult>, notice?: string) => Promise<boolean>;
+  run: (task: () => Promise<ActionsResult>, notice?: string, focusKeys?: readonly string[]) => Promise<boolean>;
 }
 
 /**
@@ -24,6 +24,21 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
   const [acknowledged, setAcknowledged] = useState(false);
   const [sentOn, setSentOn] = useState('');
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const confirmRef = useRef<HTMLInputElement>(null);
+  const sentButtonRef = useRef<HTMLButtonElement>(null);
+  const copyButtonRef = useRef<HTMLButtonElement>(null);
+  // When the confirmation opens, focus moves into it; when it closes, focus goes back to what opened it.
+  const returnFocus = useRef<'sent' | 'copy' | null>(null);
+  useEffect(() => {
+    if (confirming) {
+      confirmRef.current?.focus();
+      return;
+    }
+    const target = returnFocus.current;
+    returnFocus.current = null;
+    if (target === 'sent') (sentButtonRef.current ?? copyButtonRef.current)?.focus();
+    else if (target === 'copy') copyButtonRef.current?.focus();
+  }, [confirming]);
 
   // A newer version of this draft (saved, approved, reported) replaces what the form shows.
   useEffect(() => {
@@ -37,6 +52,8 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
   const dirty = subject !== draft.subject || body !== draft.body;
   const target = { applicationId: draft.applicationId, draftId: draft.id, expectedVersion: draft.version };
   const title = `${ACTION_KIND_LABEL[draft.kind]} draft from ${draft.createdAt.slice(0, 10)}`;
+  const keyOf = (name: string): string => `draft:${draft.id}:${name}`;
+  const afterwards = (name: string): string[] => [keyOf(name), keyOf('copy')];
 
   async function copyText(): Promise<void> {
     try {
@@ -89,7 +106,8 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
               type="button"
               className="btn btn-sm"
               disabled={busy || body.trim().length === 0}
-              onClick={() => void run(() => window.applicationActions.editDraft({ ...target, subject, body }), 'Draft saved. Approve it again if you want it marked as reviewed.')}
+              data-focus-key={keyOf('save')}
+              onClick={() => void run(() => window.applicationActions.editDraft({ ...target, subject, body }), 'Draft saved. Approve it again if you want it marked as reviewed.', afterwards('save'))}
             >
               Save changes
             </button>
@@ -99,21 +117,22 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
               type="button"
               className="btn btn-sm"
               disabled={busy || dirty}
-              onClick={() => void run(() => window.applicationActions.approveDraft(target), 'Text approved. It has not been sent.')}
+              data-focus-key={keyOf('approve')}
+              onClick={() => void run(() => window.applicationActions.approveDraft(target), 'Text approved. It has not been sent.', afterwards('approve'))}
             >
               Approve this text
             </button>
           )}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyText()}>
+          <button ref={copyButtonRef} type="button" className="btn btn-ghost btn-sm" data-focus-key={keyOf('copy')} onClick={() => void copyText()}>
             Copy
           </button>
           {!sent && (
-            <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void run(() => window.applicationActions.discardDraft(target), 'Draft discarded.')}>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={busy} data-focus-key={keyOf('discard')} onClick={() => void run(() => window.applicationActions.discardDraft(target), 'Draft discarded.', afterwards('discard'))}>
               Discard
             </button>
           )}
           {!sent && !confirming && (
-            <button type="button" className="btn btn-ghost btn-sm" disabled={busy || dirty} onClick={() => setConfirming(true)}>
+            <button ref={sentButtonRef} type="button" className="btn btn-ghost btn-sm" disabled={busy || dirty} data-focus-key={keyOf('sent')} onClick={() => setConfirming(true)}>
               I sent this
             </button>
           )}
@@ -127,7 +146,7 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
         <fieldset className="mt-2 space-y-2 rounded-box border border-warning p-2" aria-label="Confirm you sent this message">
           <legend className="px-1 text-xs font-medium">Only say this if you sent it yourself</legend>
           <label className="flex items-start gap-2 text-xs">
-            <input type="checkbox" className="checkbox checkbox-xs mt-0.5" aria-label="I sent this message myself" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />
+            <input ref={confirmRef} type="checkbox" className="checkbox checkbox-xs mt-0.5" aria-label="I sent this message myself" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />
             I sent this message myself, outside this app. This is my own statement.
           </label>
           <label className="block text-xs" htmlFor={`${baseId}-sent-on`}>
@@ -143,6 +162,7 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
                 void run(
                   () => window.applicationActions.reportDraftSent({ ...target, sentOn: sentOn === '' ? null : sentOn, confirmed: true }),
                   'Recorded as sent, as you reported. The follow-up itself is unchanged.',
+                  afterwards('sent'),
                 ).then((worked) => {
                   if (worked) setConfirming(false);
                 })
@@ -150,7 +170,14 @@ export function FollowUpDraftCard({ draft, busy, run }: FollowUpDraftCardProps) 
             >
               Record that I sent it
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirming(false)}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                returnFocus.current = 'sent';
+                setConfirming(false);
+              }}
+            >
               Not yet
             </button>
           </div>

@@ -142,36 +142,50 @@ export function ApplicationsTable({
                 {formatAppliedDate(application.appliedAt) ?? <NotSet />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Next step">
-                {application.nextStep || <NotSet label="None" />}
-                {(() => {
-                  const item = followUps?.get(application.id);
-                  if (!item) return null;
-                  const facts = item.openActions.map((action) => ({
-                    id: action.id,
-                    state: action.state,
-                    dueKind: action.dueKind,
-                    dueDate: action.dueDate,
-                    dueLocal: action.dueLocal,
-                    dueTimeZone: action.dueTimeZone,
-                    dueAtMs: Date.parse(action.dueAt),
-                  }));
-                  const summary = summarizeOpenActions(facts, nowMs);
-                  const line = actionSummaryLine(summary);
-                  const next = item.openActions.find((action) => action.id === summary.next?.id);
-                  if (!line || !next) {
-                    return item.suggestion.eligible ? (
-                      <p className="mt-1 text-xs text-base-content/70" data-testid="follow-up-summary">No follow-up planned.</p>
-                    ) : null;
-                  }
-                  const state = dueStateOf(facts.find((fact) => fact.id === next.id)!, nowMs);
-                  const due = describeDue({ ...facts.find((fact) => fact.id === next.id)!, dueUtcOffsetMinutes: next.dueUtcOffsetMinutes }, viewerZone);
-                  return (
-                    <p className="mt-1 text-xs" data-testid="follow-up-summary">
-                      <span className={state === 'overdue' ? 'font-semibold text-error' : 'font-medium'}>Follow-ups: {line}.</span>{' '}
-                      <span className="text-base-content/70">Next {state === 'overdue' ? 'was due' : 'due'} {due.primary}</span>
-                    </p>
-                  );
-                })()}
+                <div className="min-w-0">
+                  {application.nextStep || <NotSet label="None" />}
+                  {(() => {
+                    const item = followUps?.get(application.id);
+                    if (!item) return null;
+                    const facts = item.openActions.map((action) => ({
+                      id: action.id,
+                      state: action.state,
+                      dueKind: action.dueKind,
+                      dueDate: action.dueDate,
+                      dueLocal: action.dueLocal,
+                      dueTimeZone: action.dueTimeZone,
+                      dueAtMs: Date.parse(action.dueAt),
+                    }));
+                    const summary = summarizeOpenActions(facts, nowMs);
+                    const line = actionSummaryLine(summary);
+                    const next = item.openActions.find((action) => action.id === summary.next?.id);
+                    if (!line || !next) {
+                      return item.suggestion.eligible ? (
+                        <p className="mt-1 text-xs text-base-content/70" data-testid="follow-up-summary">No follow-up planned.</p>
+                      ) : null;
+                    }
+                    const state = dueStateOf(facts.find((fact) => fact.id === next.id)!, nowMs);
+                    const due = describeDue({ ...facts.find((fact) => fact.id === next.id)!, dueUtcOffsetMinutes: next.dueUtcOffsetMinutes }, viewerZone);
+                    return (
+                      <p className="mt-1 text-xs" data-testid="follow-up-summary">
+                        <span className={state === 'overdue' ? 'font-semibold text-error' : 'font-medium'}>Follow-ups: {line}.</span>{' '}
+                        <span className="text-base-content/70">Next {state === 'overdue' ? 'was due' : 'due'} {due.primary}</span>
+                      </p>
+                    );
+                  })()}
+                  {onOpenFollowUps && (
+                    <div className="mt-1">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs -ml-1.5 px-1.5"
+                        onClick={() => onOpenFollowUps(application)}
+                        aria-label={`Follow-ups for ${application.role} at ${application.company}`}
+                      >
+                        Follow-ups
+                      </button>
+                    </div>
+                  )}
+                </div>
               </td>
               <td className="ovr-responsive-table__cell" data-label="Contact">
                 {application.contact || <NotSet label="None" />}
@@ -180,16 +194,6 @@ export function ApplicationsTable({
                 className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
                 data-label="Actions"
               >
-                {onOpenFollowUps && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm px-1.5"
-                    onClick={() => onOpenFollowUps(application)}
-                    aria-label={`Follow-ups for ${application.role} at ${application.company}`}
-                  >
-                    Follow-ups
-                  </button>
-                )}
                 {onPrepareInterview && INTERVIEW_PREPARABLE_STATUSES.has(application.status) && (
                   <button
                     type="button"

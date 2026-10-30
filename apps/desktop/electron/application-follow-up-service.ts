@@ -22,7 +22,7 @@ import type {
   GenerateDraftRequest,
   ReportSentRequest,
 } from './application-actions-types.js';
-import { getInterviewContextView } from './interview-context-service.js';
+import { getInterviewContextBasis, type InterviewContextBasis } from './interview-context-service.js';
 import {
   buildFollowUpPrompt,
   factsHash,
@@ -132,21 +132,25 @@ type PrepareResult = { ok: true; value: Prepared } | { ok: false; code: FailureC
 /**
  * Collects the grounded facts. The recorded package is used only when #691's resolver names ONE sent
  * package for this application; otherwise the CURRENT linked documents are used and the draft says so.
+ *
+ * Synchronous on purpose (nothing here reads a file or calls a provider), so the same function runs once
+ * before the model call and again INSIDE the write transaction, against that transaction's own view of the
+ * database, and the two hashes can be compared with nothing able to change in between.
  */
-async function prepare(deps: FollowUpDeps, applicationId: string, actionId: string | null): Promise<PrepareResult> {
-  const record = workspace.listApplications(deps.db, 'all').find((candidate) => candidate.id === applicationId);
+function prepare(db: WorkspaceDb, applicationId: string, actionId: string | null, log?: FollowUpDeps['log']): PrepareResult {
+  const record = workspace.listApplications(db, 'all').find((candidate) => candidate.id === applicationId);
   if (!record) return { ok: false, code: 'not_found', message: 'That application is no longer available.' };
-  const action = actionId ? getAction(deps.db, applicationId, actionId) : null;
+  const action = actionId ? getAction(db, applicationId, actionId) : null;
   if (actionId && !action) return { ok: false, code: 'not_found', message: 'That follow-up is no longer available.' };
   if (action && action.state !== 'open') return { ok: false, code: 'not_open', message: 'That follow-up was already completed or dismissed.' };
   const submissionClass: SubmissionClass = classifySubmission(factsOf(record));
   if (!DRAFTABLE_CLASSES.has(submissionClass)) return { ok: false, code: 'not_submitted', message: NOT_SUBMITTED_MESSAGE };
 
-  let view: Awaited<ReturnType<typeof getInterviewContextView>> | null;
+  let view: InterviewContextBasis | null;
   try {
-    view = await getInterviewContextView(deps, applicationId);
+    view = getInterviewContextBasis(db, applicationId);
   } catch (error) {
-    deps.log?.('recorded documents unavailable for the draft; using current documents', { error: describe(error) });
+    log?.('recorded documents unavailable for the draft; using current documents', { error: describe(error) });
     view = null;
   }
   const chosen = view && view.selection !== 'choose' && view.defaultPackageId ? view.packages.find((pkg) => pkg.id === view.defaultPackageId) : undefined;
@@ -179,8 +183,8 @@ async function prepare(deps: FollowUpDeps, applicationId: string, actionId: stri
       documents: sentPackage.documents.map((doc) => ({ slot: doc.slot, provenance: doc.provenance, version: doc.version })),
     };
   } else {
-    const cv = record.cvId ? (workspace.listCvDocuments(deps.db).find((doc) => doc.id === record.cvId) ?? null) : null;
-    const letter = record.letterId ? (workspace.listLetters(deps.db).find((row) => row.id === record.letterId) ?? null) : null;
+    const cv = record.cvId ? (workspace.listCvDocuments(db).find((doc) => doc.id === record.cvId) ?? null) : null;
+    const letter = record.letterId ? (workspace.listLetters(db).find((row) => row.id === record.letterId) ?? null) : null;
     documents = [
       ...(cv ? [{ slot: 'cv' as const, provenance: 'your current linked CV; it may differ from what was sent', version: null, name: cv.name }] : []),
       ...(letter ? [{ slot: 'letter' as const, provenance: 'your current linked letter; it may differ from what was sent', version: null, name: null }] : []),
@@ -245,10 +249,14 @@ async function run(deps: FollowUpDeps, input: GenerateDraftRequest, runId: strin
     release();
     return failureResult(deps, input.applicationId, code, RUN_MESSAGE[code]);
   };
-  const before = await prepare(deps, input.applicationId, input.actionId).catch((error: unknown) => {
-    if (error instanceof WorkspaceNotFoundError) return { ok: false as const, code: 'not_found' as const, message: 'That application is no longer available.' };
-    throw error;
-  });
+  const before = ((): PrepareResult => {
+    try {
+      return prepare(deps.db, input.applicationId, input.actionId, deps.log);
+    } catch (error) {
+      if (error instanceof WorkspaceNotFoundError) return { ok: false, code: 'not_found', message: 'That application is no longer available.' };
+      throw error;
+    }
+  })();
   if (!before.ok) {
     release();
     return failureResult(deps, input.applicationId, before.code, before.message);
@@ -269,23 +277,24 @@ async function run(deps: FollowUpDeps, input: GenerateDraftRequest, runId: strin
     if (!parsed.ok) return fail('invalid_output');
     if (ungroundedTokens(`${parsed.subject}\n${parsed.body}`, before.value.prompt).length > 0) return fail('ungrounded');
 
-    // The late-result fence: whatever moved while the session ran, this result does not describe it.
-    const after = await prepare(deps, input.applicationId, input.actionId).catch(() => null);
-    if (controller.signal.aborted || !isRunLive(input.applicationId, runId) || !after?.ok || after.value.hash !== before.value.hash) {
-      return fail('discarded');
-    }
     const usage: { inputTokens?: number; outputTokens?: number } = {};
     if (typeof result.usage?.inputTokens === 'number') usage.inputTokens = result.usage.inputTokens;
     if (typeof result.usage?.outputTokens === 'number') usage.outputTokens = result.usage.outputTokens;
 
     const committed = await deps.mutate(() =>
       deps.db.transaction((tx) => {
-        if (controller.signal.aborted) return { ok: false as const, code: 'discarded' as const };
-        // Same checks again inside the write, so nothing moves between the fence and the insert.
-        const action = input.actionId ? getAction(tx as unknown as WorkspaceDb, input.applicationId, input.actionId) : null;
-        if (input.actionId && (!action || action.state !== 'open' || action.version !== before.value.actionVersion)) {
+        if (controller.signal.aborted || !isRunLive(input.applicationId, runId)) return { ok: false as const, code: 'discarded' as const };
+        // The late-result fence, INSIDE the write: the exact application row, sent class, planned step, recorded
+        // package and linked documents are read again here, synchronously, against this transaction's own view of
+        // the database, and compared with what the model was asked about. Nothing can change between this check
+        // and the insert, so a draft is never saved against a basis it was not written from.
+        let now: PrepareResult;
+        try {
+          now = prepare(tx as unknown as WorkspaceDb, input.applicationId, input.actionId, deps.log);
+        } catch {
           return { ok: false as const, code: 'discarded' as const };
         }
+        if (!now.ok || now.value.hash !== before.value.hash) return { ok: false as const, code: 'discarded' as const };
         return insertDraft(
           tx,
           {

@@ -292,7 +292,8 @@ stored in the local workspace database and goes nowhere else.
   recorded letter text or your current linked letter. Your Notes and Next step text are not sent. Nothing is sent to
   an employer, read from email or written to a calendar, and "sent" is only ever your own statement. Retained until
   you delete the application, delete `workspace.db`, or use Settings > Advanced > Reset application data (which
-  deletes all three tables). See [follow-ups.md](follow-ups.md).- **Application brief** (#688): one decision record per job, kept in `workspace.db`: the scan's own score and
+  deletes all three tables). See [follow-ups.md](follow-ups.md).
+- **Application brief** (#688): one decision record per job, kept in `workspace.db`: the scan's own score and
   reasons, work-eligibility answers with their sources, every original source link of the job, the posting text
   saved with it (cut at 80,000 characters), a summary of the CV assessment with the versions it was made under, and
   a short list of why a section went out of date. The assessment summary, in the brief and in its pinned copy, keeps
