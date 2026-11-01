@@ -376,6 +376,23 @@ contract suite, register it. No daemon, client, or desktop changes required.
 
 ## Documentation
 
+### Hosted landing page
+
+The public landing page is [ovr.web.app](https://ovr.web.app), served directly from `apps/landing`.
+Its Firebase project `ovr-landing` was transferred intact on 2026-11-01 to
+`vialeighortega@gmail.com`, organization `772038913203`. The desktop application and its local
+SQLite workspaces are independent of this marketing site. The Firebase project retains its free
+Spark setup with no billing account attached.
+
+Deploy with `pnpm deploy:landing`; the script pins the account, project and `landing` target.
+Once merged, the dedicated landing workflow uses repository/branch-restricted Google OIDC, without a
+personal Firebase token. [Private Terraform operations](https://github.com/jortega0033/cloud-infrastructure/tree/main/projects/open-vacancy-radar) and
+[the migration decision](docs/adr-cloud-account-migration-2026-11-01.md) document infrastructure,
+state dependencies and verification. AI assistants must read [AGENTS.md](AGENTS.md) first;
+[CLAUDE.md](CLAUDE.md) and [CODEX.md](CODEX.md) point to the same guidance.
+
+### Development references
+
 - [DEVELOPMENT.md](DEVELOPMENT.md): setup, an "I want to change X" map, common architectural rules
 - [docs/architecture.md](docs/architecture.md): component responsibilities, runtime flow, trust boundaries, dependency graph
 - [docs/protocol-v1.md](docs/protocol-v1.md): the `AgentEvent` union, wire format, ordering guarantees, what's public/stable
