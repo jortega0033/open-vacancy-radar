@@ -18,7 +18,13 @@ Terraform code is intentionally kept out of this public application repository. 
 
 ## Verification and cleanup
 
-Migration verification is in progress. Completion must establish active new-account Owner access, successful manual deployment and HTTPS checks, clean Terraform follow-up plan, and successful GitHub OIDC deployment. Only then revoke the old user's project roles and temporary destination-organization grants; check effective permissions after propagation. Never delete this production project as cleanup: no separate old copy exists.
+Cloud account migration is complete. The new account accepted Owner access and deployed all four landing-page files successfully with the pinned `pnpm deploy:landing` command. HTTPS checks for the homepage, stylesheet, script and favicon all returned HTTP 200. Both Hosting sites remain present. Billing remains disabled, with no account attached.
+
+Private Terraform adoption completed across two applies: four existing resources imported, ten identity/API resources added, one project-label update in place, zero resources destroyed. The follow-up plan reports no changes. A transient IAM propagation failure while creating the identity pool was resolved without weakening organization policies.
+
+The old account's Owner and temporary Project Mover project grants, plus temporary destination-organization Project Creator/Project Mover grants, were removed. After propagation, its project list excludes `ovr-landing`; testIamPermissions returns no permissions for project view/delete/IAM changes or Hosting updates. The only human project Owner is the new account. Old CLI logins remain available for other projects awaiting migration.
+
+The public workflow/instruction changes are in PR #724. The protected default branch requires one independent approval and the repository's existing checks before merge. Consequently the new GitHub OIDC workflow has not yet deployed from `master`; its first post-merge run must be checked separately. This does not block the already verified account transfer/direct deployment. Never delete this production project as cleanup: no separate old copy exists.
 
 Pre-existing edits to `STATE.md`, `loop-run-log.md`, and untracked `.claude/settings.local.json` are outside migration scope and must remain untouched.
 

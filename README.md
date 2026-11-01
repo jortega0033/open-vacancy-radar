@@ -385,8 +385,8 @@ SQLite workspaces are independent of this marketing site. The Firebase project r
 Spark setup with no billing account attached.
 
 Deploy with `pnpm deploy:landing`; the script pins the account, project and `landing` target.
-GitHub's dedicated landing workflow uses repository/branch-restricted Google OIDC, without a
-personal Firebase token. [Terraform operations](https://github.com/jortega0033/cloud-infrastructure/tree/main/projects/open-vacancy-radar) and
+Once merged, the dedicated landing workflow uses repository/branch-restricted Google OIDC, without a
+personal Firebase token. [Private Terraform operations](https://github.com/jortega0033/cloud-infrastructure/tree/main/projects/open-vacancy-radar) and
 [the migration decision](docs/adr-cloud-account-migration-2026-11-01.md) document infrastructure,
 state dependencies and verification. AI assistants must read [AGENTS.md](AGENTS.md) first;
 [CLAUDE.md](CLAUDE.md) and [CODEX.md](CODEX.md) point to the same guidance.
