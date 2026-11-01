@@ -1,5 +1,13 @@
 # OVR Dev AI Handoff
 
+Cloud ownership update (2026-11-01): the static landing-page project `ovr-landing` moved intact
+to `vialeighortega@gmail.com` in organization `772038913203`. Read
+[the migration decision](adr-cloud-account-migration-2026-11-01.md),
+[Terraform operations](https://github.com/jortega0033/cloud-infrastructure/tree/main/projects/open-vacancy-radar), and [AGENTS.md](../AGENTS.md) before cloud
+changes. Use `pnpm deploy:landing`; preserve free Spark/no-billing hosting. This does not migrate
+desktop workspaces or change the passive L1 loop's scope. The backlog review below retains its
+original review date.
+
 Last reviewed: 2026-09-19 (Europe/Amsterdam)  
 Repository: `jortega0033/open-vacancy-radar`  
 Baseline reviewed: `master` at `8dbaa2fa0c6b847d15df432a48c4ab3a0082cdae`

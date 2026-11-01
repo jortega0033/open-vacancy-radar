@@ -17,6 +17,7 @@
     "node": ">=22 <23"
   },
   "scripts": {
+    "deploy:landing": "firebase deploy --only hosting:landing --project ovr-landing --account vialeighortega@gmail.com",
     "preinstall": "node scripts/preflight.mjs",
     "build": "pnpm -r --filter=./packages/* --filter=./apps/* run build",
     "dev:daemon": "pnpm --filter @agent-dock/daemon run dev",
