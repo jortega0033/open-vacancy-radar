@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Ing. Kateřina Dvořáková Šindelářová", "confidence": "high", "evidence": "Ing. Kateřina Dvořáková Šindelářová"},
+"currentRole": {"value": "Hlavní účetní", "confidence": "high", "evidence": "Hlavní účetní, Moravské strojírny a.s., Brno"},
+"location": {"value": "Brno, Česká republika", "confidence": "high", "evidence": "Bydliště: Brno, Česká republika"},
+"primaryCountry": {"value": "Czech Republic", "confidence": "high", "evidence": "Brno, Česká republika"},
+"experienceYears": {"value": 10, "confidence": "high", "evidence": "Hlavní účetní s 10 lety praxe"},
+"languages": {"value": ["Czech", "English", "German"], "confidence": "high", "evidence": "Čeština (rodilý mluvčí), angličtina (B2), němčina (A2)"},
+"strongestSkills": {"value": ["SAP FI/CO", "IFRS", "Czech accounting standards", "Consolidation", "MS Excel"], "confidence": "high", "evidence": "měsíční a roční uzávěrky podle českých účetních standardů i IFRS"},
+"additionalSkills": {"value": ["Pohoda", "VAT", "Income tax", "Payroll", "Power BI"], "confidence": "high", "evidence": "SAP FI/CO, Pohoda, MS Excel"},
+"targetRoles": {"value": ["Chief Accountant", "Accounting Manager", "Financial Controller"], "confidence": "high", "evidence": "Hlavní účetní"},
+"consideredRoles": {"value": ["Senior Accountant"], "confidence": "low", "evidence": ""},
+"links": {"value": [], "confidence": "high", "evidence": ""},
+"summary": {"value": "Chief accountant with 10 years in manufacturing companies, responsible for month-end and year-end close under Czech standards and IFRS.", "confidence": "high", "evidence": "Hlavní účetní s 10 lety praxe v účetnictví výrobních firem"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

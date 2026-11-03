@@ -1,0 +1,40 @@
+{
+  "candidateName": "Jericho Dela Paz Manalastas",
+  "currentRole": ["Senior Customer Support Representative"],
+  "location": [
+    "Lapu-Lapu City, Cebu, Philippines",
+    "Lapu-Lapu City, Philippines",
+    "Cebu, Philippines"
+  ],
+  "primaryCountry": "Philippines",
+  "experienceYears": { "value": 8, "tolerance": 1 },
+  "languages": ["English", "Tagalog", "Cebuano"],
+  "skills": [
+    "Zendesk",
+    "Freshdesk",
+    "Salesforce Service Cloud",
+    "Google Workspace",
+    "De-escalation",
+    "Coaching"
+  ],
+  "skillsOptional": [
+    "Typing",
+    "Chat support",
+    "Voice support",
+    "Customer service",
+    "Training",
+    "Ticketing",
+    "Salesforce"
+  ],
+  "targetRoles": [
+    "Customer Support Team Lead",
+    "Team Lead",
+    "Customer Experience Team Lead",
+    "Senior Customer Support Representative",
+    "Customer Support Representative",
+    "Customer Service Representative",
+    "Customer Support Specialist",
+    "Support Team Lead"
+  ],
+  "links": []
+}

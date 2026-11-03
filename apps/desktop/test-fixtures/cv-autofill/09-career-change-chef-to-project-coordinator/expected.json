@@ -1,0 +1,41 @@
+{
+  "candidateName": "Daniel Okonkwo-Reyes",
+  "currentRole": ["Project Coordinator"],
+  "location": ["Toronto, ON, Canada", "Toronto, Canada", "Toronto, Ontario, Canada"],
+  "primaryCountry": "Canada",
+  "experienceYears": { "value": 12, "tolerance": 1 },
+  "languages": ["English", "Spanish", "Igbo"],
+  "skills": [
+    "Scheduling",
+    "Budgeting",
+    "Vendor management",
+    "Stakeholder communication",
+    "Asana",
+    "Smartsheet",
+    "Excel",
+    "MS Project",
+    "Team leadership",
+    "HACCP",
+    "Inventory management"
+  ],
+  "skillsOptional": [
+    "Project management",
+    "Menu planning",
+    "Purchasing",
+    "Status reporting",
+    "Cost control",
+    "Google Project Management Certificate",
+    "Food cost control"
+  ],
+  "targetRoles": [
+    "Project Coordinator",
+    "Junior Project Manager",
+    "Project Manager",
+    "Operations Coordinator",
+    "Construction Project Coordinator",
+    "Hospitality Project Coordinator",
+    "Assistant Project Manager",
+    "Operations Manager"
+  ],
+  "links": ["linkedin.com/in/example-daniel-okonkwo-reyes"]
+}

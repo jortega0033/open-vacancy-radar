@@ -1,0 +1,22 @@
+Amara Liesel Okafor
+Technical Writer - remote
+amara.okafor@example.com | amaraokafor-example.com
+
+Nationality: Nigerian and German (dual citizen). Work style: fully remote, async, across time zones.
+
+EXPERIENCE
+Senior Technical Writer, Driftwood Cloud (remote, US-based company), 2022 - present
+- Own the developer docs for 3 APIs (OpenAPI, Markdown, docs-as-code with Docusaurus)
+- Built the style guide and a review workflow in GitHub pull requests
+
+Technical Writer, Quillstack (remote, Berlin-based company), 2019 - 2022
+- Wrote SDK guides and release notes; migrated 400 pages from Confluence to MkDocs
+
+Support Engineer, Quillstack, 2017 - 2019
+- Answered API tickets; wrote the first troubleshooting articles
+
+SKILLS
+Technical writing, API documentation, OpenAPI, Markdown, Docusaurus, MkDocs, Git, GitHub, Confluence, Python (basic), information architecture, style guides
+
+LANGUAGES
+English (native), German (fluent), Yoruba (conversational)

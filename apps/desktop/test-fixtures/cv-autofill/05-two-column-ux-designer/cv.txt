@@ -1,0 +1,25 @@
+PRIYA NANDAKUMAR-HOLT                         CONTACT
+Product Designer                              London, United Kingdom
+                                              priya.nh@example.com
+EXPERIENCE                                    +44 7700 000005
+                                              priyanh-example.design
+Lead Product Designer        2022 - Present   linkedin.com/in/example-priya-nh
+Fernleaf Banking, London
+Leads design for the mobile savings app.      SKILLS
+Runs usability studies every sprint and       Figma
+owns the design system in Figma.              User research
+                                              Prototyping
+Product Designer             2018 - 2022      Design systems
+Kettle & Co (agency), London                  Usability testing
+Designed booking flows for travel and         Accessibility
+retail clients; prototyped in Figma and       Miro
+ProtoPie, handed off to React teams.          ProtoPie
+                                              HTML/CSS
+Junior UX Designer           2016 - 2018
+Northgate Council Digital, Leeds              LANGUAGES
+Redesigned resident forms; ran card           English (native)
+sorting and tree testing sessions.            Tamil (conversational)
+
+EDUCATION                                     INTERESTS
+BA Graphic Communication,                     Ceramics, bouldering
+University of Leeds, 2012 - 2016

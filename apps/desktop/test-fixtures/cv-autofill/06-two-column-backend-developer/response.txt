@@ -1,0 +1,15 @@
+{
+"candidateName": {"value": "Rafael Monteiro Quintas", "confidence": "high", "evidence": "Rafael Monteiro Quintas"},
+"currentRole": {"value": "Backend Engineer", "confidence": "high", "evidence": "Backend Engineer, Ledgerly, Lisbon"},
+"location": {"value": "Lisbon, Portugal", "confidence": "high", "evidence": "Lisbon, Portugal"},
+"primaryCountry": {"value": "Portugal", "confidence": "high", "evidence": "Lisbon, Portugal"},
+"experienceYears": {"value": 9, "confidence": "high", "evidence": "06/2017 - 12/2020"},
+"languages": {"value": ["Portuguese", "English", "Spanish"], "confidence": "high", "evidence": "Portuguese - native"},
+"strongestSkills": {"value": ["Go", "Java", "PostgreSQL", "Kafka", "Spring Boot"], "confidence": "high", "evidence": "Built the double-entry ledger in Go on"},
+"additionalSkills": {"value": ["Kotlin", "Docker", "Kubernetes", "AWS", "Terraform", "gRPC", "GitLab CI", "Python"], "confidence": "high", "evidence": "Terraform"},
+"targetRoles": {"value": ["Backend Engineer", "Senior Backend Engineer", "Go Developer"], "confidence": "high", "evidence": "Backend engineer building payment and"},
+"consideredRoles": {"value": ["Platform Engineer", "Java Developer"], "confidence": "low", "evidence": ""},
+"links": {"value": ["github.com/example-rquintas"], "confidence": "high", "evidence": "github.com/example-rquintas"},
+"summary": {"value": "Backend engineer building payment and ledger services in Go and Java.", "confidence": "high", "evidence": "ledger services in Go and Java"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}
+}

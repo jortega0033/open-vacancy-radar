@@ -1,0 +1,55 @@
+{
+  "candidateName": "Inês Carvalho Batista",
+  "currentRole": [
+    "E-commerce Consultant",
+    "Freelance E-commerce Consultant",
+    "E-commerce Specialist",
+    "Freelance E-commerce Specialist",
+    "E-commerce Marketing Consultant",
+    "Digital Marketing Consultant",
+    "Freelance Digital Marketing Consultant",
+    "Studio Owner",
+    "E-commerce Manager",
+    "Digital Marketing Specialist"
+  ],
+  "location": ["Porto, Portugal"],
+  "primaryCountry": "Portugal",
+  "experienceYears": { "value": 9, "tolerance": 1 },
+  "languages": ["Portuguese", "English", "German"],
+  "skills": [
+    "Shopify",
+    "WooCommerce",
+    "Google Ads",
+    "Meta Ads",
+    "Google Analytics 4",
+    "Mailchimp",
+    "Canva",
+    "Lightroom",
+    "WordPress",
+    "SEO"
+  ],
+  "skillsOptional": [
+    "Copywriting",
+    "Product photography",
+    "Email marketing",
+    "Social media",
+    "Instagram",
+    "Newsletter",
+    "ERP",
+    "E-commerce",
+    "Product copy"
+  ],
+  "targetRoles": [
+    "E-commerce Manager",
+    "E-commerce Specialist",
+    "E-commerce Consultant",
+    "Digital Marketing Manager",
+    "Digital Marketing Specialist",
+    "Performance Marketing Specialist",
+    "Online Marketing Manager",
+    "Marketing Manager",
+    "Digital Marketing Consultant",
+    "Social Media Manager"
+  ],
+  "links": ["inescb-example.pt"]
+}

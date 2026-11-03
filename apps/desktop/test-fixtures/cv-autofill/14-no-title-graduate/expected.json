@@ -1,0 +1,52 @@
+{
+  "candidateName": "Kwame Asante-Lindqvist",
+  "currentRole": [
+    "Data Intern",
+    "Data Science Intern",
+    "Data Science Graduate",
+    "MSc Data Science Student",
+    "Data Science Student",
+    "Graduate Data Scientist",
+    "Junior Data Scientist",
+    "Data Internship",
+    "Teaching Assistant",
+    "MSc Student"
+  ],
+  "location": ["Gothenburg, Sweden"],
+  "primaryCountry": "Sweden",
+  "experienceYears": { "value": 1, "tolerance": 1 },
+  "languages": ["English", "Twi", "Swedish"],
+  "skills": [
+    "Python",
+    "pandas",
+    "NumPy",
+    "scikit-learn",
+    "PyTorch",
+    "PyTorch Geometric",
+    "LightGBM",
+    "SQL",
+    "Streamlit",
+    "Git",
+    "Docker",
+    "GeoPandas"
+  ],
+  "skillsOptional": [
+    "Graph neural networks",
+    "Feature engineering",
+    "Machine learning",
+    "Forecasting",
+    "Data visualization",
+    "Kaggle"
+  ],
+  "targetRoles": [
+    "Junior Data Scientist",
+    "Data Scientist",
+    "Graduate Data Scientist",
+    "Machine Learning Engineer",
+    "Junior Machine Learning Engineer",
+    "Data Analyst",
+    "Junior Data Analyst",
+    "ML Engineer"
+  ],
+  "links": ["github.com/example-kwame-al"]
+}

@@ -1,0 +1,15 @@
+{
+"candidateName": {"value": "Daniel Okonkwo-Reyes", "confidence": "high", "evidence": "DANIEL OKONKWO-REYES"},
+"currentRole": {"value": "Project Coordinator", "confidence": "high", "evidence": "Project Coordinator, Maple & Ember Hospitality Group, Toronto"},
+"location": {"value": "Toronto, ON, Canada", "confidence": "high", "evidence": "Toronto, ON, Canada"},
+"primaryCountry": {"value": "Canada", "confidence": "high", "evidence": "Toronto, ON, Canada"},
+"experienceYears": {"value": 12, "confidence": "high", "evidence": "Line Cook, various restaurants, Toronto 2014 - 2016"},
+"languages": {"value": ["English", "Spanish", "Igbo"], "confidence": "high", "evidence": "English, Spanish (fluent), Igbo (basic)"},
+"strongestSkills": {"value": ["Scheduling", "Budgeting", "Vendor management", "Asana", "Smartsheet", "Team leadership"], "confidence": "high", "evidence": "Coordinate schedules, vendors and budgets"},
+"additionalSkills": {"value": ["Stakeholder communication", "Excel", "MS Project", "HACCP", "Inventory management", "Menu planning"], "confidence": "high", "evidence": "Scheduling, budgeting, vendor management"},
+"targetRoles": {"value": ["Project Coordinator", "Junior Project Manager", "Operations Coordinator"], "confidence": "high", "evidence": "I am moving into project coordination"},
+"consideredRoles": {"value": ["Kitchen Manager", "Food and Beverage Manager"], "confidence": "low", "evidence": "Executive Chef, Lakeshore Bistro"},
+"links": {"value": ["linkedin.com/in/example-daniel-okonkwo-reyes"], "confidence": "high", "evidence": "linkedin.com/in/example-daniel-okonkwo-reyes"},
+"summary": {"value": "Former executive chef now coordinating restaurant fit-out projects, holding the Google Project Management Certificate.", "confidence": "high", "evidence": "now coordinate fit-out projects for a restaurant group"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}
+}

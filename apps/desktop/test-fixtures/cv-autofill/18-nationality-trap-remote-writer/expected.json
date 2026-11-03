@@ -1,0 +1,35 @@
+{
+  "candidateName": "Amara Liesel Okafor",
+  "currentRole": ["Senior Technical Writer"],
+  "location": ["Remote"],
+  "primaryCountry": "",
+  "experienceYears": { "value": 9, "tolerance": 1 },
+  "languages": ["English", "German", "Yoruba"],
+  "skills": [
+    "Technical writing",
+    "API documentation",
+    "OpenAPI",
+    "Markdown",
+    "Docusaurus",
+    "MkDocs",
+    "Git",
+    "GitHub",
+    "Confluence",
+    "Python",
+    "Information architecture",
+    "Style guides"
+  ],
+  "skillsOptional": ["Docs-as-code", "Release notes", "SDK documentation", "Technical support"],
+  "targetRoles": [
+    "Senior Technical Writer",
+    "Technical Writer",
+    "Documentation Engineer",
+    "Developer Documentation Writer",
+    "Lead Technical Writer",
+    "API Technical Writer",
+    "Documentation Lead",
+    "Developer Advocate",
+    "Content Designer"
+  ],
+  "links": ["amaraokafor-example.com"]
+}

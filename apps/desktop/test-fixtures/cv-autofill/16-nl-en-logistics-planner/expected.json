@@ -1,0 +1,43 @@
+{
+  "candidateName": "Sander Hoogendijk",
+  "currentRole": ["Senior Transport Planner"],
+  "location": ["Eindhoven (NL)", "Eindhoven, Netherlands", "Eindhoven"],
+  "primaryCountry": "Netherlands",
+  "experienceYears": { "value": 13, "tolerance": 1 },
+  "languages": ["Dutch", "English", "German"],
+  "skills": [
+    "SAP SD",
+    "Transporeon",
+    "Excel",
+    "VBA",
+    "Power BI",
+    "Route planning",
+    "Carrier management",
+    "Incoterms",
+    "Lean Six Sigma"
+  ],
+  "skillsOptional": [
+    "TMS",
+    "SAP",
+    "Track and trace",
+    "Coaching",
+    "Order picking",
+    "Reach truck",
+    "Planning",
+    "FTL",
+    "LTL"
+  ],
+  "targetRoles": [
+    "Senior Transport Planner",
+    "Transport Planner",
+    "Logistics Planner",
+    "Senior Logistics Planner",
+    "Transport Manager",
+    "Logistics Coordinator",
+    "Supply Chain Planner",
+    "Team Lead Planning",
+    "Planning Team Lead",
+    "Logistics Manager"
+  ],
+  "links": ["linkedin.com/in/example-sander-hoogendijk"]
+}

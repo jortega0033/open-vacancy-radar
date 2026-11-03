@@ -1,0 +1,41 @@
+{
+  "candidateName": "Elodie Vermeersch",
+  "currentRole": [
+    "Junior Full-Stack Developer",
+    "Junior Full-Stack Developer (traineeship)",
+    "Junior Fullstack Developer"
+  ],
+  "location": ["Gent, België", "Ghent, Belgium", "Gent, Belgium"],
+  "primaryCountry": "Belgium",
+  "experienceYears": { "value": 10, "tolerance": 1 },
+  "languages": ["Dutch", "French", "English"],
+  "skills": [
+    "React",
+    "Express",
+    "PostgreSQL",
+    "Prisma",
+    "Jest",
+    "Docker",
+    "JavaScript",
+    "TypeScript",
+    "Node.js",
+    "SQL",
+    "Git",
+    "Next.js",
+    "Supabase",
+    "Firebase"
+  ],
+  "skillsOptional": ["Smartschool", "Teaching", "Mathematics", "Unit testing"],
+  "targetRoles": [
+    "Junior Full-Stack Developer",
+    "Junior Developer",
+    "Junior Web Developer",
+    "Full-Stack Developer",
+    "Junior Frontend Developer",
+    "Web Developer",
+    "Junior Software Developer",
+    "Junior React Developer",
+    "Frontend Developer"
+  ],
+  "links": ["github.com/example-elodiev", "elodiev-example.github.io"]
+}

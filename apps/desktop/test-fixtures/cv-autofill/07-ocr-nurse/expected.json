@@ -1,0 +1,50 @@
+{
+  "candidateName": "Siobhan M. O'Rourke-Byrne",
+  "currentRole": [
+    "Clinical Nurse Manager 1",
+    "Clinical Nurse Manager",
+    "CNM1",
+    "Clinical Nurse Manager 1 (CNM1)"
+  ],
+  "location": ["Drumcondra, Dublin 9, Ireland", "Dublin, Ireland", "Dublin 9, Ireland"],
+  "primaryCountry": "Ireland",
+  "experienceYears": { "value": 12, "tolerance": 1 },
+  "languages": ["English", "Irish"],
+  "skills": [
+    "Triage",
+    "Manchester Triage System",
+    "Wound care",
+    "Medication administration",
+    "IV cannulation",
+    "Venepuncture",
+    "ACLS",
+    "BLS",
+    "HealthRoster",
+    "Sepsis management",
+    "Roster planning",
+    "Team management"
+  ],
+  "skillsOptional": [
+    "Manual handling",
+    "Patient assessment",
+    "BLS Instructor",
+    "Emergency nursing",
+    "Acute medicine",
+    "Training",
+    "Leadership",
+    "Venepuncture & IV Cannulation"
+  ],
+  "targetRoles": [
+    "Clinical Nurse Manager",
+    "Clinical Nurse Manager 1",
+    "Clinical Nurse Manager 2",
+    "Nurse Manager",
+    "Registered General Nurse",
+    "Staff Nurse",
+    "Emergency Nurse",
+    "Senior Staff Nurse",
+    "Ward Manager",
+    "Nurse"
+  ],
+  "links": []
+}

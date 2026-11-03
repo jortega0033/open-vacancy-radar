@@ -1,0 +1,15 @@
+```
+{"candidateName": {"value": "Valeria Guadalupe Ríos Treviño", "confidence": "high", "evidence": "Valeria Guadalupe Ríos Treviño"},
+"currentRole": {"value": "Diseñadora Gráfica Senior", "confidence": "high", "evidence": "Diseñadora Gráfica Senior · Estudio Agave Creativo"},
+"location": {"value": "Guadalajara, Jalisco, México", "confidence": "high", "evidence": "Guadalajara, Jalisco, México"},
+"primaryCountry": {"value": "Mexico", "confidence": "high", "evidence": "Guadalajara, Jalisco, México"},
+"experienceYears": {"value": 9, "confidence": "high", "evidence": "Diseñadora Junior (freelance) · 2017 - 2018"},
+"languages": {"value": ["Spanish", "English"], "confidence": "high", "evidence": "Español (nativo), Inglés (intermedio B2)"},
+"strongestSkills": {"value": ["Adobe Illustrator", "Photoshop", "InDesign", "Branding", "Packaging design"], "confidence": "high", "evidence": "Identidades de marca para 30+ clientes"},
+"additionalSkills": {"value": ["After Effects", "Figma", "Procreate", "Typography", "Illustration"], "confidence": "high", "evidence": "Adobe Illustrator, Photoshop, InDesign, After Effects, Figma, Procreate"},
+"targetRoles": {"value": ["Senior Graphic Designer", "Brand Designer", "Packaging Designer"], "confidence": "high", "evidence": "Diseñadora Gráfica Senior"},
+"consideredRoles": {"value": ["Art Director"], "confidence": "low", "evidence": ""},
+"links": {"value": ["behance.net/example-valeria-rios"], "confidence": "high", "evidence": "behance.net/example-valeria-rios"},
+"summary": {"value": "Graphic designer with 8 years of brand identity, packaging and social media work in Guadalajara.", "confidence": "high", "evidence": "Diseñadora con 8 años creando identidades de marca"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}
+```

@@ -1,0 +1,15 @@
+{
+"candidateName": {"value": "Siobhan M. O'Rourke-Byrne", "confidence": "high", "evidence": "Siobhan  M. O'Rourke-Byrne"},
+"currentRole": {"value": "Clinical Nurse Manager 1 (CNM1)", "confidence": "high", "evidence": "Clinical Nurse Manager 1 (CNM1) - Acute Medical Unit"},
+"location": {"value": "Drumcondra, Dublin 9, Ireland", "confidence": "high", "evidence": "Drumcondra, Dublin 9, Ireland"},
+"primaryCountry": {"value": "Ireland", "confidence": "high", "evidence": "Dublin 9, Ireland"},
+"experienceYears": {"value": 12, "confidence": "high", "evidence": "Sep 2014 - Jan 2020"},
+"languages": {"value": ["English", "Irish"], "confidence": "high", "evidence": "Irish (fluent)"},
+"strongestSkills": {"value": ["Triage", "Manchester Triage System", "IV cannulation", "Sepsis management", "Team management"], "confidence": "high", "evidence": "Triage using Manchester Triage System"},
+"additionalSkills": {"value": ["Wound care", "ACLS", "BLS Instructor", "Venepuncture", "HealthRoster", "Manual Handling"], "confidence": "high", "evidence": "ACLS, BLS Instructor, Manual Handling"},
+"targetRoles": {"value": ["Clinical Nurse Manager", "Nurse Manager", "Emergency Nurse"], "confidence": "high", "evidence": "Clinical Nurse Manager 1"},
+"consideredRoles": {"value": ["Clinical Nurse Educator"], "confidence": "low", "evidence": "IV cannu1ation training"},
+"links": {"value": [], "confidence": "high", "evidence": ""},
+"summary": {"value": "Registered general nurse managing an acute medical unit, with six years of emergency department experience.", "confidence": "high", "evidence": "Manage a 28-bed unit"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}
+}

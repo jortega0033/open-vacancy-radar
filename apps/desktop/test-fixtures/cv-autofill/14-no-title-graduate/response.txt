@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Kwame Asante-Lindqvist", "confidence": "high", "evidence": "Kwame Asante-Lindqvist"},
+"currentRole": {"value": "Data Science Graduate", "confidence": "low", "evidence": "MSc Data Science and AI, Chalmers University of Technology, 2024 - 2026"},
+"location": {"value": "Gothenburg, Sweden", "confidence": "high", "evidence": "Gothenburg, Sweden"},
+"primaryCountry": {"value": "Sweden", "confidence": "high", "evidence": "Gothenburg, Sweden"},
+"experienceYears": {"value": 1, "confidence": "low", "evidence": "2023 - 2024: teaching assistant for Linear Algebra"},
+"languages": {"value": ["English", "Twi", "Swedish"], "confidence": "high", "evidence": "English (fluent), Twi (native), Swedish (A2)"},
+"strongestSkills": {"value": ["Python", "pandas", "PyTorch", "PyTorch Geometric", "scikit-learn", "LightGBM"], "confidence": "high", "evidence": "Forecasting tram delays with graph neural networks (PyTorch Geometric)"},
+"additionalSkills": {"value": ["NumPy", "SQL", "Streamlit", "Git", "Docker", "GeoPandas", "Feature engineering"], "confidence": "high", "evidence": "Python, pandas, NumPy, scikit-learn"},
+"targetRoles": {"value": ["Junior Data Scientist", "Machine Learning Engineer", "Data Analyst"], "confidence": "low", "evidence": "MSc Data Science and AI"},
+"consideredRoles": {"value": ["Transport Data Analyst"], "confidence": "low", "evidence": "built a delay dashboard in Streamlit"},
+"links": {"value": ["github.com/example-kwame-al"], "confidence": "high", "evidence": "github.com/example-kwame-al"},
+"summary": {"value": "Data science master's graduate from Chalmers with a transport data internship and a forecasting focus.", "confidence": "high", "evidence": "Thesis: Forecasting tram delays with graph neural networks"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}
