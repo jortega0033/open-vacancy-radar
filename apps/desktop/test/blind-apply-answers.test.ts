@@ -83,6 +83,27 @@ describe('exact-label matching', () => {
     expect(validate(snapshot, mapping).ok).toBe(true);
   });
 
+  it('reads the identifiers the executor really reports -- camelCase and snake_case names -- as the same labels', () => {
+    const name = field('fullName', 'text', { required: true });
+    const email = field('email_address', 'text', { required: true });
+    const location = field('current_location', 'text', { required: true });
+    const linkedin = field('linkedInUrl', 'text');
+    const mapping = map(snapshotOf(name, email, location, linkedin));
+    expect(valueOf(mapping, name.fieldRef)).toBe('Ada Synthetic');
+    expect(valueOf(mapping, email.fieldRef)).toBe('ada@example.invalid');
+    expect(valueOf(mapping, location.fieldRef)).toBe('Lisbon');
+    expect(valueOf(mapping, linkedin.fieldRef)).toBe('https://www.linkedin.com/in/ada-synthetic');
+  });
+
+  it('applies the never-fill rules to identifiers as well as to prose labels', () => {
+    const code = field('verificationCode', 'text', { required: true });
+    const gender = field('applicant_gender', 'text', { required: true });
+    const mapping = map(snapshotOf(code, gender));
+    expect(mapping.fieldMap.assignments).toEqual([]);
+    expect(mapping.interventions).toEqual([{ kind: 'verification_code', label: 'verificationCode' }]);
+    expect(mapping.missing.map((entry) => entry.label)).toEqual(['applicant_gender']);
+  });
+
   it('never fills a field whose label merely contains a known label', () => {
     const manager = field('Name of your manager', 'text', { required: true });
     const emailOfReferrer = field("Referrer's email address", 'text', { required: true });
@@ -183,7 +204,14 @@ describe('select answers', () => {
     const mapping = map(snapshot);
     expect(mapping.fieldMap.assignments).toEqual([]);
     expect(mapping.missing).toEqual([
-      { fieldRef: arrangement.fieldRef, label: 'Preferred work arrangement', controlType: 'select', options: ['Remote', 'Hybrid', 'On-site'] },
+      {
+        fieldRef: arrangement.fieldRef,
+        label: 'Preferred work arrangement',
+        controlType: 'select',
+        options: ['Remote', 'Hybrid', 'On-site'],
+        // The hash covers the page's FULL option list (placeholder included): it is what an answer is tied to.
+        optionSetHash: optionSetHashOf(OPTIONS),
+      },
     ]);
   });
 

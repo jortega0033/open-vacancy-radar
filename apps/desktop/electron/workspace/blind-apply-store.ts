@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { WorkspaceDb } from './client.js';
+import { normalizeEmployerName } from './application-identity.js';
+import { applications } from './schema.js';
 import {
   blindApplyAnswers,
   blindApplyAuthorizations,
@@ -156,6 +158,8 @@ export interface BlindApplyEventInput {
 /** What a transition may change on the item besides its state. Anything not named is left alone. */
 export interface BlindApplyItemPatch {
   stateDetail?: string;
+  /** Why an item was skipped. Only meaningful when moving to `skipped`. */
+  skipReason?: BlindApplySkipReason;
   attemptId?: string | null;
   intervention?: BlindApplyIntervention | null;
   missingFields?: BlindApplyMissingField[] | null;
@@ -431,6 +435,7 @@ export function transitionBlindApplyItem(
         state: to,
         updatedAt: now,
         ...(patch.stateDetail !== undefined ? { stateDetail: patch.stateDetail } : {}),
+        ...(patch.skipReason !== undefined ? { skipReason: patch.skipReason } : {}),
         ...(patch.attemptId !== undefined ? { attemptId: patch.attemptId } : {}),
         // Cleared on every transition unless the patch names it, so a stale "needs a captcha" never
         // survives into the state after the person dealt with it.
@@ -497,7 +502,8 @@ export function listBlindApplyEvents(db: WorkspaceDb, itemId: string): BlindAppl
     .select()
     .from(blindApplyEvents)
     .where(eq(blindApplyEvents.itemId, itemId))
-    .orderBy(asc(blindApplyEvents.at), asc(blindApplyEvents.id))
+    // Insertion order breaks ties between events written in the same millisecond.
+    .orderBy(asc(blindApplyEvents.at), sql`rowid`)
     .all()
     .map(toEvent);
 }
@@ -552,6 +558,11 @@ export function blindAnswerKey(label: string, controlType: 'text' | 'textarea' |
   return `${controlType}::${normalizeBlindLabel(label)}::${optionSetHash ?? ''}`;
 }
 
+/** A one-time answer belongs to the single item it was given for; it can never match another form. */
+export function scopedBlindAnswerKey(matchKey: string, itemId: string): string {
+  return `${matchKey}::item:${itemId}`;
+}
+
 export function findBlindApplyAnswer(db: WorkspaceDb, matchKey: string): BlindApplyAnswerRecord | null {
   const row = db.select().from(blindApplyAnswers).where(eq(blindApplyAnswers.matchKey, matchKey)).get();
   return row ? toAnswer(row) : null;
@@ -566,8 +577,15 @@ export interface BlindApplyAnswerInput {
 
 /** Upserts the one remembered answer for a question. Only ever called from the person's own answer to a
  * `needs_answer` card with "remember" ticked. */
-export function saveBlindApplyAnswer(db: WorkspaceDb, input: BlindApplyAnswerInput, now: Date = new Date()): BlindApplyAnswerRecord {
-  const matchKey = blindAnswerKey(input.label, input.controlType, input.optionSetHash);
+export function saveBlindApplyAnswer(
+  db: WorkspaceDb,
+  input: BlindApplyAnswerInput,
+  now: Date = new Date(),
+  /** When set, the answer is for this one item only (the person did not tick "remember"). */
+  scopeItemId?: string,
+): BlindApplyAnswerRecord {
+  const baseKey = blindAnswerKey(input.label, input.controlType, input.optionSetHash);
+  const matchKey = scopeItemId ? scopedBlindAnswerKey(baseKey, scopeItemId) : baseKey;
   const [row] = db
     .insert(blindApplyAnswers)
     .values({ matchKey, label: input.label, controlType: input.controlType, answer: input.answer, optionSetHash: input.optionSetHash, createdAt: now })
@@ -580,6 +598,28 @@ export function saveBlindApplyAnswer(db: WorkspaceDb, input: BlindApplyAnswerInp
 
 export function recordBlindApplyAnswerUsed(db: WorkspaceDb, id: string, now: Date = new Date()): void {
   db.update(blindApplyAnswers).set({ lastUsedAt: now }).where(eq(blindApplyAnswers.id, id)).run();
+}
+
+// -------------------------------------------------------------------------- manual tracker rows
+
+/**
+ * Whether a row the person entered into the Applications tracker by hand already covers this employer
+ * and role (#722). The attempt tables cannot see such a row -- no attempt stands behind it -- so
+ * without this a Blind submission could go to a job the person already applied for themselves.
+ * Compared on the same normalized employer name the attempt identity uses, and on the role lowercased
+ * with spacing folded; a row still only being `preparing` is the pipeline's own and is not a claim.
+ */
+export function findManualApplicationDuplicate(db: WorkspaceDb, company: string, role: string): string | null {
+  const wantedCompany = normalizeEmployerName(company);
+  const wantedRole = normalizeBlindLabel(role);
+  if (wantedCompany === '' || wantedRole === '') return null;
+  const rows = db
+    .select({ id: applications.id, company: applications.company, role: applications.role })
+    .from(applications)
+    .where(ne(applications.status, 'preparing'))
+    .all();
+  const hit = rows.find((row) => normalizeEmployerName(row.company) === wantedCompany && normalizeBlindLabel(row.role) === wantedRole);
+  return hit ? hit.id : null;
 }
 
 // ------------------------------------------------------------------------------------- reset

@@ -1892,6 +1892,66 @@ describe('acceptance 6: an abandoned preparation frees the lease and cannot writ
   });
 });
 
+describe('Blind Apply attempts are never mapped by a model (#722)', () => {
+  async function startBlindAttempt(): Promise<string> {
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY, workflowVersion: pipeline.BLIND_APPLY_WORKFLOW_VERSION });
+    if (!started.ok || !started.attemptId) throw new Error(`start refused: ${started.reason ?? 'unknown'}`);
+    expect(workspace.getApplicationAttempt(db, started.attemptId).workflowVersion).toBe(pipeline.BLIND_APPLY_WORKFLOW_VERSION);
+    queueApplicationDocumentRenders();
+    return started.attemptId;
+  }
+
+  it('without a deterministic mapper the form step stops for the person and the generation session is never asked', async () => {
+    const attemptId = await startBlindAttempt();
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain('answer mapper is not available');
+    expect(generateFieldMap).not.toHaveBeenCalled();
+    expect(insertedText()).toEqual([]);
+  });
+
+  it('a mapper that refuses stops the form step with its own reason; nothing is typed and no model is asked', async () => {
+    const attemptId = await startBlindAttempt();
+    const deterministicFieldMap = vi.fn(() => ({ ok: false as const, detail: 'Blind Apply paused: it needs one answer from you' }));
+    const ticked = await pipeline.runNextApplicationAttempt({ ...deps, deterministicFieldMap });
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(deterministicFieldMap).toHaveBeenCalledTimes(1);
+    expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe('Blind Apply paused: it needs one answer from you');
+    expect(generateFieldMap).not.toHaveBeenCalled();
+    expect(insertedText()).toEqual([]);
+  });
+
+  it('the real exact-label mapper never guesses at labels it does not know, and never ticks the consent box', async () => {
+    const attemptId = await startBlindAttempt();
+    const { mapBlindApplyAnswers } = await import('../electron/blind-apply-answers.js');
+    const deterministicFieldMap = vi.fn((input: Parameters<NonNullable<ApplicationPipelineDeps['deterministicFieldMap']>>[0]) => {
+      const mapping = mapBlindApplyAnswers({
+        attemptId: input.attempt.id,
+        snapshot: input.snapshot,
+        valueTable: input.valueTable,
+        artifacts: input.artifacts,
+        findSavedAnswer: () => null,
+      });
+      return mapping.missing.length + mapping.interventions.length > 0
+        ? { ok: false as const, detail: 'Blind Apply paused: a question has no stored answer' }
+        : { ok: true as const, fieldMap: mapping.fieldMap, valueTable: mapping.valueTable };
+    });
+    await pipeline.runNextApplicationAttempt({ ...deps, deterministicFieldMap });
+
+    expect(deterministicFieldMap).toHaveBeenCalledTimes(1);
+    expect(workspace.getApplicationAttempt(db, attemptId).checkpoint).toBe('needs_user');
+    expect(generateFieldMap).not.toHaveBeenCalled();
+    expect(insertedText()).toEqual([]);
+  });
+
+  it('the reviewed pipeline is unchanged: an ordinary attempt still asks the generation session', async () => {
+    await prepareOneApplication();
+    expect(generateFieldMap).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('start refusals', () => {
   it('refuses a vacancy with no application URL', async () => {
     const result = await pipeline.startApplicationAttempt(deps, { vacancy: { ...VACANCY, applyUrl: '' } });

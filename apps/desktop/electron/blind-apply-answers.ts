@@ -4,6 +4,7 @@ import {
   APPLICATION_VALUE_LABEL_SYNONYMS,
   chooseArtifactForField,
   normalizeFieldLabel,
+  squashFieldLabel,
   type ApplicationValueTableEntry,
 } from './application-value-table.js';
 import type { BlindApplyAnswerUse, BlindApplyIntervention, BlindApplyMissingField } from './workspace/blind-apply-schema.js';
@@ -85,7 +86,7 @@ function buildSynonymIndex(valueTable: readonly ApplicationValueTableEntry[]): M
   const index = new Map<string, ApplicationValueTableEntry>();
   for (const entry of valueTable) {
     for (const synonym of APPLICATION_VALUE_LABEL_SYNONYMS[entry.label] ?? []) {
-      if (!index.has(synonym)) index.set(synonym, entry);
+      if (!index.has(squashFieldLabel(synonym))) index.set(squashFieldLabel(synonym), entry);
     }
   }
   return index;
@@ -123,7 +124,12 @@ export function mapBlindApplyAnswers(input: BlindAnswerMapperInput): BlindAnswer
       fieldRef: field.fieldRef,
       label: field.label,
       controlType,
-      ...(field.options ? { options: field.options.filter((option) => !isPlaceholderOption(option.label)).map((option) => option.label) } : {}),
+      ...(field.options
+        ? {
+            options: field.options.filter((option) => !isPlaceholderOption(option.label)).map((option) => option.label),
+            optionSetHash: optionSetHashOf(field.options.map((option) => option.label)),
+          }
+        : {}),
     });
   };
 
@@ -185,7 +191,7 @@ export function mapBlindApplyAnswers(input: BlindAnswerMapperInput): BlindAnswer
     const demographic = DEMOGRAPHIC_LABEL.test(label);
 
     if (!demographic && !ambiguous) {
-      const entry = synonyms.get(label);
+      const entry = synonyms.get(squashFieldLabel(field.label));
       if (entry) {
         assignments.push({ fieldRef: field.fieldRef, source: { kind: 'value', valueRef: entry.valueRef } });
         uses.push({ label: field.label, provenance: entry.provenance === 'profile' ? 'profile' : 'cv' });

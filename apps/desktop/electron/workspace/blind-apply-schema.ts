@@ -67,6 +67,8 @@ export interface BlindApplyMissingField {
   controlType: 'text' | 'textarea' | 'select';
   /** Present for a select: the option labels the page offered. Display data from the employer page. */
   options?: string[];
+  /** Present for a select: a hash of the page's FULL option list, which an answer to this card is tied to. */
+  optionSetHash?: string;
 }
 
 /** What the gates decided and on what evidence, stored verbatim with the item. */

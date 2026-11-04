@@ -152,17 +152,31 @@ export const APPLICATION_VALUE_LABEL_SYNONYMS: Readonly<Record<string, readonly 
   'GitHub profile URL': ['github', 'github url', 'github profile', 'github profile url'],
 };
 
-/** A field label reduced for exact comparison: case, accents, spacing and the "required" decoration
- * a page adds (a trailing asterisk, "(required)", "(optional)") are not part of the question. */
+/**
+ * A field label reduced for exact comparison. The executor labels a field by its `aria-label`, then
+ * `placeholder`, then `name`, then `id` -- not by visible label text -- so the same question reaches
+ * this app as "Full name", "full_name", "fullName" or "applicant[full-name]". Word boundaries marked by
+ * camelCase, underscores, hyphens, dots or brackets are therefore turned into spaces first, and case,
+ * accents, spacing and the "required" decoration a page adds (an asterisk, "(required)", "(optional)")
+ * are dropped. Nothing else is folded: this is whole-label equality, never a similarity.
+ */
 export function normalizeFieldLabel(label: string): string {
   return label
     .normalize('NFKD')
     .replace(/\p{Diacritic}/gu, '')
+    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .replace(/[_\-.[\]]+/gu, ' ')
     .toLowerCase()
     .replace(/\((?:required|optional)\)/gu, ' ')
     .replace(/[*:]+/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim();
+}
+
+/** `normalizeFieldLabel` with the spaces removed, so "LinkedIn", "linked_in" and "Linked In" are one
+ * label. Still whole-string equality: "name of your manager" never squashes to "name". */
+export function squashFieldLabel(label: string): string {
+  return normalizeFieldLabel(label).replace(/\s+/gu, '');
 }
 
 /**
@@ -418,6 +432,19 @@ export function summarisePreparedFields(input: SummarisePreparedFieldsInput): Pr
         fields.push({ ...base, status: 'committed', value: entry.value, provenance: entry.provenance });
         continue;
       }
+    }
+
+    // #722: a deterministic Blind Apply map may commit a select to an option the person themselves
+    // chose earlier (a remembered answer). The reviewed pipeline never reaches this: it strips every
+    // `option` assignment into `input.optionFieldRefs` first, so for it this branch is never taken.
+    if (assignment && assignment.source.kind === 'option' && !options.has(field.fieldRef)) {
+      const chosen = field.options?.find((option) => assignment.source.kind === 'option' && option.optionRef === assignment.source.optionRef);
+      if (chosen && !blockedFieldRefs.has(field.fieldRef)) {
+        fields.push({ ...base, status: 'committed', value: chosen.label, provenance: 'user_answer' });
+        continue;
+      }
+      fields.push({ ...base, status: 'awaiting_you', detail: 'this app chose an option here, but the page did not confirm it' });
+      continue;
     }
 
     if (options.has(field.fieldRef) || field.controlType === 'select' || field.controlType === 'radio') {

@@ -2283,6 +2283,26 @@ export function findCompletedApplications(
   return identityMatches(rows, lookupIdentity(input)).map(toCompletedMatch);
 }
 
+/**
+ * Whether any attempt at this identity is in flight, waiting on a person, or already reached the
+ * employer (#722). Blind Apply asks this before spending any work, using the very same identity rules
+ * `createApplicationAttempt` enforces transactionally -- that throw stays the race-safe backstop. Reports
+ * the attempt's id and checkpoint only, never the company, role or URL.
+ */
+export function findInFlightOrCompletedApplication(
+  db: WorkspaceDb,
+  input: ApplicationIdentityQuery,
+): { attemptId: string; checkpoint: ApplicationAttemptCheckpoint } | undefined {
+  const rows = db
+    .select(COMPLETED_MATCH_COLUMNS)
+    .from(applicationAttempts)
+    .where(inArray(applicationAttempts.checkpoint, [...NON_TERMINAL_ATTEMPT_CHECKPOINTS, ...COMPLETED_ATTEMPT_CHECKPOINTS]))
+    .orderBy(desc(applicationAttempts.createdAt))
+    .all();
+  const hit = identityMatches(rows, lookupIdentity(input))[0];
+  return hit ? { attemptId: hit.row.id, checkpoint: hit.row.checkpoint } : undefined;
+}
+
 /** The newest completed application at this identity, or undefined when there is none. */
 export function findCompletedApplication(
   db: WorkspaceDb,
