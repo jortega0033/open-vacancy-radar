@@ -348,14 +348,17 @@ export function VacancyDetail({
             )}
           </div>
 
-          <div className="flex max-w-full flex-none flex-wrap gap-2">
+          {/* #657 owner steering (2026-10-30): one primary Apply action. Saving for later, the CV
+              comparison and the posting link stay one Tab away in a visibly secondary group. */}
+          <div className="flex max-w-full flex-none flex-col items-start gap-2">
             <div className="flex flex-col gap-1">
               <button
                 className="btn btn-primary btn-sm whitespace-normal"
                 type="button"
+                data-apply-opener=""
                 onClick={onPrepare}
                 disabled={prepareState === 'preparing' || !prepareAvailable || closed}
-                {...(closed ? { 'aria-describedby': 'posting-closed-note' } : {})}
+                aria-describedby={closed ? 'posting-closed-note' : 'apply-draft-note'}
               >
                 {prepareState === 'preparing' && (
                   <span className="loading loading-spinner loading-xs" aria-hidden="true" />
@@ -363,7 +366,7 @@ export function VacancyDetail({
                 {prepareState === 'preparing'
                   ? 'Starting…'
                   : prepareAvailable
-                    ? 'Get ready to apply'
+                    ? 'Apply'
                     : 'Finishing scan…'}
               </button>
               {closed ? (
@@ -381,44 +384,48 @@ export function VacancyDetail({
                   )}
                 </div>
               ) : (
-                <div className="text-xs text-base-content/60">Builds a draft for you to review. Nothing is sent.</div>
+                <div id="apply-draft-note" className="text-xs text-base-content/60">
+                  Builds a draft for you to review. Nothing is sent.
+                </div>
               )}
             </div>
-            <button
-              className="btn btn-outline btn-sm whitespace-normal"
-              type="button"
-              onClick={onSave}
-              disabled={saveState !== 'idle'}
-            >
-              {saveState === 'saving' && (
-                <span
-                  className="loading loading-spinner loading-xs text-base-content"
-                  aria-hidden="true"
-                />
-              )}
-              {saveState === 'saved' ? 'Saved' : 'Save job'}
-            </button>
-            <button
-              className="btn btn-outline btn-sm whitespace-normal"
-              type="button"
-              ref={openerRef}
-              aria-expanded={assistantOpen}
-              onClick={handleToggleAssistant}
-            >
-              {assistantOpen ? ASSISTANT_TOGGLE_LABELS.close : ASSISTANT_TOGGLE_LABELS.open}
-            </button>
-            {isWebUrl(result.url) ? (
-              <a
-                className="btn btn-outline btn-sm whitespace-normal"
-                href={result.url}
-                target="_blank"
-                rel="noopener noreferrer"
+            <div role="group" aria-label="More for this vacancy" className="flex flex-wrap items-center gap-1">
+              <button
+                className="btn btn-ghost btn-sm whitespace-normal"
+                type="button"
+                onClick={onSave}
+                disabled={saveState !== 'idle'}
               >
-                Open posting
-              </a>
-            ) : (
-              <span className="badge badge-outline badge-sm">Link not available</span>
-            )}
+                {saveState === 'saving' && (
+                  <span
+                    className="loading loading-spinner loading-xs text-base-content"
+                    aria-hidden="true"
+                  />
+                )}
+                {saveState === 'saved' ? 'Saved' : 'Save job'}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm whitespace-normal"
+                type="button"
+                ref={openerRef}
+                aria-expanded={assistantOpen}
+                onClick={handleToggleAssistant}
+              >
+                {assistantOpen ? ASSISTANT_TOGGLE_LABELS.close : ASSISTANT_TOGGLE_LABELS.open}
+              </button>
+              {isWebUrl(result.url) ? (
+                <a
+                  className="btn btn-ghost btn-sm whitespace-normal"
+                  href={result.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open posting
+                </a>
+              ) : (
+                <span className="badge badge-outline badge-sm">Link not available</span>
+              )}
+            </div>
           </div>
         </div>
 

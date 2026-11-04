@@ -284,6 +284,15 @@ export function App() {
 
   const handleBackToVacancy = useCallback((vacancy: SelectedVacancy) => {
     hasNavigatedRef.current = true;
+    // #657: a letter written for the application open on Search goes back to that same workspace,
+    // which the Search session kept open while Letters was showing.
+    if (letterReturnAttemptId && searchSession.applyAttemptId === letterReturnAttemptId) {
+      setLetterReturnAttemptId(null);
+      setNav('search');
+      void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
+      void refreshCounts();
+      return;
+    }
     if (letterReturnAttemptId) {
       setApplicationAttemptToOpen(letterReturnAttemptId);
       setLetterReturnAttemptId(null);
@@ -296,7 +305,7 @@ export function App() {
     setNav('search');
     void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
     void refreshCounts();
-  }, [letterReturnAttemptId, refreshCounts]);
+  }, [letterReturnAttemptId, refreshCounts, searchSession.applyAttemptId]);
 
   const handleViewApplicationAttempt = useCallback((attemptId: string) => {
     hasNavigatedRef.current = true;
@@ -305,6 +314,23 @@ export function App() {
     void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
     void refreshCounts();
   }, [refreshCounts]);
+
+  // A click on the "Application ready" notification (#657). Main has already shown and focused the
+  // window. On Search the workspace opens in place, so the happy path never leaves Search; from any
+  // other page it opens under Ready to apply.
+  const navRef = useRef(nav);
+  navRef.current = nav;
+  useEffect(() => {
+    const subscribe = window.applicationPipeline?.onOpenAttempt;
+    if (typeof subscribe !== 'function') return undefined;
+    return subscribe((attemptId) => {
+      if (navRef.current === 'search') {
+        setSearchSession((current) => ({ ...current, applyAttemptId: attemptId }));
+        return;
+      }
+      handleViewApplicationAttempt(attemptId);
+    });
+  }, [handleViewApplicationAttempt]);
 
   const handleCancelScheduledSend = useCallback(
     async (attempt: ApplicationAttemptRecord): Promise<CancelScheduledOutcome> => {
@@ -525,7 +551,8 @@ export function App() {
             <SearchPage
               onOpenSearchProfile={handleOpenSearchProfile}
               onSavedJobsChanged={refreshCounts}
-              onViewApplicationAttempt={handleViewApplicationAttempt}
+              onGenerateLetter={handleGenerateApplicationLetter}
+              onViewFinishedAttempt={handleViewApplicationAttempt}
               session={searchSession}
               onSessionChange={setSearchSession}
               handoff={searchHandoff}

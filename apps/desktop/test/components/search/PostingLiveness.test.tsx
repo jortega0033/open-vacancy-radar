@@ -189,7 +189,7 @@ describe('vacancy detail: liveness line and the primary action', () => {
 
   it('a closed posting cannot use the primary action; the override is a separate, secondary button', () => {
     const handlers = renderDetail(live('a', 'closed'));
-    const primary = screen.getByRole('button', { name: 'Get ready to apply' });
+    const primary = screen.getByRole('button', { name: 'Apply' });
     expect(primary).toBeDisabled();
     expect(primary).toHaveAccessibleDescription('This posting looks closed or removed.');
     fireEvent.click(primary);
@@ -204,7 +204,7 @@ describe('vacancy detail: liveness line and the primary action', () => {
 
   it.each(['open', 'not_checked', 'unverifiable'] as const)('a %s posting keeps the primary action and offers no override', (state) => {
     const handlers = renderDetail(live('a', state));
-    const primary = screen.getByRole('button', { name: 'Get ready to apply' });
+    const primary = screen.getByRole('button', { name: 'Apply' });
     expect(primary).toBeEnabled();
     fireEvent.click(primary);
     expect(handlers.onPrepare).toHaveBeenCalledTimes(1);

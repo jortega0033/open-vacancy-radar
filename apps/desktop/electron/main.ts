@@ -1491,6 +1491,18 @@ function createTray(): void {
   });
 }
 
+/**
+ * #657: a click on the "Application ready" notification brings the window forward and opens that
+ * application in the Review & apply workspace. Only the attempt id crosses to the renderer.
+ */
+function openApplicationFromNotification(attemptId: string): void {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  sendToRenderer(mainWindow, 'application:open-attempt', { attemptId });
+}
+
 /*
  * ---------------------------------------------------------------------------------------------
  * ADI-16: every channel below is registered through `guardedIpc`, never through `ipcMain` directly.
@@ -3267,11 +3279,14 @@ const applicationPipelineTick = createTick({
       const { result } = await runNextApplicationAttempt(deps);
       if (result && (result.checkpoint === 'ready' || result.checkpoint === 'needs_user')) {
         const attempt = workspace.getApplicationAttempt(deps.db, result.attemptId);
-        notifyApplicationPreparation({
-          company: attempt.company,
-          role: attempt.role,
-          needsUser: result.checkpoint === 'needs_user',
-        });
+        notifyApplicationPreparation(
+          {
+            company: attempt.company,
+            role: attempt.role,
+            needsUser: result.checkpoint === 'needs_user',
+          },
+          () => openApplicationFromNotification(result.attemptId),
+        );
       }
     });
   },

@@ -1,4 +1,5 @@
 import type { ApplicationAttemptRecord } from '../../window.js';
+import { isDocumentsReadyDetail } from '../applications/apply-workspace-state.js';
 
 /**
  * What a saved job's row says about its application, derived from the newest linked attempt (#467).
@@ -49,6 +50,8 @@ export function describeSavedJobApplication(attempt: ApplicationAttemptRecord | 
       }
       return { ...open, label: 'Ready to review', tone: 'info' };
     case 'needs_user':
+      // A manual package whose documents are ready is a success, not a warning (#657).
+      if (isDocumentsReadyDetail(attempt.checkpointDetail)) return { ...open, label: 'Ready to review', tone: 'info' };
       return { ...open, label: 'Needs your input', tone: 'warning' };
     case 'submitting':
       return { ...open, label: 'Sending now', tone: 'info' };

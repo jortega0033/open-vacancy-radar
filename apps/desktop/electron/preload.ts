@@ -2004,6 +2004,16 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
     const detail = source ? optionalString(source, 'detail') : undefined;
     return { ok: source?.ok === true, attemptId, ...(detail === undefined ? {} : { detail }) };
   },
+  // #657: the "Application ready" notification click. Only a bounded, non-empty id string crosses.
+  onOpenAttempt(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const source = asRecord(payload);
+      const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+      if (attemptId && attemptId.length <= 200) callback(attemptId);
+    };
+    ipcRenderer.on('application:open-attempt', listener);
+    return () => ipcRenderer.removeListener('application:open-attempt', listener);
+  },
 };
 
 const POSTING_STATUSES: readonly PostingVerificationView['status'][] = [

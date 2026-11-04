@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ApplicationAttemptRecord,
   ApplicationFilter,
@@ -13,7 +13,7 @@ import emptyApplicationsIllustration from '../../../assets/illustrations/empty-a
 import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, TabPanel, Tabs, UndoToast } from '../shell/index.js';
 import { ApplicationAttemptDrawer } from './ApplicationAttemptDrawer.js';
 import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
-import { ApplicationReviewSession } from './ApplicationReviewSession.js';
+import { ApplyWorkspace } from './ApplyWorkspace.js';
 import { BlindApplyFeed } from './BlindApplyFeed.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
@@ -22,21 +22,13 @@ import { FollowUpsDrawer } from './FollowUpsDrawer.js';
 import { indexOverview, totalsFor, type OverviewItem } from './follow-ups-overview.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
+import { PREPARING_CHECKPOINTS, REVIEW_CHECKPOINTS, workspaceStageFor } from './apply-workspace-state.js';
+import { restoreSkippedAttempt, SKIP_UNDO_MS } from './skip-undo.js';
 import type { SelectedVacancy } from '../letters/types.js';
 
 type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecord };
 type PageTab = ApplicationFilter | 'in_progress';
 type AttemptView = 'review' | 'preparing' | 'history';
-
-const REVIEW_CHECKPOINTS = new Set<ApplicationAttemptRecord['checkpoint']>(['ready', 'needs_user']);
-const PREPARING_CHECKPOINTS = new Set<ApplicationAttemptRecord['checkpoint']>([
-  'queued',
-  'reading_jd',
-  'tailoring',
-  'rendering',
-  'filling',
-  'submitting',
-]);
 
 interface PendingUndo {
   message: string;
@@ -52,9 +44,7 @@ interface PendingSkipUndo {
   attempt: ApplicationAttemptRecord;
 }
 
-/** How long the "Skipped" undo stays up. Longer than the delete undo: a skip can happen right
- * before the next review opens over the page. */
-export const SKIP_UNDO_MS = 10_000;
+export { SKIP_UNDO_MS };
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -99,9 +89,10 @@ export function ApplicationsPage({
   const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
   const [attemptsError, setAttemptsError] = useState<string>();
   const [attemptView, setAttemptView] = useState<AttemptView>('review');
-  const [focusedAttemptId, setFocusedAttemptId] = useState<string | null>(null);
+  /** The application open in the Review & apply workspace (#657), in place of the lists. */
+  const [workspaceAttemptId, setWorkspaceAttemptId] = useState<string | null>(null);
+  /** Read-only history drawer: finished applications only (sent, recorded, skipped, failed). */
   const [openAttempt, setOpenAttempt] = useState<ApplicationAttemptRecord | null>(null);
-  const [reviewingAttempt, setReviewingAttempt] = useState<ApplicationAttemptRecord | null>(null);
 
   const [savedJobs, setSavedJobs] = useState<readonly SavedJobRecord[]>([]);
   const [cvDocuments, setCvDocuments] = useState<readonly CvDocumentRecord[]>([]);
@@ -123,7 +114,6 @@ export function ApplicationsPage({
 
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
   const [pendingSkipUndo, setPendingSkipUndo] = useState<PendingSkipUndo | null>(null);
-  const dismissedReviewAttempt = useRef<string | null>(null);
 
   const refreshAttempts = useCallback(async () => {
     try {
@@ -180,9 +170,10 @@ export function ApplicationsPage({
   }, [activeTab]);
 
   // Attempt checkpoints advance in Electron main while this page is open. Polling is bounded to
-  // this tab so a queued row becomes its review card without a manual refresh or another click.
+  // this tab, and paused while the workspace is open: it polls its own application.
+  const workspaceOpen = workspaceAttemptId !== null;
   useEffect(() => {
-    if (activeTab !== 'in_progress') return;
+    if (activeTab !== 'in_progress' || workspaceOpen) return;
     let cancelled = false;
     async function refresh() {
       try {
@@ -201,24 +192,42 @@ export function ApplicationsPage({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeTab]);
+  }, [activeTab, workspaceOpen]);
 
+  /** Every route into one application lands on the same workspace (#657). A finished one is handed
+   * to the history drawer by the workspace itself (`handleWorkspaceFinished`). */
+  const openWorkspace = useCallback((attemptId: string) => {
+    setActiveTab('in_progress');
+    setOpenAttempt(null);
+    setWorkspaceAttemptId(attemptId);
+  }, []);
+
+  // The workspace read an application that already finished (sent, recorded, unconfirmed, failed or
+  // skipped), opened from Saved jobs, Blind Apply, the scheduled-send banner, the notification or
+  // the Letters return, or a send that finished while it was open. The history drawer carries what
+  // a finished application needs: brief, evidence, documents, job link and its recovery actions.
+  const handleWorkspaceFinished = useCallback((attempt: ApplicationAttemptRecord) => {
+    setWorkspaceAttemptId(null);
+    setActiveTab('in_progress');
+    setAttemptView('history');
+    setOpenAttempt(attempt);
+    void refreshAttempts();
+  }, [refreshAttempts]);
+  const workspaceInitial = useMemo(
+    () => attempts?.find((attempt) => attempt.id === workspaceAttemptId) ?? null,
+    [attempts, workspaceAttemptId],
+  );
+
+  // A focus request from elsewhere: Saved jobs, Blind Apply, the scheduled-send banner, the
+  // "Application ready" notification, or the return from Letters.
   useEffect(() => {
     if (!focusAttemptId) return;
-    setActiveTab('in_progress');
-    setFocusedAttemptId(focusAttemptId);
-    dismissedReviewAttempt.current = null;
-    setAttempts(null);
+    openWorkspace(focusAttemptId);
     onFocusAttemptConsumed?.();
-  }, [focusAttemptId, onFocusAttemptConsumed]);
+  }, [focusAttemptId, onFocusAttemptConsumed, openWorkspace]);
 
   /** "Open attempt" on a tracker row (#444): the same route a focus request from elsewhere takes. */
-  const handleOpenAttemptFromRow = useCallback((attemptId: string) => {
-    setActiveTab('in_progress');
-    setFocusedAttemptId(attemptId);
-    dismissedReviewAttempt.current = null;
-    setAttempts(null);
-  }, []);
+  const handleOpenAttemptFromRow = openWorkspace;
 
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
   const sortedAttempts = useMemo(() => sortAttempts(attempts ?? []), [attempts]);
@@ -235,85 +244,37 @@ export function ApplicationsPage({
     [sortedAttempts],
   );
   const visibleAttempts = attemptView === 'review' ? reviewAttempts : attemptView === 'preparing' ? preparingAttempts : historyAttempts;
-  const reviewPosition = reviewingAttempt
-    ? reviewAttempts.findIndex((attempt) => attempt.id === reviewingAttempt.id) + 1
-    : 0;
 
-  // A `ready` attempt opens straight into the review-and-submit flow (issue #202) rather than the
-  // plain read-only drawer -- that's the one checkpoint where there's actually a decision for a
-  // person to make; every other checkpoint is still just informational.
+  // A row waiting for the person, or still preparing, opens the Review & apply workspace (#657).
+  // A finished one (sent, recorded, skipped, failed) opens the read-only history drawer with its
+  // recovery actions.
   const openAttemptRow = useCallback((attempt: ApplicationAttemptRecord) => {
-    setFocusedAttemptId(attempt.id);
-    dismissedReviewAttempt.current = null;
-    if (REVIEW_CHECKPOINTS.has(attempt.checkpoint)) {
-      setOpenAttempt(null);
-      setReviewingAttempt(attempt);
-    } else {
-      setReviewingAttempt(null);
+    if (workspaceStageFor(attempt.checkpoint) === 'finished') {
       setOpenAttempt(attempt);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!focusedAttemptId || !attempts) return;
-    const focused = attempts.find((attempt) => attempt.id === focusedAttemptId);
-    if (!focused) return;
-    if (REVIEW_CHECKPOINTS.has(focused.checkpoint)) {
-      setAttemptView('review');
-      setOpenAttempt(null);
-      if (dismissedReviewAttempt.current !== focused.id) setReviewingAttempt(focused);
-    } else {
-      setAttemptView(PREPARING_CHECKPOINTS.has(focused.checkpoint) ? 'preparing' : 'history');
-      setReviewingAttempt(null);
-      setOpenAttempt((current) => (current?.id === focused.id ? focused : current ?? focused));
-    }
-  }, [attempts, focusedAttemptId]);
-
-  useEffect(() => {
-    if (activeTab !== 'in_progress' || attemptView !== 'review' || reviewingAttempt || openAttempt) return;
-    const next = reviewAttempts.find((attempt) => !attempt.scheduledAutomaticSubmitAt);
-    if (!next || dismissedReviewAttempt.current === next.id) return;
-    setFocusedAttemptId(next.id);
-    setReviewingAttempt(next);
-  }, [activeTab, attemptView, openAttempt, reviewAttempts, reviewingAttempt]);
-
-  const closeReviewSession = useCallback((outcome: 'dismissed' | 'resolved' = 'dismissed') => {
-    const currentId = reviewingAttempt?.id ?? null;
-    dismissedReviewAttempt.current = currentId;
-    if (outcome === 'dismissed') {
-      setReviewingAttempt(null);
       return;
     }
-    const next = reviewAttempts.find((attempt) => attempt.id !== currentId);
-    setAttempts((current) => current?.filter((attempt) => attempt.id !== currentId) ?? current);
-    setReviewingAttempt(next ?? null);
-    setFocusedAttemptId(next?.id ?? null);
-    if (next) dismissedReviewAttempt.current = null;
-  }, [reviewAttempts, reviewingAttempt?.id]);
+    openWorkspace(attempt.id);
+  }, [openWorkspace]);
 
-  // Closing the drawer also drops the focus, otherwise the next attempts refresh reopens it (#629).
-  const closeAttemptDrawer = useCallback(() => {
-    setFocusedAttemptId((current) => (current !== null && current === openAttempt?.id ? null : current));
-    setOpenAttempt(null);
-  }, [openAttempt]);
+  const closeWorkspace = useCallback(() => {
+    setWorkspaceAttemptId(null);
+    setActiveTab('in_progress');
+    void refreshAttempts();
+  }, [refreshAttempts]);
 
-  // A skipped attempt returned to review opens in the review dialog; a failed one that was queued
-  // again moves to Preparing. Either way the drawer that started it closes.
+  const closeAttemptDrawer = useCallback(() => setOpenAttempt(null), []);
+
+  // A skipped attempt returned to review opens in the workspace; a failed one that was queued again
+  // moves to Preparing. Either way the drawer that started it closes.
   const handleAttemptRecovered = useCallback((kind: 'returned' | 'retried' | 'revised') => {
     const recovered = openAttempt;
     setOpenAttempt(null);
-    if (kind === 'revised') {
-      // An accepted critique revision changed the package (and may have closed its form): show it
-      // where a package waiting for the person lives, with the fresh checkpoint.
-      setFocusedAttemptId(null);
+    if (kind === 'returned' && recovered) {
       setAttemptView('review');
-    } else if (kind === 'returned' && recovered) {
-      dismissedReviewAttempt.current = null;
-      setAttemptView('review');
-      setFocusedAttemptId(recovered.id);
+      setWorkspaceAttemptId(recovered.id);
     } else {
-      setFocusedAttemptId(null);
-      setAttemptView('preparing');
+      // An accepted critique revision changed the package: show it where packages waiting live.
+      setAttemptView(kind === 'revised' ? 'review' : 'preparing');
     }
     void refreshAttempts();
   }, [openAttempt, refreshAttempts]);
@@ -430,22 +391,14 @@ export function ApplicationsPage({
     const undo = pendingSkipUndo;
     if (!undo) return;
     try {
-      const current = await window.workspace.getApplicationAttempt(undo.attempt.id);
-      if (current.checkpoint === 'skipped') {
-        await window.workspace.updateApplicationAttempt(undo.attempt.id, {
-          checkpoint: undo.attempt.checkpoint,
-          checkpointDetail: undo.attempt.checkpointDetail,
-        });
-      }
-      dismissedReviewAttempt.current = null;
-      setActiveTab('in_progress');
+      await restoreSkippedAttempt(undo.attempt);
       setAttemptView('review');
-      setFocusedAttemptId(undo.attempt.id);
+      openWorkspace(undo.attempt.id);
       await refreshAttempts();
     } catch {
       setAttemptsError('We could not undo the skip.');
     }
-  }, [pendingSkipUndo, refreshAttempts]);
+  }, [openWorkspace, pendingSkipUndo, refreshAttempts]);
 
   const handleUndo = useCallback(async () => {
     const undo = pendingUndo;
@@ -497,6 +450,37 @@ export function ApplicationsPage({
   const showEmptyAction = emptyStateHasAction && linkedRecordsSettled;
   const canPrepareFromSavedJobs = savedJobs.length > 0 && onGoToSavedJobs !== undefined;
 
+  if (workspaceAttemptId) {
+    return (
+      <div className="-mx-6 -my-6">
+        <ApplyWorkspace
+          key={workspaceAttemptId}
+          attemptId={workspaceAttemptId}
+          initialAttempt={workspaceInitial}
+          closeLabel="Back to Ready to apply"
+          onClose={closeWorkspace}
+          onOpenAttempt={openWorkspace}
+          onChanged={() => {
+            void refreshAttempts();
+            onApplicationsChanged?.();
+          }}
+          onSkipped={handleSkipped}
+          onFinished={handleWorkspaceFinished}
+          {...(onGenerateLetter ? { onGenerateLetter } : {})}
+        />
+        {pendingSkipUndo && (
+          <UndoToast
+            message={pendingSkipUndo.message}
+            onUndo={() => void handleUndoSkip()}
+            onDismiss={dismissSkipUndo}
+            durationMs={SKIP_UNDO_MS}
+            layerClassName="z-[1000]"
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div>
       {!isInProgressTab && !emptyStateHasAction && (
@@ -507,12 +491,7 @@ export function ApplicationsPage({
         </div>
       )}
 
-      <BlindApplyFeed
-        onOpened={() => {
-          setActiveTab('in_progress');
-          void refreshAttempts();
-        }}
-      />
+      <BlindApplyFeed onOpened={openWorkspace} />
 
       <Tabs
         label="Applications views"
@@ -650,17 +629,6 @@ export function ApplicationsPage({
           cvDocuments={cvDocuments}
           letters={letters}
           onClose={closeInterviewPrepDrawer}
-        />
-      )}
-
-      {reviewingAttempt && (
-        <ApplicationReviewSession
-          attempt={reviewingAttempt}
-          position={reviewPosition}
-          total={reviewAttempts.length}
-          onClose={closeReviewSession}
-          onGenerateLetter={onGenerateLetter}
-          onSkipped={handleSkipped}
         />
       )}
 

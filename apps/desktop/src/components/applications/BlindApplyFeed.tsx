@@ -5,8 +5,9 @@ import { BlindApplyNeedsAnswerCard } from './BlindApplyNeedsAnswerCard.js';
 import { useBlindApply } from './use-blind-apply.js';
 
 export interface BlindApplyFeedProps {
-  /** Called after "Open" starts or finds the item's application, so the page can show it. */
-  onOpened?: () => void;
+  /** Called after "Open" starts or finds the item's application, with its id, so the page can open
+   * it in the Review & apply workspace (#657). */
+  onOpened?: (attemptId: string) => void;
 }
 
 const BADGE_CLASS: Record<string, string> = {
@@ -76,7 +77,7 @@ function EvidenceDetails({ itemId }: { itemId: string }) {
   );
 }
 
-function FeedRow({ item, onChanged, onOpened }: { item: BlindApplyFeedItem; onChanged: () => void; onOpened?: () => void }) {
+function FeedRow({ item, onChanged, onOpened }: { item: BlindApplyFeedItem; onChanged: () => void; onOpened?: (attemptId: string) => void }) {
   const [opening, setOpening] = useState(false);
   const [openFailed, setOpenFailed] = useState(false);
 
@@ -85,7 +86,7 @@ function FeedRow({ item, onChanged, onOpened }: { item: BlindApplyFeedItem; onCh
     setOpenFailed(false);
     const result = await window.blindApply.open(item.id).catch(() => ({ ok: false as const }));
     setOpening(false);
-    if (result.ok) onOpened?.();
+    if (result.ok) onOpened?.(result.attemptId);
     else setOpenFailed(true);
     onChanged();
   }
