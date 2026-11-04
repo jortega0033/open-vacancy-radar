@@ -134,6 +134,38 @@ export function buildApplicationValueTable(input: BuildApplicationValueTableInpu
 }
 
 /**
+ * The exact field labels each value-table entry may be typed into by Blind Apply's deterministic
+ * mapper (#722), keyed by the entry's own label. Compared after `normalizeFieldLabel`, as whole
+ * strings and never as substrings, so "Name of your manager" cannot be mistaken for "Full name".
+ *
+ * Deliberately short. A label missing from this list is not guessed at: the field is left to the
+ * person (or a remembered answer), which is the failure mode this feature prefers over a wrong value.
+ */
+export const APPLICATION_VALUE_LABEL_SYNONYMS: Readonly<Record<string, readonly string[]>> = {
+  'Full name': ['full name', 'name', 'your name', 'legal name', 'full legal name', 'first and last name'],
+  'Email address': ['email', 'email address', 'e-mail', 'e-mail address', 'your email', 'your email address'],
+  'Phone number': ['phone', 'phone number', 'telephone', 'mobile', 'mobile phone', 'mobile number', 'contact number', 'your phone number'],
+  'Current location': ['current location', 'location', 'city', 'city and country', 'where are you based', 'where are you located'],
+  'Current job title': ['current job title', 'current title', 'job title', 'current role', 'current position'],
+  'Working languages': ['working languages', 'professional languages'],
+  'LinkedIn profile URL': ['linkedin', 'linkedin url', 'linkedin profile', 'linkedin profile url'],
+  'GitHub profile URL': ['github', 'github url', 'github profile', 'github profile url'],
+};
+
+/** A field label reduced for exact comparison: case, accents, spacing and the "required" decoration
+ * a page adds (a trailing asterisk, "(required)", "(optional)") are not part of the question. */
+export function normalizeFieldLabel(label: string): string {
+  return label
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/\((?:required|optional)\)/gu, ' ')
+    .replace(/[*:]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+/**
  * Describes one field for the generation session, including which frame it lives in whenever that
  * frame's origin differs from the page's own (`topFrameOrigin`) -- the same comparison the write
  * path makes in `isFrameFillAllowed`, and deliberately not qualified by `field.active`.
@@ -251,7 +283,7 @@ function isDocumentUploadField(field: SnapshotField): boolean {
   return field.active && !field.classification && field.controlType === 'file';
 }
 
-function chooseArtifactForField(field: SnapshotField, artifacts: readonly ApplicationArtifactRecord[]): ApplicationArtifactRecord | undefined {
+export function chooseArtifactForField(field: SnapshotField, artifacts: readonly ApplicationArtifactRecord[]): ApplicationArtifactRecord | undefined {
   const label = field.label.toLowerCase();
   if (/\b(cover|letter|motivation)\b/u.test(label)) {
     return artifacts.find((artifact) => artifact.kind === 'cover_letter_pdf') ?? artifacts.find((artifact) => artifact.kind === 'combined_pdf');
