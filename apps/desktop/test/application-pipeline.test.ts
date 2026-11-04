@@ -2122,28 +2122,176 @@ describe('#687 posting verification before preparation and on resumption', () =>
       ['a rate limit', httpError('rate_limited', 429), 'rate_limited'],
       ['a server error', httpError('http_error', 503), 'server_error'],
       ['a network failure', httpError('network_error'), 'network_error'],
-    ] as Array<[string, Error, string]>)('%s is unable to verify, never closure: preparation proceeds on the stored snapshot', async (_label, error, reason) => {
-      http.route(GH_API, error);
+    ] as Array<[string, Error, string]>)(
+      '%s is unable to verify, never closure; #720: no AI work until the person confirms it is open',
+      async (_label, error, reason) => {
+        http.route(GH_API, error);
 
-      const { attemptId, ticked } = await startAndRun();
+        const { attemptId, ticked } = await startAndRun();
 
-      expect(ticked.result?.outcome).toBe('needs_user');
-      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
-      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
-      // One bounded request: no retry ladder, no second route around the denial.
-      expect(http.calls).toHaveLength(1);
-      expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', outcome: 'unable', reason, contentHash: null });
-      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
-      expect(view.status).toBe('unable_to_verify');
-      expect(view.status).not.toBe('confirmed_closed');
-      expect(view.actions).toEqual(['open_posting', 'check_again']);
-    });
+        expect(ticked.result?.outcome).toBe('needs_user');
+        expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_UNVERIFIED_DETAIL);
+        expect(generateTailoredResume).not.toHaveBeenCalled();
+        expect(generateCoverLetter).not.toHaveBeenCalled();
+        // One bounded request: no retry ladder, no second route around the denial.
+        expect(http.calls).toHaveLength(1);
+        expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', outcome: 'unable', reason, contentHash: null });
+        const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+        expect(view.status).toBe('unable_to_verify');
+        expect(view.status).not.toBe('confirmed_closed');
+        expect(view.actions).toEqual(['confirm_open', 'open_posting', 'check_again']);
+        expect(view.personConfirmedAt).toBeNull();
 
-    it('a login wall is unable to verify, not closed', async () => {
+        // The person looked and says it is open: recorded with its time, then prepared on the stored text.
+        clock = new Date(T0.getTime() + 2 * 60 * 1000);
+        const resumed = await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'confirm_open' });
+        expect(resumed).toMatchObject({ ok: true, continued: 'queued' });
+        queueApplicationDocumentRenders();
+        await pipeline.runNextApplicationAttempt(verifyingDeps());
+        expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+        expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+        // The "could not check" answer is younger than its retry window: reused, no second request.
+        expect(http.calls).toHaveLength(1);
+        expect(verification.readPostingVerification({ db, now: () => clock }, attemptId)).toMatchObject({
+          status: 'unable_to_verify',
+          personConfirmedAt: clock.toISOString(),
+          checkedAt: T0.toISOString(),
+        });
+      },
+    );
+
+    it('a login wall is unable to verify, not closed, and stops before AI work', async () => {
       http.route(GH_API, { status: 200, finalUrl: 'https://boards-api.greenhouse.io/users/sign_in', headers: {}, body: '<html>Sign in</html>' });
       const { attemptId } = await startAndRun();
       expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', reason: 'login_wall' });
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_UNVERIFIED_DETAIL);
+    });
+
+    describe('#720 Ashby: the official board is the evidence', () => {
+      const ASHBY_JOB = '5f2c1a7e-1111-4222-8333-444455556666';
+      const ASHBY_URL = `https://jobs.ashbyhq.com/itlabs/${ASHBY_JOB}`;
+      const ASHBY_BOARD = 'https://api.ashbyhq.com/posting-api/job-board/itlabs?includeCompensation=true';
+      const boardWith = (jobs: unknown[]): AtsHttpResponse => ({
+        status: 200,
+        finalUrl: ASHBY_BOARD,
+        headers: {},
+        body: JSON.stringify({ apiVersion: '1', jobs }),
+      });
+      const listedJob = (id: string) => ({
+        id,
+        title: 'Logistics Platform Engineer',
+        jobUrl: `https://jobs.ashbyhq.com/itlabs/${id}`,
+        isListed: true,
+        descriptionPlain: SNAPSHOT_687,
+      });
+
+      it('a job the board omits is closed/removed and causes zero tailoring calls', async () => {
+        http.route(ASHBY_BOARD, boardWith([listedJob('9a8b7c6d-1111-4222-8333-444455556666')]));
+
+        const { attemptId, ticked } = await startAndRun(posting({ applyUrl: ASHBY_URL }));
+
+        expect(ticked.result?.outcome).toBe('needs_user');
+        expect(http.calls.map((call) => call.url)).toEqual([ASHBY_BOARD]);
+        expect(generateTailoredResume).not.toHaveBeenCalled();
+        expect(generateCoverLetter).not.toHaveBeenCalled();
+        expect(generateFieldMap).not.toHaveBeenCalled();
+        expect(printToPDF).not.toHaveBeenCalled();
+        expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual([]);
+        expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_CLOSED_DETAIL);
+        expect(latest(attemptId)).toMatchObject({
+          result: 'confirmed_closed',
+          reason: 'not_listed',
+          source: 'ashby',
+          sourceRef: 'api.ashbyhq.com/posting-api/job-board/{board}',
+          observedAt: T0.toISOString(),
+        });
+        const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+        expect(view).toMatchObject({ status: 'confirmed_closed', checkedAt: T0.toISOString(), source: 'ashby' });
+        // The override stays explicit: offered, never taken.
+        expect(view.actions).toEqual(['open_posting', 'prepare_anyway', 'check_again']);
+        // A plain resume (no decision) stops again at the same finding, still with no AI work.
+        await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+        queueApplicationDocumentRenders();
+        await pipeline.runNextApplicationAttempt(verifyingDeps());
+        expect(generateTailoredResume).not.toHaveBeenCalled();
+        expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_CLOSED_DETAIL);
+      });
+
+      it('a listed job proceeds after a fresh check, comparing the board text with the stored one', async () => {
+        http.route(ASHBY_BOARD, boardWith([listedJob(ASHBY_JOB)]));
+
+        const { attemptId } = await startAndRun(posting({ applyUrl: ASHBY_URL }));
+
+        expect(http.calls).toHaveLength(1);
+        expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+        expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain(MANUAL_HANDOFF);
+        expect(latest(attemptId)).toMatchObject({ result: 'confirmed_open', reason: 'verified_open', source: 'ashby', observedAt: T0.toISOString() });
+        expect(verification.readPostingVerification({ db, now: () => clock }, attemptId)).toMatchObject({
+          status: 'confirmed_open',
+          stale: false,
+        });
+      });
+
+      it('a missing board is "could not check", never closed, and still stops before AI work', async () => {
+        http.route(ASHBY_BOARD, httpError('http_error', 404));
+        const { attemptId } = await startAndRun(posting({ applyUrl: ASHBY_URL }));
+        expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', reason: 'board_not_found' });
+        expect(generateTailoredResume).not.toHaveBeenCalled();
+        expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_UNVERIFIED_DETAIL);
+      });
+    });
+
+    it('#720: an unsupported source cannot start tailoring until the person confirms; a stale confirmation asks again', async () => {
+      const { attemptId } = await startAndRun(posting({ applyUrl: 'https://careers.example.org/jobs/42' }));
+      expect(http.calls).toHaveLength(0);
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_UNVERIFIED_DETAIL);
+
+      // Resuming without a decision cannot get around the gate.
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_UNVERIFIED_DETAIL);
+
+      clock = new Date(T0.getTime() + 60 * 1000);
+      const confirmedAt = clock.toISOString();
+      expect(await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'confirm_open' })).toMatchObject({
+        ok: true,
+        continued: 'queued',
+      });
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
       expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(http.calls).toHaveLength(0);
+      expect(store.getPersonOpenConfirmation(db, attemptId)).toMatchObject({ resolution: 'confirmed_by_person', resolvedAt: confirmedAt });
+      const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
+      expect(view.personConfirmedAt).toBe(confirmedAt);
+      expect(view.actions).not.toContain('confirm_open');
+
+      // A day later the same look no longer counts: a re-preparation stops and asks again.
+      clock = new Date(T0.getTime() + 25 * 60 * 60 * 1000);
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: 'synthetic blocker' });
+      await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId);
+      queueApplicationDocumentRenders();
+      await pipeline.runNextApplicationAttempt(verifyingDeps());
+      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe(verification.POSTING_UNVERIFIED_DETAIL);
+    });
+
+    it('#720: "It\'s open" is refused while a closed finding waits, and never overrides a later closed answer', async () => {
+      http.route(GH_API, httpError('http_error', 404));
+      const { attemptId } = await startAndRun();
+      expect(await pipeline.resumeApplicationAttempt(verifyingDeps(), attemptId, { resolution: 'confirm_open' })).toMatchObject({ ok: false });
+      expect(store.getPersonOpenConfirmation(db, attemptId)).toBeNull();
+      expect(generateTailoredResume).not.toHaveBeenCalled();
+    });
+
+    it('#720: a sent application cannot be confirmed or re-gated', async () => {
+      const { attemptId } = await startAndRun(posting({ applyUrl: 'https://careers.example.org/jobs/42' }));
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'user_reported', checkpointDetail: '' });
+      expect(store.confirmPostingOpen(db, attemptId)).toEqual({ ok: false, reason: 'historical' });
     });
 
     it('a source with no authoritative route costs no request and says so', async () => {
@@ -2538,7 +2686,7 @@ describe('#687 posting verification before preparation and on resumption', () =>
       expect(store.listPostingVerifications(db, attemptId).some((row) => row.held)).toBe(false);
     });
 
-    it('P5: a verifier port that rejects is "could not check" and preparation continues on the stored text', async () => {
+    it('P5: a verifier port that rejects is "could not check"; #720: it never stalls, and asks the person first', async () => {
       const failing: ApplicationPipelineDeps = {
         ...deps,
         now: () => clock,
@@ -2550,8 +2698,8 @@ describe('#687 posting verification before preparation and on resumption', () =>
       expect(ticked.result?.outcome).toBe('needs_user');
       const attempt = workspace.getApplicationAttempt(db, attemptId);
       expect(attempt.checkpoint).toBe('needs_user');
-      expect(attempt.checkpointDetail).toContain(MANUAL_HANDOFF);
-      expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+      expect(attempt.checkpointDetail).toBe(verification.POSTING_UNVERIFIED_DETAIL);
+      expect(generateTailoredResume).not.toHaveBeenCalled();
       expect(latest(attemptId)).toMatchObject({ result: 'unable_to_verify', reason: 'check_failed' });
       expect(verification.readPostingVerification({ db, now: () => clock }, attemptId).status).toBe('unable_to_verify');
     });
@@ -2705,7 +2853,7 @@ describe('#687 posting verification before preparation and on resumption', () =>
       const { attemptId } = await startAndRun(posting({ applyUrl: 'https://careers.example.org/jobs/42' }));
       const view = verification.readPostingVerification({ db, now: () => clock }, attemptId);
       expect(view.status).toBe('unable_to_verify');
-      expect(view.actions).toEqual(['open_posting']);
+      expect(view.actions).toEqual(['confirm_open', 'open_posting']);
     });
   });
 
@@ -3515,6 +3663,7 @@ describe('#687 measurement on a fixed synthetic fixture set', () => {
         falseChangeStops,
         employerCopyEditsReachingPreparation: LEADS.filter((entry) => entry.kind === 'employer_copy_edit' && afterRun.reached.includes(entry.n)).length,
         unableToVerifyLeads: unableRows.length,
+        // #720: "could not check" now stops before AI work until the person confirms the posting is open.
         unableToVerifyLeadsThatStillReachedPreparation: unableRows.filter((n) => afterRun.reached.includes(n)).length,
         requests: {
           logical: afterLogical,
@@ -3557,7 +3706,7 @@ describe('#687 measurement on a fixed synthetic fixture set', () => {
       })),
       limits: [
         'Fixture network answers instantly and the labels are written by the fixture author; no real posting, human label, closure rate, latency or quality is measured or implied.',
-        'A closed posting hidden behind a login wall, a denial or an unsupported source is NOT detected: it is reported "could not check" and preparation proceeds (leads 19 and 20 here).',
+        'A closed posting hidden behind a login wall, a denial or an unsupported source is NOT detected: it is reported "could not check"; since #720 preparation stops there before any AI work and waits for the person to confirm it is open (leads 19 and 20 here).',
         'Only Greenhouse, Lever, Workable and Jobgether links have an authoritative single-posting route; every other source costs no request and is "could not check".',
         'Closure is taken only from 404/410, Workable /oops, or a payload that is nothing but an unqualified closure notice; closure-like prose inside an open posting is open (leads 21-26).',
         'Requirement detection is a token/section heuristic; a requirement change worded without any requirement signal, outside a requirements section, and under a fifth of the posting is not flagged.',
@@ -3570,7 +3719,9 @@ describe('#687 measurement on a fixed synthetic fixture set', () => {
     expect(measurement.before.closedLeadsReachingPreparation).toBe(5);
     expect(falseClosure).toEqual([]);
     expect(trueClosuresDetected).toEqual([9, 10, 11]);
-    expect(closedReachedAfter).toEqual([19, 20]);
+    // #720: the two closed leads the check cannot see (19, 20) no longer reach AI work unconfirmed.
+    expect(closedReachedAfter).toEqual([]);
+    expect(measurement.after.unableToVerifyLeadsThatStillReachedPreparation).toBe(0);
     expect(missedChangeStops).toEqual([]);
     expect(falseChangeStops).toEqual([]);
     expect(measurement.after.employerCopyEditsReachingPreparation).toBe(EMPLOYER_EDITS.length);

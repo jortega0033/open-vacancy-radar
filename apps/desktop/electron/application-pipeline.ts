@@ -29,6 +29,8 @@ import {
   isPostingPreparationStopDetail,
   POSTING_CHANGED_DETAIL,
   POSTING_CLOSED_DETAIL,
+  POSTING_UNVERIFIED_DETAIL,
+  postingOpenEvidence,
   refreshAttemptFromPosting,
   resolvePostingFinding,
   verifyAttemptPosting,
@@ -36,6 +38,7 @@ import {
 } from './application-posting-verification.js';
 import { discardPostingHold, isHistoricalAttempt } from './workspace/posting-verification-store.js';
 import type {
+  PostingDecision,
   PostingVerificationView,
   StartApplicationAttemptRefusal,
   StartApplicationAttemptResult,
@@ -711,6 +714,12 @@ export async function runApplicationAttempt(
     if (view.status === 'materially_changed' && view.resolution === null) {
       return settle(run, attemptId, 'needs_user', POSTING_CHANGED_DETAIL, 'needs_user');
     }
+    // #720: "could not check" is not closure, but it is not a reason to spend AI work either. Unless a
+    // fresh open answer, an explicit Get ready anyway, or the person's own recent "It's open" stands
+    // behind this posting, preparation stops here, before any tailoring call, and asks the person.
+    if (view.status === 'unable_to_verify' && postingOpenEvidence(deps.db, attemptId, new Date(nowIso(deps))) === null) {
+      return settle(run, attemptId, 'needs_user', POSTING_UNVERIFIED_DETAIL, 'needs_user');
+    }
   }
   if (
     attempt.jdSnapshot.trim().length === 0 &&
@@ -1081,7 +1090,7 @@ export async function restartApplicationTailoring(
 export async function resumeApplicationAttempt(
   deps: ApplicationPipelineDeps,
   attemptId: string,
-  options: { resolution?: 'prepare_anyway' | 'keep_current' } = {},
+  options: { resolution?: PostingDecision } = {},
 ): Promise<RestartApplicationTailoringResult> {
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
   // A `failed` attempt is a preparation that stopped before anything reached an employer, so it can
@@ -1104,6 +1113,8 @@ export async function resumeApplicationAttempt(
   //  - an application waiting on its own, unrelated blocker keeps that blocker (`recorded`);
   //  - only an application whose PREPARATION stopped on this finding, so nothing was prepared yet,
   //    goes on to be prepared (`queued`).
+  //  - `confirm_open` (#720) records the person's "It's open" for a posting that could not be checked;
+  //    the queued run re-checks it first, and a definitive closed answer still stops it.
   if (options.resolution !== undefined) {
     if (isHistoricalAttempt(attempt)) {
       return { ok: false, attemptId, tailoringMode: attempt.tailoringMode, detail: 'this application was already sent' };

@@ -10,6 +10,7 @@ import {
   type PostingValidators,
 } from '@open-vacancy-radar/vacancy-engine';
 import type {
+  PostingDecision,
   PostingVerificationAction,
   PostingVerificationReasonCode,
   PostingVerificationStatus,
@@ -18,9 +19,11 @@ import type {
 import * as workspace from './workspace/repository.js';
 import {
   adoptPostingChange,
+  confirmPostingOpen,
   getLatestPostingVerification,
   getNewestDefinitivePostingVerification,
   getPendingPostingFinding,
+  getPersonOpenConfirmation,
   getPostingObservedText,
   isHistoricalAttempt,
   recordPostingVerification,
@@ -86,13 +89,51 @@ export const POSTING_CHANGED_DETAIL =
  */
 export const POSTING_REOPENED_DETAIL = 'The posting is open again, so this application can be prepared now.';
 
+/**
+ * #720: preparation stopped before any AI work because nothing could confirm the posting is still
+ * open. The person looks at it and records "It's open" (or leaves it).
+ */
+export const POSTING_UNVERIFIED_DETAIL =
+  "We couldn't check automatically whether this posting is still open. Open the posting, and if it is still listed, confirm it's open to continue.";
+
+/**
+ * How long a person's "It's open" counts as evidence: the same window as an automatic open answer.
+ * After it, preparing again asks again rather than leaning on an old look.
+ */
+export const PERSON_CONFIRMATION_WINDOW_MS = POSTING_FRESHNESS_WINDOW_MS;
+
 export function isPostingFindingDetail(detail: string): boolean {
   return detail === POSTING_CLOSED_DETAIL || detail === POSTING_CHANGED_DETAIL;
 }
 
 /** A sentence this module wrote because PREPARATION stopped on a posting finding (nothing was prepared). */
 export function isPostingPreparationStopDetail(detail: string): boolean {
-  return isPostingFindingDetail(detail) || detail === POSTING_REOPENED_DETAIL;
+  return isPostingFindingDetail(detail) || detail === POSTING_REOPENED_DETAIL || detail === POSTING_UNVERIFIED_DETAIL;
+}
+
+/** Inside `[0, window)` before `now`; a time in the future (clock moved back) is not fresh evidence. */
+function within(at: string | null, now: Date, window: number): boolean {
+  if (at === null) return false;
+  const age = now.getTime() - Date.parse(at);
+  return age >= 0 && age < window;
+}
+
+/**
+ * What lets preparation spend AI work on a posting the newest check could not answer for (#720):
+ *  - `checked_open`: the newest definitive answer found it open (or changed, which is open) within the window;
+ *  - `override`: the newest definitive answer said closed and the person explicitly chose Get ready anyway;
+ *  - `person_confirmed`: the person recorded "It's open" within the window.
+ * Null means nothing does, and preparation stops at `POSTING_UNVERIFIED_DETAIL` before any AI call.
+ */
+export type PostingOpenEvidence = 'checked_open' | 'override' | 'person_confirmed';
+
+export function postingOpenEvidence(db: WorkspaceDb, attemptId: string, now: Date): PostingOpenEvidence | null {
+  const definitive = getNewestDefinitivePostingVerification(db, attemptId);
+  if (definitive?.outcome === 'open' && within(definitive.observedAt, now, POSTING_FRESHNESS_WINDOW_MS)) return 'checked_open';
+  if (definitive?.result === 'confirmed_closed' && definitive.resolution === 'prepare_anyway') return 'override';
+  const confirmation = getPersonOpenConfirmation(db, attemptId);
+  if (confirmation !== null && within(confirmation.resolvedAt, now, PERSON_CONFIRMATION_WINDOW_MS)) return 'person_confirmed';
+  return null;
 }
 
 /**
@@ -165,6 +206,7 @@ function actionsFor(
   attemptCheckpoint: ApplicationAttemptCheckpoint,
   checkable: boolean,
   preparable: boolean,
+  confirmable: boolean,
 ): PostingVerificationAction[] {
   const waiting = attemptCheckpoint === 'needs_user' || attemptCheckpoint === 'failed';
   // "Check again" only where it can actually ask someone: a link with an authoritative route.
@@ -184,7 +226,9 @@ function actionsFor(
         ? ['refresh', 'keep_current', 'open_posting', ...checkAgain]
         : ['open_posting', ...checkAgain];
     case 'unable_to_verify':
-      return [...prepareNow, 'open_posting', ...checkAgain];
+      // #720: a preparation that stopped because nothing could confirm the posting is open waits for
+      // the person's own look: "It's open" first, the posting link right beside it.
+      return confirmable ? ['confirm_open', 'open_posting', ...checkAgain] : [...prepareNow, 'open_posting', ...checkAgain];
     case 'confirmed_open':
       return [...prepareNow, ...checkAgain];
     case 'not_checked':
@@ -197,7 +241,14 @@ export function buildPostingVerificationView(
   latest: PostingVerificationRecord | null,
   pending: PostingVerificationRecord | null,
   now: Date,
-  extra: { reused?: boolean; hold?: PostingHoldEffect } = {},
+  extra: {
+    reused?: boolean;
+    hold?: PostingHoldEffect;
+    /** The newest "It's open" the person recorded (#720). */
+    confirmation?: PostingVerificationRecord | null;
+    /** What, if anything, lets preparation continue past a "could not check" (#720). */
+    openEvidence?: PostingOpenEvidence | null;
+  } = {},
 ): PostingVerificationView {
   const historical = isHistoricalAttempt(attempt);
   const baselineHash = baselineHashOf(attempt);
@@ -221,12 +272,21 @@ export function buildPostingVerificationView(
   // Preparation stopped on a finding (so there is no package) and no undecided closed/changed finding
   // is left for this snapshot: an open answer supersedes it, and a later "could not check" does not
   // bring it back. Nothing is offered while a finding still waits for the person.
-  const preparable =
+  const atStop =
     !historical &&
     attempt.checkpoint === 'needs_user' &&
     isPostingPreparationStopDetail(attempt.checkpointDetail) &&
-    pendingCurrent === null &&
-    (status === 'confirmed_open' || status === 'unable_to_verify');
+    pendingCurrent === null;
+  // A stop on "could not check" (#720) is only settled by evidence the posting is open: a fresh open
+  // answer, an explicit override, or the person's own "It's open". Without it Prepare now would only
+  // stop again, so the person is asked to confirm instead.
+  const unverifiedStop = atStop && attempt.checkpointDetail === POSTING_UNVERIFIED_DETAIL;
+  const hasEvidence = (extra.openEvidence ?? null) !== null;
+  const preparable =
+    atStop &&
+    (status === 'confirmed_open' || status === 'unable_to_verify') &&
+    (!unverifiedStop || status === 'confirmed_open' || hasEvidence);
+  const confirmable = unverifiedStop && status === 'unable_to_verify' && !hasEvidence;
   const changeSummary: PostingChangeSummary | null =
     shown?.result === 'materially_changed' && shown.resolution !== 'refreshed' ? shown.changeSummary : null;
   return {
@@ -245,7 +305,9 @@ export function buildPostingVerificationView(
     noDeadlineStated: shown !== null && shown.outcome === 'open' && shown.deadline === null && shown.contentHash !== null,
     change: changeSummary ? { added: changeSummary.added, removed: changeSummary.removed } : null,
     changeKind: changeSummary ? (changeSummary.kind ?? 'requirements') : null,
-    resolution: shown?.resolution === 'superseded' ? null : (shown?.resolution ?? null),
+    resolution:
+      shown?.resolution === 'superseded' || shown?.resolution === 'confirmed_by_person' ? null : (shown?.resolution ?? null),
+    personConfirmedAt: historical ? null : (extra.confirmation?.resolvedAt ?? null),
     reused: extra.reused ?? false,
     stale: freshnessBasis === null || !isPostingFresh(freshnessBasis, now),
     invalidated: extra.hold === 'held',
@@ -258,6 +320,7 @@ export function buildPostingVerificationView(
       attempt.checkpoint,
       !historical && resolvePostingProbe(attempt.canonicalUrl) !== null,
       preparable,
+      confirmable,
     ),
   };
 }
@@ -268,7 +331,11 @@ function viewFor(deps: { db: WorkspaceDb }, attempt: ApplicationAttemptRecord, n
     getLatestPostingVerification(deps.db, attempt.id),
     getPendingPostingFinding(deps.db, attempt.id),
     now,
-    extra,
+    {
+      ...extra,
+      confirmation: getPersonOpenConfirmation(deps.db, attempt.id),
+      openEvidence: postingOpenEvidence(deps.db, attempt.id, now),
+    },
   );
 }
 
@@ -544,12 +611,21 @@ function judge(
   };
 }
 
-/** Applies the person's decision about the current open finding (restoring a held package). */
+/**
+ * Applies the person's decision about the current open finding (restoring a held package), or records
+ * their "It's open" for a posting that could not be checked (#720: nothing is held, nothing restored).
+ */
 export function resolvePostingFinding(
   deps: PostingVerificationDeps,
   attemptId: string,
-  resolution: 'prepare_anyway' | 'keep_current',
+  resolution: PostingDecision,
 ): ResolvePostingVerificationOutcome | null {
+  if (resolution === 'confirm_open') {
+    const confirmed = confirmPostingOpen(deps.db, attemptId, nowOf(deps));
+    if (!confirmed.ok) return null;
+    deps.log?.('the person confirmed that a posting which could not be checked is open', { attemptId });
+    return { record: confirmed.record, restored: false };
+  }
   return resolvePostingVerification(deps.db, attemptId, resolution);
 }
 

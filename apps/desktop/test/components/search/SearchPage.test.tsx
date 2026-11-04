@@ -3004,3 +3004,81 @@ describe('SearchPage search plan (#686)', () => {
     expect(screen.getByText(/UI engineer\. Returned by the source for: UI engineer at/)).toBeInTheDocument();
   });
 });
+
+describe('SearchPage posting liveness (#720)', () => {
+  function liveView(vacancyKey: string, state: 'open' | 'closed' | 'not_checked' | 'unverifiable') {
+    const checked = state === 'open' || state === 'closed';
+    return {
+      vacancyKey,
+      state,
+      checkedAt: checked ? new Date().toISOString() : null,
+      source: checked ? 'ashby' : null,
+      sourceRef: checked ? 'api.ashbyhq.com/posting-api/job-board/{board}' : null,
+      reason: state === 'closed' ? ('not_listed' as const) : null,
+      checkable: state !== 'unverifiable',
+    };
+  }
+
+  function withLiveness(check: ApplicationPipelineBridge['checkPostingLiveness']) {
+    const pipeline = window.applicationPipeline;
+    const read = vi.fn(async (keys: string[]) => keys.map((key) => liveView(key, 'not_checked')));
+    Object.assign(pipeline, { postingLiveness: read, checkPostingLiveness: check });
+    return { pipeline, read };
+  }
+
+  it('reads the visible rows without a check, then checks the shown result once and puts its state beside the score', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy(), makeWorldwideVacancy({ key: 'ww-2', title: 'Second role', contentHash: 'h2' })])),
+    });
+    const check = vi.fn(async (key: string) => liveView(key, 'open'));
+    const { read } = withLiveness(check);
+
+    render(<SearchPage />);
+    await waitFor(() => expect(check).toHaveBeenCalledWith('ww-1'));
+    expect(read).toHaveBeenCalledWith(['ww-1', 'ww-2']);
+    const card = await waitFor(() => {
+      const row = document.querySelector('[data-result-key="ww-1"]') as HTMLElement;
+      expect(within(row).getByTestId('posting-liveness')).toHaveTextContent('Open');
+      return row;
+    });
+    expect(card).toBeInTheDocument();
+    expect(within(document.querySelector('[data-result-key="ww-2"]') as HTMLElement).getByTestId('posting-liveness')).toHaveTextContent('Not checked yet');
+    expect(check).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getAllByText('Second role')[0]!);
+    await waitFor(() => expect(check).toHaveBeenCalledWith('ww-2'));
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it('a closed result cannot start from the primary action; "Prepare anyway" is the explicit secondary path', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+    const { pipeline } = withLiveness(vi.fn(async (key: string) => liveView(key, 'closed')));
+    const onViewApplicationAttempt = vi.fn();
+
+    render(<SearchPage onViewApplicationAttempt={onViewApplicationAttempt} />);
+    const primary = await screen.findByRole('button', { name: 'Get ready to apply' });
+    await waitFor(() => expect(primary).toBeDisabled());
+    fireEvent.click(primary);
+    expect(pipeline.startFromVacancy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare anyway' }));
+    await waitFor(() => expect(pipeline.startFromVacancy).toHaveBeenCalledWith('ww-1'));
+    await waitFor(() => expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-search-1'));
+  });
+
+  it('an older bridge without liveness still shows "Not checked yet" beside the score and never fails the page', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+    render(<SearchPage />);
+    const row = await waitFor(() => {
+      const found = document.querySelector('[data-result-key="ww-1"]');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(within(row).getByTestId('posting-liveness')).toHaveTextContent('Not checked yet');
+    expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeEnabled();
+  });
+});

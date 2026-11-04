@@ -32,7 +32,13 @@ export type PostingVerificationResult =
   | 'confirmed_closed'
   | 'materially_changed'
   | 'unable_to_verify';
-export type PostingVerificationResolution = 'refreshed' | 'prepare_anyway' | 'keep_current' | 'superseded';
+export type PostingVerificationResolution =
+  | 'refreshed'
+  | 'prepare_anyway'
+  | 'keep_current'
+  | 'superseded'
+  /** #720: on a "could not check" row, the person looked at the posting and recorded that it is open. */
+  | 'confirmed_by_person';
 export type PostingVerificationOutcome = 'open' | 'closed' | 'unable';
 
 /** Newest rows kept per attempt; older ones are pruned unless they carry a decision or a hold. */
@@ -617,6 +623,56 @@ export function adoptPostingChange(db: WorkspaceDb, attemptId: string): AdoptPos
       .where(eq(applicationPostingVerifications.id, pending.id))
       .run();
     return { ok: true, verificationId: pending.id };
+  });
+}
+
+/**
+ * The newest "It's open" the person recorded for this attempt (#720), or null. The record's
+ * `resolvedAt` is when they said it; its `observedAt` is the automatic check that could not answer.
+ */
+export function getPersonOpenConfirmation(db: Pick<WorkspaceDb, 'select'>, attemptId: string): PostingVerificationRecord | null {
+  const row = db
+    .select()
+    .from(applicationPostingVerifications)
+    .where(
+      and(
+        eq(applicationPostingVerifications.attemptId, attemptId),
+        eq(applicationPostingVerifications.resolution, 'confirmed_by_person'),
+      ),
+    )
+    .orderBy(desc(applicationPostingVerifications.resolvedAt), desc(sql`rowid`))
+    .limit(1)
+    .get();
+  return row ? toRecord(row) : null;
+}
+
+export type ConfirmPostingOpenResult =
+  | { ok: true; record: PostingVerificationRecord }
+  | { ok: false; reason: 'not_found' | 'historical' | 'not_waiting' | 'finding_pending' | 'nothing_to_confirm' };
+
+/**
+ * Records the person's explicit "It's open" for a posting the app could not check (#720), on the
+ * newest "could not check" row, with the time it was said. Refused for a sent application, for one
+ * that is not waiting, while a closed/changed finding still waits for its own decision (that
+ * decision comes first), and when the newest answer is not a "could not check" (nothing to confirm).
+ * It never overrides a definitive check: a later closed answer still stops preparation.
+ */
+export function confirmPostingOpen(db: WorkspaceDb, attemptId: string, at: Date = new Date()): ConfirmPostingOpenResult {
+  return db.transaction((tx) => {
+    const attempt = tx.select().from(applicationAttempts).where(eq(applicationAttempts.id, attemptId)).get();
+    if (!attempt) return { ok: false, reason: 'not_found' };
+    if (isHistoricalAttempt(attempt)) return { ok: false, reason: 'historical' };
+    if (attempt.checkpoint !== 'needs_user' && attempt.checkpoint !== 'failed') return { ok: false, reason: 'not_waiting' };
+    if (pendingRow(tx, attemptId)) return { ok: false, reason: 'finding_pending' };
+    const latest = latestRow(tx, attemptId);
+    if (!latest || latest.result !== 'unable_to_verify') return { ok: false, reason: 'nothing_to_confirm' };
+    const [row] = tx
+      .update(applicationPostingVerifications)
+      .set({ resolution: 'confirmed_by_person', resolvedAt: at })
+      .where(eq(applicationPostingVerifications.id, latest.id))
+      .returning()
+      .all();
+    return row ? { ok: true, record: toRecord(row) } : { ok: false, reason: 'nothing_to_confirm' };
   });
 }
 

@@ -2074,6 +2074,9 @@ describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
       'postingVerification',
       'verifyPosting',
       'refreshFromPosting',
+      // #720: read-only liveness for search results, and one bounded check of one selected result.
+      'postingLiveness',
+      'checkPostingLiveness',
       'attachLetter',
     ]);
     expect(typeof api.start).toBe('function');

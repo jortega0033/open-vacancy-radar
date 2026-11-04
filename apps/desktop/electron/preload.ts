@@ -52,6 +52,7 @@ import type {
 } from './application-executor-types.js';
 import type {
   ApplicationPipelineBridge,
+  PostingLivenessView,
   PostingVerificationAction,
   PostingVerificationView,
   RestartApplicationTailoringResult,
@@ -1947,7 +1948,9 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
   },
   async resume(attemptId, options): Promise<RestartApplicationTailoringResult> {
     const resolution =
-      options?.resolution === 'prepare_anyway' || options?.resolution === 'keep_current' ? options.resolution : undefined;
+      options?.resolution === 'prepare_anyway' || options?.resolution === 'keep_current' || options?.resolution === 'confirm_open'
+        ? options.resolution
+        : undefined;
     const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', {
       attemptId,
       ...(resolution === undefined ? {} : { resolution }),
@@ -1971,6 +1974,21 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
     const mode = source ? optionalString(source, 'tailoringMode') : undefined;
     return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
   },
+  async postingLiveness(vacancyKeys): Promise<PostingLivenessView[]> {
+    const keys = vacancyKeys.filter((key) => typeof key === 'string' && key.length > 0).slice(0, 200);
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:posting-liveness', { vacancyKeys: keys });
+    if (!Array.isArray(result)) return [];
+    return result.flatMap((entry) => {
+      const key = asRecord(entry) ? optionalString(asRecord(entry)!, 'vacancyKey') : undefined;
+      return key !== undefined && keys.includes(key) ? [parsePostingLivenessView(entry, key)] : [];
+    });
+  },
+  async checkPostingLiveness(vacancyKey): Promise<PostingLivenessView> {
+    return parsePostingLivenessView(
+      await ipcRenderer.invoke('application-pipeline:check-posting-liveness', { vacancyKey }),
+      vacancyKey,
+    );
+  },
   async attachLetter(attemptId) {
     const source = asRecord(await ipcRenderer.invoke('application-pipeline:attach-letter', { attemptId }));
     const detail = source ? optionalString(source, 'detail') : undefined;
@@ -1992,6 +2010,8 @@ const POSTING_ACTIONS: readonly PostingVerificationAction[] = [
   'refresh',
   'keep_current',
   'prepare_anyway',
+  'prepare_now',
+  'confirm_open',
 ];
 const POSTING_RESOLUTIONS = ['refreshed', 'prepare_anyway', 'keep_current'] as const;
 const POSTING_CHANGE_KINDS = ['requirements', 'text'] as const;
@@ -2019,6 +2039,7 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
   const recheck = source ? asRecord(source.recheck) : undefined;
   const recheckAt = recheck ? optionalString(recheck, 'checkedAt') : undefined;
   const recheckReason = recheck ? optionalString(recheck, 'reason') : undefined;
+  const personConfirmedAt = source ? optionalString(source, 'personConfirmedAt') : undefined;
   const actions = Array.isArray(source?.actions)
     ? (source.actions as unknown[]).filter((action): action is PostingVerificationAction =>
         (POSTING_ACTIONS as readonly unknown[]).includes(action),
@@ -2046,6 +2067,8 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
     resolution: (POSTING_RESOLUTIONS as readonly unknown[]).includes(resolution)
       ? (resolution as PostingVerificationView['resolution'])
       : null,
+    // #720: present only when the person actually recorded "It's open"; a malformed time is dropped.
+    ...(known && personConfirmedAt !== undefined && !Number.isNaN(Date.parse(personConfirmedAt)) ? { personConfirmedAt } : {}),
     reused: known && source?.reused === true,
     stale: !known || source?.stale !== false,
     invalidated: known && source?.invalidated === true,
@@ -2056,6 +2079,31 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
         ? { checkedAt: recheckAt, reason: recheckReason as PostingVerificationView['reason'] & string }
         : null,
     actions: known ? actions : ['check_again'],
+  };
+}
+
+const POSTING_LIVENESS_STATES: readonly PostingLivenessView['state'][] = ['open', 'not_checked', 'unverifiable', 'closed'];
+
+/**
+ * Fail closed (#720): an unknown or mismatched answer is "not checked yet", never open or closed, and
+ * open/closed without a real check time is not believed.
+ */
+function parsePostingLivenessView(result: unknown, requestedKey: string): PostingLivenessView {
+  const source = asRecord(result);
+  const state = source ? optionalString(source, 'state') : undefined;
+  const checkedAt = source ? optionalString(source, 'checkedAt') : undefined;
+  const validTime = checkedAt !== undefined && !Number.isNaN(Date.parse(checkedAt));
+  let known = source?.vacancyKey === requestedKey && (POSTING_LIVENESS_STATES as readonly unknown[]).includes(state);
+  if (known && (state === 'open' || state === 'closed') && !validTime) known = false;
+  const reason = known && source ? optionalString(source, 'reason') : undefined;
+  return {
+    vacancyKey: requestedKey,
+    state: known ? (state as PostingLivenessView['state']) : 'not_checked',
+    checkedAt: known && validTime ? checkedAt : null,
+    source: known && source ? (optionalString(source, 'source') ?? null) : null,
+    sourceRef: known && source ? (optionalString(source, 'sourceRef') ?? null) : null,
+    reason: reason !== undefined ? (reason as PostingLivenessView['reason']) : null,
+    checkable: known && source?.checkable === true,
   };
 }
 

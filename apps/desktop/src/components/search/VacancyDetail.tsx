@@ -4,6 +4,9 @@ import { describeLeadQueries } from './search-plan-view.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
 import { ErrorBanner, Eyebrow } from '../shell/index.js';
+import type { PostingLivenessView } from '../../window.js';
+import { livenessFor, livenessLine, livenessProvenance, LivenessChip } from './posting-liveness.js';
+import { formatCheckedAgo } from '../applications/posting-verification-text.js';
 import {
   fitHighlights,
   formatDate,
@@ -82,12 +85,41 @@ function VerificationRow({ verification }: { verification: Verification }) {
 }
 
 /**
+ * #720: the posting's plain liveness, placed directly beside the fit score: the state and when it was
+ * checked by default, who answered and why behind "How we know". Never a second "verification" section.
+ */
+function LivenessLine({ view, checking, stateBeside }: { view: PostingLivenessView; checking: boolean; stateBeside: boolean }) {
+  // When the state chip already sits beside the score, this line adds only what it does not say.
+  const line =
+    checking && view.checkedAt === null
+      ? 'Checking whether the posting is still open…'
+      : stateBeside
+        ? view.checkedAt === null
+          ? null
+          : `Checked ${formatCheckedAgo(view.checkedAt, new Date())}`
+        : livenessLine(view);
+  return (
+    <div className="mt-1.5 text-xs text-base-content/70" data-testid="posting-liveness-line">
+      {line !== null && <p role="status">{line}</p>}
+      <details className="mt-0.5">
+        <summary className="cursor-pointer">How we know</summary>
+        {livenessProvenance(view).map((line) => (
+          <p key={line} className="mt-0.5 text-base-content/60">
+            {line}
+          </p>
+        ))}
+      </details>
+    </div>
+  );
+}
+
+/**
  * Compact fit block for the top of the detail pane (issue #452): the score with its scale, the
  * three fit dimensions, and at most three matching signals and two gaps. Everything comes from the
  * scorer's own `profileMatch`; fewer signals than three means fewer are shown. The full breakdown
  * stays in "Why this matches you" below.
  */
-function FitSummary({ result }: { result: SearchResult }) {
+function FitSummary({ result, liveness, checking }: { result: SearchResult; liveness: PostingLivenessView; checking: boolean }) {
   const score = result.profileScore;
   const { signals, gaps } = fitHighlights(result.profileMatch);
 
@@ -103,6 +135,7 @@ function FitSummary({ result }: { result: SearchResult }) {
               <span aria-hidden="true">{score}/100</span>
               <span className="sr-only">{profileFitSpoken(score)}</span>
             </span>
+            <LivenessChip view={liveness} />
             {result.profileMatch && (
               <>
                 <span className="badge badge-soft badge-sm">Technical fit {result.profileMatch.technicalFit}</span>
@@ -118,6 +151,7 @@ function FitSummary({ result }: { result: SearchResult }) {
           ? 'Not scored yet.'
           : 'Based on what you are looking for.'}
       </p>
+      <LivenessLine view={liveness} checking={checking} stateBeside={score !== null} />
       {(signals.length > 0 || gaps.length > 0) && (
         <div className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm text-base-content/70 sm:grid-cols-2">
           {signals.length > 0 && (
@@ -200,6 +234,16 @@ export interface VacancyDetailProps {
   onScrollTopChange?: (scrollTop: number) => void;
   /** The CV assistant, rendered by the page so this component stays presentational. */
   assistant: ReactNode;
+  /** What is known about whether this posting is open (#720). Absent = "Not checked yet". */
+  liveness?: PostingLivenessView;
+  /** A check of this posting is running right now. */
+  livenessChecking?: boolean;
+  /**
+   * The secondary, explicit path for a posting a check found closed (#720). It starts the application
+   * without any AI work: preparation checks again and, if still closed, waits for Get ready anyway,
+   * which is recorded with its time.
+   */
+  onPrepareAnyway?: () => void;
 }
 
 /**
@@ -226,7 +270,13 @@ export function VacancyDetail({
   scrollTop = 0,
   onScrollTopChange,
   assistant,
+  liveness,
+  livenessChecking = false,
+  onPrepareAnyway,
 }: VacancyDetailProps) {
+  const live = liveness ?? livenessFor(result.key, undefined);
+  // #720: a posting a check found closed cannot use the primary action.
+  const closed = live.state === 'closed';
   const scrollRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop)
@@ -304,7 +354,8 @@ export function VacancyDetail({
                 className="btn btn-primary btn-sm whitespace-normal"
                 type="button"
                 onClick={onPrepare}
-                disabled={prepareState === 'preparing' || !prepareAvailable}
+                disabled={prepareState === 'preparing' || !prepareAvailable || closed}
+                {...(closed ? { 'aria-describedby': 'posting-closed-note' } : {})}
               >
                 {prepareState === 'preparing' && (
                   <span className="loading loading-spinner loading-xs" aria-hidden="true" />
@@ -315,7 +366,23 @@ export function VacancyDetail({
                     ? 'Get ready to apply'
                     : 'Finishing scan…'}
               </button>
-              <div className="text-xs text-base-content/60">Builds a draft for you to review. Nothing is sent.</div>
+              {closed ? (
+                <div className="flex flex-wrap items-center gap-1 text-xs text-base-content/70">
+                  <span id="posting-closed-note">This posting looks closed or removed.</span>
+                  {onPrepareAnyway && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={onPrepareAnyway}
+                      disabled={prepareState === 'preparing' || !prepareAvailable}
+                    >
+                      Prepare anyway
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-base-content/60">Builds a draft for you to review. Nothing is sent.</div>
+              )}
             </div>
             <button
               className="btn btn-outline btn-sm whitespace-normal"
@@ -369,7 +436,7 @@ export function VacancyDetail({
         <VerificationRow verification={result.verification} />
 
         <div className="ovr-vacancy-summary-grid mt-3 grid grid-cols-1 gap-2.5">
-          <FitSummary result={result} />
+          <FitSummary result={result} liveness={live} checking={livenessChecking} />
 
           <Card label="CV match">
             <div className="mt-1.5 text-sm font-semibold">Not compared to your CV yet</div>
@@ -397,13 +464,6 @@ export function VacancyDetail({
             </p>
           ) : result.profileMatch ? (
             <div className="mt-3 space-y-4">
-              <p className="text-sm text-base-content/70">
-                <span className="font-semibold text-base-content">
-                  Profile fit: {result.profileScore} out of 100.
-                </span>{' '}
-                Based on what you are looking for.
-              </p>
-
               {result.profileMatch.matchingSkills.length > 0 && (
                 <div>
                   <div className="mb-1.5 text-xs font-semibold text-base-content/60">
@@ -481,7 +541,7 @@ export function VacancyDetail({
           </dl>
         </section>
 
-        <VerificationSection result={result} />
+        <VerificationSection result={result} livenessAnswered={live.state === 'open' || live.state === 'closed'} />
 
         {assistantOpen && (
           <section ref={assistantRef} className="mt-6 border-t border-base-300 pt-5">

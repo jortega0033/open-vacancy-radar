@@ -150,7 +150,8 @@ describe('VacancyDetail', () => {
 
       // The full breakdown. The compact summary above it repeats some of these, so scope to it.
       const breakdown = within(screen.getByRole('region', { name: 'Profile score breakdown' }));
-      expect(breakdown.getByText(/Profile fit: 82 out of 100\./)).toBeInTheDocument();
+      // #720: the score is shown once, in the summary, beside the posting's liveness state.
+      expect(breakdown.queryByText(/Profile fit: 82 out of 100\./)).not.toBeInTheDocument();
       expect(breakdown.queryByText('Frontend Engineer')).not.toBeInTheDocument();
       expect(breakdown.getByText('Angular')).toBeInTheDocument();
       expect(breakdown.getByText('TypeScript')).toBeInTheDocument();
