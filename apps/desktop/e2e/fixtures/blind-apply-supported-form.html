@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture: Blind Apply supported form</title>
+<!--
+  Test-only fixture (issue #722). NOT a real employer or ATS page: it is loaded over a file:// URL that
+  `application-target-policies.ts` pins by exact path, and it exists so Blind Apply can be driven end to
+  end -- fill from exact labels, send, observe a confirmation -- without this repo ever contacting or
+  imitating a real site.
+
+  Shape: only the fields a deterministic, exact-label Blind Apply run can answer from a CV, a profile and
+  one answer the person chose to remember: five text-like inputs, one native select, and a resume upload.
+  Deliberately NO consent checkbox: a required consent box pauses Blind Apply for the person, which is
+  what `ashby-application-form.html` covers.
+
+  Sending shows a confirmation page that was not there before the click and prints a reference, the two
+  things the submission observer accepts as a receipt (#271). Nothing is transmitted anywhere.
+-->
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  .field { margin-bottom: 1.25rem; }
+  label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+  .hint { font-weight: 400; color: #666; font-size: 0.85rem; }
+  input[type="text"], input[type="email"], input[type="tel"], input[type="url"], select {
+    width: 100%; padding: 0.5rem; box-sizing: border-box; font-size: 1rem;
+  }
+</style>
+</head>
+<body>
+  <main id="page">
+    <h1>Apply: Senior Frontend Engineer (fixture)</h1>
+    <form id="application-form">
+      <div class="field">
+        <label for="full-name">Full name <span aria-hidden="true">*</span></label>
+        <input type="text" id="full-name" aria-label="Full name" name="fullName" required />
+      </div>
+
+      <div class="field">
+        <label for="email">Email address <span aria-hidden="true">*</span></label>
+        <input type="email" id="email" aria-label="Email address" name="email" required />
+      </div>
+
+      <div class="field">
+        <label for="phone">Phone number <span aria-hidden="true">*</span></label>
+        <input type="tel" id="phone" aria-label="Phone number" name="phone" required />
+      </div>
+
+      <div class="field">
+        <label for="current-location">Current location <span aria-hidden="true">*</span></label>
+        <input type="text" id="current-location" aria-label="Current location" name="currentLocation" required />
+      </div>
+
+      <div class="field">
+        <label for="linkedin">LinkedIn profile URL <span class="hint">(optional)</span></label>
+        <input type="url" id="linkedin" aria-label="LinkedIn profile URL" name="linkedInUrl" />
+      </div>
+
+      <div class="field">
+        <label for="work-arrangement">Preferred work arrangement <span aria-hidden="true">*</span></label>
+        <select id="work-arrangement" aria-label="Preferred work arrangement" name="workArrangement" required>
+          <option value="">Select one</option>
+          <option value="remote">Remote</option>
+          <option value="hybrid">Hybrid</option>
+          <option value="onsite">On-site</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="resume">Resume <span aria-hidden="true">*</span></label>
+        <input type="file" id="resume" aria-label="Resume" name="resume" accept="application/pdf" required />
+      </div>
+
+      <button type="submit" id="submit-application">Submit Application</button>
+    </form>
+  </main>
+  <script>
+    document.getElementById('application-form').addEventListener('submit', function (event) {
+      event.preventDefault();
+      if (!event.target.checkValidity()) return;
+      document.getElementById('page').innerHTML =
+        '<h1>Your application has been submitted</h1><p>Application reference: BLIND-FIXTURE-0001</p>';
+    });
+  </script>
+</body>
+</html>
