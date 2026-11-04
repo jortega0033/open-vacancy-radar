@@ -2,7 +2,7 @@ import { ArrowLeft, CheckCircle } from '@phosphor-icons/react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import type { SelectedVacancy } from '../letters/types.js';
-import { WarningBanner } from '../shell/index.js';
+import { ErrorBanner, WarningBanner } from '../shell/index.js';
 import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationCritiquePanel } from './ApplicationCritiquePanel.js';
 import { ApplicationReviewSession } from './ApplicationReviewSession.js';
@@ -533,9 +533,7 @@ export function ApplyWorkspace({
       </div>
 
       {loadError && (
-        <div className="alert alert-error mt-4 text-sm" role="alert">
-          {loadError}
-        </div>
+        <ErrorBanner className="mt-4">{loadError}</ErrorBanner>
       )}
 
       {attempt && (phase.phase === 'manual' || phase.phase === 'tailoring_blocked' || phase.phase === 'preparation_blocked' || phase.phase === 'error') && (
@@ -790,12 +788,19 @@ export function ApplyWorkspace({
 
       {phase.phase === 'error' && (
         <div className="mt-5 space-y-4">
-          <div
-            className={`alert ${phase.failure.outcome === 'unconfirmed' ? 'alert-warning' : phase.failure.outcome === 'sent' ? 'alert-info' : 'alert-error'}`}
-            role="alert"
-          >
-            <p className="font-semibold">{phase.failure.message}</p>
-          </div>
+          {phase.failure.outcome === 'unconfirmed' ? (
+            <WarningBanner>
+              <span className="font-semibold">{phase.failure.message}</span>
+            </WarningBanner>
+          ) : phase.failure.outcome === 'sent' ? (
+            <div className="alert alert-info" role="alert">
+              <p className="font-semibold">{phase.failure.message}</p>
+            </div>
+          ) : (
+            <ErrorBanner>
+              <span className="font-semibold">{phase.failure.message}</span>
+            </ErrorBanner>
+          )}
           {phase.failure.detail ? <TechnicalDetails text={phase.failure.detail} label="Technical details" /> : null}
           {phase.failure.outcome === 'unconfirmed' && !phase.checked ? (
             <p className="text-xs text-base-content/70">Check the employer site first. Then Try again unlocks.</p>

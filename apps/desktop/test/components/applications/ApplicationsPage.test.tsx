@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApplicationsPage } from '../../../src/components/applications/index.js';
 import type { ApplicationAttemptRecord, ApplicationRecord } from '../../../src/window.js';
