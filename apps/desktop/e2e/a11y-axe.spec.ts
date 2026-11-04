@@ -126,7 +126,8 @@ test.describe('axe accessibility audit (issue #501)', () => {
         const page = await app.firstWindow();
         await page.waitForLoadState('domcontentloaded');
         await ensureLightTheme(page);
-        await goto(page, 'Applications');
+        // With a seeded application the sidebar button's name carries its badge counts.
+        await page.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: /^Applications/ }).first().click();
         await page.getByRole('tab', { name: /^Ready to apply/ }).click();
         await page.getByRole('row', { name: new RegExp(APPLY_COMPANY) }).click();
         const region = page.getByRole('region', { name: `${APPLY_ROLE} at ${APPLY_COMPANY}` });

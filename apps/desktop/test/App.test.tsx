@@ -509,6 +509,49 @@ describe('App', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeInTheDocument();
     });
 
+    it('Generate letter from the Search workspace goes to Letters and comes back to the same workspace (#657)', async () => {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      });
+      const attempt = {
+        id: 'attempt-letter',
+        vacancyKey: 'ww-1',
+        role: 'Remote Frontend Engineer',
+        company: 'Acme Corp',
+        canonicalUrl: 'https://example.invalid/jobs/ww-1',
+        jdSnapshot: 'Join our team.',
+        checkpoint: 'needs_user',
+        checkpointDetail: 'Your tailored CV is ready. Cover letter blocker: unsupported source facts. Use Generate letter.',
+        updatedAt: '2026-10-01T00:00:00.000Z',
+        scheduledAutomaticSubmitAt: null,
+      };
+      installWorkspaceBridge({
+        getApplicationAttempt: vi.fn().mockResolvedValue(attempt),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([{ id: 'cv-1', attemptId: attempt.id, kind: 'cv_pdf', fileName: 'cv.pdf' }]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue(null),
+      };
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        startFromVacancy: vi.fn().mockResolvedValue({ ok: true, attemptId: 'attempt-letter', savedJobId: 'saved-1', created: false }),
+        attachLetter: vi.fn().mockResolvedValue({ ok: true, attemptId: 'attempt-letter' }),
+      };
+
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Get ready to apply' }));
+      const region = await screen.findByRole('region', { name: 'Remote Frontend Engineer at Acme Corp' });
+      fireEvent.click(await within(region).findByRole('button', { name: 'Generate letter' }));
+
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
+      fireEvent.click(await screen.findByRole('button', { name: 'Back to Remote Frontend Engineer' }));
+
+      // Back on Search, in the same workspace, not under Applications.
+      expect(await screen.findByRole('region', { name: 'Remote Frontend Engineer at Acme Corp' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Search jobs' })).toBeInTheDocument();
+    });
+
     it('starts a new transient session after the App root remounts', async () => {
       const getReport = vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()]));
       installVacancyRadarBridge({
