@@ -191,6 +191,8 @@ describe('copy rules: pipeline jargon', () => {
 //  #639 part 2 (apply flow):
 //    Get ready to apply        the one verb for starting the apply flow from any job. Banned: "Start application",
 //                              "Prepare application", "Tailor for a job". "Compare with my CV" stays as the read-only check.
+//    Apply                     #657 owner steering (2026-10-30): the one primary action in the Search vacancy detail
+//                              is labelled Apply, described as building a draft to review with nothing sent.
 //    Ready to apply            the Applications tab for drafts waiting on you. Banned: "Review queue".
 //    application               what a tailoring case or attempt is called on screen. Banned: "tailoring case", "attempt".
 //  Internal names (CvProfile, getSearchProfile, the 'search-profile' focus section) stay as they are.

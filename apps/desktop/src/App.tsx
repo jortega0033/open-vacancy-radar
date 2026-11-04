@@ -552,6 +552,7 @@ export function App() {
               onOpenSearchProfile={handleOpenSearchProfile}
               onSavedJobsChanged={refreshCounts}
               onGenerateLetter={handleGenerateApplicationLetter}
+              onViewFinishedAttempt={handleViewApplicationAttempt}
               session={searchSession}
               onSessionChange={setSearchSession}
               handoff={searchHandoff}

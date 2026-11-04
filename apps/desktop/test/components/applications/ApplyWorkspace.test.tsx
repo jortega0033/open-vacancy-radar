@@ -335,3 +335,139 @@ describe('ApplyWorkspace (#657)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ApplyWorkspace: a send in progress (#657 review)', () => {
+  const sending = makeAttempt({ checkpoint: 'submitting', checkpointDetail: '' });
+
+  it('says the application is being sent, never that it is still being prepared, and offers no manual submit', async () => {
+    setup({ sequence: [sending] });
+    renderWorkspace();
+
+    const status = await screen.findByTestId('apply-workspace-status');
+    await waitFor(() => expect(status).toHaveTextContent('Sending your application…'));
+    const note = screen.getByTestId('apply-workspace-sending');
+    expect(note).toHaveTextContent("Your application is being sent to Acme Corp. Do not submit it on the employer's site as well.");
+    // None of the preparation view: no steps, no "Writing your letter", no "turns ready here" promise.
+    expect(screen.queryByRole('list', { name: 'Preparation steps' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Writing your letter/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/turns ready here/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Ready to review')).not.toBeInTheDocument();
+    // Nothing that could lead to a second, manual submission while the send is in flight.
+    for (const name of ['Open the employer form', 'Approve package', 'I submitted it', 'I already submitted it', 'Skip']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it('hands the application to the host once the send settles', async () => {
+    const sent = makeAttempt({ checkpoint: 'submission_unknown', checkpointDetail: '', updatedAt: '2026-10-01T10:05:00.000Z' });
+    setup({ sequence: [sending, sending, sent] });
+    const onFinished = vi.fn();
+    renderWorkspace({ onFinished });
+
+    await screen.findByTestId('apply-workspace-sending');
+    await waitFor(() => expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ checkpoint: 'submission_unknown' })), {
+      timeout: 5_000,
+    });
+    expect(onFinished).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ApplyWorkspace: a finished application (#657 review)', () => {
+  it.each(['user_reported', 'submission_unknown', 'failed', 'skipped', 'submitted'] as const)(
+    'hands a %s application read on opening to the host history view',
+    async (checkpoint) => {
+      const finished = makeAttempt({ checkpoint, checkpointDetail: '' });
+      setup({ sequence: [finished] });
+      const onFinished = vi.fn();
+      renderWorkspace({ onFinished });
+      await waitFor(() => expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ id: 'attempt-1', checkpoint })));
+      expect(onFinished).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('decides from a fresh read: a stale skipped list row that was put back in review stays in the workspace', async () => {
+    const staleRow = makeAttempt({ checkpoint: 'skipped' });
+    const restored = makeAttempt({ updatedAt: '2026-10-01T10:05:00.000Z' });
+    setup({ sequence: [restored] });
+    const onFinished = vi.fn();
+    renderWorkspace({ onFinished, initialAttempt: staleRow });
+
+    expect(await screen.findByRole('button', { name: 'Approve package' })).toBeInTheDocument();
+    expect(onFinished).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApplyWorkspace: I already submitted it (#657 review)', () => {
+  it('records the submission from the ready view without opening the employer form', async () => {
+    const { applicationExecutor } = setup();
+    const { onChanged } = renderWorkspace();
+    await screen.findByText('Ready to review');
+
+    expect(screen.getByText("Already submitted it on Acme Corp's site?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'I already submitted it' }));
+    await waitFor(() => expect(applicationExecutor.recordUserReportedSubmission).toHaveBeenCalledWith('attempt-1'));
+    expect(await screen.findByText(/Recorded\. Frontend Engineer at Acme Corp is marked as applied\./)).toBeInTheDocument();
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it('records it from the approved view too, still without opening the employer form', async () => {
+    const { applicationExecutor } = setup();
+    renderWorkspace();
+    await screen.findByText('Ready to review');
+    fireEvent.click(screen.getByRole('button', { name: 'Approve package' }));
+    await screen.findByRole('button', { name: 'Open the employer form' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'I already submitted it' }));
+    await waitFor(() => expect(applicationExecutor.recordUserReportedSubmission).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/is marked as applied/)).toBeInTheDocument();
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows a failed record as not sent', async () => {
+    const recordUserReportedSubmission = vi.fn().mockResolvedValue({ ok: false, reason: 'not_found', detail: 'no such application' });
+    setup({ executor: { recordUserReportedSubmission } });
+    renderWorkspace();
+    await screen.findByText('Ready to review');
+    fireEvent.click(screen.getByRole('button', { name: 'I already submitted it' }));
+    expect(await screen.findByText('Not sent. We could not record this application.')).toBeInTheDocument();
+    expect(recordUserReportedSubmission).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/is marked as applied/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ApplyWorkspace: focus after each step (#657 review)', () => {
+  it('moves focus to I submitted it after opening the employer form, then to Back after recording', async () => {
+    setup();
+    renderWorkspace();
+    await screen.findByText('Ready to review');
+    fireEvent.click(screen.getByRole('button', { name: 'Approve package' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open the employer form' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'I submitted it' })).toHaveFocus());
+    fireEvent.click(screen.getByRole('button', { name: 'I submitted it' }));
+    await screen.findByText(/is marked as applied/);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back to the vacancy' })).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('moves focus to Undo after Skip, and to the workspace heading after Undo', async () => {
+    const ready = makeAttempt();
+    const { workspace } = setup({ sequence: [ready] });
+    renderWorkspace();
+    await screen.findByText('Ready to review');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    const undo = await screen.findByRole('button', { name: 'Undo' });
+    await waitFor(() => expect(undo).toHaveFocus());
+
+    // Undo reads the stored record once (still skipped), puts it back, then reads the restored record.
+    (workspace.getApplicationAttempt as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...ready, checkpoint: 'skipped' });
+    fireEvent.click(undo);
+    const heading = screen.getByRole('heading', { level: 2, name: 'Frontend Engineer at Acme Corp' });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(await screen.findByRole('button', { name: 'Approve package' })).toBeInTheDocument();
+    expect(heading).toHaveFocus();
+  });
+});

@@ -211,7 +211,7 @@ base.describe('Escape dismissal for seeded-workspace overlays', () => {
           await window.waitForLoadState('domcontentloaded');
           await ensureLightTheme(window);
           await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'Search', exact: true }).click();
-          await window.getByRole('button', { name: 'Get ready to apply' }).click();
+          await window.getByRole('button', { name: 'Apply', exact: true }).click();
 
           const workspaceRegion = window.getByTestId('apply-workspace');
           await expect(workspaceRegion.getByRole('button', { name: 'Approve package' })).toBeVisible();
@@ -223,7 +223,7 @@ base.describe('Escape dismissal for seeded-workspace overlays', () => {
           await expect(window.locator(':focus')).toHaveCount(1);
           await workspaceRegion.getByRole('button', { name: 'Back to the vacancy' }).click();
           await expect(workspaceRegion).toBeHidden();
-          await expect(window.getByRole('button', { name: 'Get ready to apply' })).toBeFocused();
+          await expect(window.getByRole('button', { name: 'Apply', exact: true })).toBeFocused();
         } finally {
           await electronApp.close();
         }

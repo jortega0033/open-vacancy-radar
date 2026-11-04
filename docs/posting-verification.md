@@ -27,7 +27,7 @@ yet"; a link no check can reach says "Couldn't check". A result whose applicatio
 says so too. These summaries live in memory only (no posting text, nothing about the person) and are bounded; after
 a restart results honestly read "Not checked yet" again.
 
-A result a check found **closed** cannot use the primary **Get ready to apply**. The secondary **Prepare anyway**
+A result a check found **closed** cannot use the primary **Apply** action. The secondary **Prepare anyway**
 starts the application without any AI work: preparation checks the posting again and, if it is still closed, stops
 at the closed finding, where **Get ready anyway** is the explicit override that is recorded with its time.
 

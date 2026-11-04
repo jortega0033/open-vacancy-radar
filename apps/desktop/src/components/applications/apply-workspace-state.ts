@@ -32,6 +32,16 @@ export function workspaceStageFor(checkpoint: ApplicationAttemptCheckpoint): Wor
   return 'finished';
 }
 
+/**
+ * True while a send is in flight: the Send application click (`application-review-session.ts`) or
+ * Blind Apply about to send writes `submitting`. It is listed with the preparing checkpoints so the
+ * workspace keeps re-reading it, but it is never shown as preparation, and it never offers the
+ * employer form, which could lead to a second, duplicate application.
+ */
+export function isSendInProgress(checkpoint: ApplicationAttemptCheckpoint): boolean {
+  return checkpoint === 'submitting';
+}
+
 /** The stored sentence the pipeline writes when automatic tailoring stops (`application-pipeline.ts`
  * matches on the same prefix). The raw reason after it is kept for a Details disclosure. */
 export const TAILORING_STOPPED_PREFIX = 'Automatic CV tailoring stopped:';
@@ -136,7 +146,8 @@ export interface ProgressStep {
 
 /**
  * The preparation progress shown in place, in plain words (text diet T17). Pipeline checkpoint
- * names never reach the screen. `filling` and `submitting` only happen for an allowlisted site.
+ * names never reach the screen. `filling` only happens for an allowlisted site. `submitting` is a
+ * send in flight (see `isSendInProgress`) and the workspace shows it without these steps.
  */
 const PROGRESS_STEPS = ['Checking the posting', 'Writing your CV', 'Writing your letter and files', 'Ready to review'] as const;
 
@@ -178,8 +189,9 @@ export function preparationStatusLine(checkpoint: ApplicationAttemptCheckpoint):
     case 'rendering':
       return 'Writing your letter and making the files…';
     case 'filling':
-    case 'submitting':
       return 'Getting the employer form ready…';
+    case 'submitting':
+      return 'Sending your application…';
     default:
       return 'Ready to review.';
   }

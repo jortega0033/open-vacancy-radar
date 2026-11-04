@@ -23,6 +23,7 @@ import { indexOverview, totalsFor, type OverviewItem } from './follow-ups-overvi
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
 import { PREPARING_CHECKPOINTS, REVIEW_CHECKPOINTS, workspaceStageFor } from './apply-workspace-state.js';
+import { restoreSkippedAttempt, SKIP_UNDO_MS } from './skip-undo.js';
 import type { SelectedVacancy } from '../letters/types.js';
 
 type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecord };
@@ -43,9 +44,7 @@ interface PendingSkipUndo {
   attempt: ApplicationAttemptRecord;
 }
 
-/** How long the "Skipped" undo stays up after a skip in the allowlisted review dialog. Longer than
- * the delete undo. A skip in the Review & apply workspace keeps its Undo in place instead. */
-export const SKIP_UNDO_MS = 10_000;
+export { SKIP_UNDO_MS };
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -195,12 +194,25 @@ export function ApplicationsPage({
     };
   }, [activeTab, workspaceOpen]);
 
-  /** Every route into one application lands on the same workspace (#657). */
+  /** Every route into one application lands on the same workspace (#657). A finished one is handed
+   * to the history drawer by the workspace itself (`handleWorkspaceFinished`). */
   const openWorkspace = useCallback((attemptId: string) => {
     setActiveTab('in_progress');
     setOpenAttempt(null);
     setWorkspaceAttemptId(attemptId);
   }, []);
+
+  // The workspace read an application that already finished (sent, recorded, unconfirmed, failed or
+  // skipped), opened from Saved jobs, Blind Apply, the scheduled-send banner, the notification or
+  // the Letters return, or a send that finished while it was open. The history drawer carries what
+  // a finished application needs: brief, evidence, documents, job link and its recovery actions.
+  const handleWorkspaceFinished = useCallback((attempt: ApplicationAttemptRecord) => {
+    setWorkspaceAttemptId(null);
+    setActiveTab('in_progress');
+    setAttemptView('history');
+    setOpenAttempt(attempt);
+    void refreshAttempts();
+  }, [refreshAttempts]);
   const workspaceInitial = useMemo(
     () => attempts?.find((attempt) => attempt.id === workspaceAttemptId) ?? null,
     [attempts, workspaceAttemptId],
@@ -379,13 +391,7 @@ export function ApplicationsPage({
     const undo = pendingSkipUndo;
     if (!undo) return;
     try {
-      const current = await window.workspace.getApplicationAttempt(undo.attempt.id);
-      if (current.checkpoint === 'skipped') {
-        await window.workspace.updateApplicationAttempt(undo.attempt.id, {
-          checkpoint: undo.attempt.checkpoint,
-          checkpointDetail: undo.attempt.checkpointDetail,
-        });
-      }
+      await restoreSkippedAttempt(undo.attempt);
       setAttemptView('review');
       openWorkspace(undo.attempt.id);
       await refreshAttempts();
@@ -459,6 +465,7 @@ export function ApplicationsPage({
             onApplicationsChanged?.();
           }}
           onSkipped={handleSkipped}
+          onFinished={handleWorkspaceFinished}
           {...(onGenerateLetter ? { onGenerateLetter } : {})}
         />
         {pendingSkipUndo && (

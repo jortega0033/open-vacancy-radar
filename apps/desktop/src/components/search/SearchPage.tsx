@@ -3,13 +3,14 @@ import { ArrowLeft, Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile, GlobalRemoteReport, SearchPlan } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
-import type { PostingLivenessView, SavedJobInput, VacancyEngineStatus } from '../../window.js';
+import type { ApplicationAttemptRecord, PostingLivenessView, SavedJobInput, VacancyEngineStatus } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState, ErrorBanner, WarningBanner, useAnnounce } from '../shell/index.js';
+import { EmptyState, ErrorBanner, UndoToast, WarningBanner, useAnnounce } from '../shell/index.js';
 import { ApplyWorkspace } from '../applications/ApplyWorkspace.js';
+import { restoreSkippedAttempt, SKIP_UNDO_MS } from '../applications/skip-undo.js';
 import {
   SCAN_FAILED_ANNOUNCEMENT,
   SCAN_STARTED_ANNOUNCEMENT,
@@ -189,6 +190,9 @@ export interface SearchPageProps {
   onSavedJobsChanged?: () => void;
   /** Hands an application to the letter generator; App brings the person back to this workspace. */
   onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
+  /** Shows an application that already finished in the Applications history view (#657), which
+   * carries its documents, details and recovery actions. Search has no history view of its own. */
+  onViewFinishedAttempt?: (attemptId: string) => void;
   preferredSelectedKey?: string | null;
   session?: SearchSessionState;
   onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
@@ -226,6 +230,7 @@ export function SearchPage({
   onOpenSearchProfile,
   onSavedJobsChanged,
   onGenerateLetter,
+  onViewFinishedAttempt,
   preferredSelectedKey = null,
   session: controlledSession,
   onSessionChange,
@@ -384,6 +389,8 @@ export function SearchPage({
   const [applyAttemptId, setApplyAttemptId] = useSearchSessionField(session, setSession, 'applyAttemptId');
   /** Set when the workspace closes, so focus goes back to the control that opened it. */
   const focusApplyOpenerRef = useRef(false);
+  /** A skip in the allowlisted review dialog opened from this workspace, offered for undo (#468). */
+  const [skipUndo, setSkipUndo] = useState<ApplicationAttemptRecord | null>(null);
 
   const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(new Set());
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
@@ -1444,16 +1451,64 @@ export function SearchPage({
     setApplyAttemptId(null);
   }, [setApplyAttemptId]);
 
-  // Back from the workspace: focus returns to Get ready to apply on the vacancy it came from, or
-  // to the vacancy heading when that control is not there.
+  // An application that already finished goes to the Applications history view instead.
+  const handleApplyFinished = useCallback((attempt: ApplicationAttemptRecord) => {
+    setApplyAttemptId(null);
+    onViewFinishedAttempt?.(attempt.id);
+  }, [onViewFinishedAttempt, setApplyAttemptId]);
+
+  // The same undo the Applications page offers: restore the exact checkpoint only if the
+  // application is still skipped, then reopen it here.
+  const handleUndoApplySkip = useCallback(async () => {
+    const skipped = skipUndo;
+    if (!skipped) return;
+    setSkipUndo(null);
+    try {
+      await restoreSkippedAttempt(skipped);
+      setApplyAttemptId(skipped.id);
+    } catch {
+      announce('We could not undo the skip.');
+    }
+  }, [announce, setApplyAttemptId, skipUndo]);
+
+  // Back from the workspace: focus returns to Apply on the vacancy it came from, or to the vacancy
+  // heading when that control is not there. With no vacancy selected (opened from the notification
+  // or a trip to Letters) it goes to the first result, or to the page heading.
   useEffect(() => {
     if (applyAttemptId !== null || !focusApplyOpenerRef.current) return;
     focusApplyOpenerRef.current = false;
     const opener =
       document.querySelector<HTMLElement>('[data-apply-opener]:not([disabled])') ??
-      document.querySelector<HTMLElement>('[data-vacancy-heading]');
-    opener?.focus({ preventScroll: false });
+      document.querySelector<HTMLElement>('[data-vacancy-heading]') ??
+      document.querySelector<HTMLElement>('[data-result-key]');
+    if (opener) {
+      opener.focus({ preventScroll: false });
+      return;
+    }
+    const heading = document.querySelector<HTMLElement>('h1');
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
   }, [applyAttemptId]);
+
+  const applyWorkspacePane = applyAttemptId ? (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="search-apply-pane">
+        <ApplyWorkspace
+          key={applyAttemptId}
+          attemptId={applyAttemptId}
+          closeLabel={selected ? 'Back to the vacancy' : hasReport ? 'Back to results' : 'Back to Search'}
+          onClose={closeApplyWorkspace}
+          onOpenAttempt={setApplyAttemptId}
+          onChanged={onSavedJobsChanged}
+          onSkipped={setSkipUndo}
+          {...(onViewFinishedAttempt ? { onFinished: handleApplyFinished } : {})}
+          {...(onGenerateLetter ? { onGenerateLetter } : {})}
+        />
+      </div>
+    </div>
+  ) : null;
 
   // Moves focus where the person just went: the detail heading after choosing a vacancy, the row
   // they came from after Back (#451). Runs after the pane has rendered, once per change.
@@ -1715,6 +1770,9 @@ export function SearchPage({
         // Nothing has come back from any source yet -- there is genuinely nothing to show, streamed
         // or otherwise, so this is still the plain loading state.
         <SearchLoadingSkeleton />
+      ) : !hasReport && !isStreamingPartial && applyWorkspacePane ? (
+        // Opened from the notification before any search: the workspace still opens in place.
+        <div className="mt-3 flex min-h-0 flex-1">{applyWorkspacePane}</div>
       ) : !hasReport && !isStreamingPartial ? (
         <div className="min-h-0 flex-1 px-6">
           <EmptyState
@@ -1813,20 +1871,8 @@ export function SearchPage({
               />
             )}
 
-            {showWorkspace && applyAttemptId ? (
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="search-apply-pane">
-                  <ApplyWorkspace
-                    key={applyAttemptId}
-                    attemptId={applyAttemptId}
-                    closeLabel={selected ? 'Back to the vacancy' : 'Back to results'}
-                    onClose={closeApplyWorkspace}
-                    onOpenAttempt={setApplyAttemptId}
-                    onChanged={onSavedJobsChanged}
-                    {...(onGenerateLetter ? { onGenerateLetter } : {})}
-                  />
-                </div>
-              </div>
+            {showWorkspace && applyWorkspacePane ? (
+              applyWorkspacePane
             ) : showDetailPane && selected ? (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {singlePane && (
@@ -1977,6 +2023,15 @@ export function SearchPage({
             </>
           )}
         </div>
+      )}
+      {skipUndo && (
+        <UndoToast
+          message={`Skipped ${skipUndo.role} at ${skipUndo.company}.`}
+          onUndo={() => void handleUndoApplySkip()}
+          onDismiss={() => setSkipUndo(null)}
+          durationMs={SKIP_UNDO_MS}
+          layerClassName="z-[1000]"
+        />
       )}
     </div>
   );

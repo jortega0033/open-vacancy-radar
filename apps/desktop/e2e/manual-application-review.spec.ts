@@ -4,7 +4,7 @@ import { ensureLightTheme, launchApp } from './fixtures.js';
 import { APPLY_COMPANY, APPLY_ROLE, APPLY_VACANCY_URL, seedApplyWorkspace } from './apply-workspace-seed.js';
 
 /**
- * #657: from a selected Search result, Get ready to apply opens the Review & apply workspace in
+ * #657: from a selected Search result, Apply opens the Review & apply workspace in
  * place of the detail pane. Search stays on screen, there is no tab switch and no dialog. From
  * documents ready to the employer page takes two clicks (Approve package, Open the employer form);
  * opening a document is optional. Everything here is synthetic: the employer link is on the
@@ -38,8 +38,8 @@ test('Search opens the Review & apply workspace in place and reaches the employe
 
       const sidebar = window.getByRole('complementary', { name: 'Main' });
       await sidebar.getByRole('button', { name: 'Search', exact: true }).click();
-      await expect(window.getByRole('button', { name: 'Get ready to apply' })).toBeVisible();
-      await window.getByRole('button', { name: 'Get ready to apply' }).click();
+      await expect(window.getByRole('button', { name: 'Apply', exact: true })).toBeVisible();
+      await window.getByRole('button', { name: 'Apply', exact: true }).click();
 
       // One in-app screen: the workspace replaces the detail pane on Search. No tab switch, no dialog.
       const workspace = window.getByRole('region', { name: `${APPLY_ROLE} at ${APPLY_COMPANY}` });
@@ -130,6 +130,9 @@ test('Search opens the Review & apply workspace in place and reaches the employe
         document.documentElement.dataset.theme = 'openvacancyradar';
       });
 
+      // A person who already submitted on an earlier visit can record it without the employer form.
+      await expect(workspace.getByRole('button', { name: 'I already submitted it' })).toBeVisible();
+
       // Click 1 of 2: Approve package. Focus moves to the one primary action left.
       await approve.click();
       const openForm = workspace.getByRole('button', { name: 'Open the employer form' });
@@ -141,9 +144,13 @@ test('Search opens the Review & apply workspace in place and reaches the employe
         .toEqual([APPLY_VACANCY_URL]);
       await expect(window.getByRole('dialog')).toHaveCount(0);
 
-      // The person submits on the employer site, then records it explicitly.
-      await workspace.getByRole('button', { name: 'I submitted it' }).click();
+      // The person submits on the employer site, then records it explicitly. Focus already waits on
+      // that control when they come back from the browser, and moves to Back once it is recorded.
+      const submitted = workspace.getByRole('button', { name: 'I submitted it' });
+      await expect(submitted).toBeFocused();
+      await submitted.click();
       await expect(workspace.getByRole('status').first()).toContainText(`${APPLY_ROLE} at ${APPLY_COMPANY} is marked as applied.`);
+      await expect(workspace.getByRole('button', { name: 'Back to the vacancy' })).toBeFocused();
       await expect(window.getByRole('heading', { level: 1, name: 'Search jobs' })).toBeVisible();
     } finally {
       await electronApp.close();

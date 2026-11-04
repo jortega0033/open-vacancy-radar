@@ -1,5 +1,5 @@
 import { StrictMode, useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
 import { getEngineHealth } from '../../../src/engine-health.js';
@@ -2409,7 +2409,7 @@ describe('SearchPage', () => {
 
       // A saved-report row (not provisional) keeps its safe actions enabled during the rescan.
       expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeEnabled();
     });
   });
@@ -2669,9 +2669,9 @@ describe('SearchPage', () => {
     const pipeline = window.applicationPipeline;
 
     render(<SearchPage />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Get ready to apply' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
     await waitFor(() => expect(pipeline.startFromVacancy).toHaveBeenCalledWith('ww-1'));
     // No tab switch and no dialog: the workspace replaces the detail pane, the results stay.
@@ -2684,8 +2684,149 @@ describe('SearchPage', () => {
 
     // Back returns to the vacancy with focus on the control that opened the workspace.
     fireEvent.click(within(workspace).getByRole('button', { name: 'Back to the vacancy' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Get ready to apply' })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus());
     expect(screen.getByRole('button', { name: 'Saved' })).toBeInTheDocument();
+  });
+
+  it('closing a workspace opened with no vacancy selected moves focus to a stable place on Search (#657 review)', async () => {
+    const vacancies = Array.from({ length: 30 }, (_, index) =>
+      makeWorldwideVacancy({ key: `ww-${index}`, title: `Frontend Role ${String(index).padStart(2, '0')}` }),
+    );
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport(vacancies)),
+    });
+    window.workspace.getApplicationAttempt = vi.fn().mockResolvedValue({
+      id: 'attempt-notified',
+      role: 'Notified Role',
+      company: 'Notify Co',
+      canonicalUrl: 'https://example.invalid/jobs/n',
+      checkpoint: 'tailoring',
+      checkpointDetail: '',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    });
+
+    let setOuter: ((update: (current: SearchSessionState) => SearchSessionState) => void) | undefined;
+    function Harness() {
+      const [session, setSession] = useState(createSearchSessionState());
+      setOuter = setSession;
+      return <SearchPage session={session} onSessionChange={setSession} />;
+    }
+    render(<Harness />);
+    // The selected vacancy is on page 1; page 2 is on screen, so neither Apply nor the vacancy heading
+    // is there. The notification then opens the workspace in place, as App does.
+    await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+    act(() => setOuter!((current) => ({ ...current, applyAttemptId: 'attempt-notified' })));
+    const workspace = await screen.findByRole('region', { name: 'Notified Role at Notify Co' });
+    fireEvent.click(within(workspace).getByRole('button', { name: 'Back to results' }));
+
+    await waitFor(() => expect(screen.queryByTestId('apply-workspace')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+    const firstResult = document.querySelector<HTMLElement>('[data-result-key]');
+    expect(firstResult).not.toBeNull();
+    await waitFor(() => expect(firstResult).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('a skip in the allowlisted review opened from the Search workspace keeps an Undo that restores and reopens it (#657 review)', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+    let current: Record<string, unknown> = {
+      id: 'attempt-search-1',
+      role: 'Remote Frontend Engineer',
+      company: 'Acme Corp',
+      canonicalUrl: 'https://example.invalid/jobs/ww-1',
+      checkpoint: 'ready',
+      checkpointDetail: 'Ready for review.',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    };
+    window.workspace.getApplicationAttempt = vi.fn(async () => current) as unknown as typeof window.workspace.getApplicationAttempt;
+    const updateApplicationAttempt = vi.fn(async (_id: string, patch: Record<string, unknown>) => {
+      current = { ...current, ...patch, updatedAt: '2026-09-01T00:05:00.000Z' };
+      return current;
+    });
+    window.workspace.updateApplicationAttempt = updateApplicationAttempt as unknown as typeof window.workspace.updateApplicationAttempt;
+    const closeReview = vi.fn().mockResolvedValue(undefined);
+    window.applicationPipeline.postingVerification = vi.fn().mockResolvedValue(null);
+    (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+      resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+      openReview: vi.fn().mockResolvedValue({
+        snapshot: {
+          generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z',
+          challengeDetected: false, activeFrameId: 0, pageStateFingerprint: 'fingerprint',
+        },
+        screenshotBase64: 'ZmFrZQ==',
+        readiness: {
+          ready: true, verifiedFilledCount: 0, discoveredFieldCount: 0, requiredFieldCount: 0, requiredFieldsSatisfied: 0, blockers: [],
+        },
+        handoffShown: false,
+      }),
+      applyFieldMap: vi.fn(),
+      submitReview: vi.fn(),
+      closeReview,
+      hideHandoff: vi.fn().mockResolvedValue(undefined),
+    };
+
+    render(<LiveAnnouncerProvider><SearchPage /></LiveAnnouncerProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(await within(dialog).findByRole('button', { name: /^skip$/i }));
+
+    await waitFor(() => expect(updateApplicationAttempt).toHaveBeenCalledWith('attempt-search-1', { checkpoint: 'skipped' }));
+    expect(await screen.findByText('Skipped Remote Frontend Engineer at Acme Corp.')).toBeInTheDocument();
+    expect(screen.queryByTestId('apply-workspace')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() =>
+      expect(updateApplicationAttempt).toHaveBeenCalledWith('attempt-search-1', { checkpoint: 'ready', checkpointDetail: 'Ready for review.' }),
+    );
+    expect(await screen.findByTestId('apply-workspace')).toBeInTheDocument();
+  });
+
+  it('the Search workspace undo writes nothing once the application moved on from skipped (#657 review)', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+    const ready = {
+      id: 'attempt-search-1', role: 'Remote Frontend Engineer', company: 'Acme Corp', canonicalUrl: 'https://example.invalid/jobs/ww-1',
+      checkpoint: 'ready', checkpointDetail: '', updatedAt: '2026-09-01T00:00:00.000Z',
+    };
+    let current: Record<string, unknown> = ready;
+    window.workspace.getApplicationAttempt = vi.fn(async () => current) as unknown as typeof window.workspace.getApplicationAttempt;
+    const updateApplicationAttempt = vi.fn(async (_id: string, patch: Record<string, unknown>) => {
+      current = { ...current, ...patch };
+      return current;
+    });
+    window.workspace.updateApplicationAttempt = updateApplicationAttempt as unknown as typeof window.workspace.updateApplicationAttempt;
+    window.applicationPipeline.postingVerification = vi.fn().mockResolvedValue(null);
+    (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+      resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+      openReview: vi.fn().mockResolvedValue({
+        snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false, activeFrameId: 0, pageStateFingerprint: 'f' },
+        screenshotBase64: 'ZmFrZQ==',
+        readiness: { ready: true, verifiedFilledCount: 0, discoveredFieldCount: 0, requiredFieldCount: 0, requiredFieldsSatisfied: 0, blockers: [] },
+        handoffShown: false,
+      }),
+      applyFieldMap: vi.fn(),
+      submitReview: vi.fn(),
+      closeReview: vi.fn().mockResolvedValue(undefined),
+      hideHandoff: vi.fn().mockResolvedValue(undefined),
+    };
+
+    render(<LiveAnnouncerProvider><SearchPage /></LiveAnnouncerProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
+    fireEvent.click(await within(await screen.findByRole('dialog')).findByRole('button', { name: /^skip$/i }));
+    await screen.findByText('Skipped Remote Frontend Engineer at Acme Corp.');
+
+    // Something else recorded a submission meanwhile: undo must not overwrite it.
+    current = { ...current, checkpoint: 'user_reported' };
+    updateApplicationAttempt.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(window.workspace.getApplicationAttempt).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument());
+    expect(updateApplicationAttempt).not.toHaveBeenCalled();
   });
 
   it('reports a failed save on the vacancy rather than silently doing nothing', async () => {
@@ -3076,7 +3217,7 @@ describe('SearchPage posting liveness (#720)', () => {
     const { pipeline } = withLiveness(vi.fn(async (key: string) => liveView(key, 'closed')));
 
     render(<SearchPage />);
-    const primary = await screen.findByRole('button', { name: 'Get ready to apply' });
+    const primary = await screen.findByRole('button', { name: 'Apply' });
     await waitFor(() => expect(primary).toBeDisabled());
     fireEvent.click(primary);
     expect(pipeline.startFromVacancy).not.toHaveBeenCalled();
@@ -3097,6 +3238,6 @@ describe('SearchPage posting liveness (#720)', () => {
       return found as HTMLElement;
     });
     expect(within(row).getByTestId('posting-liveness')).toHaveTextContent('Not checked yet');
-    expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 });

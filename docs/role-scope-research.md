@@ -125,7 +125,7 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
   (`packages/vacancy-engine/src/global-remote/report.ts:89`) and names the full per-listing audit file, `latest.audit.ndjson`,
   instead (`packages/vacancy-engine/src/global-remote/report.ts:194`). A reader of that table alone does not see those rows.
 - **Queries do read target roles.** The scheduled scan searches the first target role
-  (`apps/desktop/electron/vacancy-scan-query.ts:135`), and Search's default query is the first role (`apps/desktop/src/components/search/SearchPage.tsx:962`).
+  (`apps/desktop/electron/vacancy-scan-query.ts:135`), and Search's default query is the first role (`apps/desktop/src/components/search/SearchPage.tsx:969`).
   The Resume Toolkit's best-fit prompt can propose stretch directions and titles outside frontend
   (`apps/desktop/src/components/cv/prompts.ts:395`). Those land only as reviewable plan suggestions
   (`packages/vacancy-engine/src/candidate/search-plan.ts:268`). So a non-frontend title can be **searched**, but its results are **ranked** by the frontend rule.

@@ -6,6 +6,7 @@ import {
   hasUsefulManualDocuments,
   isDocumentsReadyDetail,
   isLetterMissing,
+  isSendInProgress,
   nextReadyAttempt,
   pipelineLimit,
   preparationStatusLine,
@@ -39,6 +40,23 @@ describe('workspace stage (#657)', () => {
     for (const checkpoint of ['submitted', 'user_reported', 'skipped', 'failed', 'submission_unknown'] as const) {
       expect(workspaceStageFor(checkpoint)).toBe('finished');
     }
+  });
+});
+
+describe('a send in progress (#657 review)', () => {
+  it('treats only submitting as a send in flight, distinct from preparation', () => {
+    expect(isSendInProgress('submitting')).toBe(true);
+    for (const checkpoint of ['queued', 'reading_jd', 'tailoring', 'rendering', 'filling', 'ready', 'needs_user', 'submitted', 'submission_unknown'] as const) {
+      expect(isSendInProgress(checkpoint)).toBe(false);
+    }
+    // Still re-read like preparation, so the workspace sees the send settle.
+    expect(workspaceStageFor('submitting')).toBe('preparing');
+  });
+
+  it('says a send is under way, never that the form is being got ready', () => {
+    expect(preparationStatusLine('submitting')).toBe('Sending your application…');
+    expect(preparationStatusLine('filling')).toBe('Getting the employer form ready…');
+    expect(preparationStatusLine('submitting')).not.toMatch(/ready|writing|preparing/i);
   });
 });
 

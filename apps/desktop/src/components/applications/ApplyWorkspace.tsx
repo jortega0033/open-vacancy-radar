@@ -12,6 +12,7 @@ import {
   classifyReviewEntry,
   describePreparationBlocker,
   isLetterMissing,
+  isSendInProgress,
   isTailoringStopped,
   nextReadyAttempt,
   pipelineLimit,
@@ -31,6 +32,7 @@ import {
   unconfirmedFailure,
   type ReviewFailure,
 } from './review-outcome.js';
+import { restoreSkippedAttempt } from './skip-undo.js';
 
 /** How often a preparing application is re-read while the workspace is open. */
 export const WORKSPACE_POLL_MS = 1_500;
@@ -83,6 +85,13 @@ export interface ApplyWorkspaceProps {
   onChanged?: () => void;
   /** Passed to the allowlisted review dialog, whose skip the host can offer to undo (#468). */
   onSkipped?: (attempt: ApplicationAttemptRecord) => void;
+  /**
+   * The application read from storage has already finished (sent, recorded, unconfirmed, failed or
+   * skipped), on opening or when a send in flight settles. The host shows it in its history view,
+   * which carries the documents, job link, details and recovery actions. Decided only from a fresh
+   * read, never from the host's possibly stale list row. Without it the workspace shows the status.
+   */
+  onFinished?: (attempt: ApplicationAttemptRecord) => void;
 }
 
 /** Calls a bridge method so a throw or a missing promise becomes a rejection, never a crash. */
@@ -129,10 +138,18 @@ export function ApplyWorkspace({
   onGenerateLetter,
   onChanged,
   onSkipped,
+  onFinished,
 }: ApplyWorkspaceProps) {
   const headingId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const openFormRef = useRef<HTMLButtonElement>(null);
+  const submittedRef = useRef<HTMLButtonElement>(null);
+  const undoRef = useRef<HTMLButtonElement>(null);
+  const onFinishedRef = useRef(onFinished);
+  onFinishedRef.current = onFinished;
+  /** Set once the application was handed to the host as finished, so it happens once. */
+  const handedOffRef = useRef(false);
   const { recordSuccessMoment } = useSupportPrompt();
 
   const seed = initialAttempt?.id === attemptId ? initialAttempt : null;
@@ -153,6 +170,15 @@ export function ApplyWorkspace({
   const decisionRef = useRef(false);
 
   const stage = attempt ? workspaceStageFor(attempt.checkpoint) : null;
+
+  /** True when a fresh read says the application finished and the host took it over. */
+  const handOffIfFinished = useCallback((fresh: ApplicationAttemptRecord): boolean => {
+    const handOff = onFinishedRef.current;
+    if (!handOff || handedOffRef.current || workspaceStageFor(fresh.checkpoint) !== 'finished') return false;
+    handedOffRef.current = true;
+    handOff(fresh);
+    return true;
+  }, []);
 
   const reload = useCallback(async () => {
     try {
@@ -178,10 +204,13 @@ export function ApplyWorkspace({
     setCritiqueOpen(false);
     setLoadError(null);
     decisionRef.current = false;
+    handedOffRef.current = false;
     // With a known record, only a newer stage replaces it: a stale read must not undo progress.
     readAttempt(attemptId)
       .then((fresh) => {
-        if (!cancelled && (!known || fresh.updatedAt >= known.updatedAt)) setAttempt(fresh);
+        if (cancelled || (known && fresh.updatedAt < known.updatedAt)) return;
+        if (handOffIfFinished(fresh)) return;
+        setAttempt(fresh);
       })
       .catch(() => {
         if (!cancelled && !known) setLoadError('We could not load this application.');
@@ -190,7 +219,7 @@ export function ApplyWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [attemptId]);
+  }, [attemptId, handOffIfFinished]);
 
   // Preparation runs in main. Re-read only this application while it is preparing; stop as soon as
   // it settles, and on unmount.
@@ -202,7 +231,8 @@ export function ApplyWorkspace({
     const timer = window.setInterval(() => {
       readAttempt(attemptId)
         .then((fresh) => {
-          if (!cancelled) setAttempt(fresh);
+          // A send that settled, or a preparation that ended as failed: the host's history view.
+          if (!cancelled && !handOffIfFinished(fresh)) setAttempt(fresh);
         })
         .catch(() => {});
     }, WORKSPACE_POLL_MS);
@@ -210,9 +240,9 @@ export function ApplyWorkspace({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [attemptId, preparing]);
+  }, [attemptId, preparing, handOffIfFinished]);
 
-  // A finished application opened directly (a notification for an old one, a history row).
+  // A finished application opened directly, on a host without a history view of its own.
   useEffect(() => {
     if (stage === 'finished') setPhase((current) => (current.phase === 'loading' || current.phase === 'preparing' ? { phase: 'finished' } : current));
   }, [stage]);
@@ -294,11 +324,20 @@ export function ApplyWorkspace({
     };
   }, [attemptId, phaseName]);
 
-  // After Approve package, the next step is the one primary action left.
+  // Focus follows the step whenever the control that had it goes away, so a keyboard or screen
+  // reader user never lands on the page start. After Approve package: Open the employer form. After
+  // opening the form (and on coming back from the browser): I submitted it. After a recorded
+  // submission: the control that leaves the workspace. After Skip: Undo.
   const approved = phase.phase === 'manual' && phase.approved;
+  const opened = phase.phase === 'manual' && phase.opened;
   useEffect(() => {
-    if (approved) openFormRef.current?.focus();
-  }, [approved]);
+    if (opened) submittedRef.current?.focus();
+    else if (approved) openFormRef.current?.focus();
+  }, [approved, opened]);
+  useEffect(() => {
+    if (phaseName === 'applied') closeRef.current?.focus();
+    else if (phaseName === 'skipped') undoRef.current?.focus();
+  }, [phaseName]);
 
   /** Back to preparing in place after a retry, a resume or a refreshed posting. */
   const restartInPlace = useCallback(async () => {
@@ -368,15 +407,11 @@ export function ApplyWorkspace({
     const { previous } = phase;
     setPhase({ ...phase, busy: true });
     try {
-      const current = await readAttempt(attemptId);
-      if (current.checkpoint === 'skipped') {
-        await window.workspace.updateApplicationAttempt(attemptId, {
-          checkpoint: previous.checkpoint,
-          checkpointDetail: previous.checkpointDetail,
-        });
-      }
+      await restoreSkippedAttempt(previous);
       decisionRef.current = false;
       setPhase({ phase: 'loading' });
+      // Undo goes away with the skipped state; the heading is the stable place to continue from.
+      headingRef.current?.focus();
       onChanged?.();
       const fresh = await reload();
       if (fresh) setEntryNonce((nonce) => nonce + 1);
@@ -503,7 +538,7 @@ export function ApplyWorkspace({
       className="mx-auto w-full max-w-2xl px-6 py-5 pb-10"
     >
       <div className="mb-3">
-        <button type="button" className="btn btn-ghost btn-sm -ml-2" disabled={busy} onClick={onClose}>
+        <button ref={closeRef} type="button" className="btn btn-ghost btn-sm -ml-2" disabled={busy} onClick={onClose}>
           <ArrowLeft size={14} aria-hidden="true" />
           {closeLabel}
         </button>
@@ -554,7 +589,17 @@ export function ApplyWorkspace({
         </div>
       )}
 
-      {phase.phase === 'preparing' && attempt && (
+      {phase.phase === 'preparing' && attempt && isSendInProgress(attempt.checkpoint) && (
+        <div className="mt-5 flex items-start gap-2 text-sm" data-testid="apply-workspace-sending">
+          <span className="loading loading-spinner loading-xs mt-0.5 flex-none" aria-hidden="true" />
+          <p>
+            Your application is being sent to {company}. Do not submit it on the employer&apos;s site as well. This
+            page updates when the send finishes.
+          </p>
+        </div>
+      )}
+
+      {phase.phase === 'preparing' && attempt && !isSendInProgress(attempt.checkpoint) && (
         <div className="mt-5">
           <ol className="space-y-2" aria-label="Preparation steps">
             {preparationSteps(attempt.checkpoint).map((step) => (
@@ -693,6 +738,7 @@ export function ApplyWorkspace({
                 </button>
               </div>
               <p className="text-xs text-base-content/70">You submit on the employer&apos;s site. Nothing is sent from here.</p>
+              <AlreadySubmitted company={company} disabled={busy} onRecord={() => void handleSubmitted()} />
             </div>
           ) : !phase.opened ? (
             <div className="space-y-2">
@@ -711,12 +757,13 @@ export function ApplyWorkspace({
                 </button>
               </div>
               <p className="text-xs text-base-content/70">It opens in your browser. Submit there, then come back here.</p>
+              <AlreadySubmitted company={company} disabled={busy} onRecord={() => void handleSubmitted()} />
             </div>
           ) : (
             <div className="space-y-2">
               <p className="text-sm">Submitted it on {company}&apos;s site?</p>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn btn-success" disabled={busy} onClick={() => void handleSubmitted()}>
+                <button ref={submittedRef} type="button" className="btn btn-success" disabled={busy} onClick={() => void handleSubmitted()}>
                   I submitted it
                 </button>
                 <button type="button" className="btn btn-outline" disabled={busy} onClick={onClose}>
@@ -841,7 +888,7 @@ export function ApplyWorkspace({
 
       {phase.phase === 'skipped' && (
         <div className="mt-5 flex flex-wrap items-center gap-2">
-          <button type="button" className="btn btn-outline btn-sm" disabled={phase.busy} onClick={() => void handleUndoSkip()}>
+          <button ref={undoRef} type="button" className="btn btn-outline btn-sm" disabled={phase.busy} onClick={() => void handleUndoSkip()}>
             Undo
           </button>
         </div>
@@ -884,6 +931,21 @@ export function ApplyWorkspace({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * For a person who already submitted on the employer's site (often on an earlier visit): records the
+ * same `user_reported` outcome as I submitted it, without opening the employer form again.
+ */
+function AlreadySubmitted({ company, disabled, onRecord }: { company: string; disabled: boolean; onRecord: () => void }) {
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-xs text-base-content/70">
+      <span>Already submitted it on {company || 'the employer'}&apos;s site?</span>
+      <button type="button" className="btn btn-ghost btn-xs" disabled={disabled} onClick={onRecord}>
+        I already submitted it
+      </button>
+    </p>
   );
 }
 

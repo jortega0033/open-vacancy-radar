@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import { App } from '../src/App.js';
-import type { AgentDockBridge, DaemonStatus, VacancyEngineStatus } from '../src/window.js';
+import type { AgentDockBridge, ApplicationAttemptRecord, DaemonStatus, VacancyEngineStatus } from '../src/window.js';
 import { installVacancyRadarBridge, installWorkspaceBridge } from './workspace-bridge.js';
 import type { WorkspaceCounts } from '../src/window.js';
 
@@ -509,6 +509,132 @@ describe('App', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeInTheDocument();
     });
 
+    // #657 review: a finished application opened by id goes to the history drawer, never the
+    // sparse workspace. These drive the real App routes end to end against the bridge stand-ins.
+    function finishedAttempt(id: string, checkpoint: string) {
+      return {
+        id, role: 'Done Role', company: 'History Co', checkpoint, checkpointDetail: `Stored detail for ${checkpoint}.`,
+        updatedAt: '2026-10-01T00:00:00.000Z', createdAt: '2026-10-01T00:00:00.000Z', canonicalUrl: 'https://example.invalid/done',
+        vacancyKey: 'vac-done', applicationId: null, submittedAt: null, scheduledAutomaticSubmitAt: null, jdSnapshot: '', jdComplete: true,
+      };
+    }
+    const DONE_CV = { id: 'art-done', attemptId: 'attempt-done', kind: 'cv_pdf', fileName: 'cv.pdf', createdAt: '2026-10-01T00:00:00.000Z' };
+
+    async function expectHistoryDrawer(checkpoint: string) {
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(`Stored detail for ${checkpoint}.`)).toBeInTheDocument();
+      await waitFor(() => expect(within(dialog).getByText('Tailored CV')).toBeInTheDocument());
+      expect(screen.queryByTestId('apply-workspace')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeInTheDocument();
+      return dialog;
+    }
+
+    it('a notification click on Search for a finished application opens its history drawer (#657 review)', async () => {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      });
+      const done = finishedAttempt('attempt-done', 'submission_unknown');
+      installWorkspaceBridge({
+        getApplicationAttempt: vi.fn().mockResolvedValue(done),
+        listApplicationAttempts: vi.fn().mockResolvedValue([done]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([DONE_CV]),
+      });
+      let push: ((attemptId: string) => void) | undefined;
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        onOpenAttempt: vi.fn((callback: (attemptId: string) => void) => {
+          push = callback;
+          return () => {};
+        }),
+      };
+
+      render(<App />);
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Search jobs' })).toBeInTheDocument());
+      await waitFor(() => expect(push).toBeDefined());
+      push!('attempt-done');
+
+      await expectHistoryDrawer('submission_unknown');
+    });
+
+    it('a notification click on Search before any search opens the workspace in place, and a finished one opens its drawer (#657 review)', async () => {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(null),
+      });
+      const preparing = { ...finishedAttempt('attempt-prep', 'tailoring'), role: 'Early Role', company: 'First Co' };
+      const done = finishedAttempt('attempt-done', 'failed');
+      installWorkspaceBridge({
+        getApplicationAttempt: vi.fn(async (id: string) => (id === 'attempt-done' ? done : preparing)) as unknown as (id: string) => Promise<ApplicationAttemptRecord>,
+        listApplicationAttempts: vi.fn().mockResolvedValue([done]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([DONE_CV]),
+      });
+      let push: ((attemptId: string) => void) | undefined;
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        onOpenAttempt: vi.fn((callback: (attemptId: string) => void) => {
+          push = callback;
+          return () => {};
+        }),
+      };
+
+      render(<App />);
+      await waitFor(() => expect(screen.getByText('No search yet')).toBeInTheDocument());
+      await waitFor(() => expect(push).toBeDefined());
+      push!('attempt-prep');
+      const region = await screen.findByRole('region', { name: 'Early Role at First Co' });
+      expect(screen.getByRole('heading', { level: 1, name: 'Search jobs' })).toBeInTheDocument();
+      fireEvent.click(within(region).getByRole('button', { name: 'Back to Search' }));
+      await waitFor(() => expect(screen.getByText('No search yet')).toBeInTheDocument());
+
+      push!('attempt-done');
+      const dialog = await expectHistoryDrawer('failed');
+      expect(within(dialog).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    });
+
+    it('a notification click from another page for a skipped application offers Return to review in the drawer (#657 review)', async () => {
+      const done = finishedAttempt('attempt-done', 'skipped');
+      installWorkspaceBridge({
+        getApplicationAttempt: vi.fn().mockResolvedValue(done),
+        listApplicationAttempts: vi.fn().mockResolvedValue([done]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([DONE_CV]),
+      });
+      let push: ((attemptId: string) => void) | undefined;
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        onOpenAttempt: vi.fn((callback: (attemptId: string) => void) => {
+          push = callback;
+          return () => {};
+        }),
+      };
+
+      render(<App />);
+      fireEvent.click(screen.getByRole('button', { name: 'CV' }));
+      await waitFor(() => expect(push).toBeDefined());
+      push!('attempt-done');
+
+      const dialog = await expectHistoryDrawer('skipped');
+      expect(within(dialog).getByRole('button', { name: 'Return to review' })).toBeInTheDocument();
+    });
+
+    it('Saved jobs "Open review" on an application the person reported as applied opens its history drawer (#657 review)', async () => {
+      const done = finishedAttempt('attempt-done', 'user_reported');
+      installWorkspaceBridge({
+        listSavedJobs: vi.fn().mockResolvedValue([{
+          id: 'job-done', vacancyKey: 'vac-done', role: 'Done Role', company: 'History Co', location: 'Remote', salary: null,
+          arrangement: null, verification: null, matchPercent: null, sourceUrl: 'https://example.invalid/done', notes: '',
+          status: 'considering', savedAt: '2026-10-01T00:00:00.000Z', gapAnalysis: null, gapAnalysisAt: null,
+        }]),
+        getApplicationAttempt: vi.fn().mockResolvedValue(done),
+        listApplicationAttempts: vi.fn().mockResolvedValue([done]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([DONE_CV]),
+      });
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = { start: vi.fn() };
+
+      render(<App />);
+      fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
+      fireEvent.click(await screen.findByRole('button', { name: /open review for done role/i }));
+
+      await expectHistoryDrawer('user_reported');
+    });
+
     it('Generate letter from the Search workspace goes to Letters and comes back to the same workspace (#657)', async () => {
       installVacancyRadarBridge({
         getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
@@ -540,7 +666,7 @@ describe('App', () => {
       };
 
       render(<App />);
-      fireEvent.click(await screen.findByRole('button', { name: 'Get ready to apply' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
       const region = await screen.findByRole('region', { name: 'Remote Frontend Engineer at Acme Corp' });
       fireEvent.click(await within(region).findByRole('button', { name: 'Generate letter' }));
 
