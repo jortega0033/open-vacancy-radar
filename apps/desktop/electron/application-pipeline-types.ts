@@ -203,4 +203,10 @@ export interface ApplicationPipelineBridge {
   checkPostingLiveness?(vacancyKey: string): Promise<PostingLivenessView>;
   /** Links the letter just saved from the review hand-off to this attempt. Main finds the letter. */
   attachLetter(attemptId: string): Promise<{ ok: boolean; attemptId: string; detail?: string }>;
+  /**
+   * #657: main pushes an application id when the person clicks its "Application ready" notification,
+   * so the renderer opens that application in the Review & apply workspace. Only a non-empty id
+   * string crosses; returns the unsubscribe function.
+   */
+  onOpenAttempt?(callback: (attemptId: string) => void): () => void;
 }

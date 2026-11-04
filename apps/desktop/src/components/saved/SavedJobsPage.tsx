@@ -218,7 +218,7 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
    * Hands one saved job to the preparation pipeline (#272). This records an attempt and queues it;
    * it never submits anything, and it never reaches the daemon or a browser from here -- Electron
    * main resolves the vacancy, the CV and the destination itself and does the work under a queue
-   * lease. Progress shows up on the Applications page's "In progress" tab.
+   * lease. Progress shows in place in the Review & apply workspace, which opens straight away.
    *
    * A refusal is reported as a plain notice rather than an error banner: "an application for this
    * vacancy is already in progress" is the dedup rule working, not a failure.
@@ -229,6 +229,13 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
     setPreparingJobIds((current) => new Set(current).add(job.id));
     try {
       const result = await window.applicationPipeline.start(job.id);
+      // #657: the Review & apply workspace opens straight away for this application. A warning
+      // still needs reading here first, so it keeps the notice with its link.
+      if (result.ok && result.attemptId && !result.warning && onViewApplicationAttempt) {
+        onSavedJobsChanged?.();
+        onViewApplicationAttempt(result.attemptId);
+        return;
+      }
       setPrepareNotice(
         result.ok
           ? {
@@ -248,7 +255,7 @@ export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: 
         return next;
       });
     }
-  }, [onSavedJobsChanged, refreshAttempts]);
+  }, [onSavedJobsChanged, onViewApplicationAttempt, refreshAttempts]);
 
   const requestDelete = useCallback((job: SavedJobRecord) => {
     setActionError(undefined);

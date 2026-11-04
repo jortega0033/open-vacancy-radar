@@ -16,6 +16,9 @@ export interface SearchSessionState {
   sourceWarningsOpen: boolean;
   listScrollTop: number;
   detailScrollTop: number;
+  /** The application open in the Review & apply workspace in place of the detail pane (#657). Kept
+   * in the session so a trip to Letters for the cover letter comes back to it. */
+  applyAttemptId: string | null;
 }
 
 export function createSearchSessionState(): SearchSessionState {
@@ -33,5 +36,6 @@ export function createSearchSessionState(): SearchSessionState {
     sourceWarningsOpen: false,
     listScrollTop: 0,
     detailScrollTop: 0,
+    applyAttemptId: null,
   };
 }

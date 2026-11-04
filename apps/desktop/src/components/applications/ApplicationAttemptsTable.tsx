@@ -1,5 +1,5 @@
 import type { ApplicationAttemptRecord } from '../../window.js';
-import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
+import { attemptListStatus } from './apply-workspace-state.js';
 
 export interface ApplicationAttemptsTableProps {
   attempts: readonly ApplicationAttemptRecord[];
@@ -26,7 +26,8 @@ function formatScheduledTime(iso: string): string {
  * Read-only pipeline table for in-progress application attempts (issue #202) -- no inline status
  * change, no edit, no delete: `checkpoint` is only ever advanced by the main-process generation
  * pipeline, and an attempt's existence is not something the renderer creates or removes. Clicking a
- * row is the one action, opening `ApplicationAttemptDrawer` for the full detail.
+ * row is the one action: the Review & apply workspace for an application that is preparing or waiting,
+ * the read-only history drawer for a finished one (#657).
  */
 export function ApplicationAttemptsTable({ attempts, onOpen, onCancelScheduledAutomaticSubmission }: ApplicationAttemptsTableProps) {
   return (
@@ -84,8 +85,8 @@ export function ApplicationAttemptsTable({ attempts, onOpen, onCancelScheduledAu
                       </button>
                     </div>
                   ) : (
-                    <span className={ATTEMPT_CHECKPOINT_BADGE_CLASS[attempt.checkpoint]}>
-                      {ATTEMPT_CHECKPOINT_LABEL[attempt.checkpoint]}
+                    <span className={attemptListStatus(attempt).badgeClass}>
+                      {attemptListStatus(attempt).label}
                     </span>
                   )}
                 </td>

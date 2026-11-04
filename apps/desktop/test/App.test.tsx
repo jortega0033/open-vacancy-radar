@@ -464,6 +464,51 @@ describe('App', () => {
       expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
     });
 
+    it('an "Application ready" notification click opens the workspace in place on Search (#657)', async () => {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      });
+      const attempt = { id: 'attempt-n1', role: 'Notified Role', company: 'Notify Co', checkpoint: 'tailoring', checkpointDetail: '', updatedAt: '2026-10-01T00:00:00.000Z', canonicalUrl: 'https://example.invalid/n1' };
+      installWorkspaceBridge({ getApplicationAttempt: vi.fn().mockResolvedValue(attempt) });
+      let push: ((attemptId: string) => void) | undefined;
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        onOpenAttempt: vi.fn((callback: (attemptId: string) => void) => {
+          push = callback;
+          return () => {};
+        }),
+      };
+
+      render(<App />);
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Search jobs' })).toBeInTheDocument());
+      await waitFor(() => expect(push).toBeDefined());
+      push!('attempt-n1');
+
+      expect(await screen.findByRole('region', { name: 'Notified Role at Notify Co' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Search jobs' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('an "Application ready" notification click from another page opens the workspace under Ready to apply (#657)', async () => {
+      const attempt = { id: 'attempt-n2', role: 'Other Role', company: 'Elsewhere Co', checkpoint: 'tailoring', checkpointDetail: '', updatedAt: '2026-10-01T00:00:00.000Z', canonicalUrl: 'https://example.invalid/n2' };
+      installWorkspaceBridge({ getApplicationAttempt: vi.fn().mockResolvedValue(attempt) });
+      let push: ((attemptId: string) => void) | undefined;
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        onOpenAttempt: vi.fn((callback: (attemptId: string) => void) => {
+          push = callback;
+          return () => {};
+        }),
+      };
+
+      render(<App />);
+      fireEvent.click(screen.getByRole('button', { name: 'CV' }));
+      await waitFor(() => expect(push).toBeDefined());
+      push!('attempt-n2');
+
+      expect(await screen.findByRole('region', { name: 'Other Role at Elsewhere Co' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeInTheDocument();
+    });
+
     it('starts a new transient session after the App root remounts', async () => {
       const getReport = vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()]));
       installVacancyRadarBridge({

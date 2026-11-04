@@ -2652,20 +2652,39 @@ describe('SearchPage', () => {
     });
   });
 
-  it('starts preparation directly from Search and opens the resolved attempt', async () => {
+  it('starts preparation directly from Search and opens the Review & apply workspace in place (#657)', async () => {
     installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
     });
+    const getApplicationAttempt = vi.fn().mockResolvedValue({
+      id: 'attempt-search-1',
+      role: 'Remote Frontend Engineer',
+      company: 'Acme Corp',
+      canonicalUrl: 'https://example.invalid/jobs/ww-1',
+      checkpoint: 'tailoring',
+      checkpointDetail: '',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    });
+    window.workspace.getApplicationAttempt = getApplicationAttempt;
     const pipeline = window.applicationPipeline;
-    const onViewApplicationAttempt = vi.fn();
 
-    render(<SearchPage onViewApplicationAttempt={onViewApplicationAttempt} />);
+    render(<SearchPage />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Get ready to apply' }));
 
     await waitFor(() => expect(pipeline.startFromVacancy).toHaveBeenCalledWith('ww-1'));
-    await waitFor(() => expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-search-1'));
+    // No tab switch and no dialog: the workspace replaces the detail pane, the results stay.
+    const workspace = await screen.findByRole('region', { name: 'Remote Frontend Engineer at Acme Corp' });
+    expect(getApplicationAttempt).toHaveBeenCalledWith('attempt-search-1');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(within(workspace).getByRole('heading', { level: 2 })).toHaveFocus();
+    expect(within(workspace).getByRole('status', { name: '' })).toHaveTextContent('Writing your CV for this job');
+    expect(document.querySelector('[data-result-key="ww-1"]')).not.toBeNull();
+
+    // Back returns to the vacancy with focus on the control that opened the workspace.
+    fireEvent.click(within(workspace).getByRole('button', { name: 'Back to the vacancy' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Get ready to apply' })).toHaveFocus());
     expect(screen.getByRole('button', { name: 'Saved' })).toBeInTheDocument();
   });
 
@@ -3055,9 +3074,8 @@ describe('SearchPage posting liveness (#720)', () => {
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
     });
     const { pipeline } = withLiveness(vi.fn(async (key: string) => liveView(key, 'closed')));
-    const onViewApplicationAttempt = vi.fn();
 
-    render(<SearchPage onViewApplicationAttempt={onViewApplicationAttempt} />);
+    render(<SearchPage />);
     const primary = await screen.findByRole('button', { name: 'Get ready to apply' });
     await waitFor(() => expect(primary).toBeDisabled());
     fireEvent.click(primary);
@@ -3065,7 +3083,7 @@ describe('SearchPage posting liveness (#720)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Prepare anyway' }));
     await waitFor(() => expect(pipeline.startFromVacancy).toHaveBeenCalledWith('ww-1'));
-    await waitFor(() => expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-search-1'));
+    expect(await screen.findByTestId('apply-workspace')).toBeInTheDocument();
   });
 
   it('an older bridge without liveness still shows "Not checked yet" beside the score and never fails the page', async () => {

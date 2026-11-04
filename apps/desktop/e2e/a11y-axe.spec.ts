@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, goto, test } from './fixtures.js';
+import { ensureLightTheme, expect, goto, launchApp, test } from './fixtures.js';
+import { APPLY_COMPANY, APPLY_ROLE, seedApplyWorkspace } from './apply-workspace-seed.js';
 
 /**
  * Issue #501: runs axe-core (WCAG 2.0/2.1 A and AA) over all seven pages, at a roomy size and at
@@ -17,8 +18,10 @@ import { expect, goto, test } from './fixtures.js';
  * rather than weakening the check. Set AXE_RECORD=1 to record instead of assert: it prints the observed ids per page and the
  * offending selectors, to regenerate the baseline.
  *
- * Not covered here: Ctrl+= zoom (needs the zoom menu, not merged on master yet), and states behind
- * interaction (drawers, dialogs): this audits each page's resting state with an empty workspace.
+ * Not covered here: Ctrl+= zoom (needs the zoom menu, not merged on master yet), and most states
+ * behind interaction (drawers, dialogs): this audits each page's resting state with an empty
+ * workspace. The Review & apply workspace (#657) is audited open, with a seeded application, below
+ * and in `manual-application-review.spec.ts` (Search host).
  */
 
 const PAGES = ['Search', 'Saved jobs', 'Applications', 'CV', 'Letters', 'AI runtime', 'Settings'] as const;
@@ -108,6 +111,46 @@ test.describe('axe accessibility audit (issue #501)', () => {
         .withTags(TAGS)
         .analyze();
       expect(results.violations, `${theme} first-run hint accessibility violations`).toEqual([]);
+    }
+  });
+
+  test('the Review & apply workspace opened from Ready to apply has no axe violations (#657)', async () => {
+    test.setTimeout(120_000);
+    const seeded = await seedApplyWorkspace('ovr-axe-apply-workspace');
+    try {
+      const app = await launchApp(seeded.userDataDir, {
+        appId: `ovr-e2e-axe-apply-${process.pid}`,
+        vacancyEngineDataRoot: seeded.vacancyEngineDataRoot,
+      });
+      try {
+        const page = await app.firstWindow();
+        await page.waitForLoadState('domcontentloaded');
+        await ensureLightTheme(page);
+        await goto(page, 'Applications');
+        await page.getByRole('tab', { name: /^Ready to apply/ }).click();
+        await page.getByRole('row', { name: new RegExp(APPLY_COMPANY) }).click();
+        const region = page.getByRole('region', { name: `${APPLY_ROLE} at ${APPLY_COMPANY}` });
+        await expect(region.getByRole('button', { name: 'Approve package' })).toBeVisible();
+        await expect(region.getByRole('heading', { level: 2 })).toBeFocused();
+        for (const config of CONFIGS) {
+          await app.evaluate(({ BrowserWindow }, bounds) => {
+            BrowserWindow.getAllWindows()[0]?.setBounds(bounds);
+          }, { x: 0, y: 0, width: config.width, height: config.height });
+          await page.evaluate((theme) => {
+            document.documentElement.dataset.theme = theme;
+          }, config.theme);
+          await page.waitForTimeout(250);
+          const results = await new AxeBuilder({ page }).setLegacyMode(true).withTags(TAGS).analyze();
+          expect(
+            results.violations.map((violation) => `${violation.id} ${JSON.stringify(violation.nodes.map((n) => n.target))}`),
+            `${config.name}: Review & apply workspace axe violations`,
+          ).toEqual([]);
+        }
+      } finally {
+        await app.close();
+      }
+    } finally {
+      await seeded.cleanup();
     }
   });
 

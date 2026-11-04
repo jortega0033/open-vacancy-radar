@@ -353,6 +353,7 @@ export function VacancyDetail({
               <button
                 className="btn btn-primary btn-sm whitespace-normal"
                 type="button"
+                data-apply-opener=""
                 onClick={onPrepare}
                 disabled={prepareState === 'preparing' || !prepareAvailable || closed}
                 {...(closed ? { 'aria-describedby': 'posting-closed-note' } : {})}

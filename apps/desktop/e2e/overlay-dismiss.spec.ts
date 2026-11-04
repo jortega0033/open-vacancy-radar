@@ -155,8 +155,11 @@ const REPORT = {
 };
 
 base.describe('Escape dismissal for seeded-workspace overlays', () => {
+  // #657: the manual review is no longer an overlay. It is the in-place Review & apply workspace, a
+  // region of the Search page. The regression this guards stays the same: Escape must never leave a
+  // stray overlay behind or trap focus, and the labelled Back control always leaves.
   base(
-    'Escape closes the manual application review session',
+    'Escape leaves no overlay over the in-place Review & apply workspace, and Back leaves it',
     async () => {
       const userDataDir = await mkdtemp(join(tmpdir(), 'ovr-overlay-dismiss-review-'));
       const vacancyEngineDataRoot = await mkdtemp(join(tmpdir(), 'ovr-overlay-dismiss-review-engine-'));
@@ -210,10 +213,17 @@ base.describe('Escape dismissal for seeded-workspace overlays', () => {
           await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'Search', exact: true }).click();
           await window.getByRole('button', { name: 'Get ready to apply' }).click();
 
-          const dialog = window.getByRole('dialog');
-          await expect(dialog.getByTestId('manual-application-swipe-card')).toBeVisible();
+          const workspaceRegion = window.getByTestId('apply-workspace');
+          await expect(workspaceRegion.getByRole('button', { name: 'Approve package' })).toBeVisible();
+          await expect(window.getByRole('dialog')).toHaveCount(0);
           await window.keyboard.press('Escape');
-          await expect(dialog).toBeHidden();
+          await expect(window.getByRole('dialog')).toHaveCount(0);
+          // Focus is not trapped: Tab moves on from the heading to a control.
+          await window.keyboard.press('Tab');
+          await expect(window.locator(':focus')).toHaveCount(1);
+          await workspaceRegion.getByRole('button', { name: 'Back to the vacancy' }).click();
+          await expect(workspaceRegion).toBeHidden();
+          await expect(window.getByRole('button', { name: 'Get ready to apply' })).toBeFocused();
         } finally {
           await electronApp.close();
         }

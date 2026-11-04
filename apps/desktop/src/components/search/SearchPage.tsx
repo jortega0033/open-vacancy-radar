@@ -9,6 +9,7 @@ import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
 import { EmptyState, ErrorBanner, WarningBanner, useAnnounce } from '../shell/index.js';
+import { ApplyWorkspace } from '../applications/ApplyWorkspace.js';
 import {
   SCAN_FAILED_ANNOUNCEMENT,
   SCAN_STARTED_ANNOUNCEMENT,
@@ -186,7 +187,8 @@ function SearchLoadingSkeleton() {
 export interface SearchPageProps {
   onOpenSearchProfile?: () => void;
   onSavedJobsChanged?: () => void;
-  onViewApplicationAttempt?: (attemptId: string) => void;
+  /** Hands an application to the letter generator; App brings the person back to this workspace. */
+  onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
   preferredSelectedKey?: string | null;
   session?: SearchSessionState;
   onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
@@ -223,7 +225,7 @@ function writeUsePlanChoice(value: boolean): void {
 export function SearchPage({
   onOpenSearchProfile,
   onSavedJobsChanged,
-  onViewApplicationAttempt,
+  onGenerateLetter,
   preferredSelectedKey = null,
   session: controlledSession,
   onSessionChange,
@@ -378,6 +380,10 @@ export function SearchPage({
   const [sourceWarningsOpen, setSourceWarningsOpen] = useSearchSessionField(session, setSession, 'sourceWarningsOpen');
   const [listScrollTop, setListScrollTop] = useSearchSessionField(session, setSession, 'listScrollTop');
   const [detailScrollTop, setDetailScrollTop] = useSearchSessionField(session, setSession, 'detailScrollTop');
+  // #657: the Review & apply workspace replaces the detail pane in place. Search stays on screen.
+  const [applyAttemptId, setApplyAttemptId] = useSearchSessionField(session, setSession, 'applyAttemptId');
+  /** Set when the workspace closes, so focus goes back to the control that opened it. */
+  const focusApplyOpenerRef = useRef(false);
 
   const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(new Set());
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
@@ -1330,11 +1336,13 @@ export function SearchPage({
   const handleSelect = useCallback((result: SearchResult) => {
     setSelectedKey(result.key);
     setDetailScrollTop(0);
+    // Choosing another result leaves the workspace; the application keeps preparing in main.
+    setApplyAttemptId(null);
     if (singlePane) {
       paneFocusRef.current = 'detail';
       setPaneView('detail');
     }
-  }, [setDetailScrollTop, setSelectedKey, singlePane]);
+  }, [setApplyAttemptId, setDetailScrollTop, setSelectedKey, singlePane]);
 
   const handleBackToResults = useCallback(() => {
     paneFocusRef.current = 'row';
@@ -1384,7 +1392,9 @@ export function SearchPage({
       setSavedKeys((current) => new Set(current).add(key));
       setSaveStates((current) => ({ ...current, [key]: 'saved' }));
       onSavedJobsChanged?.();
-      onViewApplicationAttempt?.(result.attemptId);
+      // #657: no tab switch and no dialog. The workspace opens here, in place of the detail pane.
+      setApplyAttemptId(result.attemptId);
+      if (singlePane) setPaneView('detail');
     } catch (error) {
       setPrepareErrors((current) => ({
         ...current,
@@ -1393,7 +1403,7 @@ export function SearchPage({
     } finally {
       setPrepareStates((current) => ({ ...current, [key]: 'idle' }));
     }
-  }, [liveness, onSavedJobsChanged, onViewApplicationAttempt, selected]);
+  }, [liveness, onSavedJobsChanged, selected, setApplyAttemptId, singlePane]);
 
   const saveState: SaveState = selected
     ? (saveStates[selected.key] ?? (savedKeys.has(selected.key) ? 'saved' : 'idle'))
@@ -1420,8 +1430,30 @@ export function SearchPage({
     wasTwoPaneRef.current = !singlePane;
   }, [pageWidth, singlePane, selectedKey]);
 
+  const showWorkspace = applyAttemptId !== null && (!singlePane || paneView === 'detail');
   const showDetailPane = !!selected && (!singlePane || paneView === 'detail');
-  const showListPane = !singlePane || paneView === 'list' || !selected;
+  const showListPane = !singlePane || paneView === 'list' || (!selected && applyAttemptId === null);
+
+  // A workspace opened from elsewhere (the notification, Letters) while the page is narrow shows it.
+  useEffect(() => {
+    if (applyAttemptId !== null && singlePane) setPaneView('detail');
+  }, [applyAttemptId, singlePane]);
+
+  const closeApplyWorkspace = useCallback(() => {
+    focusApplyOpenerRef.current = true;
+    setApplyAttemptId(null);
+  }, [setApplyAttemptId]);
+
+  // Back from the workspace: focus returns to Get ready to apply on the vacancy it came from, or
+  // to the vacancy heading when that control is not there.
+  useEffect(() => {
+    if (applyAttemptId !== null || !focusApplyOpenerRef.current) return;
+    focusApplyOpenerRef.current = false;
+    const opener =
+      document.querySelector<HTMLElement>('[data-apply-opener]:not([disabled])') ??
+      document.querySelector<HTMLElement>('[data-vacancy-heading]');
+    opener?.focus({ preventScroll: false });
+  }, [applyAttemptId]);
 
   // Moves focus where the person just went: the detail heading after choosing a vacancy, the row
   // they came from after Back (#451). Runs after the pane has rendered, once per change.
@@ -1781,7 +1813,21 @@ export function SearchPage({
               />
             )}
 
-            {showDetailPane && selected ? (
+            {showWorkspace && applyAttemptId ? (
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="search-apply-pane">
+                  <ApplyWorkspace
+                    key={applyAttemptId}
+                    attemptId={applyAttemptId}
+                    closeLabel={selected ? 'Back to the vacancy' : 'Back to results'}
+                    onClose={closeApplyWorkspace}
+                    onOpenAttempt={setApplyAttemptId}
+                    onChanged={onSavedJobsChanged}
+                    {...(onGenerateLetter ? { onGenerateLetter } : {})}
+                  />
+                </div>
+              </div>
+            ) : showDetailPane && selected ? (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {singlePane && (
                   <div className="flex-none border-b border-base-300 px-1 py-2">
