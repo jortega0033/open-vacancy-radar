@@ -1049,6 +1049,11 @@ export interface ApplicationDataResetResult {
     applicationActions: number;
     applicationActionPrefs: number;
     followUpDrafts: number;
+    /** #722: Blind Apply authorizations, evaluated items, the event trail and remembered answers. */
+    blindApplyAuthorizations: number;
+    blindApplyItems: number;
+    blindApplyEvents: number;
+    blindApplyAnswers: number;
   };
 }
 

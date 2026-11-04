@@ -1221,3 +1221,6 @@ export const applicationFollowUpDrafts = sqliteTable('application_follow_up_draf
   uniqueIndex('application_follow_up_drafts_request_idx').on(table.applicationId, table.requestId),
   index('application_follow_up_drafts_application_idx').on(table.applicationId),
 ]);
+
+// Blind Apply (#722): defined in its own module, re-exported so drizzle-kit and the repository see one schema.
+export * from './blind-apply-schema.js';

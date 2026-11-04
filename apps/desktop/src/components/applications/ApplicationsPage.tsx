@@ -14,6 +14,7 @@ import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, TabPanel, Tabs, Un
 import { ApplicationAttemptDrawer } from './ApplicationAttemptDrawer.js';
 import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
 import { ApplicationReviewSession } from './ApplicationReviewSession.js';
+import { BlindApplyFeed } from './BlindApplyFeed.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
 import { InterviewPrepDrawer } from './InterviewPrepDrawer.js';
@@ -505,6 +506,13 @@ export function ApplicationsPage({
           </button>
         </div>
       )}
+
+      <BlindApplyFeed
+        onOpened={() => {
+          setActiveTab('in_progress');
+          void refreshAttempts();
+        }}
+      />
 
       <Tabs
         label="Applications views"

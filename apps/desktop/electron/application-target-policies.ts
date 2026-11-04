@@ -39,17 +39,34 @@ const FIXTURE_FORM_NO_UPLOAD_URL = fixtureUrl('ashby-application-form-no-upload.
  * and `not-a-target.html`, its (deliberately unlisted) redirect destination. */
 const REDIRECT_ATTEMPT_URL = fixtureUrl('redirect-attempt.html');
 
+/** Blind Apply's local, test-only fixtures (#722). None is a real target: each is a file:// page pinned
+ * by exact path, like the fixtures above. One a run can complete and be sent from, one with questions no
+ * stored answer covers, and one behind a bot-check marker. */
+const BLIND_SUPPORTED_URL = fixtureUrl('blind-apply-supported-form.html');
+const BLIND_MISSING_ANSWER_URL = fixtureUrl('blind-apply-missing-answer-form.html');
+const BLIND_CAPTCHA_URL = fixtureUrl('blind-apply-captcha-form.html');
+
 /** Exported so a test names the fixture it drives instead of indexing into `exactFileUrls`. */
 export const FIXTURE_FORM_URLS = Object.freeze({
   withUpload: FIXTURE_FORM_URL,
   withoutUpload: FIXTURE_FORM_NO_UPLOAD_URL,
+  blindSupported: BLIND_SUPPORTED_URL,
+  blindMissingAnswer: BLIND_MISSING_ANSWER_URL,
+  blindCaptcha: BLIND_CAPTCHA_URL,
 });
 
 export const FIXTURE_REVIEW_POLICY: ApplicationTargetPolicy = {
   id: 'ashby-fixture-test-only',
   displayName: 'Local fixture form (test-only, not a real target)',
   origins: [],
-  exactFileUrls: [FIXTURE_FORM_URL, FIXTURE_FORM_NO_UPLOAD_URL, REDIRECT_ATTEMPT_URL],
+  exactFileUrls: [
+    FIXTURE_FORM_URL,
+    FIXTURE_FORM_NO_UPLOAD_URL,
+    REDIRECT_ATTEMPT_URL,
+    BLIND_SUPPORTED_URL,
+    BLIND_MISSING_ANSWER_URL,
+    BLIND_CAPTCHA_URL,
+  ],
   adapter: 'generic-html-form',
   termsRegisterEntry: 'ashby',
   termsVersion: 'n/a (local fixture, not a live target)',
@@ -77,6 +94,15 @@ export const FIXTURE_REVIEW_POLICY: ApplicationTargetPolicy = {
 
 const APPLICATION_TARGET_POLICIES: readonly ApplicationTargetPolicy[] = [FIXTURE_REVIEW_POLICY];
 
+/** The display names of the compiled policies that could receive an unattended Blind Apply submission
+ * (cleared by the terms register AND allowed to submit). Used to tell the person, honestly, where it
+ * can act. A policy that only resolves local test files is reported as such, never as a real site. */
+export function listBlindSubmissionTargets(): Array<{ id: string; displayName: string; testOnly: boolean }> {
+  return APPLICATION_TARGET_POLICIES.filter(
+    (policy) => policy.termsEligibleForAutomation === true && policy.allowedActions.includes('submit') && !policy.killSwitches.submit,
+  ).map((policy) => ({ id: policy.id, displayName: policy.displayName, testOnly: policy.origins.length === 0 }));
+}
+
 export function resolveApplicationTargetPolicy(policyId: string): ApplicationTargetPolicy | undefined {
   return APPLICATION_TARGET_POLICIES.find((policy) => policy.id === policyId);
 }
@@ -100,6 +126,20 @@ export function resolveApplicationTargetPolicy(policyId: string): ApplicationTar
  */
 let autoApplyEnabled = false;
 
+/**
+ * Whether an explicit, currently-active Blind Apply authorization exists (#722). Kept apart from
+ * `autoApplyEnabled` so that the settings mirror (which rewrites that flag on every settings save) can
+ * never switch Blind Apply off behind the person's back, and so that turning Blind Apply off can never
+ * switch the settings flag off. The resolver treats either as "automation may consider a URL"; neither
+ * adds a policy, and the compiled table is still the only thing that decides which URLs resolve.
+ */
+let blindApplyActive = false;
+
+/** Called by main.ts only: hydrated at startup from the stored authorization, set on enable, cleared on Stop. */
+export function setBlindApplyActive(active: boolean): void {
+  blindApplyActive = active;
+}
+
 /** Called by main.ts only, from the settings hydration and every settings write. */
 export function setAutoApplyEnabled(enabled: boolean): void {
   autoApplyEnabled = enabled;
@@ -108,7 +148,7 @@ export function setAutoApplyEnabled(enabled: boolean): void {
 /** What the kill switch currently says, for callers that want to explain themselves rather than
  * silently treat "no policy" and "automation is off" as the same thing. */
 export function isAutoApplyEnabled(): boolean {
-  return autoApplyEnabled;
+  return autoApplyEnabled || blindApplyActive;
 }
 
 /**
@@ -141,6 +181,6 @@ export function resolvePolicyIdForCanonicalUrl(url: string): string | undefined 
  * which still reads the compiled table and nothing else.
  */
 export function resolvePolicyIdAmong(policies: readonly ApplicationTargetPolicy[], url: string): string | undefined {
-  if (!autoApplyEnabled) return undefined;
+  if (!autoApplyEnabled && !blindApplyActive) return undefined;
   return policies.find((policy) => isNavigationAllowed(policy, url))?.id;
 }

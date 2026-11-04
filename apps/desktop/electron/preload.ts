@@ -23,6 +23,16 @@ import type {
 } from '@open-vacancy-radar/vacancy-engine';
 import type { SearchPlanLoadResult, SearchPlanResetResult } from './search-plan-store.js';
 import type { CompanyEvidenceBridge } from './company-evidence.js';
+import type { BlindApplyBridge } from './blind-apply-types.js';
+import {
+  parseBlindApplyAnswerResult,
+  parseBlindApplyEnableResult,
+  parseBlindApplyEvidence,
+  parseBlindApplyFeed,
+  parseBlindApplyOpenResult,
+  parseBlindApplyStatus,
+  parseBlindApplyStopResult,
+} from './blind-apply-parse.js';
 import type { ApplicationBriefBridge } from './application-brief.js';
 import { parseCritiqueResult, type ApplicationCritiqueBridge } from './application-critique-types.js';
 import { parseInterviewContextResult, type InterviewContextBridge } from './interview-context-types.js';
@@ -2127,6 +2137,44 @@ function parseRestartTailoringResult(
 }
 
 contextBridge.exposeInMainWorld('applicationPipeline', applicationPipelineApi);
+
+/**
+ * #722. Blind Apply. The renderer can read the activity feed and its evidence, answer a "needs one
+ * answer" card, open an item into the existing reviewed flow, ask main to show its OWN native
+ * confirmation, and Stop. `enable` carries no argument at all: the filters, the CV and the wording
+ * the person confirms are gathered and shown by main, so the renderer cannot widen or hide any of them.
+ */
+const blindApplyApi: BlindApplyBridge = {
+  async status() {
+    return parseBlindApplyStatus(await ipcRenderer.invoke('blind-apply:status'));
+  },
+  async enable() {
+    return parseBlindApplyEnableResult(await ipcRenderer.invoke('blind-apply:enable'));
+  },
+  async stop() {
+    return parseBlindApplyStopResult(await ipcRenderer.invoke('blind-apply:stop'));
+  },
+  async feed() {
+    return parseBlindApplyFeed(await ipcRenderer.invoke('blind-apply:feed'));
+  },
+  async evidence(itemId) {
+    return parseBlindApplyEvidence(await ipcRenderer.invoke('blind-apply:evidence', itemId), itemId);
+  },
+  async answer(input) {
+    return parseBlindApplyAnswerResult(
+      await ipcRenderer.invoke('blind-apply:answer', {
+        itemId: input.itemId,
+        answers: input.answers.map((entry) => ({ label: entry.label, answer: entry.answer })),
+        remember: input.remember === true,
+      }),
+    );
+  },
+  async open(itemId) {
+    return parseBlindApplyOpenResult(await ipcRenderer.invoke('blind-apply:open', itemId));
+  },
+};
+
+contextBridge.exposeInMainWorld('blindApply', blindApplyApi);
 
 /**
  * #689. The eleventh namespace: company evidence. Every method resolves with a result REBUILT from

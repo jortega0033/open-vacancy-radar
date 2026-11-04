@@ -854,6 +854,34 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
     expect(queue.enqueued).not.toContain(blocked.id);
   });
 
+  it('turns an attempt found mid-submit into submission_unknown with a receipt row, and never re-queues it (#722)', async () => {
+    const mid = workspace.createApplicationAttempt(db, {
+      vacancyKey: 'vac-mid-submit',
+      canonicalUrl: FIXTURE_FORM_URLS.withoutUpload,
+      company: 'Northwind Freight',
+      role: 'Logistics Platform Engineer',
+      sourceCvContentHash: 'hash',
+      jdSnapshotHash: 'hash',
+      checkpoint: 'submitting',
+    });
+
+    const recovered = await pipeline.recoverInterruptedApplicationAttempts(deps);
+
+    expect(recovered).toEqual([{ attemptId: mid.id, from: 'submitting' }]);
+    const after = workspace.getApplicationAttempt(db, mid.id);
+    expect(after.checkpoint).toBe('submission_unknown');
+    expect(after.checkpointDetail).toContain('may or may not have been sent');
+    expect(after.submittedAt).not.toBeNull();
+    const receipts = workspace.listApplicationSubmissionReceipts(db, mid.id);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ outcome: 'unknown', source: 'page_observation', evidenceKind: 'none' });
+    expect(queue.enqueued).not.toContain(mid.id);
+
+    // A second recovery pass finds nothing left to do: the receipt is not written twice.
+    expect(await pipeline.recoverInterruptedApplicationAttempts(deps)).toEqual([]);
+    expect(workspace.listApplicationSubmissionReceipts(db, mid.id)).toHaveLength(1);
+  });
+
   it('replaces staged documents after an interrupted run instead of duplicating them', async () => {
     const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
     let stateReads = 0;
@@ -1861,6 +1889,66 @@ describe('acceptance 6: an abandoned preparation frees the lease and cannot writ
     stuckNavigation.release();
     await abandonedRunSettled(stopped);
     expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(attempt);
+  });
+});
+
+describe('Blind Apply attempts are never mapped by a model (#722)', () => {
+  async function startBlindAttempt(): Promise<string> {
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY, workflowVersion: pipeline.BLIND_APPLY_WORKFLOW_VERSION });
+    if (!started.ok || !started.attemptId) throw new Error(`start refused: ${started.reason ?? 'unknown'}`);
+    expect(workspace.getApplicationAttempt(db, started.attemptId).workflowVersion).toBe(pipeline.BLIND_APPLY_WORKFLOW_VERSION);
+    queueApplicationDocumentRenders();
+    return started.attemptId;
+  }
+
+  it('without a deterministic mapper the form step stops for the person and the generation session is never asked', async () => {
+    const attemptId = await startBlindAttempt();
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toContain('answer mapper is not available');
+    expect(generateFieldMap).not.toHaveBeenCalled();
+    expect(insertedText()).toEqual([]);
+  });
+
+  it('a mapper that refuses stops the form step with its own reason; nothing is typed and no model is asked', async () => {
+    const attemptId = await startBlindAttempt();
+    const deterministicFieldMap = vi.fn(() => ({ ok: false as const, detail: 'Blind Apply paused: it needs one answer from you' }));
+    const ticked = await pipeline.runNextApplicationAttempt({ ...deps, deterministicFieldMap });
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(deterministicFieldMap).toHaveBeenCalledTimes(1);
+    expect(workspace.getApplicationAttempt(db, attemptId).checkpointDetail).toBe('Blind Apply paused: it needs one answer from you');
+    expect(generateFieldMap).not.toHaveBeenCalled();
+    expect(insertedText()).toEqual([]);
+  });
+
+  it('the real exact-label mapper never guesses at labels it does not know, and never ticks the consent box', async () => {
+    const attemptId = await startBlindAttempt();
+    const { mapBlindApplyAnswers } = await import('../electron/blind-apply-answers.js');
+    const deterministicFieldMap = vi.fn((input: Parameters<NonNullable<ApplicationPipelineDeps['deterministicFieldMap']>>[0]) => {
+      const mapping = mapBlindApplyAnswers({
+        attemptId: input.attempt.id,
+        snapshot: input.snapshot,
+        valueTable: input.valueTable,
+        artifacts: input.artifacts,
+        findSavedAnswer: () => null,
+      });
+      return mapping.missing.length + mapping.interventions.length > 0
+        ? { ok: false as const, detail: 'Blind Apply paused: a question has no stored answer' }
+        : { ok: true as const, fieldMap: mapping.fieldMap, valueTable: mapping.valueTable };
+    });
+    await pipeline.runNextApplicationAttempt({ ...deps, deterministicFieldMap });
+
+    expect(deterministicFieldMap).toHaveBeenCalledTimes(1);
+    expect(workspace.getApplicationAttempt(db, attemptId).checkpoint).toBe('needs_user');
+    expect(generateFieldMap).not.toHaveBeenCalled();
+    expect(insertedText()).toEqual([]);
+  });
+
+  it('the reviewed pipeline is unchanged: an ordinary attempt still asks the generation session', async () => {
+    await prepareOneApplication();
+    expect(generateFieldMap).toHaveBeenCalledTimes(1);
   });
 });
 

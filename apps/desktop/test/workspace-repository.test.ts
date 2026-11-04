@@ -167,6 +167,10 @@ describe('settings', () => {
       applicationActions: 0,
       applicationActionPrefs: 0,
       followUpDrafts: 0,
+      blindApplyAuthorizations: 0,
+      blindApplyItems: 0,
+      blindApplyEvents: 0,
+      blindApplyAnswers: 0,
     });
     expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null, mcpEndpointEnabled: false });
     expect(workspace.listSavedJobs(db)).toEqual([]);
