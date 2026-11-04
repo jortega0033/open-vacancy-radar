@@ -88,6 +88,13 @@ export interface BlindApplyAuthorizationDeps {
   /** Injected so a test can answer the dialog without Electron. */
   confirm?: (parent: BrowserWindow | undefined, options: MessageBoxOptions) => Promise<boolean>;
   now?: () => Date;
+  /**
+   * Runs after the person approves and before the new authorization is written. Main passes the same
+   * Stop the Stop button runs, so the previous authorization's unsent work is cancelled and its pages
+   * closed instead of lingering as Preparing / Needs you under an authorization that no longer acts.
+   * If it throws, nothing new is authorized.
+   */
+  beforeReplace?: () => Promise<void>;
 }
 
 export type RequestBlindApplyResult =
@@ -111,6 +118,8 @@ export async function requestBlindApplyAuthorization(
   });
   const approved = await (deps.confirm ?? showConfirmDialog)(deps.parent, options);
   if (!approved) return { ok: false, reason: 'declined' };
+
+  await deps.beforeReplace?.();
 
   const authorization = createBlindApplyAuthorization(
     deps.db,

@@ -15,6 +15,7 @@ import type { BlindApplyCandidate, BlindApplyLiveness } from '../electron/blind-
 import { buildApplicationValueTable } from '../electron/application-value-table.js';
 import { BLIND_APPLY_WORKFLOW_VERSION, CAPTCHA_STOP_DETAIL } from '../electron/application-pipeline.js';
 import { FIXTURE_REVIEW_POLICY } from '../electron/application-target-policies.js';
+import { requestBlindApplyAuthorization } from '../electron/blind-apply-authorization.js';
 import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/client.js';
 import * as store from '../electron/workspace/blind-apply-store.js';
 import * as workspace from '../electron/workspace/repository.js';
@@ -712,6 +713,71 @@ describe('restart recovery', () => {
     expect(h.spies.submit).not.toHaveBeenCalled();
   });
 
+  /** An item past the click boundary: the attempt says `submitting`, the item says `submitting`. */
+  async function sendInFlight(h: Harness, n: number) {
+    h.candidates.push(candidate(n));
+    await h.runner.tick();
+    const item = itemFor(h, `vac-${n}`);
+    h.prepare(item.id);
+    store.transitionBlindApplyItem(db, item.id, ['preparing'], 'ready', {}, { kind: 'prepare' });
+    store.transitionBlindApplyItem(db, item.id, ['ready'], 'submitting', {}, { kind: 'submit_click' });
+    workspace.updateApplicationAttempt(db, item.attemptId!, { checkpoint: 'submitting' });
+    return itemFor(h, `vac-${n}`);
+  }
+
+  it("Stop during a send, then the app closes: the item becomes \"couldn't confirm\", not \"Sending\" forever", async () => {
+    const h = harness();
+    const item = await sendInFlight(h, 1);
+
+    await h.runner.stop(); // a send in flight is past the boundary: Stop leaves it alone
+    expect(itemFor(h, 'vac-1').state).toBe('submitting');
+    expect(store.getActiveBlindApplyAuthorization(db)).toBeNull();
+
+    // The app closes; the pipeline's own recovery marks the attempt, it never re-sends.
+    workspace.updateApplicationAttempt(db, item.attemptId!, { checkpoint: 'submission_unknown', checkpointDetail: 'the app closed during submission' });
+    const restarted = createBlindApplyRunner(h.deps);
+    await restarted.recoverOnStartup();
+
+    expect(itemFor(h, 'vac-1')).toMatchObject({ state: 'outcome_unknown', stateDetail: "Sent? Couldn't confirm" });
+    await restarted.tick();
+    expect(itemFor(h, 'vac-1').state).toBe('outcome_unknown');
+    expect(h.spies.submit).not.toHaveBeenCalled();
+  });
+
+  it('a stopped authorization is also reconciled on every tick, with no restart needed', async () => {
+    const h = harness();
+    const item = await sendInFlight(h, 1);
+    await h.runner.stop();
+    workspace.updateApplicationAttempt(db, item.attemptId!, { checkpoint: 'submission_unknown', checkpointDetail: 'no confirmation seen' });
+
+    await h.runner.tick(); // no active authorization: this used to return before looking at the item
+    expect(itemFor(h, 'vac-1').state).toBe('outcome_unknown');
+    expect(h.spies.submit).not.toHaveBeenCalled();
+  });
+
+  it('a send in flight under a replaced authorization is settled the same way', async () => {
+    const h = harness();
+    const item = await sendInFlight(h, 1);
+    const replacement = store.createBlindApplyAuthorization(db, {
+      roleFamilies: ['frontend'], filtersSnapshot: {}, filtersHash: 'fh', profileVersion: 'p2', sourceCvId: null,
+      sourceCvContentHash: 'cv-2', useSavedAnswers: true, policyIds: [FIXTURE_POLICY.id], confirmTextHash: 'th2',
+    }, h.clock.now);
+    workspace.updateApplicationAttempt(db, item.attemptId!, { checkpoint: 'submission_unknown', checkpointDetail: 'the app closed during submission' });
+
+    await createBlindApplyRunner(h.deps).recoverOnStartup();
+    expect(itemFor(h, 'vac-1').state).toBe('outcome_unknown');
+    expect(store.getActiveBlindApplyAuthorization(db)?.id).toBe(replacement.id);
+    expect(h.spies.submit).not.toHaveBeenCalled();
+  });
+
+  it('a stopped authorization whose attempt is still genuinely submitting is left alone', async () => {
+    const h = harness();
+    await sendInFlight(h, 1);
+    await h.runner.stop();
+    await h.runner.tick();
+    expect(itemFor(h, 'vac-1').state).toBe('submitting');
+  });
+
   it('a ready item that lost its page is prepared again after a restart', async () => {
     const h = harness();
     h.candidates.push(candidate(1));
@@ -724,6 +790,106 @@ describe('restart recovery', () => {
     expect(itemFor(h, 'vac-1').state).toBe('preparing');
     expect(h.spies.requeue).toHaveBeenCalledWith(item.attemptId);
     expect(h.spies.submit).not.toHaveBeenCalled();
+  });
+});
+
+describe('confirming again after a CV or profile change', () => {
+  const FACTS = {
+    roleFamilies: ['frontend'],
+    roleFamilyNames: ['Frontend / UI engineering'],
+    filtersSnapshot: { country: 'PT' },
+    filterLines: ['Based in PT'],
+    profileVersion: 'p2',
+    cv: { id: 'cv-1', name: 'Main CV', contentHash: 'cv-2' },
+    policyIds: [FIXTURE_POLICY.id],
+    realTargets: [],
+  };
+
+  it("stops the old authorization's unsent work: nothing stays Preparing, Sending or Needs you", async () => {
+    const h = harness();
+    for (let n = 1; n <= 4; n += 1) h.candidates.push(candidate(n));
+    await h.runner.tick();
+    // vac-1 is mid-preparation (page open), vac-2 is ready, vac-3 waits for the person, vac-4 is queued.
+    h.live.add(itemFor(h, 'vac-1').attemptId!);
+    h.prepare(itemFor(h, 'vac-2').id);
+    runMapper(h, itemFor(h, 'vac-3').id, snapshotOf(field('I agree', 'checkbox', { required: true, classification: 'consent_field' })));
+    h.live.add(itemFor(h, 'vac-3').attemptId!);
+    expect(itemFor(h, 'vac-3').state).toBe('needs_you');
+    const oldAuthorizationId = h.authorizationId;
+
+    const result = await requestBlindApplyAuthorization(
+      {
+        db,
+        parent: undefined,
+        confirm: async () => true,
+        beforeReplace: async () => {
+          await h.runner.stop('replaced by a newer confirmation');
+        },
+      },
+      FACTS,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(['vac-1', 'vac-2', 'vac-3', 'vac-4'].map((key) => itemFor(h, key).state)).toEqual(['stopped', 'stopped', 'stopped', 'stopped']);
+    // Queued/preparing work is cancelled and its page closed; the item waiting on the person keeps its page.
+    expect(h.spies.cancelQueue).toHaveBeenCalledWith(itemFor(h, 'vac-1').attemptId);
+    expect(h.spies.cancelQueue).toHaveBeenCalledWith(itemFor(h, 'vac-2').attemptId);
+    expect(h.live.has(itemFor(h, 'vac-1').attemptId!)).toBe(false);
+    expect(h.live.has(itemFor(h, 'vac-2').attemptId!)).toBe(false);
+    expect(h.live.has(itemFor(h, 'vac-3').attemptId!)).toBe(true);
+    // The old authorization is stopped; the new one is the only active one.
+    expect(store.getBlindApplyAuthorization(db, oldAuthorizationId)?.stoppedAt).not.toBeNull();
+    expect(store.getActiveBlindApplyAuthorization(db)?.id).toBe(result.authorization.id);
+    // Nothing from the old authorization is sent afterwards, and the unsent attempts keep their checkpoint.
+    h.facts.cvContentHash = 'cv-2';
+    h.facts.profileVersion = 'p2';
+    await h.runner.tick();
+    expect(h.spies.submit).not.toHaveBeenCalled();
+    expect(workspace.getApplicationAttempt(db, itemFor(h, 'vac-2').attemptId!).checkpoint).toBe('ready');
+  });
+
+  it('leaves completed records alone', async () => {
+    const h = harness();
+    h.candidates.push(candidate(1), candidate(2));
+    await h.runner.tick();
+    h.prepare(itemFor(h, 'vac-1').id);
+    await h.runner.tick();
+    expect(itemFor(h, 'vac-1').state).toBe('submitted');
+    const snapshot = () => ({
+      item: itemFor(h, 'vac-1'),
+      events: store.listBlindApplyEvents(db, itemFor(h, 'vac-1').id),
+      receipts: workspace.listApplicationSubmissionReceipts(db, itemFor(h, 'vac-1').attemptId!),
+    });
+    const before = snapshot();
+    await requestBlindApplyAuthorization(
+      { db, parent: undefined, confirm: async () => true, beforeReplace: async () => { await h.runner.stop('replaced by a newer confirmation'); } },
+      FACTS,
+    );
+    expect(snapshot()).toEqual(before);
+    expect(itemFor(h, 'vac-2').state).toBe('stopped');
+  });
+
+  it('declining the confirmation changes nothing about the running authorization', async () => {
+    const h = harness();
+    h.candidates.push(candidate(1));
+    await h.runner.tick();
+    const beforeReplace = vi.fn(async () => {});
+    const result = await requestBlindApplyAuthorization({ db, parent: undefined, confirm: async () => false, beforeReplace }, FACTS);
+    expect(result).toEqual({ ok: false, reason: 'declined' });
+    expect(beforeReplace).not.toHaveBeenCalled();
+    expect(itemFor(h, 'vac-1').state).toBe('preparing');
+    expect(store.getActiveBlindApplyAuthorization(db)?.id).toBe(h.authorizationId);
+  });
+
+  it('authorizes nothing new when the cleanup fails', async () => {
+    const h = harness();
+    const result = requestBlindApplyAuthorization(
+      { db, parent: undefined, confirm: async () => true, beforeReplace: async () => { throw new Error('cleanup failed'); } },
+      FACTS,
+    );
+    await expect(result).rejects.toThrow('cleanup failed');
+    expect(store.getActiveBlindApplyAuthorization(db)?.id).toBe(h.authorizationId);
   });
 });
 

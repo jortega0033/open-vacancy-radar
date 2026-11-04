@@ -549,9 +549,26 @@ export function createBlindApplyRunner(deps: BlindApplyRunnerDeps): BlindApplyRu
     }
   }
 
+  /**
+   * Reconciles every `submitting` item against its attempt, whatever its authorization's state. A Stop
+   * or a replacing confirmation never touches an item past the click boundary, so a send that was in
+   * flight when the person stopped (and then closed the app) must still be settled from the attempt:
+   * the pipeline's recovery makes it `submission_unknown`, and the item has to say so, not "Sending".
+   */
+  function reconcileAllSubmitting(): void {
+    for (const item of listBlindApplyItems(db, { states: ['submitting'] })) {
+      try {
+        reconcileSubmitting(item);
+      } catch (error) {
+        log('Blind Apply could not settle an application that was being sent', { itemId: item.id, error: describeError(error) });
+      }
+    }
+  }
+
   // -------------------------------------------------------------------------------- tick
 
   async function tick(): Promise<void> {
+    reconcileAllSubmitting(); // before the early return: stopped and superseded authorizations too
     const auth = getActiveBlindApplyAuthorization(db);
     if (!auth || stopRequested.has(auth.id)) return;
 
@@ -569,7 +586,6 @@ export function createBlindApplyRunner(deps: BlindApplyRunnerDeps): BlindApplyRu
 
     if (!paused) await selectCandidates(auth, current);
 
-    for (const item of listBlindApplyItems(db, { authorizationId: auth.id, states: ['submitting'] })) reconcileSubmitting(item);
     for (const item of listBlindApplyItems(db, { authorizationId: auth.id, states: ['preparing'] })) {
       try {
         await reconcilePreparing(item);
@@ -667,12 +683,13 @@ export function createBlindApplyRunner(deps: BlindApplyRunnerDeps): BlindApplyRu
         move(item, [item.state], 'stopped', { stateDetail: 'Stopped by you' }, { kind: 'recover', detail: 'stopped before the app closed' });
       }
     }
-    const active = getActiveBlindApplyAuthorization(db);
-    if (!active) return;
 
     // The pipeline's own recovery has already turned a mid-submit attempt into `submission_unknown`
-    // (never re-sent); bring the matching items in line.
-    for (const item of listBlindApplyItems(db, { authorizationId: active.id, states: ['submitting'] })) reconcileSubmitting(item);
+    // (never re-sent); bring the matching items in line, under any authorization, stopped or not.
+    reconcileAllSubmitting();
+
+    const active = getActiveBlindApplyAuthorization(db);
+    if (!active) return;
 
     // A `ready` item lost its page with the process. Prepare it again; never send into nothing.
     for (const item of listBlindApplyItems(db, { authorizationId: active.id, states: ['ready'] })) {

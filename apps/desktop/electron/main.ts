@@ -3427,7 +3427,15 @@ guardedIpc.handle('blind-apply:enable', async () => {
   };
   const targets = listBlindSubmissionTargets();
   const result = await requestBlindApplyAuthorization(
-    { db, parent: mainWindow },
+    {
+      db,
+      parent: mainWindow,
+      // A confirmation that replaces an active one (after a CV or profile change) first runs the same
+      // Stop as the Stop button, so the old authorization's unsent work does not linger in the feed.
+      beforeReplace: async () => {
+        await (await ensureBlindApplyRunner()).stop('replaced by a newer confirmation');
+      },
+    },
     {
       roleFamilies: ['frontend'],
       roleFamilyNames: ['Frontend / UI engineering'],
