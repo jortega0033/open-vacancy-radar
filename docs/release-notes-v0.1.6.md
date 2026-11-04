@@ -133,7 +133,10 @@ New local data in `workspace.db`: migration 0041 adds `blind_apply_authorization
 `blind_apply_items`, `blind_apply_events` (append-only) and `blind_apply_answers` (answers you chose
 to remember). Posting checks can now record **It's open** as your decision. Settings > Advanced >
 Reset application data clears the four Blind Apply tables. Liveness summaries beside search results
-are kept in memory only. See [privacy.md](privacy.md) and [blind-apply.md](blind-apply.md).
+are kept in memory only. See [blind-apply.md](blind-apply.md#local-record) and
+[posting-verification.md](posting-verification.md). [privacy.md](privacy.md) does not list the Blind
+Apply tables or the detail-pane posting check yet; these notes and those two pages are the current
+record.
 
 ## Known limitations
 
