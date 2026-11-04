@@ -310,6 +310,24 @@ export const INTERRUPTED_ATTEMPT_RESTART: ApplicationAttemptRestart = {
   detail: 'the app closed while this was being prepared; it will start again from the beginning',
 };
 
+/**
+ * What restart recovery records for an attempt found at `submitting` (#722, fixing a gap that predates
+ * Blind Apply). `submitting` is written immediately before the one call that can reach the employer, so
+ * finding it at rest means the app stopped somewhere between that write and the observation of the
+ * outcome: the click may or may not have landed. It is therefore NOT in `interruptedWhenAtRest` (that
+ * would restart preparation and risk a second real application). It becomes `submission_unknown`, the
+ * existing state that `submitApplicationReview` already refuses to blindly retry.
+ */
+export const INTERRUPTED_SUBMISSION_RECOVERY = {
+  checkpoint: 'submission_unknown',
+  detail: 'the app closed during submission; this application may or may not have been sent, so it will not be sent again automatically',
+} as const;
+
+/** Whether finding this checkpoint at rest means a submit was in flight when the app stopped. */
+export function isInterruptedSubmission(checkpoint: ApplicationAttemptCheckpoint): boolean {
+  return checkpoint === 'submitting';
+}
+
 /** Whether a run must leave this checkpoint completely alone. */
 export function isSettledCheckpoint(checkpoint: ApplicationAttemptCheckpoint): boolean {
   return !APPLICATION_ATTEMPT_CHECKPOINT_ROLES[checkpoint].preparationMayRun;

@@ -61,6 +61,7 @@ import { deleteAllCritiques } from './application-critique-store.js';
 import { bindSubmissionPackage, deleteAllSubmissionPackages } from './submission-package-store.js';
 import { deleteAllInterviewRounds } from './interview-round-store.js';
 import { deleteAllApplicationActions } from './application-action-store.js';
+import { deleteAllBlindApply } from './blind-apply-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -3095,6 +3096,8 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       ...deleteAllInterviewRounds(tx),
       // #692: the local due actions, the suggestion switches and the follow-up drafts.
       ...deleteAllApplicationActions(tx),
+      // #722: the Blind Apply authorizations, evaluated items, event trail and remembered answers.
+      ...deleteAllBlindApply(tx),
     };
 
     tx.delete(applicationAttempts).run();

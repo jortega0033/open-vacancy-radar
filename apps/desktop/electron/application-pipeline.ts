@@ -3,7 +3,9 @@ import { describeBlockers, parseFieldMap, type FormSnapshot } from '@agent-dock/
 import { stageApplicationDocuments, stageLetterArtifact, StagingAbandonedError } from './application-artifact-staging.js';
 import {
   INTERRUPTED_ATTEMPT_RESTART,
+  INTERRUPTED_SUBMISSION_RECOVERY,
   isInterruptedCheckpoint,
+  isInterruptedSubmission,
   isSettledCheckpoint,
   resolveAttemptRecovery,
   resolveAttemptTransition,
@@ -1585,6 +1587,32 @@ export async function recoverInterruptedApplicationAttempts(
     // has open, so they are not this attempt's prepared state any more.
     workspace.recordPreparedApplicationFields(deps.db, attempt.id, null);
     await enqueue(attempt.id);
+    recovered.push({ attemptId: attempt.id, from: attempt.checkpoint });
+  }
+
+  // #722: an attempt found mid-submit is never restarted and never re-clicked. It becomes
+  // `submission_unknown` with a receipt row saying so, which `submitApplicationReview` refuses to retry
+  // and which only a delayed receipt or the person's own statement can resolve.
+  for (const attempt of attempts.filter((candidate) => isInterruptedSubmission(candidate.checkpoint))) {
+    const observedAt = nowIso(deps);
+    try {
+      workspace.createApplicationSubmissionReceipt(deps.db, {
+        attemptId: attempt.id,
+        outcome: 'unknown',
+        source: 'page_observation',
+        destination: attempt.canonicalUrl,
+        evidenceKind: 'none',
+        detail: INTERRUPTED_SUBMISSION_RECOVERY.detail,
+        observedAt,
+      });
+    } catch (err) {
+      deps.log?.('could not record the receipt for an interrupted submission', { attemptId: attempt.id, error: describeError(err) });
+    }
+    workspace.updateApplicationAttempt(deps.db, attempt.id, {
+      checkpoint: INTERRUPTED_SUBMISSION_RECOVERY.checkpoint,
+      checkpointDetail: INTERRUPTED_SUBMISSION_RECOVERY.detail,
+      submittedAt: observedAt,
+    });
     recovered.push({ attemptId: attempt.id, from: attempt.checkpoint });
   }
 

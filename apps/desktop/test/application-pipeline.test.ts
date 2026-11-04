@@ -854,6 +854,34 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
     expect(queue.enqueued).not.toContain(blocked.id);
   });
 
+  it('turns an attempt found mid-submit into submission_unknown with a receipt row, and never re-queues it (#722)', async () => {
+    const mid = workspace.createApplicationAttempt(db, {
+      vacancyKey: 'vac-mid-submit',
+      canonicalUrl: FIXTURE_FORM_URLS.withoutUpload,
+      company: 'Northwind Freight',
+      role: 'Logistics Platform Engineer',
+      sourceCvContentHash: 'hash',
+      jdSnapshotHash: 'hash',
+      checkpoint: 'submitting',
+    });
+
+    const recovered = await pipeline.recoverInterruptedApplicationAttempts(deps);
+
+    expect(recovered).toEqual([{ attemptId: mid.id, from: 'submitting' }]);
+    const after = workspace.getApplicationAttempt(db, mid.id);
+    expect(after.checkpoint).toBe('submission_unknown');
+    expect(after.checkpointDetail).toContain('may or may not have been sent');
+    expect(after.submittedAt).not.toBeNull();
+    const receipts = workspace.listApplicationSubmissionReceipts(db, mid.id);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ outcome: 'unknown', source: 'page_observation', evidenceKind: 'none' });
+    expect(queue.enqueued).not.toContain(mid.id);
+
+    // A second recovery pass finds nothing left to do: the receipt is not written twice.
+    expect(await pipeline.recoverInterruptedApplicationAttempts(deps)).toEqual([]);
+    expect(workspace.listApplicationSubmissionReceipts(db, mid.id)).toHaveLength(1);
+  });
+
   it('replaces staged documents after an interrupted run instead of duplicating them', async () => {
     const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
     let stateReads = 0;
