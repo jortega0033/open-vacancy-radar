@@ -55,7 +55,7 @@ const ANCHORS: readonly [string, string][] = [
   ['packages/vacancy-engine/src/global-remote/evaluation.ts:15', 'const ROLE_EXCLUSIONS'],
   ['packages/vacancy-engine/src/global-remote/evaluation.ts:90', 'export function classifyDiscoveryVacancy'],
   ['packages/vacancy-engine/src/pipeline/global-remote.ts:1067', 'function withApprovedTitleClassification'],
-  ['apps/desktop/src/components/search/SearchResultList.tsx:56', 'deliberately does'],
+  ['apps/desktop/src/components/search/SearchResultList.tsx:62', 'deliberately does'],
   ['packages/vacancy-engine/src/global-remote/report.ts:89', "'role_mismatch', 'non_vacancy'"],
   ['packages/vacancy-engine/src/global-remote/report.ts:194', 'latest.audit.ndjson'],
   ['README.md:25', 'frontend-only'],

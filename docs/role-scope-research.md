@@ -119,7 +119,7 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
   It also has a fixed exclusion list (`packages/vacancy-engine/src/global-remote/evaluation.ts:15`). A #686-approved title
   stands in for the positive rule only (`packages/vacancy-engine/src/pipeline/global-remote.ts:1067`).
   This decision is shown as "Discovery decision" in the detail pane and counted in report statistics. Search **neither hides
-  nor reorders** a `role_mismatch` row (`apps/desktop/src/components/search/SearchResultList.tsx:56`), so in Search a
+  nor reorders** a `role_mismatch` row (`apps/desktop/src/components/search/SearchResultList.tsx:62`), so in Search a
   `role_mismatch` is not a hidden result, and this research does not treat it as one. The generated HTML report is different:
   its "Discovery-board title matches" table omits `role_mismatch` and `non_vacancy` rows
   (`packages/vacancy-engine/src/global-remote/report.ts:89`) and names the full per-listing audit file, `latest.audit.ndjson`,
