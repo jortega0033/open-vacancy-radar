@@ -6,7 +6,7 @@ import { SettingsRow, SettingsSection } from './controls.js';
 const REFUSAL_COPY: Record<Extract<BlindApplyEnableResult, { ok: false }>['reason'], string> = {
   declined: '',
   no_cv: 'Add a CV first.',
-  no_profile: 'Set up your search profile (at least one target role) first.',
+  no_profile: 'Set up what you are looking for (at least one target role) first.',
   no_role_family: 'There is no role family to confirm.',
 };
 

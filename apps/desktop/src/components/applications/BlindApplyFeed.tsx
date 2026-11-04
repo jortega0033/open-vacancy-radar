@@ -54,7 +54,7 @@ function EvidenceDetails({ itemId }: { itemId: string }) {
               <ul className="list-disc pl-4">
                 {evidence.answers.map((answer) => (
                   <li key={`${answer.label}-${answer.answerId ?? answer.provenance}`}>
-                    {answer.label}: {answer.provenance === 'saved_answer' ? 'an answer you saved' : answer.provenance === 'cv' ? 'from your CV' : 'from your profile'}
+                    {answer.label}: {answer.provenance === 'saved_answer' ? 'an answer you saved' : answer.provenance === 'cv' ? 'from your CV' : 'from your saved details'}
                   </li>
                 ))}
               </ul>
