@@ -12,6 +12,7 @@ import type { NavPage } from '../shell/nav.js';
 import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
+import { BlindApplySection } from './BlindApplySection.js';
 import { McpEndpointSection } from './McpEndpointSection.js';
 import { SavedAnswersSection } from './SavedAnswersSection.js';
 import { SourceScoutSection } from './SourceScoutSection.js';
@@ -674,6 +675,8 @@ export function SettingsPage({
               </button>
             </SettingsRow>
           </SettingsSection>
+
+          <BlindApplySection {...(disabled !== undefined ? { disabled } : {})} />
 
           <McpEndpointSection
             settings={settings}

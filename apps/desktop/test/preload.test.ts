@@ -2074,13 +2074,34 @@ describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
       'postingVerification',
       'verifyPosting',
       'refreshFromPosting',
+      // #720: read-only liveness for search results, and one bounded check of one selected result.
+      'postingLiveness',
+      'checkPostingLiveness',
       'attachLetter',
+      // #657: the "Application ready" notification click, a push channel carrying only an id.
+      'onOpenAttempt',
     ]);
     expect(typeof api.start).toBe('function');
     expect(typeof api.startFromVacancy).toBe('function');
     expect(typeof api.retryTailoring).toBe('function');
     expect(typeof api.useOriginalCv).toBe('function');
     expect(typeof api.resume).toBe('function');
+  });
+
+  it('onOpenAttempt forwards only a non-empty id string from its fixed channel and unsubscribes (#657)', async () => {
+    const api = await loadPreload('applicationPipeline');
+    const received: string[] = [];
+    const unsubscribe = (api.onOpenAttempt as (cb: (id: string) => void) => () => void)((id) => received.push(id));
+    expect(on).toHaveBeenCalledWith('application:open-attempt', expect.any(Function));
+    const listener = on.mock.calls[0]![1] as (event: unknown, payload: unknown) => void;
+    listener({}, { attemptId: 'attempt-1', canonicalUrl: 'https://evil.example' });
+    listener({}, { attemptId: '' });
+    listener({}, { attemptId: 42 });
+    listener({}, 'attempt-2');
+    listener({}, { attemptId: 'x'.repeat(201) });
+    expect(received).toEqual(['attempt-1']);
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('application:open-attempt', listener);
   });
 
   it('exposes no generic IPC passthrough', async () => {

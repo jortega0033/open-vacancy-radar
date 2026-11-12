@@ -288,6 +288,13 @@
       "when": 1793315128244,
       "tag": "0040_application_due_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1793772454129,
+      "tag": "0041_blind_apply",
+      "breakpoints": true
     }
   ]
 }

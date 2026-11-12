@@ -69,6 +69,7 @@ import { createApplicationActionsHandlers } from './application-actions-ipc.js';
 import { cancelAllFollowUps } from './follow-up-runs.js';
 import { cancelAllCritiques, type CritiqueDeps } from './application-critique-service.js';
 import { readPostingVerification } from './application-posting-verification.js';
+import { createPostingLivenessService, POSTING_LIVENESS_READ_LIMIT } from './vacancy-posting-liveness.js';
 import { runCompanyResearchSession } from './company-evidence-research.js';
 import { createCompanyEvidenceHandlers } from './company-evidence-ipc.js';
 import { CompanyEvidenceRuns, getView as companyEvidenceView, proseEvidence, type CompanyEvidenceDeps } from './company-evidence-service.js';
@@ -97,6 +98,7 @@ import {
   confirmApplicationAnswer,
   evaluateAndScheduleAutomaticSubmission,
   fireDueAutomaticSubmissions,
+  hasActiveApplicationReview,
   hideApplicationReviewHandoff,
   openApplicationReview,
   showApplicationReviewForHandoff,
@@ -104,7 +106,26 @@ import {
   submitApplicationReview,
   recordUserReportedSubmission,
 } from './application-review-session.js';
-import { resolvePolicyIdForCanonicalUrl, setAutoApplyEnabled } from './application-target-policies.js';
+import {
+  listBlindSubmissionTargets,
+  resolveApplicationTargetPolicy,
+  resolvePolicyIdForCanonicalUrl,
+  setAutoApplyEnabled,
+  setBlindApplyActive,
+} from './application-target-policies.js';
+import { requestBlindApplyAuthorization } from './blind-apply-authorization.js';
+import type { BlindApplyCurrentFacts } from './blind-apply-eligibility.js';
+import { createBlindApplyFieldMapper, createBlindApplyRunner, type BlindApplyRunner } from './blind-apply-runner.js';
+import type { BlindApplyAnswerInput } from './blind-apply-types.js';
+import {
+  blindFilterLines,
+  buildBlindApplyEvidence,
+  buildBlindApplyFeed,
+  buildBlindApplyStatus,
+  candidateFromAuditRow,
+  type BlindApplyProfileFilters,
+} from './blind-apply-views.js';
+import { getActiveBlindApplyAuthorization, getBlindApplyItem } from './workspace/blind-apply-store.js';
 import { requestAutomationGrant } from './automatic-submission-grant.js';
 import { notifyApplicationPreparation } from './application-preparation-notify.js';
 import { notifyVacancyScanCompleted, notifyVacancyScanFailed } from './vacancy-scan-notify.js';
@@ -524,6 +545,13 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     // -- that module stays in its refusing state, so the failure mode is "nothing is automatically
     // submittable", never the reverse.
     setAutoApplyEnabled(settings.autoApplyEnabled);
+    // #722: a Blind Apply authorization that was still active when the app closed is still active.
+    // A failed read leaves the switch off, so the failure mode is "nothing is submittable".
+    try {
+      setBlindApplyActive(getActiveBlindApplyAuthorization(db) !== null);
+    } catch (error) {
+      console.error('[blind-apply] could not read the authorization', error);
+    }
     void syncMcpServer(settings.mcpEndpointEnabled);
     return db;
   })();
@@ -1463,6 +1491,18 @@ function createTray(): void {
   });
 }
 
+/**
+ * #657: a click on the "Application ready" notification brings the window forward and opens that
+ * application in the Review & apply workspace. Only the attempt id crosses to the renderer.
+ */
+function openApplicationFromNotification(attemptId: string): void {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  sendToRenderer(mainWindow, 'application:open-attempt', { attemptId });
+}
+
 /*
  * ---------------------------------------------------------------------------------------------
  * ADI-16: every channel below is registered through `guardedIpc`, never through `ipcMain` directly.
@@ -2230,10 +2270,16 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
       });
     },
     loadProfile: loadApplicationValueProfile,
+    // #722: the exact-label mapper that stands in for the generation session on Blind Apply attempts
+    // (and only on those: the pipeline consults it by the attempt's own workflow version).
+    deterministicFieldMap: createBlindApplyFieldMapper({ db }),
     // #687: the one bounded live check, through the same shared safe-HTTP client the on-demand
     // description fetch uses. Built lazily so an app that never prepares anything never opens the engine DB.
     async verifyPosting(input) {
-      return createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+      const observation = await createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+      // #720: a result whose application check found it closed (or open) says so in the search list.
+      postingLiveness.remember(input.url, observation);
+      return observation;
     },
     // #689: the drafting stage reads only what the support policy already approved from the local
     // store. It never starts research and never fetches.
@@ -2312,31 +2358,36 @@ guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) =
   });
 });
 
+/** Starts the reviewed flow for one search result. Shared by the search page and by Blind Apply's
+ * "Apply yourself" action, so both reach the identical pipeline. */
+async function startApplicationFromVacancy(vacancyKey: string) {
+  const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+  if (!row) throw new Error('this vacancy is no longer available in the latest report');
+
+  const db = await ensureWorkspaceDb();
+  let savedJob = workspace.listSavedJobs(db).find((saved) => saved.vacancyKey === vacancyKey);
+  const created = savedJob === undefined;
+  savedJob ??= workspace.createSavedJob(db, {
+    role: row.title,
+    company: row.company,
+    location: row.location,
+    vacancyKey: row.key,
+    matchPercent: row.profileScore,
+    sourceUrl: row.url,
+    status: 'considering',
+  });
+
+  const result = await startPipelineForSavedJob(savedJob.id);
+  if (result.reason === 'attempt_already_in_progress' && result.attemptId) {
+    return { ok: true, attemptId: result.attemptId, savedJobId: savedJob.id, created: false };
+  }
+  return { ...result, savedJobId: savedJob.id, created };
+}
+
 guardedIpc.handle('application-pipeline:start-from-vacancy', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
     const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-    const vacancyKey = parseId(source.vacancyKey, 'vacancyKey');
-    const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
-    if (!row) throw new Error('this vacancy is no longer available in the latest report');
-
-    const db = await ensureWorkspaceDb();
-    let savedJob = workspace.listSavedJobs(db).find((saved) => saved.vacancyKey === vacancyKey);
-    const created = savedJob === undefined;
-    savedJob ??= workspace.createSavedJob(db, {
-      role: row.title,
-      company: row.company,
-      location: row.location,
-      vacancyKey: row.key,
-      matchPercent: row.profileScore,
-      sourceUrl: row.url,
-      status: 'considering',
-    });
-
-    const result = await startPipelineForSavedJob(savedJob.id);
-    if (result.reason === 'attempt_already_in_progress' && result.attemptId) {
-      return { ok: true, attemptId: result.attemptId, savedJobId: savedJob.id, created: false };
-    }
-    return { ...result, savedJobId: savedJob.id, created };
+    return startApplicationFromVacancy(parseId(source.vacancyKey, 'vacancyKey'));
   });
 });
 
@@ -2364,7 +2415,9 @@ guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) 
   return applicationDataResetGate.runMutation(async () => {
     const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
     const resolution =
-      source.resolution === 'prepare_anyway' || source.resolution === 'keep_current' ? source.resolution : undefined;
+      source.resolution === 'prepare_anyway' || source.resolution === 'keep_current' || source.resolution === 'confirm_open'
+        ? source.resolution
+        : undefined;
     const result = await resumeApplicationAttempt(
       await applicationPipelineDeps(),
       parseId(source.attemptId, 'attemptId'),
@@ -2373,6 +2426,33 @@ guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) 
     if (result.ok) void applicationPipelineTick.runOnce();
     return result;
   });
+});
+
+// #720: plain liveness for search results. Reading never touches the network; a check is one
+// bounded request for one selected result, through the same verifier and source policy as preparation.
+const postingLiveness = createPostingLivenessService({
+  resolveUrl: (vacancyKey) => resolvePipelineVacancy(vacancyKey)?.applyUrl || null,
+  async verify(input) {
+    return createPostingVerifier(await ensureApplicationJdHttpClient()).verify(input);
+  },
+  log: (message, meta) => console.warn(`[posting-liveness] ${message}`, meta ?? {}),
+});
+
+function parseVacancyKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((key): key is string => typeof key === 'string' && key.length > 0 && key.length <= 512)
+    .slice(0, POSTING_LIVENESS_READ_LIMIT);
+}
+
+guardedIpc.handle('application-pipeline:posting-liveness', (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return postingLiveness.read(parseVacancyKeys(source.vacancyKeys));
+});
+
+guardedIpc.handle('application-pipeline:check-posting-liveness', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return postingLiveness.check(parseId(source.vacancyKey, 'vacancyKey'));
 });
 
 // #687: reading the stored posting check never touches the network.
@@ -3199,11 +3279,14 @@ const applicationPipelineTick = createTick({
       const { result } = await runNextApplicationAttempt(deps);
       if (result && (result.checkpoint === 'ready' || result.checkpoint === 'needs_user')) {
         const attempt = workspace.getApplicationAttempt(deps.db, result.attemptId);
-        notifyApplicationPreparation({
-          company: attempt.company,
-          role: attempt.role,
-          needsUser: result.checkpoint === 'needs_user',
-        });
+        notifyApplicationPreparation(
+          {
+            company: attempt.company,
+            role: attempt.role,
+            needsUser: result.checkpoint === 'needs_user',
+          },
+          () => openApplicationFromNotification(result.attemptId),
+        );
       }
     });
   },
@@ -3214,6 +3297,217 @@ function scheduleApplicationPipelineTick(): void {
     void applicationPipelineTick.runOnce();
   }, APPLICATION_PIPELINE_TICK_INTERVAL_MS);
 }
+
+// ------------------------------------------------------------------------- Blind Apply (#722)
+//
+// Opt-in, no daily limit, no per-job review. The runner (`blind-apply-runner.ts`) owns the lifecycle;
+// this is only its wiring to the rest of the app. Everything the renderer can do is one of the channels
+// below: read the feed, answer a card, open an item into the reviewed flow, ask for the native
+// confirmation, and Stop.
+
+const BLIND_APPLY_TICK_INTERVAL_MS = 30 * 1000;
+/** Bounds one whole turn (including a send and its observation) so a stuck step can never wedge the guard. */
+const BLIND_APPLY_TICK_HARD_TIMEOUT_MS = 15 * 60 * 1000;
+
+async function loadBlindApplyProfile(): Promise<CandidateProfile | null> {
+  try {
+    return await loadCandidateProfile(await candidateProfilePath());
+  } catch {
+    return null;
+  }
+}
+
+function blindApplyDefaultCv(db: WorkspaceDb) {
+  const documents = workspace.listCvDocuments(db);
+  const defaultCvId = workspace.getSettings(db).defaultCvId;
+  return documents.find((document) => document.id === defaultCvId) ?? documents.find((document) => document.isDefault) ?? null;
+}
+
+async function loadBlindApplyCurrentFacts(): Promise<BlindApplyCurrentFacts> {
+  const cv = blindApplyDefaultCv(await ensureWorkspaceDb());
+  // An unreadable profile reads as "changed": Blind Apply pauses rather than guessing.
+  const profileVersion = (await loadBlindApplyProfile())?.profileVersion ?? '';
+  return { cvContentHash: cv ? createHash('sha256').update(cv.text).digest('hex') : null, profileVersion };
+}
+
+let blindApplyRunnerPromise: Promise<BlindApplyRunner> | undefined;
+
+function ensureBlindApplyRunner(): Promise<BlindApplyRunner> {
+  blindApplyRunnerPromise ??= (async () => {
+    const db = await ensureWorkspaceDb();
+    return createBlindApplyRunner({
+      db,
+      log: (message, meta) => console.warn(`[blind-apply] ${message}`, meta ?? {}),
+      // Frontend rows whose filters are not already known to fail. Other roles are out of scope and leave no record.
+      listCandidates: () =>
+        (latestVacancyReport?.discoveryAudit ?? [])
+          .map(candidateFromAuditRow)
+          .filter((candidate) => candidate.family === 'frontend' && candidate.filters !== 'not_eligible'),
+      loadCurrentFacts: loadBlindApplyCurrentFacts,
+      resolvePolicy: (url) => {
+        const policyId = resolvePolicyIdForCanonicalUrl(url);
+        return policyId ? resolveApplicationTargetPolicy(policyId) : undefined;
+      },
+      minIntervalMs: (policyId) => resolveApplicationTargetPolicy(policyId)?.rateLimits.minIntervalMs ?? 0,
+      async checkLiveness(candidate) {
+        const view = await postingLiveness.check(candidate.vacancyKey);
+        return { status: view.state === 'open' ? 'open' : view.state === 'closed' ? 'closed' : 'unverifiable', verificationId: null };
+      },
+      pipeline: {
+        resolveVacancy: resolvePipelineVacancy,
+        start: async (input) => startApplicationAttempt(await applicationPipelineDeps(), input),
+        async resume(attemptId) {
+          const result = await resumeApplicationAttempt(await applicationPipelineDeps(), attemptId);
+          return { ok: result.ok, ...(result.detail ? { detail: result.detail } : {}) };
+        },
+        async requeue(attemptId) {
+          await closeApplicationReview(attemptId).catch(() => {});
+          workspace.recordPreparedApplicationFields(db, attemptId, null);
+          workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'queued', checkpointDetail: 'prepared again because its page was closed' });
+          await applicationQueuePort.enqueue(attemptId);
+        },
+        async cancelQueue(attemptId) {
+          await daemonFetch(`/v2/applications/${encodeURIComponent(attemptId)}/cancel`, { method: 'POST' });
+        },
+        kick: () => {
+          void applicationPipelineTick.runOnce();
+        },
+      },
+      reviews: {
+        hasLive: hasActiveApplicationReview,
+        close: closeApplicationReview,
+        submit: (attemptId, beforeClick) => submitApplicationReview(db, attemptId, 'automatic', { beforeClick }),
+      },
+    });
+  })();
+  return blindApplyRunnerPromise;
+}
+
+const blindApplyTick = createTick({
+  label: 'blind-apply',
+  hardTimeoutMs: BLIND_APPLY_TICK_HARD_TIMEOUT_MS,
+  onError: (error) => console.error('[blind-apply] tick failed', error),
+  run: async () => {
+    if (applicationDataResetGate.isResetting) return;
+    await applicationDataResetGate.runMutation(async () => {
+      await (await ensureBlindApplyRunner()).tick();
+    });
+  },
+});
+
+function scheduleBlindApplyTick(): void {
+  setInterval(() => {
+    void blindApplyTick.runOnce();
+  }, BLIND_APPLY_TICK_INTERVAL_MS);
+}
+
+function parseBlindApplyAnswerInput(value: unknown): BlindApplyAnswerInput {
+  const source = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const itemId = parseId(source.itemId, 'itemId');
+  if (!Array.isArray(source.answers) || source.answers.length > 50) throw new Error('"answers" must be a short list');
+  const answers = source.answers.map((entry) => {
+    const record = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {};
+    if (typeof record.label !== 'string' || record.label.length === 0 || record.label.length > 500) throw new Error('an answer needs its label');
+    if (typeof record.answer !== 'string' || record.answer.length > 4000) throw new Error('an answer must be text of at most 4,000 characters');
+    return { label: record.label, answer: record.answer };
+  });
+  return { itemId, answers, remember: source.remember === true };
+}
+
+guardedIpc.handle('blind-apply:status', async () => {
+  const db = await ensureWorkspaceDb();
+  const auth = getActiveBlindApplyAuthorization(db);
+  const cvName = auth?.sourceCvId ? (workspace.listCvDocuments(db).find((document) => document.id === auth.sourceCvId)?.name ?? null) : null;
+  return buildBlindApplyStatus(db, {
+    current: await loadBlindApplyCurrentFacts().catch(() => null),
+    cvName,
+    targets: listBlindSubmissionTargets(),
+  });
+});
+
+guardedIpc.handle('blind-apply:enable', async () => {
+  const db = await ensureWorkspaceDb();
+  const cv = blindApplyDefaultCv(db);
+  const profile = await loadBlindApplyProfile();
+  // A profile with no target roles scores nothing, so there is nothing meaningful to confirm.
+  const configured = profile !== null && profile.targetRoles.length > 0;
+  const filters: BlindApplyProfileFilters = {
+    targetRoles: profile?.targetRoles ?? [],
+    excludedRoleFamilies: profile?.excludedRoleFamilies ?? [],
+    primaryCountry: profile?.constraints.primaryCountry ?? '',
+    location: profile?.location ?? '',
+    professionalLanguage: profile?.constraints.professionalLanguage ?? '',
+    minimumMonthlyBaseEur: profile?.constraints.minimumMonthlyBaseEur ?? 0,
+    dutchRequired: profile?.constraints.dutchRequired ?? false,
+  };
+  const targets = listBlindSubmissionTargets();
+  const result = await requestBlindApplyAuthorization(
+    {
+      db,
+      parent: mainWindow,
+      // A confirmation that replaces an active one (after a CV or profile change) first runs the same
+      // Stop as the Stop button, so the old authorization's unsent work does not linger in the feed.
+      beforeReplace: async () => {
+        await (await ensureBlindApplyRunner()).stop('replaced by a newer confirmation');
+      },
+    },
+    {
+      roleFamilies: ['frontend'],
+      roleFamilyNames: ['Frontend / UI engineering'],
+      filtersSnapshot: { ...filters },
+      filterLines: blindFilterLines(filters),
+      profileVersion: configured ? (profile?.profileVersion ?? '') : '',
+      cv: cv ? { id: cv.id, name: cv.name, contentHash: createHash('sha256').update(cv.text).digest('hex') } : null,
+      policyIds: targets.map((target) => target.id),
+      realTargets: targets.filter((target) => !target.testOnly).map((target) => target.displayName),
+    },
+  );
+  if (!result.ok) return { ok: false, reason: result.reason };
+  setBlindApplyActive(true);
+  void blindApplyTick.runOnce();
+  return { ok: true };
+});
+
+// Deliberately NOT behind the data-reset gate: Stop must be immediate, and it only ever writes the
+// authorization and moves unsent items to `stopped`.
+guardedIpc.handle('blind-apply:stop', async () => {
+  const runner = await ensureBlindApplyRunner();
+  const result = await runner.stop();
+  setBlindApplyActive(false);
+  return result;
+});
+
+guardedIpc.handle('blind-apply:feed', async () => buildBlindApplyFeed(await ensureWorkspaceDb()));
+
+guardedIpc.handle('blind-apply:evidence', async (_event, input: unknown) => {
+  return buildBlindApplyEvidence(await ensureWorkspaceDb(), parseId(input, 'itemId'));
+});
+
+guardedIpc.handle('blind-apply:answer', async (_event, input: unknown) => {
+  const parsed = parseBlindApplyAnswerInput(input);
+  return applicationDataResetGate.runMutation(async () => (await ensureBlindApplyRunner()).answer(parsed));
+});
+
+guardedIpc.handle('blind-apply:open', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const item = getBlindApplyItem(await ensureWorkspaceDb(), parseId(input, 'itemId'));
+    if (!item) return { ok: false, reason: 'not_openable' };
+    if (item.state === 'apply_yourself') {
+      try {
+        const result = await startApplicationFromVacancy(item.vacancyKey);
+        return result.ok && result.attemptId
+          ? { ok: true, kind: 'apply_yourself', attemptId: result.attemptId, savedJobId: result.savedJobId }
+          : { ok: false, reason: 'unavailable' };
+      } catch {
+        return { ok: false, reason: 'unavailable' };
+      }
+    }
+    if (item.attemptId && item.state !== 'queued' && item.state !== 'preparing' && item.state !== 'skipped') {
+      return { ok: true, kind: 'review', attemptId: item.attemptId };
+    }
+    return { ok: false, reason: 'not_openable' };
+  });
+});
 
 /** How often the staging sweep below runs. Independent of, and much shorter than, the 15-minute
  * staleness bound itself (`cv-transcription-staging.ts`'s `STALE_MS`) so a candidate the user
@@ -3250,6 +3544,14 @@ async function recoverApplicationPipelineOnStartup(): Promise<void> {
     }
   } catch (error: unknown) {
     console.error('[application-pipeline] startup recovery failed', error);
+  }
+  // #722: after the pipeline's own recovery (which turns an interrupted submit into
+  // `submission_unknown`), bring Blind Apply's items in line. Nothing resumes under a stopped authorization.
+  try {
+    const runner = await ensureBlindApplyRunner();
+    await applicationDataResetGate.runMutation(() => runner.recoverOnStartup());
+  } catch (error: unknown) {
+    console.error('[blind-apply] startup recovery failed', error);
   }
 }
 
@@ -3414,7 +3716,7 @@ guardedIpc.handle('workspace:counts:get', async () => workspace.getCounts(await 
 
 guardedIpc.handle('workspace:data:reset', async () => {
   return applicationDataResetGate.runReset(async () => {
-    if (applicationPipelineTick.inFlight || automaticSubmissionTick.inFlight) {
+    if (applicationPipelineTick.inFlight || automaticSubmissionTick.inFlight || blindApplyTick.inFlight) {
       throw new Error('wait for the active application task to finish before resetting data');
     }
 
@@ -3477,6 +3779,8 @@ guardedIpc.handle('workspace:data:reset', async () => {
     autoScanEnabled = result.settings.autoScanEnabled;
     autoSourceScoutEnabled = result.settings.autoSourceScoutEnabled;
     setAutoApplyEnabled(result.settings.autoApplyEnabled);
+    // #722: the reset removed every authorization, so Blind Apply is off.
+    setBlindApplyActive(false);
     void syncMcpServer(result.settings.mcpEndpointEnabled);
     return result;
   });
@@ -4005,6 +4309,7 @@ if (gotSingleInstanceLock) {
     scheduleSourceScoutTick();
     scheduleAutomaticSubmissionTick();
     scheduleApplicationPipelineTick();
+    scheduleBlindApplyTick();
     scheduleCvTranscriptionStagingSweep();
 
     app.on('activate', () => {

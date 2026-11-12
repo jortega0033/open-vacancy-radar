@@ -323,3 +323,52 @@ describe('summarisePreparedFields', () => {
     expect(prepared).toMatchObject({ version: 1, company: 'Northwind Freight', role: 'Logistics Platform Engineer', verification: 'applied' });
   });
 });
+
+describe('summarisePreparedFields: an option a deterministic Blind Apply map chose (#722)', () => {
+  const snapshot: FormSnapshot = {
+    generation: 1,
+    fields: [
+      field({
+        fieldRef: 'f6666666666666666',
+        label: 'Preferred work arrangement',
+        controlType: 'select',
+        required: true,
+        options: [
+          { optionRef: 'o1111111111111111', label: 'Remote' },
+          { optionRef: 'o2222222222222222', label: 'Hybrid' },
+        ],
+      }),
+    ],
+    submitControls: [],
+    capturedAt: '2026-11-04T10:00:00.000Z',
+    challengeDetected: false,
+    activeFrameId: 0,
+    pageStateFingerprint: 'fp',
+  };
+  const fieldMap: FieldMap = {
+    attemptId: '11111111-1111-4111-8111-111111111111',
+    snapshotGeneration: 1,
+    assignments: [{ fieldRef: 'f6666666666666666', source: { kind: 'option', optionRef: 'o1111111111111111' } }],
+    unmapped: [],
+  };
+  const common = { snapshot, fieldMap, valueTable: [], uploadFieldRefs: [], company: 'Acme', role: 'Frontend', preparedAt: '2026-11-04T10:00:00.000Z' };
+
+  it('records the chosen option as committed, attributed to the person who chose it', () => {
+    const { prepared } = summarisePreparedFields({ ...common, optionFieldRefs: [] });
+    expect(prepared.fields[0]).toMatchObject({ status: 'committed', value: 'Remote', provenance: 'user_answer' });
+  });
+
+  it('does not claim it when the page did not confirm the write', () => {
+    const { prepared } = summarisePreparedFields({
+      ...common,
+      optionFieldRefs: [],
+      readinessBlockers: [{ kind: 'mismatch', fieldRef: 'f6666666666666666' }],
+    });
+    expect(prepared.fields[0]).toMatchObject({ status: 'awaiting_you' });
+  });
+
+  it('the reviewed pipeline path is unchanged: an option it stripped stays the person\'s to choose', () => {
+    const { prepared } = summarisePreparedFields({ ...common, fieldMap: { ...fieldMap, assignments: [] }, optionFieldRefs: ['f6666666666666666'] });
+    expect(prepared.fields[0]).toMatchObject({ status: 'awaiting_you' });
+  });
+});

@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
-import { describeBlockers, parseFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
+import { describeBlockers, parseFieldMap, type FieldMap, type FormSnapshot } from '@agent-dock/application-executor';
 import { stageApplicationDocuments, stageLetterArtifact, StagingAbandonedError } from './application-artifact-staging.js';
 import {
   INTERRUPTED_ATTEMPT_RESTART,
+  INTERRUPTED_SUBMISSION_RECOVERY,
   isInterruptedCheckpoint,
+  isInterruptedSubmission,
   isSettledCheckpoint,
   resolveAttemptRecovery,
   resolveAttemptTransition,
@@ -29,6 +31,8 @@ import {
   isPostingPreparationStopDetail,
   POSTING_CHANGED_DETAIL,
   POSTING_CLOSED_DETAIL,
+  POSTING_UNVERIFIED_DETAIL,
+  postingOpenEvidence,
   refreshAttemptFromPosting,
   resolvePostingFinding,
   verifyAttemptPosting,
@@ -36,6 +40,7 @@ import {
 } from './application-posting-verification.js';
 import { discardPostingHold, isHistoricalAttempt } from './workspace/posting-verification-store.js';
 import type {
+  PostingDecision,
   PostingVerificationView,
   StartApplicationAttemptRefusal,
   StartApplicationAttemptResult,
@@ -48,6 +53,7 @@ import {
   type ApplicationValueCvContact,
   type ApplicationValueProfile,
   type ApplicationValueTableEntry,
+  type SanitisedFieldMap,
 } from './application-value-table.js';
 import { cvDocumentToTailoredResume } from './cv-export.js';
 import type { TailoredResume } from './resume-schema.js';
@@ -117,6 +123,21 @@ export interface ApplicationQueuePort {
   entryState(attemptId: string): Promise<ApplicationQueueEntryState | null>;
 }
 
+/** Identifies attempts started by Blind Apply (#722), so the form step can tell them apart without
+ * trusting any other bookkeeping. Fail-closed: see `ApplicationPipelineDeps.deterministicFieldMap`. */
+export const BLIND_APPLY_WORKFLOW_VERSION = 'blind-apply-v1';
+
+export interface DeterministicFieldMapInput {
+  attempt: ApplicationAttemptRecord;
+  snapshot: FormSnapshot;
+  valueTable: ApplicationValueTableEntry[];
+  artifacts: ReturnType<typeof workspace.listApplicationArtifacts>;
+}
+
+export type DeterministicFieldMapOutcome =
+  | { ok: true; fieldMap: FieldMap; valueTable: ApplicationValueTableEntry[] }
+  | { ok: false; detail: string };
+
 /** Result of one Domain A generation session, matching `runFieldMapGeneration`'s own shape. */
 export interface FieldMapGenerationOutcome {
   ok: boolean;
@@ -164,6 +185,14 @@ export interface ApplicationPipelineDeps {
    * every behaviour below is exactly what it was before this existed.
    */
   verifyPosting?: PostingVerifierPort['verify'];
+  /**
+   * #722: the deterministic field mapper for attempts Blind Apply owns. It replaces the generation
+   * session for those attempts and ONLY those: it is consulted exactly when the attempt's
+   * `workflowVersion` is `BLIND_APPLY_WORKFLOW_VERSION`. If such an attempt is run by deps that have no
+   * mapper, preparation stops for the person; it never falls back to asking a model what to type, since
+   * nobody reviews a Blind Apply form before it is sent.
+   */
+  deterministicFieldMap?(input: DeterministicFieldMapInput): DeterministicFieldMapOutcome;
   /**
    * Sourced company evidence for the letter step (#689): ONLY facts that already passed the support
    * policy (current, confirmed, uncontested, this employer and this role). Absent, throwing or empty
@@ -289,6 +318,8 @@ export interface StartApplicationAttemptInput {
   /** Deliberately re-applying to a vacancy that already has a non-terminal attempt (#198's own
    * escape hatch). Defaults to false: a caller has to opt in. */
   force?: boolean;
+  /** #722: the workflow that owns this attempt. Defaults to the reviewed pipeline's own. */
+  workflowVersion?: string;
 }
 
 /**
@@ -329,7 +360,7 @@ export async function startApplicationAttempt(
       jdSnapshot,
       jdSnapshotHash: sha256(jdSnapshot),
       jdComplete: vacancy.description !== null && vacancy.descriptionComplete,
-      workflowVersion: APPLICATION_PIPELINE_WORKFLOW_VERSION,
+      workflowVersion: input.workflowVersion ?? APPLICATION_PIPELINE_WORKFLOW_VERSION,
       checkpoint: 'queued',
       ...(input.force ? { force: true } : {}),
     });
@@ -711,6 +742,12 @@ export async function runApplicationAttempt(
     if (view.status === 'materially_changed' && view.resolution === null) {
       return settle(run, attemptId, 'needs_user', POSTING_CHANGED_DETAIL, 'needs_user');
     }
+    // #720: "could not check" is not closure, but it is not a reason to spend AI work either. Unless a
+    // fresh open answer, an explicit Get ready anyway, or the person's own recent "It's open" stands
+    // behind this posting, preparation stops here, before any tailoring call, and asks the person.
+    if (view.status === 'unable_to_verify' && postingOpenEvidence(deps.db, attemptId, new Date(nowIso(deps))) === null) {
+      return settle(run, attemptId, 'needs_user', POSTING_UNVERIFIED_DETAIL, 'needs_user');
+    }
   }
   if (
     attempt.jdSnapshot.trim().length === 0 &&
@@ -1081,7 +1118,7 @@ export async function restartApplicationTailoring(
 export async function resumeApplicationAttempt(
   deps: ApplicationPipelineDeps,
   attemptId: string,
-  options: { resolution?: 'prepare_anyway' | 'keep_current' } = {},
+  options: { resolution?: PostingDecision } = {},
 ): Promise<RestartApplicationTailoringResult> {
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
   // A `failed` attempt is a preparation that stopped before anything reached an employer, so it can
@@ -1104,6 +1141,8 @@ export async function resumeApplicationAttempt(
   //  - an application waiting on its own, unrelated blocker keeps that blocker (`recorded`);
   //  - only an application whose PREPARATION stopped on this finding, so nothing was prepared yet,
   //    goes on to be prepared (`queued`).
+  //  - `confirm_open` (#720) records the person's "It's open" for a posting that could not be checked;
+  //    the queued run re-checks it first, and a definitive closed answer still stops it.
   if (options.resolution !== undefined) {
     if (isHistoricalAttempt(attempt)) {
       return { ok: false, attemptId, tailoringMode: attempt.tailoringMode, detail: 'this application was already sent' };
@@ -1268,6 +1307,11 @@ interface FillApplicationFormInput {
   stagedArtifacts: ReturnType<typeof workspace.listApplicationArtifacts>;
 }
 
+/** What a run records when the page shows a bot check. Exported so Blind Apply can tell this stop from
+ * any other without matching prose it does not own. */
+export const CAPTCHA_STOP_DETAIL =
+  'this page is showing a CAPTCHA or bot check. This app never answers those; open the application yourself to continue.';
+
 /** The open-snapshot-generate-validate-apply half, split out only so `runApplicationAttempt`'s
  * caller can decide whether to retain the prepared live view for review or close it after failure. */
 async function fillApplicationForm(
@@ -1293,16 +1337,10 @@ async function fillApplicationForm(
   }
 
   if (snapshot.challengeDetected) {
-    return settle(
-      run,
-      attemptId,
-      'needs_user',
-      'this page is showing a CAPTCHA or bot check. This app never answers those; open the application yourself to continue.',
-      'needs_user',
-    );
+    return settle(run, attemptId, 'needs_user', CAPTCHA_STOP_DETAIL, 'needs_user');
   }
 
-  const valueTable: ApplicationValueTableEntry[] = buildApplicationValueTable({
+  let valueTable: ApplicationValueTableEntry[] = buildApplicationValueTable({
     cvContact: cvContactOf(input.cv),
     profile: input.profile,
   });
@@ -1316,21 +1354,45 @@ async function fillApplicationForm(
     );
   }
 
-  const generation = await deps.generateFieldMap(buildFieldMapGenerationPrompt({ attemptId, snapshot, valueTable }));
-  // The field-map session is the other step with no timeout of its own, and the one most likely to
-  // have been what the worker gave up waiting for. Everything after this line commits keystrokes to
-  // a live page, so this is the last honest place to stop.
+  // #722: an attempt Blind Apply owns is mapped by exact-label rules, never by the generation session.
+  // The branch is keyed on the attempt's own workflow version and fails closed.
+  let sanitised: SanitisedFieldMap;
+  if (input.attempt.workflowVersion === BLIND_APPLY_WORKFLOW_VERSION) {
+    if (!deps.deterministicFieldMap) {
+      return settle(run, attemptId, 'needs_user', 'Blind Apply paused: its answer mapper is not available, so nothing was typed into the form', 'needs_user');
+    }
+    const mapped = deps.deterministicFieldMap({
+      attempt: input.attempt,
+      snapshot,
+      valueTable,
+      artifacts: input.stagedArtifacts,
+    });
+    if (!mapped.ok) return settle(run, attemptId, 'needs_user', mapped.detail, 'needs_user');
+    valueTable = mapped.valueTable;
+    // Determinism narrows what is proposed; it is still validated and read back below like any other map.
+    sanitised = {
+      fieldMap: mapped.fieldMap,
+      uploadFieldRefs: mapped.fieldMap.assignments.filter((assignment) => assignment.source.kind === 'artifact').map((assignment) => assignment.fieldRef),
+      optionFieldRefs: [],
+    };
+  } else {
+    const generation = await deps.generateFieldMap(buildFieldMapGenerationPrompt({ attemptId, snapshot, valueTable }));
+    // The field-map session is the other step with no timeout of its own, and the one most likely to
+    // have been what the worker gave up waiting for. Everything after this line commits keystrokes to
+    // a live page, so this is the last honest place to stop.
+    if (!isLivePreparation(run)) return abandoned(run, attemptId);
+    if (!generation.ok) {
+      return settle(run, attemptId, 'needs_user', `working out what goes in each field did not finish: ${generation.error ?? 'no reason given'}`, 'needs_user');
+    }
+
+    const parsed = parseFieldMap(extractJsonObject(generation.text));
+    if (!parsed) {
+      return settle(run, attemptId, 'needs_user', 'the field-mapping step returned something this app could not read, so nothing was typed into the form', 'needs_user');
+    }
+    sanitised = sanitiseGeneratedFieldMap(parsed, snapshot, input.stagedArtifacts);
+  }
   if (!isLivePreparation(run)) return abandoned(run, attemptId);
-  if (!generation.ok) {
-    return settle(run, attemptId, 'needs_user', `working out what goes in each field did not finish: ${generation.error ?? 'no reason given'}`, 'needs_user');
-  }
 
-  const parsed = parseFieldMap(extractJsonObject(generation.text));
-  if (!parsed) {
-    return settle(run, attemptId, 'needs_user', 'the field-mapping step returned something this app could not read, so nothing was typed into the form', 'needs_user');
-  }
-
-  const sanitised = sanitiseGeneratedFieldMap(parsed, snapshot, input.stagedArtifacts);
   const applied = await applyApplicationFieldMap(
     deps.db,
     {
@@ -1574,6 +1636,32 @@ export async function recoverInterruptedApplicationAttempts(
     // has open, so they are not this attempt's prepared state any more.
     workspace.recordPreparedApplicationFields(deps.db, attempt.id, null);
     await enqueue(attempt.id);
+    recovered.push({ attemptId: attempt.id, from: attempt.checkpoint });
+  }
+
+  // #722: an attempt found mid-submit is never restarted and never re-clicked. It becomes
+  // `submission_unknown` with a receipt row saying so, which `submitApplicationReview` refuses to retry
+  // and which only a delayed receipt or the person's own statement can resolve.
+  for (const attempt of attempts.filter((candidate) => isInterruptedSubmission(candidate.checkpoint))) {
+    const observedAt = nowIso(deps);
+    try {
+      workspace.createApplicationSubmissionReceipt(deps.db, {
+        attemptId: attempt.id,
+        outcome: 'unknown',
+        source: 'page_observation',
+        destination: attempt.canonicalUrl,
+        evidenceKind: 'none',
+        detail: INTERRUPTED_SUBMISSION_RECOVERY.detail,
+        observedAt,
+      });
+    } catch (err) {
+      deps.log?.('could not record the receipt for an interrupted submission', { attemptId: attempt.id, error: describeError(err) });
+    }
+    workspace.updateApplicationAttempt(deps.db, attempt.id, {
+      checkpoint: INTERRUPTED_SUBMISSION_RECOVERY.checkpoint,
+      checkpointDetail: INTERRUPTED_SUBMISSION_RECOVERY.detail,
+      submittedAt: observedAt,
+    });
     recovered.push({ attemptId: attempt.id, from: attempt.checkpoint });
   }
 

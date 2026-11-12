@@ -1763,6 +1763,62 @@ describe('application-review-session', () => {
       });
     });
 
+    describe('the beforeClick stop boundary (#722)', () => {
+      async function openReady(afterSubmitTree?: CdpDomNode) {
+        const { openApplicationReview, submitApplicationReview } = await importSession();
+        const view = fakeView(SUBMIT_TREE, afterSubmitTree ? { afterSubmitTree } : {});
+        createApplicationView.mockImplementation(() => view);
+        await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+        workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
+        extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+        return { view, submitApplicationReview };
+      }
+
+      it('a false answer refuses with "stopped": no click, and the checkpoint is never moved off ready', async () => {
+        const { view, submitApplicationReview } = await openReady();
+        const beforeClick = vi.fn(() => false);
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID, 'automatic', { beforeClick });
+
+        expect(result).toEqual({ ok: false, reason: 'stopped', detail: expect.any(String) });
+        expect(beforeClick).toHaveBeenCalledTimes(1);
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+        const calledMethods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
+        expect(calledMethods).not.toContain('Input.dispatchMouseEvent');
+        expect(workspaceMock.createApplicationSubmissionReceipt).not.toHaveBeenCalled();
+      });
+
+      it('is asked after every other check has passed and immediately before the checkpoint is written', async () => {
+        const { submitApplicationReview } = await openReady(CONFIRMATION_TREE);
+        const order: string[] = [];
+        workspaceMock.updateApplicationAttempt.mockImplementation((_db: unknown, _id: string, patch: { checkpoint?: string }) => {
+          order.push(`checkpoint:${patch.checkpoint}`);
+        });
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID, 'automatic', {
+          beforeClick: () => {
+            order.push('beforeClick');
+            return true;
+          },
+        });
+
+        expect(result).toEqual({ ok: true });
+        expect(order.slice(0, 2)).toEqual(['beforeClick', 'checkpoint:submitting']);
+      });
+
+      it('is not consulted when an earlier check already refused', async () => {
+        const { submitApplicationReview } = await openReady();
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submitted' })));
+        const beforeClick = vi.fn(() => true);
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID, 'automatic', { beforeClick });
+
+        expect(result.reason).toBe('already_submitted');
+        expect(beforeClick).not.toHaveBeenCalled();
+      });
+    });
+
     it('lands on submission_unknown, never a silent retry or drop, when the submit click itself fails ambiguously', async () => {
       const { openApplicationReview, submitApplicationReview } = await importSession();
       const view = fakeView(SUBMIT_TREE);

@@ -29,6 +29,11 @@ export function SectionHeading({ children, aside }: { children: string; aside?: 
 
 export interface VerificationSectionProps {
   result: SearchResult;
+  /**
+   * #720: the posting's own job system has already answered (open or closed) in the liveness line
+   * beside the fit score. The "check the posting yourself" chore is then not repeated here.
+   */
+  livenessAnswered?: boolean;
 }
 
 /**
@@ -38,8 +43,9 @@ export interface VerificationSectionProps {
  * this URL against an official employer/ATS source, that separate (vacancy-level, not
  * employer-level) evidence is shown for what it is.
  */
-export function VerificationSection({ result }: VerificationSectionProps) {
+export function VerificationSection({ result, livenessAnswered = false }: VerificationSectionProps) {
   const official = result.official;
+  if (!official && livenessAnswered) return null;
 
   return (
     <section className="mt-6">

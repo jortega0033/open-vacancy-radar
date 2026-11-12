@@ -134,6 +134,52 @@ export function buildApplicationValueTable(input: BuildApplicationValueTableInpu
 }
 
 /**
+ * The exact field labels each value-table entry may be typed into by Blind Apply's deterministic
+ * mapper (#722), keyed by the entry's own label. Compared after `normalizeFieldLabel`, as whole
+ * strings and never as substrings, so "Name of your manager" cannot be mistaken for "Full name".
+ *
+ * Deliberately short. A label missing from this list is not guessed at: the field is left to the
+ * person (or a remembered answer), which is the failure mode this feature prefers over a wrong value.
+ */
+export const APPLICATION_VALUE_LABEL_SYNONYMS: Readonly<Record<string, readonly string[]>> = {
+  'Full name': ['full name', 'name', 'your name', 'legal name', 'full legal name', 'first and last name'],
+  'Email address': ['email', 'email address', 'e-mail', 'e-mail address', 'your email', 'your email address'],
+  'Phone number': ['phone', 'phone number', 'telephone', 'mobile', 'mobile phone', 'mobile number', 'contact number', 'your phone number'],
+  'Current location': ['current location', 'location', 'city', 'city and country', 'where are you based', 'where are you located'],
+  'Current job title': ['current job title', 'current title', 'job title', 'current role', 'current position'],
+  'Working languages': ['working languages', 'professional languages'],
+  'LinkedIn profile URL': ['linkedin', 'linkedin url', 'linkedin profile', 'linkedin profile url'],
+  'GitHub profile URL': ['github', 'github url', 'github profile', 'github profile url'],
+};
+
+/**
+ * A field label reduced for exact comparison. The executor labels a field by its `aria-label`, then
+ * `placeholder`, then `name`, then `id` -- not by visible label text -- so the same question reaches
+ * this app as "Full name", "full_name", "fullName" or "applicant[full-name]". Word boundaries marked by
+ * camelCase, underscores, hyphens, dots or brackets are therefore turned into spaces first, and case,
+ * accents, spacing and the "required" decoration a page adds (an asterisk, "(required)", "(optional)")
+ * are dropped. Nothing else is folded: this is whole-label equality, never a similarity.
+ */
+export function normalizeFieldLabel(label: string): string {
+  return label
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .replace(/[_\-.[\]]+/gu, ' ')
+    .toLowerCase()
+    .replace(/\((?:required|optional)\)/gu, ' ')
+    .replace(/[*:]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+/** `normalizeFieldLabel` with the spaces removed, so "LinkedIn", "linked_in" and "Linked In" are one
+ * label. Still whole-string equality: "name of your manager" never squashes to "name". */
+export function squashFieldLabel(label: string): string {
+  return normalizeFieldLabel(label).replace(/\s+/gu, '');
+}
+
+/**
  * Describes one field for the generation session, including which frame it lives in whenever that
  * frame's origin differs from the page's own (`topFrameOrigin`) -- the same comparison the write
  * path makes in `isFrameFillAllowed`, and deliberately not qualified by `field.active`.
@@ -251,7 +297,7 @@ function isDocumentUploadField(field: SnapshotField): boolean {
   return field.active && !field.classification && field.controlType === 'file';
 }
 
-function chooseArtifactForField(field: SnapshotField, artifacts: readonly ApplicationArtifactRecord[]): ApplicationArtifactRecord | undefined {
+export function chooseArtifactForField(field: SnapshotField, artifacts: readonly ApplicationArtifactRecord[]): ApplicationArtifactRecord | undefined {
   const label = field.label.toLowerCase();
   if (/\b(cover|letter|motivation)\b/u.test(label)) {
     return artifacts.find((artifact) => artifact.kind === 'cover_letter_pdf') ?? artifacts.find((artifact) => artifact.kind === 'combined_pdf');
@@ -386,6 +432,19 @@ export function summarisePreparedFields(input: SummarisePreparedFieldsInput): Pr
         fields.push({ ...base, status: 'committed', value: entry.value, provenance: entry.provenance });
         continue;
       }
+    }
+
+    // #722: a deterministic Blind Apply map may commit a select to an option the person themselves
+    // chose earlier (a remembered answer). The reviewed pipeline never reaches this: it strips every
+    // `option` assignment into `input.optionFieldRefs` first, so for it this branch is never taken.
+    if (assignment && assignment.source.kind === 'option' && !options.has(field.fieldRef)) {
+      const chosen = field.options?.find((option) => assignment.source.kind === 'option' && option.optionRef === assignment.source.optionRef);
+      if (chosen && !blockedFieldRefs.has(field.fieldRef)) {
+        fields.push({ ...base, status: 'committed', value: chosen.label, provenance: 'user_answer' });
+        continue;
+      }
+      fields.push({ ...base, status: 'awaiting_you', detail: 'this app chose an option here, but the page did not confirm it' });
+      continue;
     }
 
     if (options.has(field.fieldRef) || field.controlType === 'select' || field.controlType === 'radio') {

@@ -12,8 +12,14 @@ import { PostingVerificationNotice } from './PostingVerificationNotice.js';
 import { isPostingPreparationStopDetail } from './posting-verification-text.js';
 import { retryLabel, useWaitingForReset } from './provider-reset.js';
 import { WarningBanner } from '../shell/index.js';
-import { classifyProviderError, type ProviderErrorInfo } from '../../provider-error.js';
-import { activeProviderLimit, recordProviderLimit } from '../../provider-limits.js';
+import {
+  classifyReviewEntry,
+  describePreparationBlocker,
+  isTailoringStopped,
+  pipelineLimit,
+  TAILORING_STOPPED_PREFIX,
+} from './apply-workspace-state.js';
+import { PipelineLimitNotice, TechnicalDetails, useRecordPipelineLimit } from './apply-review-parts.js';
 import {
   alreadySentFailure,
   describeSubmitRefusal,
@@ -52,67 +58,6 @@ type SessionState =
    * record in flight. `checked` is set once the person has opened the employer page, which is what
    * unlocks Try again after an outcome the app could not confirm. */
   | { phase: 'error'; failure: ReviewFailure; busy: boolean; checked: boolean };
-
-/** The stored sentence the pipeline writes when automatic tailoring stops (`application-pipeline.ts`
- * matches on the same prefix). The raw reason after it is kept for a Details disclosure. */
-const TAILORING_STOPPED_PREFIX = 'Automatic CV tailoring stopped:';
-
-/** One plain sentence for a blocked preparation. The pipeline's own sentence is kept in a Details
- * disclosure, since it names internal steps. */
-function describePreparationBlocker(message: string): string {
-  return /\b(?:cover|motivation) letter\b/iu.test(message)
-    ? 'Your cover letter still needs attention.'
-    : 'This application needs your attention.';
-}
-
-/** Raw detail text behind a collapsed disclosure, for the few people who need it. */
-function TechnicalDetails({ text, label }: { text: string; label: string }) {
-  if (!text) return null;
-  return (
-    <details className="text-xs text-base-content/70">
-      <summary className="cursor-pointer font-medium">{label}</summary>
-      <p className="mt-1 break-words">{text}</p>
-    </details>
-  );
-}
-
-/**
- * A usage limit behind a blocked preparation (#546). Application preparation always runs on Claude
- * (`applicationPipelineDeps` in `main.ts`), so a limit there is Claude's whatever tool the person
- * picked. The reset time is placed relative to when the attempt last changed, not to now, so a
- * stored message read hours later does not move the reset into the future.
- *
- * Only the text the pipeline wrote after one of its provider-run markers is classified, never the
- * whole checkpoint detail, so a blocker about the form or the page that happens to mention "429"
- * or "rate limit" is not mistaken for Claude's limit.
- */
-const PROVIDER_FAILURE_MARKERS = [
-  TAILORING_STOPPED_PREFIX,
-  // `application-pipeline.ts`: the cover letter and field-map generation runs.
-  'automatic cover letter generation stopped:',
-  'working out what goes in each field did not finish:',
-] as const;
-
-function pipelineLimit(message: string, updatedAt: string): ProviderErrorInfo | null {
-  const marker = PROVIDER_FAILURE_MARKERS.find((candidate) => message.includes(candidate));
-  if (!marker) return null;
-  const providerText = message.slice(message.indexOf(marker) + marker.length);
-  const when = Date.parse(updatedAt);
-  const info = classifyProviderError(providerText, Number.isNaN(when) ? new Date() : new Date(when));
-  return info.kind === 'usage_limit' ? info : null;
-}
-
-/** A limit with no reset time is not recorded once it is older than Claude's usage window. */
-const UNTIMED_LIMIT_MAX_AGE_MS = 5 * 60 * 60 * 1000;
-
-function PipelineLimitNotice({ info }: { info: ProviderErrorInfo }) {
-  return (
-    <WarningBanner>
-      Claude has reached its usage limit{info.resetLabel ? ` until ${info.resetLabel}` : ''}. Preparing an
-      application needs Claude, so try again once the limit resets.
-    </WarningBanner>
-  );
-}
 
 function errorState(failure: ReviewFailure): SessionState {
   return { phase: 'error', failure, busy: false, checked: false };
@@ -205,7 +150,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
           current = attempt;
         }
       }
-      if (current.checkpoint === 'needs_user' && current.checkpointDetail.startsWith(TAILORING_STOPPED_PREFIX)) {
+      if (isTailoringStopped(current)) {
         setState({ phase: 'tailoring_blocked', message: current.checkpointDetail, busy: false });
         return;
       }
@@ -213,24 +158,18 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
       try {
         const policyId = await window.applicationExecutor.resolveTargetPolicyId(current.canonicalUrl);
         if (cancelled) return;
-        if (!policyId) {
-          const hasUsefulManualDocuments = current.checkpointDetail.includes('Your application documents are ready.')
-            || current.checkpointDetail.includes('Your tailored CV is ready.')
-            || current.checkpointDetail.includes('Your CV was prepared without any skills.');
-          if (current.checkpoint === 'needs_user' && !hasUsefulManualDocuments) {
-            setState({ phase: 'preparation_blocked', message: current.checkpointDetail, busy: false });
-            return;
-          }
+        const entry = classifyReviewEntry(current, policyId);
+        if (entry.kind === 'preparation_blocked') {
+          setState({ phase: 'preparation_blocked', message: entry.message, busy: false });
+          return;
+        }
+        if (entry.kind !== 'live_review') {
           setState({ phase: 'ineligible', continued: false, busy: false });
           return;
         }
-        if (current.checkpoint === 'needs_user') {
-          setState({ phase: 'preparation_blocked', message: current.checkpointDetail, busy: false });
-          return;
-        }
-        policyIdRef.current = policyId;
+        policyIdRef.current = entry.policyId;
         setState({ phase: 'opening' });
-        const review = await window.applicationExecutor.openReview({ attemptId: attempt.id, policyId, targetUrl: current.canonicalUrl });
+        const review = await window.applicationExecutor.openReview({ attemptId: attempt.id, policyId: entry.policyId, targetUrl: current.canonicalUrl });
         if (cancelled) return;
         openedRef.current = true;
         setState({ phase: 'ready', review });
@@ -508,28 +447,8 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
   const blockedMessage = state.phase === 'tailoring_blocked' || state.phase === 'preparation_blocked' ? state.message : null;
   const limit = blockedMessage === null ? null : pipelineLimit(blockedMessage, liveAttempt.updatedAt);
   const waitingForReset = useWaitingForReset(limit?.resetAt);
-  // So the AI runtime page shows Claude's limit too, not only this dialog. Keyed on plain values,
-  // since `limit` is rebuilt every render. An old attempt never overrides a newer limit, and a limit
-  // that has already passed is not recorded at all.
-  const limited = limit !== null;
-  const limitResetLabel = limit?.resetLabel;
-  const limitResetAt = limit?.resetAt;
-  const limitUpdatedAt = liveAttempt.updatedAt;
-  useEffect(() => {
-    if (!limited) return;
-    const now = Date.now();
-    const parsed = Date.parse(limitUpdatedAt);
-    const reachedAt = Number.isNaN(parsed) ? now : parsed;
-    if (limitResetAt !== undefined ? limitResetAt <= now : now - reachedAt > UNTIMED_LIMIT_MAX_AGE_MS) return;
-    const existing = activeProviderLimit('claude', now);
-    if (existing && existing.reachedAt >= reachedAt) return;
-    recordProviderLimit({
-      provider: 'claude',
-      reachedAt,
-      ...(limitResetLabel ? { resetLabel: limitResetLabel } : {}),
-      ...(limitResetAt !== undefined ? { resetAt: limitResetAt } : {}),
-    });
-  }, [limited, limitResetLabel, limitResetAt, limitUpdatedAt]);
+  // So the AI runtime page shows Claude's limit too, not only this dialog.
+  useRecordPipelineLimit(limit, liveAttempt.updatedAt);
 
   // Only while the live page is handed over: the dialog below owns Escape for every other phase, and
   // the banner shown during a handoff is not a dialog.

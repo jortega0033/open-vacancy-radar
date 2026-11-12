@@ -52,7 +52,7 @@ function renderDetail(
   result: SearchResult,
   overrides: { prepareAvailable?: boolean } = {},
 ) {
-  render(
+  return render(
     <VacancyDetail
       result={result}
       defaultCvName={null}
@@ -114,26 +114,31 @@ describe('VacancyDetail', () => {
     renderDetail(worldwideResult());
 
     expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeInTheDocument();
   });
 
-  it('orders the actions by priority and ties the safety note to the primary one', () => {
-    renderDetail(worldwideResult());
+  // #657 owner steering (2026-10-30): one primary Apply action; saving for later and the other
+  // controls move out of the primary button row but stay visible and reachable.
+  it('has one primary Apply action and keeps Save job, the CV comparison and the posting link in a secondary group', () => {
+    const { container } = renderDetail(worldwideResult());
 
-    const prepare = screen.getByRole('button', { name: 'Get ready to apply' });
-    expect(prepare).toHaveClass('btn-primary');
-    expect(prepare).toHaveAccessibleDescription('Builds a draft for you to review. Nothing is sent.');
-    const actions = Array.from(prepare.parentElement!.querySelectorAll('button, a'));
-    expect(actions.map((action) => action.textContent)).toEqual([
-      'Get ready to apply',
-      'Save job',
-      'Compare with my CV',
-      'Open posting',
-    ]);
-    // The outbound link is the quietest action; Save and Compare are secondary.
-    expect(screen.getByRole('link', { name: 'Open posting' })).toHaveClass('btn-ghost');
-    expect(screen.getByRole('button', { name: 'Save job' })).toHaveClass('btn-outline');
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    expect(apply).toHaveClass('btn-primary');
+    expect(apply).toHaveAccessibleDescription('Builds a draft for you to review. Nothing is sent.');
+    expect(container.querySelectorAll('.btn-primary')).toHaveLength(1);
+
+    const more = screen.getByRole('group', { name: 'More for this vacancy' });
+    for (const control of [
+      within(more).getByRole('button', { name: 'Save job' }),
+      within(more).getByRole('button', { name: 'Compare with my CV' }),
+      within(more).getByRole('link', { name: 'Open posting' }),
+    ]) {
+      expect(control).toBeVisible();
+      expect(control).not.toHaveClass('btn-primary');
+      expect(control).not.toHaveClass('btn-outline');
+    }
+    expect(within(more).queryByRole('button', { name: 'Apply' })).toBeNull();
   });
 
   it('groups the fit, reasons and description apart from the overview facts for wide panes', () => {
@@ -184,7 +189,8 @@ describe('VacancyDetail', () => {
 
       // The full breakdown. The compact summary above it repeats some of these, so scope to it.
       const breakdown = within(screen.getByRole('region', { name: 'Profile score breakdown' }));
-      expect(breakdown.getByText(/Profile fit: 82 out of 100\./)).toBeInTheDocument();
+      // #720: the score is shown once, in the summary, beside the posting's liveness state.
+      expect(breakdown.queryByText(/Profile fit: 82 out of 100\./)).not.toBeInTheDocument();
       expect(breakdown.queryByText('Frontend Engineer')).not.toBeInTheDocument();
       expect(breakdown.getByText('Angular')).toBeInTheDocument();
       expect(breakdown.getByText('TypeScript')).toBeInTheDocument();

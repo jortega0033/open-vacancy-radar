@@ -559,6 +559,13 @@ export function hideApplicationReviewHandoff(window: BrowserWindow | undefined, 
   handoffAttemptId = undefined;
 }
 
+/** Whether this attempt has a live, snapshotted review in this process right now. A prepared attempt
+ * loses it when the app restarts (the page view is not persistent), and cannot be submitted until it is
+ * prepared again. */
+export function hasActiveApplicationReview(attemptId: string): boolean {
+  return activeReviews.get(attemptId)?.executor.currentSnapshot !== undefined;
+}
+
 /** Which attempt currently holds the live handoff, if any. */
 export function currentHandoffAttemptId(): string | undefined {
   return handoffAttemptId;
@@ -591,7 +598,10 @@ export type SubmitApplicationReviewRefusalReason =
    * Refused rather than retried: a blind second click risks a duplicate application on top of one
    * that may already have gone through (#271's third acceptance case). */
   | 'submission_outcome_unresolved'
-  | 'submission_unknown';
+  | 'submission_unknown'
+  /** The caller's own `beforeClick` boundary said no, immediately before the click (#722): Blind Apply
+   * was stopped. Nothing reached the page and the checkpoint was never moved off `ready`. */
+  | 'stopped';
 
 export interface SubmitApplicationReviewResult {
   ok: boolean;
@@ -666,10 +676,23 @@ function computeFormStructureHash(snapshot: FormSnapshot): string {
  *    produces `needs_user`; anything inconclusive produces the existing `submission_unknown`, which
  *    this function now also refuses to blindly re-click on a later call.
  */
+export interface SubmitApplicationReviewOptions {
+  /**
+   * The last question asked before the click (#722). Evaluated synchronously, after every check above
+   * has passed and immediately before the checkpoint is written to `submitting` -- so it is the
+   * boundary a global Stop can still win at. Returning `false` refuses with `stopped`: nothing has
+   * reached the page and the attempt stays `ready`. Returning `true` is a promise that the caller has
+   * recorded that the click is about to happen. Absent for the reviewed flow, whose behaviour is
+   * exactly what it was.
+   */
+  beforeClick?: () => boolean;
+}
+
 export async function submitApplicationReview(
   db: WorkspaceDb,
   attemptId: string,
   mode: 'manual' | 'automatic' = 'manual',
+  options: SubmitApplicationReviewOptions = {},
 ): Promise<SubmitApplicationReviewResult> {
   const active = activeReviews.get(attemptId);
   if (!active) return { ok: false, reason: 'no_open_review', detail: `no open review for attempt ${attemptId}` };
@@ -801,6 +824,10 @@ export async function submitApplicationReview(
     });
     if (!gateResult.ok) {
       return { ok: false, reason: gateResult.reason, detail: gateResult.detail };
+    }
+
+    if (options.beforeClick && !options.beforeClick()) {
+      return { ok: false, reason: 'stopped', detail: 'submission was stopped before anything was sent' };
     }
 
     workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submitting' });

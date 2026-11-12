@@ -60,24 +60,53 @@ function compensationText(job: Record<string, unknown>): string | null {
     ?? optionalString(compensation?.compensationTierSummary);
 }
 
+/**
+ * The description text this adapter stores for one board job, exactly as the scan builds it, or null
+ * when the job carries no description field at all. Shared with the posting verifier (#720), so a
+ * re-read of the same board compares like with like. `toText` lets the verifier convert markup inside
+ * its own parsing budget; it defaults to the adapter's parser.
+ */
+export function ashbyJobDescription(
+  job: Record<string, unknown>,
+  toText: (html: string) => string = htmlToText,
+): string | null {
+  const plain = optionalString(job.descriptionPlain);
+  const descriptionHtml = optionalString(job.descriptionHtml);
+  if (plain === null && descriptionHtml === null) return null;
+  const description = plain ?? toText(descriptionHtml ?? '');
+  const salary = compensationText(job);
+  return salary === null ? description : `${description}\n\nCompensation: ${salary}`;
+}
+
+/**
+ * Whether a board job is the listed posting with this id (the last path segment of
+ * `https://jobs.ashbyhq.com/{board}/{id}`, which is Ashby's job id). A job the board marks unlisted
+ * never matches: the adapter drops it as well, so to this app it is not on the board.
+ */
+export function isListedAshbyJob(value: unknown, jobId: string): boolean {
+  const job = record(value);
+  if (job === null || optionalBoolean(job.isListed) === false) return false;
+  const wanted = jobId.toLowerCase();
+  if (optionalString(job.id)?.toLowerCase() === wanted) return true;
+  const url = httpUrl(job.jobUrl);
+  return url !== null && new URL(url).pathname.split('/').filter(Boolean).at(-1)?.toLowerCase() === wanted;
+}
+
 function normalizeJob(value: unknown): NormalizedVacancy | null {
   const job = record(value);
   if (job === null || optionalBoolean(job.isListed) === false) return null;
   const title = optionalString(job.title);
   const url = httpUrl(job.jobUrl);
-  const plain = optionalString(job.descriptionPlain);
-  const descriptionHtml = optionalString(job.descriptionHtml);
-  if (title === null || url === null || (plain === null && descriptionHtml === null)) return null;
+  const description = ashbyJobDescription(job);
+  if (title === null || url === null || description === null) return null;
   const id = externalId(job, url);
   if (id === null) return null;
-  const salary = compensationText(job);
-  const description = plain ?? htmlToText(descriptionHtml ?? '');
   const remote = optionalBoolean(job.isRemote);
 
   return makeVacancy({
     externalId: id,
     title,
-    description: salary === null ? description : `${description}\n\nCompensation: ${salary}`,
+    description,
     location: locationText(job),
     remote,
     workplaceMode: workplaceMode(job.workplaceType, remote),

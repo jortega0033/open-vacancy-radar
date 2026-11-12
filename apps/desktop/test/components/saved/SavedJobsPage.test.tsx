@@ -290,7 +290,7 @@ describe('SavedJobsPage', () => {
 });
 
 describe('SavedJobsPage: preparing an application (#272)', () => {
-  it('hands the saved job id to the pipeline and offers a direct application link', async () => {
+  it('hands the saved job id to the pipeline and opens the Review & apply workspace straight away (#657)', async () => {
     installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([makeJob({ id: 'job-7' })]) });
     const start = installApplicationPipelineBridge();
     const onViewApplicationAttempt = vi.fn();
@@ -302,8 +302,22 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
     // The id and nothing else: the renderer never names a URL, a CV, or a job description.
     await waitFor(() => expect(start).toHaveBeenCalledWith('job-7'));
     expect(start).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/Preparing an application/i)).toBeInTheDocument();
+    // No extra View application click.
+    await waitFor(() => expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-1'));
+    expect(screen.queryByRole('button', { name: /view application/i })).not.toBeInTheDocument();
+  });
 
+  it('keeps the notice and its link when the start came back with a warning to read first', async () => {
+    installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([makeJob({ id: 'job-7' })]) });
+    installApplicationPipelineBridge(vi.fn().mockResolvedValue({ ok: true, attemptId: 'attempt-1', warning: 'Your CV is old.' }));
+    const onViewApplicationAttempt = vi.fn();
+
+    render(<SavedJobsPage onViewApplicationAttempt={onViewApplicationAttempt} />);
+    await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /get ready to apply/i }));
+
+    expect(await screen.findByText(/Your CV is old/)).toBeInTheDocument();
+    expect(onViewApplicationAttempt).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /view application/i }));
     expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-1');
   });

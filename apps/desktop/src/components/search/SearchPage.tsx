@@ -3,7 +3,7 @@ import { ArrowLeft, Info } from '@phosphor-icons/react';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile, GlobalRemoteReport, SearchPlan } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
-import type { SavedJobInput, VacancyEngineStatus } from '../../window.js';
+import type { ApplicationAttemptRecord, PostingLivenessView, SavedJobInput, VacancyEngineStatus } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
@@ -12,11 +12,14 @@ import {
   EmptyState,
   ErrorBanner,
   ResizeHandle,
+  UndoToast,
   WarningBanner,
   clampWidth,
   useAnnounce,
   useStoredWidth,
 } from '../shell/index.js';
+import { ApplyWorkspace } from '../applications/ApplyWorkspace.js';
+import { restoreSkippedAttempt, SKIP_UNDO_MS } from '../applications/skip-undo.js';
 import {
   SCAN_FAILED_ANNOUNCEMENT,
   SCAN_STARTED_ANNOUNCEMENT,
@@ -194,7 +197,11 @@ function SearchLoadingSkeleton() {
 export interface SearchPageProps {
   onOpenSearchProfile?: () => void;
   onSavedJobsChanged?: () => void;
-  onViewApplicationAttempt?: (attemptId: string) => void;
+  /** Hands an application to the letter generator; App brings the person back to this workspace. */
+  onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
+  /** Shows an application that already finished in the Applications history view (#657), which
+   * carries its documents, details and recovery actions. Search has no history view of its own. */
+  onViewFinishedAttempt?: (attemptId: string) => void;
   preferredSelectedKey?: string | null;
   session?: SearchSessionState;
   onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
@@ -252,7 +259,8 @@ function writeUsePlanChoice(value: boolean): void {
 export function SearchPage({
   onOpenSearchProfile,
   onSavedJobsChanged,
-  onViewApplicationAttempt,
+  onGenerateLetter,
+  onViewFinishedAttempt,
   preferredSelectedKey = null,
   session: controlledSession,
   onSessionChange,
@@ -414,11 +422,29 @@ export function SearchPage({
   const [sourceWarningsOpen, setSourceWarningsOpen] = useSearchSessionField(session, setSession, 'sourceWarningsOpen');
   const [listScrollTop, setListScrollTop] = useSearchSessionField(session, setSession, 'listScrollTop');
   const [detailScrollTop, setDetailScrollTop] = useSearchSessionField(session, setSession, 'detailScrollTop');
+  // #657: the Review & apply workspace replaces the detail pane in place. Search stays on screen.
+  const [applyAttemptId, setApplyAttemptId] = useSearchSessionField(session, setSession, 'applyAttemptId');
+  /** Set when the workspace closes, so focus goes back to the control that opened it. */
+  const focusApplyOpenerRef = useRef(false);
+  /** A skip in the allowlisted review dialog opened from this workspace, offered for undo (#468). */
+  const [skipUndo, setSkipUndo] = useState<ApplicationAttemptRecord | null>(null);
 
   const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(new Set());
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [prepareStates, setPrepareStates] = useState<Record<string, PrepareState>>({});
+  // #720: plain liveness per result key, as main knows it. Read for the visible page without any
+  // request; the one result shown in the detail pane is checked once (bounded, same verifier).
+  const [liveness, setLiveness] = useState<ReadonlyMap<string, PostingLivenessView>>(() => new Map());
+  const [livenessChecking, setLivenessChecking] = useState<string | null>(null);
+  const mergeLiveness = useCallback((views: readonly PostingLivenessView[]) => {
+    if (views.length === 0) return;
+    setLiveness((current) => {
+      const next = new Map(current);
+      for (const view of views) next.set(view.vacancyKey, view);
+      return next;
+    });
+  }, []);
   const [prepareErrors, setPrepareErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
   // Which CLI the gap-analysis offer below actually runs through (issue #400): the effective
@@ -981,6 +1007,47 @@ export function SearchPage({
     [pageItems, selectedKey],
   );
 
+  const livenessPageKeys = useMemo(
+    () => pageItems.filter((result) => !result.provisional).map((result) => result.key).join('\n'),
+    [pageItems],
+  );
+  useEffect(() => {
+    const read = window.applicationPipeline?.postingLiveness;
+    if (typeof read !== 'function' || livenessPageKeys.length === 0) return;
+    let cancelled = false;
+    read(livenessPageKeys.split('\n'))
+      .then((views) => {
+        if (!cancelled) mergeLiveness(views);
+      })
+      .catch(() => {
+        // Nothing known is "Not checked yet", which is what the rows already say.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [livenessPageKeys, mergeLiveness]);
+
+  const selectedLivenessKey = selected && !selected.provisional ? selected.key : null;
+  useEffect(() => {
+    const check = window.applicationPipeline?.checkPostingLiveness;
+    if (typeof check !== 'function' || selectedLivenessKey === null) return;
+    let cancelled = false;
+    setLivenessChecking(selectedLivenessKey);
+    check(selectedLivenessKey)
+      .then((view) => {
+        if (!cancelled) mergeLiveness([view]);
+      })
+      .catch(() => {
+        // A check that could not run changes nothing shown; preparation checks again before AI work.
+      })
+      .finally(() => {
+        if (!cancelled) setLivenessChecking((current) => (current === selectedLivenessKey ? null : current));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLivenessKey, mergeLiveness]);
+
   const reportHasOnlyUnscoredRows =
     worldwideReport !== null && savedResults.length > 0 && savedResults.every((r) => r.profileScore === null);
   const currentProfileConfigured =
@@ -1362,11 +1429,13 @@ export function SearchPage({
   const handleSelect = useCallback((result: SearchResult) => {
     setSelectedKey(result.key);
     setDetailScrollTop(0);
+    // Choosing another result leaves the workspace; the application keeps preparing in main.
+    setApplyAttemptId(null);
     if (singlePane) {
       paneFocusRef.current = 'detail';
       setPaneView('detail');
     }
-  }, [setDetailScrollTop, setSelectedKey, singlePane]);
+  }, [setApplyAttemptId, setDetailScrollTop, setSelectedKey, singlePane]);
 
   const handleBackToResults = useCallback(() => {
     paneFocusRef.current = 'row';
@@ -1392,12 +1461,16 @@ export function SearchPage({
     }
   }, [onSavedJobsChanged, selected]);
 
-  const handlePrepare = useCallback(async () => {
+  const handlePrepare = useCallback(async (options: { anyway?: boolean } = {}) => {
     // Gated on the selected row's own `provisional` flag, not the page-level scanning state
     // (issue #363): a provisional row must never start application preparation, whether it's
     // provisional because no report has loaded yet or because the user is viewing a rescan's live
     // rows while an old report still exists.
     if (!selected || selected.provisional) return;
+    // #720: a posting a check found closed never starts from the primary action. "Prepare anyway" is
+    // the explicit secondary path; main checks again before any AI work and, if it is still closed,
+    // waits for Get ready anyway, which is recorded with its time.
+    if (liveness.get(selected.key)?.state === 'closed' && options.anyway !== true) return;
     const key = selected.key;
     setPrepareStates((current) => ({ ...current, [key]: 'preparing' }));
     setPrepareErrors((current) => {
@@ -1412,7 +1485,9 @@ export function SearchPage({
       setSavedKeys((current) => new Set(current).add(key));
       setSaveStates((current) => ({ ...current, [key]: 'saved' }));
       onSavedJobsChanged?.();
-      onViewApplicationAttempt?.(result.attemptId);
+      // #657: no tab switch and no dialog. The workspace opens here, in place of the detail pane.
+      setApplyAttemptId(result.attemptId);
+      if (singlePane) setPaneView('detail');
     } catch (error) {
       setPrepareErrors((current) => ({
         ...current,
@@ -1421,7 +1496,7 @@ export function SearchPage({
     } finally {
       setPrepareStates((current) => ({ ...current, [key]: 'idle' }));
     }
-  }, [onSavedJobsChanged, onViewApplicationAttempt, selected]);
+  }, [liveness, onSavedJobsChanged, selected, setApplyAttemptId, singlePane]);
 
   const saveState: SaveState = selected
     ? (saveStates[selected.key] ?? (savedKeys.has(selected.key) ? 'saved' : 'idle'))
@@ -1448,8 +1523,78 @@ export function SearchPage({
     wasTwoPaneRef.current = !singlePane;
   }, [pageWidth, singlePane, selectedKey]);
 
+  const showWorkspace = applyAttemptId !== null && (!singlePane || paneView === 'detail');
   const showDetailPane = !!selected && (!singlePane || paneView === 'detail');
-  const showListPane = !singlePane || paneView === 'list' || !selected;
+  const showListPane = !singlePane || paneView === 'list' || (!selected && applyAttemptId === null);
+
+  // A workspace opened from elsewhere (the notification, Letters) while the page is narrow shows it.
+  useEffect(() => {
+    if (applyAttemptId !== null && singlePane) setPaneView('detail');
+  }, [applyAttemptId, singlePane]);
+
+  const closeApplyWorkspace = useCallback(() => {
+    focusApplyOpenerRef.current = true;
+    setApplyAttemptId(null);
+  }, [setApplyAttemptId]);
+
+  // An application that already finished goes to the Applications history view instead.
+  const handleApplyFinished = useCallback((attempt: ApplicationAttemptRecord) => {
+    setApplyAttemptId(null);
+    onViewFinishedAttempt?.(attempt.id);
+  }, [onViewFinishedAttempt, setApplyAttemptId]);
+
+  // The same undo the Applications page offers: restore the exact checkpoint only if the
+  // application is still skipped, then reopen it here.
+  const handleUndoApplySkip = useCallback(async () => {
+    const skipped = skipUndo;
+    if (!skipped) return;
+    setSkipUndo(null);
+    try {
+      await restoreSkippedAttempt(skipped);
+      setApplyAttemptId(skipped.id);
+    } catch {
+      announce('We could not undo the skip.');
+    }
+  }, [announce, setApplyAttemptId, skipUndo]);
+
+  // Back from the workspace: focus returns to Apply on the vacancy it came from, or to the vacancy
+  // heading when that control is not there. With no vacancy selected (opened from the notification
+  // or a trip to Letters) it goes to the first result, or to the page heading.
+  useEffect(() => {
+    if (applyAttemptId !== null || !focusApplyOpenerRef.current) return;
+    focusApplyOpenerRef.current = false;
+    const opener =
+      document.querySelector<HTMLElement>('[data-apply-opener]:not([disabled])') ??
+      document.querySelector<HTMLElement>('[data-vacancy-heading]') ??
+      document.querySelector<HTMLElement>('[data-result-key]');
+    if (opener) {
+      opener.focus({ preventScroll: false });
+      return;
+    }
+    const heading = document.querySelector<HTMLElement>('h1');
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
+  }, [applyAttemptId]);
+
+  const applyWorkspacePane = applyAttemptId ? (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="search-apply-pane">
+        <ApplyWorkspace
+          key={applyAttemptId}
+          attemptId={applyAttemptId}
+          closeLabel={selected ? 'Back to the vacancy' : hasReport ? 'Back to results' : 'Back to Search'}
+          onClose={closeApplyWorkspace}
+          onOpenAttempt={setApplyAttemptId}
+          onChanged={onSavedJobsChanged}
+          onSkipped={setSkipUndo}
+          {...(onViewFinishedAttempt ? { onFinished: handleApplyFinished } : {})}
+          {...(onGenerateLetter ? { onGenerateLetter } : {})}
+        />
+      </div>
+    </div>
+  ) : null;
 
   // Moves focus where the person just went: the detail heading after choosing a vacancy, the row
   // they came from after Back (#451). Runs after the pane has rendered, once per change.
@@ -1707,6 +1852,13 @@ export function SearchPage({
           </div>
           <SearchLoadingSkeleton />
         </>
+      ) : scanning && !hasReport && !isStreamingPartial ? (
+        // Nothing has come back from any source yet -- there is genuinely nothing to show, streamed
+        // or otherwise, so this is still the plain loading state.
+        <SearchLoadingSkeleton />
+      ) : !hasReport && !isStreamingPartial && applyWorkspacePane ? (
+        // Opened from the notification before any search: the workspace still opens in place.
+        <div className="mt-3 flex min-h-0 flex-1">{applyWorkspacePane}</div>
       ) : !hasReport && !isStreamingPartial ? (
         // A running scan never lands here: it shows its own live list from the start, at zero rows
         // until a source answers, so this is only the before-any-search state.
@@ -1790,6 +1942,7 @@ export function SearchPage({
                 selectedKey={selectedKey}
                 onSelect={handleSelect}
                 savedKeys={savedKeys}
+                liveness={liveness}
                 summary={summary}
                 scanActive={scanning}
                 checkedCount={worldwideReport?.statistics.rawRowsFetched ?? worldwideReport?.statistics.discoveryListings}
@@ -1821,7 +1974,9 @@ export function SearchPage({
               />
             )}
 
-            {showDetailPane && selected ? (
+            {showWorkspace && applyWorkspacePane ? (
+              applyWorkspacePane
+            ) : showDetailPane && selected ? (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {singlePane && (
                   <div className="flex-none border-b border-base-300 px-1 py-2">
@@ -1841,6 +1996,9 @@ export function SearchPage({
                 {...(prepareError ? { prepareError } : {})}
                 onSave={() => void handleSave()}
                 onPrepare={() => void handlePrepare()}
+                onPrepareAnyway={() => void handlePrepare({ anyway: true })}
+                {...(liveness.has(selected.key) ? { liveness: liveness.get(selected.key)! } : {})}
+                livenessChecking={livenessChecking === selected.key}
                 assistantOpen={assistantForKey === selected.key}
                 onToggleAssistant={() =>
                   setAssistantForKey((current) => (current === selected.key ? null : selected.key))
@@ -1968,6 +2126,15 @@ export function SearchPage({
             </>
           )}
         </div>
+      )}
+      {skipUndo && (
+        <UndoToast
+          message={`Skipped ${skipUndo.role} at ${skipUndo.company}.`}
+          onUndo={() => void handleUndoApplySkip()}
+          onDismiss={() => setSkipUndo(null)}
+          durationMs={SKIP_UNDO_MS}
+          layerClassName="z-[1000]"
+        />
       )}
     </div>
   );

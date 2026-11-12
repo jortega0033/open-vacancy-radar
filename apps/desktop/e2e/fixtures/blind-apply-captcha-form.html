@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture: Blind Apply form behind a bot check</title>
+<!--
+  Test-only fixture (issue #722). NOT a real employer page; local file:// only, pinned by exact path in
+  `application-target-policies.ts`.
+
+  Carries the class marker the executor recognises as a bot-detection widget (`g-recaptcha`). No script is
+  loaded and no site key is real: it is only a marker. A Blind Apply run must stop on sight, hand the item
+  to the person as "Needs you", type nothing and click nothing.
+-->
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  .field { margin-bottom: 1.25rem; }
+  label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+  input[type="text"], input[type="email"] { width: 100%; padding: 0.5rem; box-sizing: border-box; font-size: 1rem; }
+</style>
+</head>
+<body>
+  <main>
+    <h1>Apply: Frontend Engineer (fixture, bot check)</h1>
+    <form id="application-form">
+      <div class="field">
+        <label for="full-name">Full name <span aria-hidden="true">*</span></label>
+        <input type="text" id="full-name" aria-label="Full name" name="fullName" required />
+      </div>
+      <div class="field">
+        <label for="email">Email address <span aria-hidden="true">*</span></label>
+        <input type="email" id="email" aria-label="Email address" name="email" required />
+      </div>
+      <div class="g-recaptcha" data-sitekey="synthetic-marker-not-a-real-key"></div>
+      <button type="submit" id="submit-application">Submit Application</button>
+    </form>
+  </main>
+</body>
+</html>

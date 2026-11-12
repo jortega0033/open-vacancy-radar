@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture: Blind Apply form with questions no stored answer covers</title>
+<!--
+  Test-only fixture (issue #722). NOT a real employer page; local file:// only, pinned by exact path in
+  `application-target-policies.ts`.
+
+  It asks two REQUIRED questions that nothing in a CV or profile answers -- a select and a free-text
+  question -- so a Blind Apply run must pause this one application as "Needs one answer", must not invent
+  either answer, and must leave both controls empty. Everything else on the page is answerable from the
+  CV, so the only thing in the way is exactly what the test names.
+-->
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  .field { margin-bottom: 1.25rem; }
+  label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+  input[type="text"], input[type="email"], select { width: 100%; padding: 0.5rem; box-sizing: border-box; font-size: 1rem; }
+</style>
+</head>
+<body>
+  <main id="page">
+    <h1>Apply: Frontend Engineer (fixture, extra questions)</h1>
+    <form id="application-form">
+      <div class="field">
+        <label for="full-name">Full name <span aria-hidden="true">*</span></label>
+        <input type="text" id="full-name" aria-label="Full name" name="fullName" required />
+      </div>
+      <div class="field">
+        <label for="email">Email address <span aria-hidden="true">*</span></label>
+        <input type="email" id="email" aria-label="Email address" name="email" required />
+      </div>
+      <div class="field">
+        <label for="education">Highest level of education <span aria-hidden="true">*</span></label>
+        <select id="education" aria-label="Highest level of education" name="education" required>
+          <option value="">Select one</option>
+          <option value="secondary">Secondary school</option>
+          <option value="bachelor">Bachelor's degree</option>
+          <option value="master">Master's degree</option>
+          <option value="doctorate">Doctorate</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="react-years">Years of experience with React <span aria-hidden="true">*</span></label>
+        <input type="text" id="react-years" aria-label="Years of experience with React" name="reactYears" required />
+      </div>
+      <button type="submit" id="submit-application">Submit Application</button>
+    </form>
+  </main>
+  <script>
+    document.getElementById('application-form').addEventListener('submit', function (event) {
+      event.preventDefault();
+      if (!event.target.checkValidity()) return;
+      document.getElementById('page').innerHTML =
+        '<h1>Your application has been submitted</h1><p>Application reference: BLIND-FIXTURE-0002</p>';
+    });
+  </script>
+</body>
+</html>

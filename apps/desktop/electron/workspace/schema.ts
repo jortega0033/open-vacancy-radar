@@ -589,9 +589,12 @@ export const applicationPostingVerifications = sqliteTable('application_posting_
   observedText: text('observed_text'),
   /**
    * The person's decision about this finding, or null while it is still open. `superseded` = a later
-   * definitive check replaced it before anyone decided (no decision was made).
+   * definitive check replaced it before anyone decided (no decision was made). `confirmed_by_person`
+   * (#720) = on a "could not check" row: the person looked at the posting and recorded that it is open.
    */
-  resolution: text('resolution', { enum: ['refreshed', 'prepare_anyway', 'keep_current', 'superseded'] }),
+  resolution: text('resolution', {
+    enum: ['refreshed', 'prepare_anyway', 'keep_current', 'superseded', 'confirmed_by_person'],
+  }),
   resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
   /**
    * A prepared package this finding took out of review while the person decides: the attempt's
@@ -1218,3 +1221,6 @@ export const applicationFollowUpDrafts = sqliteTable('application_follow_up_draf
   uniqueIndex('application_follow_up_drafts_request_idx').on(table.applicationId, table.requestId),
   index('application_follow_up_drafts_application_idx').on(table.applicationId),
 ]);
+
+// Blind Apply (#722): defined in its own module, re-exported so drizzle-kit and the repository see one schema.
+export * from './blind-apply-schema.js';

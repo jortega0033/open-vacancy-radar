@@ -6,8 +6,8 @@ import type { ApplicationAttemptRecord } from '../../../src/window.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
 
 /**
- * #468: a skip can be undone from a toast and from the history drawer, and a failed preparation
- * can be tried again from that drawer. All records are synthetic.
+ * #468: a skip can be undone in place in the Review & apply workspace (#657) and from the history
+ * drawer, and a failed preparation can be tried again from that drawer. All records are synthetic.
  */
 
 function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): ApplicationAttemptRecord {
@@ -95,21 +95,22 @@ describe('skip undo (#468)', () => {
     expect(SKIP_UNDO_MS).toBeGreaterThanOrEqual(8_000);
   });
 
-  it('shows "Skipped {role} at {company}." with Undo after a skip, and Undo returns the attempt to review', async () => {
+  it('shows "Skipped {role} at {company}." with Undo in the workspace after a skip, and Undo returns the attempt to review', async () => {
     const attempt = makeAttempt({ checkpointDetail: 'Your application documents are ready.' });
     const store = installAttemptStore(attempt);
     installManualExecutor();
 
     render(<ApplicationsPage />);
     fireEvent.click(screen.getByRole('tab', { name: 'Ready to apply' }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Skip' }));
+    fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
+    const region = await screen.findByRole('region', { name: 'Senior Frontend Engineer at Acme Corp' });
+    fireEvent.click(await within(region).findByRole('button', { name: 'Skip' }));
 
-    const toast = await screen.findByRole('status');
-    expect(toast).toHaveTextContent('Skipped Senior Frontend Engineer at Acme Corp.');
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await within(region).findByText('Skipped Senior Frontend Engineer at Acme Corp.')).toBeInTheDocument();
+    // The Undo stays in place with no timer; nothing opens over the page.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
-    fireEvent.click(within(toast).getByRole('button', { name: 'Undo' }));
+    fireEvent.click(within(region).getByRole('button', { name: 'Undo' }));
 
     // Restores the checkpoint and detail the attempt had before the skip.
     await waitFor(() =>
@@ -118,7 +119,7 @@ describe('skip undo (#468)', () => {
         checkpointDetail: 'Your application documents are ready.',
       }),
     );
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(await within(region).findByRole('button', { name: 'Approve package' })).toBeInTheDocument();
   });
 
   it('does not touch an attempt that has moved on from skipped when Undo is pressed', async () => {
@@ -128,15 +129,16 @@ describe('skip undo (#468)', () => {
 
     render(<ApplicationsPage />);
     fireEvent.click(screen.getByRole('tab', { name: 'Ready to apply' }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Skip' }));
-    const toast = await screen.findByRole('status');
+    fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
+    const region = await screen.findByRole('region', { name: 'Senior Frontend Engineer at Acme Corp' });
+    fireEvent.click(await within(region).findByRole('button', { name: 'Skip' }));
+    await within(region).findByText('Skipped Senior Frontend Engineer at Acme Corp.');
 
     // Something else advanced the attempt in the meantime.
     store.setCurrent({ ...attempt, checkpoint: 'submitted' });
     store.updateApplicationAttempt.mockClear();
     store.getApplicationAttempt.mockClear();
-    fireEvent.click(within(toast).getByRole('button', { name: 'Undo' }));
+    fireEvent.click(within(region).getByRole('button', { name: 'Undo' }));
 
     await waitFor(() => expect(store.getApplicationAttempt).toHaveBeenCalled());
     expect(store.updateApplicationAttempt).not.toHaveBeenCalled();
@@ -157,7 +159,10 @@ describe('history drawer recovery (#468)', () => {
     await waitFor(() =>
       expect(store.updateApplicationAttempt).toHaveBeenCalledWith(attempt.id, { checkpoint: 'ready', checkpointDetail: '' }),
     );
-    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent(/review application/i));
+    // Back to review in the same Review & apply workspace (#657), not a dialog.
+    const region = await screen.findByRole('region', { name: 'Senior Frontend Engineer at Acme Corp' });
+    expect(await within(region).findByRole('button', { name: 'Approve package' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('refuses to return an attempt to review once it is no longer skipped', async () => {

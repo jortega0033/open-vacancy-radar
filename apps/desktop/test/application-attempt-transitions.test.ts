@@ -5,8 +5,10 @@ import {
   APPLICATION_QUEUE_STATE_KEYS,
   APPLICATION_QUEUE_STATE_ROLES,
   INTERRUPTED_ATTEMPT_RESTART,
+  INTERRUPTED_SUBMISSION_RECOVERY,
   awaitsScheduling,
   isInterruptedCheckpoint,
+  isInterruptedSubmission,
   isSettledCheckpoint,
   resolveAttemptRecovery,
   resolveAttemptTransition,
@@ -76,6 +78,22 @@ describe('APPLICATION_ATTEMPT_CHECKPOINT_ROLES', () => {
 
   it('submitting is settled: preparation must never touch the submit half', () => {
     expect(isSettledCheckpoint('submitting')).toBe(true);
+  });
+});
+
+describe('an interrupted submission (#722)', () => {
+  it('only submitting is an interrupted submission, and it is never also a restartable preparation', () => {
+    const interruptedSubmissions = APPLICATION_ATTEMPT_CHECKPOINT_KEYS.filter((c) => isInterruptedSubmission(c));
+    expect(interruptedSubmissions).toEqual(['submitting']);
+    // Restarting preparation here could produce a second real application.
+    expect(isInterruptedCheckpoint('submitting')).toBe(false);
+    expect(awaitsScheduling('submitting')).toBe(false);
+  });
+
+  it('recovers to submission_unknown, the state submitApplicationReview refuses to retry', () => {
+    expect(INTERRUPTED_SUBMISSION_RECOVERY.checkpoint).toBe('submission_unknown');
+    expect(isSettledCheckpoint(INTERRUPTED_SUBMISSION_RECOVERY.checkpoint)).toBe(true);
+    expect(INTERRUPTED_SUBMISSION_RECOVERY.detail).toContain('may or may not have been sent');
   });
 });
 

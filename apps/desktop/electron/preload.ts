@@ -23,6 +23,16 @@ import type {
 } from '@open-vacancy-radar/vacancy-engine';
 import type { SearchPlanLoadResult, SearchPlanResetResult } from './search-plan-store.js';
 import type { CompanyEvidenceBridge } from './company-evidence.js';
+import type { BlindApplyBridge } from './blind-apply-types.js';
+import {
+  parseBlindApplyAnswerResult,
+  parseBlindApplyEnableResult,
+  parseBlindApplyEvidence,
+  parseBlindApplyFeed,
+  parseBlindApplyOpenResult,
+  parseBlindApplyStatus,
+  parseBlindApplyStopResult,
+} from './blind-apply-parse.js';
 import type { ApplicationBriefBridge } from './application-brief.js';
 import { parseCritiqueResult, type ApplicationCritiqueBridge } from './application-critique-types.js';
 import { parseInterviewContextResult, type InterviewContextBridge } from './interview-context-types.js';
@@ -52,6 +62,7 @@ import type {
 } from './application-executor-types.js';
 import type {
   ApplicationPipelineBridge,
+  PostingLivenessView,
   PostingVerificationAction,
   PostingVerificationView,
   RestartApplicationTailoringResult,
@@ -1947,7 +1958,9 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
   },
   async resume(attemptId, options): Promise<RestartApplicationTailoringResult> {
     const resolution =
-      options?.resolution === 'prepare_anyway' || options?.resolution === 'keep_current' ? options.resolution : undefined;
+      options?.resolution === 'prepare_anyway' || options?.resolution === 'keep_current' || options?.resolution === 'confirm_open'
+        ? options.resolution
+        : undefined;
     const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', {
       attemptId,
       ...(resolution === undefined ? {} : { resolution }),
@@ -1971,10 +1984,35 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
     const mode = source ? optionalString(source, 'tailoringMode') : undefined;
     return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
   },
+  async postingLiveness(vacancyKeys): Promise<PostingLivenessView[]> {
+    const keys = vacancyKeys.filter((key) => typeof key === 'string' && key.length > 0).slice(0, 200);
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:posting-liveness', { vacancyKeys: keys });
+    if (!Array.isArray(result)) return [];
+    return result.flatMap((entry) => {
+      const key = asRecord(entry) ? optionalString(asRecord(entry)!, 'vacancyKey') : undefined;
+      return key !== undefined && keys.includes(key) ? [parsePostingLivenessView(entry, key)] : [];
+    });
+  },
+  async checkPostingLiveness(vacancyKey): Promise<PostingLivenessView> {
+    return parsePostingLivenessView(
+      await ipcRenderer.invoke('application-pipeline:check-posting-liveness', { vacancyKey }),
+      vacancyKey,
+    );
+  },
   async attachLetter(attemptId) {
     const source = asRecord(await ipcRenderer.invoke('application-pipeline:attach-letter', { attemptId }));
     const detail = source ? optionalString(source, 'detail') : undefined;
     return { ok: source?.ok === true, attemptId, ...(detail === undefined ? {} : { detail }) };
+  },
+  // #657: the "Application ready" notification click. Only a bounded, non-empty id string crosses.
+  onOpenAttempt(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const source = asRecord(payload);
+      const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+      if (attemptId && attemptId.length <= 200) callback(attemptId);
+    };
+    ipcRenderer.on('application:open-attempt', listener);
+    return () => ipcRenderer.removeListener('application:open-attempt', listener);
   },
 };
 
@@ -1992,6 +2030,8 @@ const POSTING_ACTIONS: readonly PostingVerificationAction[] = [
   'refresh',
   'keep_current',
   'prepare_anyway',
+  'prepare_now',
+  'confirm_open',
 ];
 const POSTING_RESOLUTIONS = ['refreshed', 'prepare_anyway', 'keep_current'] as const;
 const POSTING_CHANGE_KINDS = ['requirements', 'text'] as const;
@@ -2019,6 +2059,7 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
   const recheck = source ? asRecord(source.recheck) : undefined;
   const recheckAt = recheck ? optionalString(recheck, 'checkedAt') : undefined;
   const recheckReason = recheck ? optionalString(recheck, 'reason') : undefined;
+  const personConfirmedAt = source ? optionalString(source, 'personConfirmedAt') : undefined;
   const actions = Array.isArray(source?.actions)
     ? (source.actions as unknown[]).filter((action): action is PostingVerificationAction =>
         (POSTING_ACTIONS as readonly unknown[]).includes(action),
@@ -2046,6 +2087,8 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
     resolution: (POSTING_RESOLUTIONS as readonly unknown[]).includes(resolution)
       ? (resolution as PostingVerificationView['resolution'])
       : null,
+    // #720: present only when the person actually recorded "It's open"; a malformed time is dropped.
+    ...(known && personConfirmedAt !== undefined && !Number.isNaN(Date.parse(personConfirmedAt)) ? { personConfirmedAt } : {}),
     reused: known && source?.reused === true,
     stale: !known || source?.stale !== false,
     invalidated: known && source?.invalidated === true,
@@ -2056,6 +2099,31 @@ function parsePostingVerificationView(result: unknown, requestedAttemptId: strin
         ? { checkedAt: recheckAt, reason: recheckReason as PostingVerificationView['reason'] & string }
         : null,
     actions: known ? actions : ['check_again'],
+  };
+}
+
+const POSTING_LIVENESS_STATES: readonly PostingLivenessView['state'][] = ['open', 'not_checked', 'unverifiable', 'closed'];
+
+/**
+ * Fail closed (#720): an unknown or mismatched answer is "not checked yet", never open or closed, and
+ * open/closed without a real check time is not believed.
+ */
+function parsePostingLivenessView(result: unknown, requestedKey: string): PostingLivenessView {
+  const source = asRecord(result);
+  const state = source ? optionalString(source, 'state') : undefined;
+  const checkedAt = source ? optionalString(source, 'checkedAt') : undefined;
+  const validTime = checkedAt !== undefined && !Number.isNaN(Date.parse(checkedAt));
+  let known = source?.vacancyKey === requestedKey && (POSTING_LIVENESS_STATES as readonly unknown[]).includes(state);
+  if (known && (state === 'open' || state === 'closed') && !validTime) known = false;
+  const reason = known && source ? optionalString(source, 'reason') : undefined;
+  return {
+    vacancyKey: requestedKey,
+    state: known ? (state as PostingLivenessView['state']) : 'not_checked',
+    checkedAt: known && validTime ? checkedAt : null,
+    source: known && source ? (optionalString(source, 'source') ?? null) : null,
+    sourceRef: known && source ? (optionalString(source, 'sourceRef') ?? null) : null,
+    reason: reason !== undefined ? (reason as PostingLivenessView['reason']) : null,
+    checkable: known && source?.checkable === true,
   };
 }
 
@@ -2079,6 +2147,44 @@ function parseRestartTailoringResult(
 }
 
 contextBridge.exposeInMainWorld('applicationPipeline', applicationPipelineApi);
+
+/**
+ * #722. Blind Apply. The renderer can read the activity feed and its evidence, answer a "needs one
+ * answer" card, open an item into the existing reviewed flow, ask main to show its OWN native
+ * confirmation, and Stop. `enable` carries no argument at all: the filters, the CV and the wording
+ * the person confirms are gathered and shown by main, so the renderer cannot widen or hide any of them.
+ */
+const blindApplyApi: BlindApplyBridge = {
+  async status() {
+    return parseBlindApplyStatus(await ipcRenderer.invoke('blind-apply:status'));
+  },
+  async enable() {
+    return parseBlindApplyEnableResult(await ipcRenderer.invoke('blind-apply:enable'));
+  },
+  async stop() {
+    return parseBlindApplyStopResult(await ipcRenderer.invoke('blind-apply:stop'));
+  },
+  async feed() {
+    return parseBlindApplyFeed(await ipcRenderer.invoke('blind-apply:feed'));
+  },
+  async evidence(itemId) {
+    return parseBlindApplyEvidence(await ipcRenderer.invoke('blind-apply:evidence', itemId), itemId);
+  },
+  async answer(input) {
+    return parseBlindApplyAnswerResult(
+      await ipcRenderer.invoke('blind-apply:answer', {
+        itemId: input.itemId,
+        answers: input.answers.map((entry) => ({ label: entry.label, answer: entry.answer })),
+        remember: input.remember === true,
+      }),
+    );
+  },
+  async open(itemId) {
+    return parseBlindApplyOpenResult(await ipcRenderer.invoke('blind-apply:open', itemId));
+  },
+};
+
+contextBridge.exposeInMainWorld('blindApply', blindApplyApi);
 
 /**
  * #689. The eleventh namespace: company evidence. Every method resolves with a result REBUILT from
