@@ -56,7 +56,7 @@ There is no human study, no real job search, no time measurement and no provider
 | Eligibility mismatch | `classifyEligibility`, `apps/desktop/electron/application-brief.ts:239` | Reused unchanged |
 | Staleness of an assessment | `matchOverlay`, `apps/desktop/electron/application-brief.ts:446`, `BRIEF_WORKFLOW_VERSION`, `apps/desktop/electron/application-brief.ts:30` | Reused unchanged |
 | Search provenance | `LeadQueryProvenance` (#686), `packages/vacancy-engine/src/global-remote/models.ts:381` | The shape follow-up B would copy |
-| Role family | Scorer `primaryFit` in `profileMatch` (#367), `packages/vacancy-engine/src/filtering/relevance.ts:640` | Only when the job was scored |
+| Role family | Scorer `primaryFit` in `profileMatch` (#367), `packages/vacancy-engine/src/filtering/relevance.ts:642` | Only when the job was scored |
 
 No new scorer, package, queue, corpus or model was added. #412 (comparator) and #694 (role scope) are untouched.
 
@@ -88,7 +88,7 @@ No new scorer, package, queue, corpus or model was added. #412 (comparator) and 
 
 A job's **title** and the scorer's `matchingSkills`/`gaps` are stored too (`saved_jobs.role`, `BriefSourceFacts.match`). The prototype reads them (`JobObservation.hints`) for one reason only: so a test can plant a skill in them and prove that nothing is computed from them (§9). A title or scorer hint is never a requirement, a lane, a recurrence count or a gap.
 
-The scorer's own "gaps" are **not** skill gaps. `scoreWorldwideVacancy` (`packages/vacancy-engine/src/filtering/relevance.ts:640`) emits "No explicit candidate skill match found", seniority, excluded role family, unmet mandatory language and salary notes. They compare a job to the person's stated profile; they never list a requirement the person lacks. They belong to the evaluator-opinion/preference lanes, not the missing-experience lane.
+The scorer's own "gaps" are **not** skill gaps. `scoreWorldwideVacancy` (`packages/vacancy-engine/src/filtering/relevance.ts:642`) emits "No explicit candidate skill match found", seniority, excluded role family, unmet mandatory language and salary notes. They compare a job to the person's stated profile; they never list a requirement the person lacks. They belong to the evaluator-opinion/preference lanes, not the missing-experience lane.
 
 ### Four identity surfaces, and a defect found
 

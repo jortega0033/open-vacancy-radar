@@ -5,13 +5,19 @@ Evidence date: 2026-10-30, against `master` at `d31a4b88` (after #693 merged in 
 `docs/research/role-scope/694-evaluation.json`, which the test byte-compares. Source citations are
 `path:line` at that commit.
 
+**Update for #714 (2026-11-13).** The scorer now reads Vue, Nuxt and Svelte as frontend, and reads "engineer in test" as
+QA in both the scorer and the discovery exclusion list. The checked-in JSON and the `relevance.ts` citations were
+regenerated and moved for that change. Scores quoted below for F08 and N02 are the 2026-10-30 values. After #714,
+F08 scores 89 (frontend) and N02 scores 29 (QA, `role_mismatch` at discovery). The F08>N02 and S02>N02 discordant
+pairs and the S01 tie no longer occur. No other case's score changed; F08 now enters top-k lists it was missing from.
+
 ## Decision (ADR)
 
 **Status:** Accepted for this delivery. The user chose "keep frontend focus" on 2026-10-28, and this research
 found no safety or correctness reason to narrow it further.
 
 **Context.** The Search profile accepts any target-role text (`packages/vacancy-engine/src/candidate/profile.ts:25`).
-The evaluator that orders Search is frontend-shaped (`packages/vacancy-engine/src/filtering/relevance.ts:272`).
+The evaluator that orders Search is frontend-shaped (`packages/vacancy-engine/src/filtering/relevance.ts:274`).
 It reads `targetRoles` only to decide whether a profile is configured at all (`packages/vacancy-engine/src/candidate/profile.ts:130`),
 never to decide what a good role is. So a backend or data target gets a frontend ranking, presented as if it fitted the stated target.
 
@@ -31,7 +37,7 @@ never to decide what a good role is. So a backend or data target gets a frontend
   - A person whose targets are not frontend still gets a frontend-shaped ordering. The product already states
     "frontend-only" (`README.md:25`), and the score breakdown's reasons already name frontend evidence. §7.2 is the contract any
     future change to target-role input must keep.
-  - Two gaps found here stay open until their own small fixes land: #713 and #714 (§10).
+  - Two gaps found here stay open until their own small fixes land: #713 and #714 (§10). #714 has since been fixed.
 - Reversible: option B is a self-contained research module with versioned explanations. If the conditions in §8 are ever met, it can be revisited without undoing anything shipped.
 
 ## What is in this PR
@@ -78,7 +84,7 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
 
 | Concern | Owner reused | How |
 |---|---|---|
-| Scoring | `scoreWorldwideVacancy` (`packages/vacancy-engine/src/filtering/relevance.ts:640`) and the pipeline step that calls it per row (`packages/vacancy-engine/src/pipeline/global-remote.ts:275`) | Called unchanged. The evaluator is not re-exported from the package index, so it is reached through its module's own export, the same way `apps/desktop/test/vacancy-scan-run.test.ts` reaches the pipeline |
+| Scoring | `scoreWorldwideVacancy` (`packages/vacancy-engine/src/filtering/relevance.ts:642`) and the pipeline step that calls it per row (`packages/vacancy-engine/src/pipeline/global-remote.ts:275`) | Called unchanged. The evaluator is not re-exported from the package index, so it is reached through its module's own export, the same way `apps/desktop/test/vacancy-scan-run.test.ts` reaches the pipeline |
 | Score breakdown and ordering (#367/#395/#464) | `sortSearchResultIndex` (`apps/desktop/src/components/search/results.ts:723`) via `sortResults` | Real Search order of the scored rows |
 | Reviewed titles and languages (#686) | `approveSearchPlanDraft` (`packages/vacancy-engine/src/candidate/search-plan.ts:244`), `captureSearchPlanSnapshot` (`packages/vacancy-engine/src/candidate/search-plan.ts:322`), `compileSearchPlanQueries` (`packages/vacancy-engine/src/global-remote/search-plan.ts:123`), `vacancyMatchesRole` / `vacancyTitleMatches` (`packages/vacancy-engine/src/global-remote/focused-scan.ts:280`, `packages/vacancy-engine/src/global-remote/focused-scan.ts:288`) | Plans are approved, snapshotted and compiled exactly as a run does. Unapproved suggestions stay unapproved |
 | Eligibility (#280) | `assessWorkEligibility` with a fixed clock | Answers reported as `yes / no / unknown`, never combined |
@@ -101,13 +107,13 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
   | design | 20 |
   | backend, management, QA, data, embedded, devops, support | 5 or 8 |
 
-  Sources: `packages/vacancy-engine/src/filtering/relevance.ts:272`, `packages/vacancy-engine/src/filtering/relevance.ts:369`.
+  Sources: `packages/vacancy-engine/src/filtering/relevance.ts:274`, `packages/vacancy-engine/src/filtering/relevance.ts:371`.
 - **Technical fit counts a fixed list of frontend concepts.** The list has Angular, React, TypeScript, Web Components, etc.,
   but no Vue or Svelte (`packages/vacancy-engine/src/filtering/relevance.ts:67`). It is capped at 55 for backend and other
-  non-frontend families (`packages/vacancy-engine/src/filtering/relevance.ts:450`).
-- **The only profile-driven gates** are excluded role families (`packages/vacancy-engine/src/filtering/relevance.ts:572`)
-  and the mandatory-language cap of 45 (`packages/vacancy-engine/src/filtering/relevance.ts:608`). `targetRoles` is read only
-  through `isCandidateProfileConfigured` (`packages/vacancy-engine/src/filtering/relevance.ts:645`).
+  non-frontend families (`packages/vacancy-engine/src/filtering/relevance.ts:452`).
+- **The only profile-driven gates** are excluded role families (`packages/vacancy-engine/src/filtering/relevance.ts:574`)
+  and the mandatory-language cap of 45 (`packages/vacancy-engine/src/filtering/relevance.ts:610`). `targetRoles` is read only
+  through `isCandidateProfileConfigured` (`packages/vacancy-engine/src/filtering/relevance.ts:647`).
 - **The 70 threshold hides nothing.** The pipeline discards `relevant` (`packages/vacancy-engine/src/pipeline/global-remote.ts:280`)
   and Search sorts every scored row by score. "Below threshold" therefore means "ranked lower", never "removed".
   This research does not read every low score as a hidden result.
@@ -187,7 +193,7 @@ in-process call per (case, profile). No network, model, provider, file I/O, cach
 UI Developer (82), Client-side (78), Web Engineer (88), Frontend-Entwickler (88) and Frontend ontwikkelaar (84). The hard negatives
 N01 (29), N03 manager (28) and N04 Unity (38) are correctly low. **No not-relevant case reaches 70.** The one misleading
 case is N02 "Senior UI Engineer in Test" at 69, read as frontend (role fit 96) because the QA title rule does not cover
-"engineer in test" (`packages/vacancy-engine/src/filtering/relevance.ts:326`).
+"engineer in test" (`packages/vacancy-engine/src/filtering/relevance.ts:328`).
 
 **Option B on the same cases** matches all 25 relevant cases. That includes F08 and S01/S02 (at `low` confidence). But it calls
 N02, N03 and N04 a frontend **match** (low confidence, title-only), and today's evaluator gets those three right. Its family rule

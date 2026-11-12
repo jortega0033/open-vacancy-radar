@@ -125,6 +125,52 @@ describe('scoreWorldwideVacancy', () => {
     expect(result!.deterministicScore).toBeLessThanOrEqual(45);
     expect(result!.gaps.some((gap) => gap.startsWith('Excluded primary role family'))).toBe(true);
   });
+
+  // #714 regression cases, taken from the #694 corpus (F08, N02). The expected outcomes are the
+  // fixture author's, not human-reviewed labels.
+  it('reads a Vue/Nuxt title and stack as frontend (#714, F08)', () => {
+    const result = scoreWorldwideVacancy(
+      vacancy({
+        title: 'Senior Vue.js Developer',
+        description: `Responsibilities
+          Build our customer web app with Vue 3, Nuxt and TypeScript.
+          Create reusable, accessible UI components.
+          Requirements
+          Strong Vue and TypeScript experience; CSS architecture.`,
+      }),
+      profile,
+      100_000,
+    );
+
+    expect(result!.primaryFit).toBe('Frontend / UI engineering');
+    expect(result!.relevant).toBe(true);
+    expect(result!.deterministicScore).toBeGreaterThanOrEqual(RELEVANCE_THRESHOLD);
+  });
+
+  it('reads a Svelte title as frontend (#714)', () => {
+    const result = scoreWorldwideVacancy(vacancy({ title: 'SvelteKit Developer' }), profile, 100_000);
+
+    expect(result!.primaryFit).toBe('Frontend / UI engineering');
+  });
+
+  it('reads an "engineer in test" title as QA, not frontend (#714, N02)', () => {
+    const result = scoreWorldwideVacancy(
+      vacancy({
+        title: 'Senior UI Engineer in Test',
+        description: `Responsibilities
+          Build automated end-to-end tests for our web UI with Playwright.
+          Own the test strategy and CI test reports.
+          Requirements
+          Test automation experience with Playwright or Cypress.`,
+      }),
+      profile,
+      100_000,
+    );
+
+    expect(result!.primaryFit).toBe('QA / test automation');
+    expect(result!.relevant).toBe(false);
+    expect(result!.deterministicScore).toBeLessThan(RELEVANCE_THRESHOLD);
+  });
 });
 
 /**

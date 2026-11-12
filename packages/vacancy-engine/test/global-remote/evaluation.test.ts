@@ -43,6 +43,9 @@ describe('global remote deterministic evaluation', () => {
     expect(isFrontendOnlyTitle('Frontend Engineering Manager')).toBe(false);
     expect(isFrontendOnlyTitle('Senior Design Engineer')).toBe(false);
     expect(isFrontendOnlyTitle('Solidity Compiler Frontend Engineer')).toBe(false);
+    // #714: the discovery gate agrees with the scorer that "engineer in test" is QA.
+    expect(isFrontendOnlyTitle('Senior UI Engineer in Test')).toBe(false);
+    expect(hasExcludedRoleFamily('Software Engineer in Test')).toBe(true);
   });
 
   it('annualizes supported USD periods and refuses unsupported hourly assumptions', () => {
