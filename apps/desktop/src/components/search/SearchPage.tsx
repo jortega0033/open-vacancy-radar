@@ -8,7 +8,16 @@ import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState, ErrorBanner, UndoToast, WarningBanner, useAnnounce } from '../shell/index.js';
+import {
+  EmptyState,
+  ErrorBanner,
+  ResizeHandle,
+  UndoToast,
+  WarningBanner,
+  clampWidth,
+  useAnnounce,
+  useStoredWidth,
+} from '../shell/index.js';
 import { ApplyWorkspace } from '../applications/ApplyWorkspace.js';
 import { restoreSkippedAttempt, SKIP_UNDO_MS } from '../applications/skip-undo.js';
 import {
@@ -207,6 +216,27 @@ export interface SearchPageProps {
  * window with the rail still splits and a 1000px window with the full sidebar does not. */
 const SINGLE_PANE_BELOW_PX = 900;
 
+/** Split layout: the results list's width bounds. The detail pane always keeps at least
+ * `DETAIL_MIN_PX`, so neither pane can be dragged into a sliver. */
+const LIST_MIN_PX = 320;
+const LIST_MAX_PX = 960;
+const DETAIL_MIN_PX = 420;
+const LIST_WIDTH_KEY = 'ovr.layout.searchListWidth.v1';
+const RESULT_LIST_ID = 'ovr-search-result-list';
+
+/** The part of the session that belongs to one list view (the live scan's, or a loaded report's). */
+type ListViewState = Pick<SearchSessionState, 'page' | 'selectedKey' | 'listScrollTop' | 'detailScrollTop' | 'assistantForKey'>;
+const EMPTY_LIST_VIEW: ListViewState = { page: 0, selectedKey: null, listScrollTop: 0, detailScrollTop: 0, assistantForKey: null };
+function pickListView({ page, selectedKey, listScrollTop, detailScrollTop, assistantForKey }: SearchSessionState): ListViewState {
+  return { page, selectedKey, listScrollTop, detailScrollTop, assistantForKey };
+}
+
+/** The list's width until the person drags it: 40% of the page up to 448px on ordinary windows (the
+ * old fixed `w-2/5 max-w-md`), growing to a quarter of the page on ultrawide ones. */
+function defaultListWidth(pageWidth: number): number {
+  return Math.min(pageWidth * 0.4, Math.max(448, pageWidth * 0.25));
+}
+
 /** Remembered per app install: whether searches also use the approved plan titles (#686). Default off. */
 const USE_SEARCH_PLAN_KEY = 'ovr.search.useSearchPlan';
 
@@ -303,6 +333,13 @@ export function SearchPage({
   const pageWidth = useElementWidth(rootRef);
   /** True when the page is too narrow for two panes (#451). `null` width (not measured) reads as wide. */
   const singlePane = pageWidth !== null && pageWidth < SINGLE_PANE_BELOW_PX;
+  const [storedListWidth, setStoredListWidth] = useStoredWidth(LIST_WIDTH_KEY);
+  // Only a measured split page gets a resizable list; unmeasured or single-pane keeps the CSS width.
+  const listMaxPx = pageWidth === null ? LIST_MAX_PX : Math.min(LIST_MAX_PX, pageWidth - DETAIL_MIN_PX);
+  const listWidth =
+    pageWidth === null || singlePane
+      ? undefined
+      : clampWidth(storedListWidth ?? defaultListWidth(pageWidth), LIST_MIN_PX, listMaxPx);
   /** In the single-pane flow, which pane is showing. The selected vacancy survives either. */
   const [paneView, setPaneView] = useState<'list' | 'detail'>('list');
   /** Where focus goes after the next pane change: the detail heading on select, the row on Back. */
@@ -781,28 +818,48 @@ export function SearchPage({
   const worldwideReportRef = useRef(worldwideReport);
   worldwideReportRef.current = worldwideReport;
   const hasReport = worldwideReport !== null;
-  const liveProgressCount = partialVacancies.length;
-  const hasLiveRows = liveProgressCount > 0;
+  const liveResults = useMemo<SearchResult[]>(() => {
+    const rows = toPartialResults(partialVacancies);
+    const duplicates = duplicateResultKeys(rows);
+    if (duplicates.length === 0) return rows;
+    console.warn(`Search results carried repeated vacancy keys; keeping the first row for each: ${duplicates.join(', ')}`);
+    return dedupeResultsByKey(rows);
+  }, [partialVacancies]);
+  const liveFilters = useMemo(
+    () => pendingScanFilters ?? withReportQueryAlternatives(appliedFilters, session.report),
+    [appliedFilters, pendingScanFilters, session.report],
+  );
+  const liveVisible = useMemo(
+    () =>
+      sortSearchResultIndex(
+        filterSearchResultIndex(buildSearchResultIndex(liveResults), liveFilters),
+        liveFilters.query,
+        liveFilters.queryAlternatives,
+      ),
+    [liveFilters, liveResults],
+  );
+  // Count matches for the submitted search, never every raw listing emitted by a source. The latter
+  // made a zero-match search announce thousands of "live vacancies" while the list correctly showed 0.
+  const liveProgressCount = liveVisible.length;
+  // The current scan owns the default view from the moment it starts, including its honest zero-row
+  // state. Waiting for the first row before switching left the old report/query on screen and made
+  // progressive search look frozen. `viewingSaved` remains the explicit opt-out during a rescan.
+  const showLiveResults = scanning && (!hasReport || !viewingSaved);
+
   // Whether the currently displayed list is the scan's own live/provisional rows rather than the
-  // saved report (issue #364). Two cases:
-  //  - No saved report exists yet: live rows are shown as soon as any arrive, same as before #364.
-  //  - A saved report is already loaded: a rescan's live rows now replace the visible list the
-  //    moment the first one arrives too, rather than staying hidden behind a "N have arrived" count
-  //    for the whole scan -- `viewingSaved` is the explicit, user-driven way back to the saved
-  //    report without waiting for the rescan to finish.
+  // saved report (issue #364). A rescan starts at 0 current matches and appends each matching row as
+  // soon as it arrives; the previous report is available only through the explicit toggle.
   //
   // Never without a running scan (issue #464): a late progress event can land in `partialVacancies`
   // after the scan finished, and those rows would otherwise sit on screen as a "Live" list that
   // nothing is updating.
-  const showLiveResults = hasLiveRows && scanning && (!hasReport || !viewingSaved);
-
-  // While no live rows are being shown, fall back to the saved report if one exists, or to nothing.
+  // While the live view is not being shown, fall back to the saved report if one exists, or nothing.
   // This never merges partial rows into a loaded report: the final displayed list, once a real
   // `GlobalRemoteReport` is in view, is exactly what a non-streaming scan would have shown,
   // byte-for-byte.
   const results = useMemo<SearchResult[]>(() => {
     const rows = showLiveResults
-      ? toPartialResults(partialVacancies)
+      ? liveResults
       : worldwideReport
         ? toWorldwideResults(worldwideReport)
         : [];
@@ -812,7 +869,7 @@ export function SearchPage({
     if (duplicates.length === 0) return rows;
     console.warn(`Search results carried repeated vacancy keys; keeping the first row for each: ${duplicates.join(', ')}`);
     return dedupeResultsByKey(rows);
-  }, [showLiveResults, worldwideReport, partialVacancies]);
+  }, [liveResults, showLiveResults, worldwideReport]);
 
   // Spoken scan signals (issue #456): start, throttled progress, then finish or failure. The text
   // goes through the always-mounted app-level announcer; the visible banner stays for sighted users.
@@ -856,20 +913,19 @@ export function SearchPage({
   // and the salary note/count below) must derive from this single value, not `appliedFilters`
   // directly, so they never disagree about which filters are in effect.
   const effectiveFilters = useMemo(
-    () =>
-      showLiveResults && pendingScanFilters
-        ? pendingScanFilters
-        : withReportQueryAlternatives(appliedFilters, session.report),
-    [appliedFilters, pendingScanFilters, session.report, showLiveResults],
+    () => (showLiveResults ? liveFilters : withReportQueryAlternatives(appliedFilters, session.report)),
+    [appliedFilters, liveFilters, session.report, showLiveResults],
   );
   const visible = useMemo(
     () =>
-      sortSearchResultIndex(
-        filterSearchResultIndex(resultIndex, effectiveFilters),
-        effectiveFilters.query,
-        effectiveFilters.queryAlternatives,
-      ),
-    [resultIndex, effectiveFilters],
+      showLiveResults
+        ? liveVisible
+        : sortSearchResultIndex(
+            filterSearchResultIndex(resultIndex, effectiveFilters),
+            effectiveFilters.query,
+            effectiveFilters.queryAlternatives,
+          ),
+    [effectiveFilters, liveVisible, resultIndex, showLiveResults],
   );
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
@@ -882,6 +938,36 @@ export function SearchPage({
 
   const sources = useMemo(() => sourceOptions(results), [results]);
   const employmentTypes = useMemo(() => employmentOptions(results), [results]);
+
+  // The live view and the previous report each keep their own page, selection and scroll. Entering
+  // the live view puts the report's view aside; leaving it (the toggle, or a scan that failed or was
+  // stopped, so the same report is still loaded) brings it back untouched. A scan that loaded a new
+  // report keeps the live view's state, which the revalidation below then fits to that report.
+  // Declared before the revalidation so its update is queued first in the same commit.
+  const savedViewRef = useRef<{ report: GlobalRemoteReport | null; view: ListViewState } | null>(null);
+  const liveViewRef = useRef<ListViewState | null>(null);
+  const wasLiveRef = useRef(showLiveResults);
+  useEffect(() => {
+    if (wasLiveRef.current === showLiveResults) return;
+    wasLiveRef.current = showLiveResults;
+    const report = worldwideReportRef.current;
+    if (showLiveResults) {
+      setSession((current) => {
+        savedViewRef.current = { report, view: pickListView(current) };
+        return { ...current, ...(liveViewRef.current ?? EMPTY_LIST_VIEW) };
+      });
+      return;
+    }
+    const saved = savedViewRef.current;
+    savedViewRef.current = null;
+    setSession((current) => {
+      liveViewRef.current = scanning ? pickListView(current) : null;
+      return saved && saved.report === report ? { ...current, ...saved.view } : current;
+    });
+  }, [scanning, setSession, showLiveResults]);
+  useEffect(() => {
+    if (!scanning) liveViewRef.current = null;
+  }, [scanning]);
 
   // Revalidate restored view state together. If a newer report removed the selected vacancy or
   // shortened the result set, the detail pane follows the first row on the surviving page.
@@ -1555,7 +1641,7 @@ export function SearchPage({
           busy={busy}
           salaryNote={salaryNote}
           hasReport={hasReport}
-          appliedQuery={appliedFilters.query}
+          appliedQuery={effectiveFilters.query}
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
@@ -1640,20 +1726,20 @@ export function SearchPage({
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <span>
                 {showLiveResults
-                  ? 'Searching job sites. New jobs appear as they are found.'
+                  ? `Scan in progress. ${liveProgressCount.toLocaleString()} new ${liveProgressCount === 1 ? 'match' : 'matches'} so far. Jobs appear here as they are found.`
                   : hasReport
-                  ? `Searching job sites. Showing your last results meanwhile${hasLiveRows ? ` (${liveProgressCount.toLocaleString()} new so far)` : ''}.`
-                  : 'Searching job sites. This can take a few minutes.'}
+                  ? `Scan in progress. Showing previous results. ${liveProgressCount.toLocaleString()} new ${liveProgressCount === 1 ? 'match' : 'matches'} so far.`
+                  : 'Scan in progress. This can take a few minutes.'}
               </span>
               <ScanProgressPanel status={scanStatus} now={scanNow} stopping={stopping} onStop={() => void handleStopScan()} />
             </div>
-            {hasReport && hasLiveRows && (
+            {hasReport && (
               <button
                 type="button"
                 className="btn btn-outline btn-xs flex-none"
                 onClick={() => setViewingSaved((current) => !current)}
               >
-                {showLiveResults ? 'Show saved results' : `Show live results (${liveProgressCount.toLocaleString()})`}
+                {showLiveResults ? 'Show previous results' : `Show current search (${liveProgressCount.toLocaleString()})`}
               </button>
             )}
           </div>
@@ -1774,6 +1860,8 @@ export function SearchPage({
         // Opened from the notification before any search: the workspace still opens in place.
         <div className="mt-3 flex min-h-0 flex-1">{applyWorkspacePane}</div>
       ) : !hasReport && !isStreamingPartial ? (
+        // A running scan never lands here: it shows its own live list from the start, at zero rows
+        // until a source answers, so this is only the before-any-search state.
         <div className="min-h-0 flex-1 px-6">
           <EmptyState
             illustration={emptySearchIllustration}
@@ -1868,6 +1956,21 @@ export function SearchPage({
                 scrollTop={listScrollTop}
                 onScrollTopChange={setListScrollTop}
                 split={!singlePane}
+                id={RESULT_LIST_ID}
+                {...(listWidth !== undefined ? { width: listWidth } : {})}
+              />
+            )}
+            {showListPane && listWidth !== undefined && (
+              <ResizeHandle
+                label="Resize results list"
+                controls={RESULT_LIST_ID}
+                value={listWidth}
+                min={LIST_MIN_PX}
+                max={listMaxPx}
+                onChange={setStoredListWidth}
+                onReset={() => setStoredListWidth(null)}
+                narrowerLabel="Narrower results list"
+                widerLabel="Wider results list"
               />
             )}
 

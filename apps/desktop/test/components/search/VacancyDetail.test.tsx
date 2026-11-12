@@ -141,6 +141,22 @@ describe('VacancyDetail', () => {
     expect(within(more).queryByRole('button', { name: 'Apply' })).toBeNull();
   });
 
+  it('groups the fit, reasons and description apart from the overview facts for wide panes', () => {
+    renderDetail(worldwideResult({ description: 'Join our team.' }));
+
+    const body = document.querySelector('.ovr-vacancy-body')!;
+    const [main, side] = Array.from(body.children);
+    expect(within(main as HTMLElement).getByRole('region', { name: 'Profile fit summary' })).toBeInTheDocument();
+    expect(within(main as HTMLElement).getByText('Join our team.')).toBeInTheDocument();
+    expect(within(side as HTMLElement).getByText('Overview')).toBeInTheDocument();
+    expect(within(side as HTMLElement).queryByText('Join our team.')).not.toBeInTheDocument();
+  });
+
+  it('says "Not scored yet" once in the fit summary', () => {
+    renderDetail(worldwideResult({ profileScore: null }));
+    expect(within(screen.getByRole('region', { name: 'Profile fit summary' })).getAllByText(/not scored yet/i)).toHaveLength(1);
+  });
+
   it('holds preparation until a streamed vacancy belongs to the final report', () => {
     renderDetail(worldwideResult(), { prepareAvailable: false });
     expect(screen.getByRole('button', { name: 'Finishing scan…' })).toBeDisabled();

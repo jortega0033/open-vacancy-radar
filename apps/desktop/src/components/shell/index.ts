@@ -1,4 +1,4 @@
-export { AppSidebar } from './AppSidebar.js';
+export { AppSidebar, MAIN_SIDEBAR_ID } from './AppSidebar.js';
 export type { AppSidebarProps } from './AppSidebar.js';
 export { WorkspaceHeader } from './WorkspaceHeader.js';
 export type { WorkspaceHeaderProps, RuntimeState } from './WorkspaceHeader.js';
@@ -41,5 +41,7 @@ export { Menu } from './Menu.js';
 export type { MenuProps, MenuItem } from './Menu.js';
 export { ScheduledSendBanner } from './ScheduledSendBanner.js';
 export type { CancelScheduledOutcome, ScheduledSendBannerProps } from './ScheduledSendBanner.js';
+export { ResizeHandle, clampWidth, useStoredWidth } from './ResizeHandle.js';
+export type { ResizeHandleProps } from './ResizeHandle.js';
 export { Dialog } from './Dialog.js';
 export type { DialogProps } from './Dialog.js';

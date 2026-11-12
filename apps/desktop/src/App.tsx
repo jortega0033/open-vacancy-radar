@@ -19,10 +19,14 @@ import {
   AppSidebar,
   Dialog,
   LiveAnnouncerProvider,
+  MAIN_SIDEBAR_ID,
+  ResizeHandle,
   ScheduledSendBanner,
   WorkspaceHeader,
+  clampWidth,
   headerCopy,
   isNavPage,
+  useStoredWidth,
   type CancelScheduledOutcome,
   type NavPage,
   type RuntimeState,
@@ -40,6 +44,11 @@ const COUNTS_REFRESH_MS = 5_000;
 const ENGINE_HEALTH_REFRESH_MS = 20_000;
 /** Below this window width the sidebar is the 64px rail unless the person pinned it open (#451). */
 const SIDEBAR_RAIL_BELOW_PX = 1100;
+/** The expanded sidebar's width bounds; 236px is the prototype's fixed width and stays the default. */
+const SIDEBAR_MIN_PX = 200;
+const SIDEBAR_DEFAULT_PX = 236;
+const SIDEBAR_MAX_PX = 360;
+const SIDEBAR_WIDTH_KEY = 'ovr.layout.sidebarWidth.v1';
 
 export function App() {
   const companyList = useAutoCompanyList();
@@ -63,6 +72,13 @@ export function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+  const [storedSidebarWidth, setStoredSidebarWidth] = useStoredWidth(SIDEBAR_WIDTH_KEY);
+  // Resizable only where the expanded sidebar is a real column on a wide window: the rail and the
+  // narrow-window overlay keep their fixed widths.
+  const sidebarResizable = !sidebarCollapsed && !railForced && windowWidth >= SIDEBAR_RAIL_BELOW_PX;
+  const sidebarWidth = sidebarResizable
+    ? clampWidth(storedSidebarWidth ?? SIDEBAR_DEFAULT_PX, SIDEBAR_MIN_PX, SIDEBAR_MAX_PX)
+    : undefined;
   useEffect(() => {
     // Widening the window, or pinning the sidebar, leaves nothing for the overlay to cover.
     if (!railForced) setSidebarOverlayOpen(false);
@@ -487,7 +503,21 @@ export function App() {
         runtimeLabel={PROVIDER_LABEL[providerInUse]}
         runtimeState={shownRuntimeState}
         engine={engineHealth}
+        {...(sidebarWidth !== undefined ? { width: sidebarWidth } : {})}
       />
+      {sidebarWidth !== undefined && (
+        <ResizeHandle
+          label="Resize sidebar"
+          controls={MAIN_SIDEBAR_ID}
+          value={sidebarWidth}
+          min={SIDEBAR_MIN_PX}
+          max={SIDEBAR_MAX_PX}
+          onChange={setStoredSidebarWidth}
+          onReset={() => setStoredSidebarWidth(null)}
+          narrowerLabel="Narrower sidebar"
+          widerLabel="Wider sidebar"
+        />
+      )}
 
       {/* The full sidebar over the content at narrow widths, without taking width from it (#451).
           The rail stays in the layout; this is drawn above it and closes on Escape, on the dimmed
