@@ -47,7 +47,7 @@ const ANCHORS: readonly [string, string][] = [
   ['packages/vacancy-engine/src/eligibility/language.ts:137', 'export function detectLanguageRequirements'],
   ['packages/vacancy-engine/src/eligibility/language.ts:145', "heading = 'mandatory'"],
   ['apps/desktop/electron/vacancy-scan-query.ts:135', 'export function scheduledScanQueryFromProfile'],
-  ['apps/desktop/src/components/search/SearchPage.tsx:969', 'currentProfileScanQuery'],
+  ['apps/desktop/src/components/search/SearchPage.tsx:1055', 'currentProfileScanQuery'],
   ['apps/desktop/src/components/search/results.ts:723', 'export function sortSearchResultIndex'],
   ['apps/desktop/src/components/cv/prompts.ts:395', 'export function buildBestFitRolesPrompt'],
   ['packages/vacancy-engine/src/global-remote/evaluation.ts:13', 'const FRONTEND_ROLE'],

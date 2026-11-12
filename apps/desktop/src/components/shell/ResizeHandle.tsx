@@ -174,7 +174,6 @@ export function ResizeHandle({
           tabIndex={-1}
           className="btn btn-ghost btn-square btn-xs size-6 pointer-coarse:size-11"
           aria-label={narrowerLabel}
-          title={narrowerLabel}
           disabled={value <= min}
           onClick={() => set(value - LARGE_STEP_PX)}
         >
@@ -185,7 +184,6 @@ export function ResizeHandle({
           tabIndex={-1}
           className="btn btn-ghost btn-square btn-xs size-6 pointer-coarse:size-11"
           aria-label={widerLabel}
-          title={widerLabel}
           disabled={value >= max}
           onClick={() => set(value + LARGE_STEP_PX)}
         >
