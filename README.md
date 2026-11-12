@@ -199,6 +199,7 @@ apps/
                        src/components/{search,saved,applications,cv,cv-library,letters,runtime,settings}/
                        electron/workspace/  : the personal-data SQLite schema, IPC, repository
   daemon/           Standalone local Node.js service (Fastify), runnable without Electron
+  landing/          Static marketing page (https://ovr.web.app), deployed with `pnpm deploy:landing`
 packages/
   vacancy-engine/   The worldwide/remote discovery engine (plus a best-effort IND sponsor check),
                      vendored from the standalone `ind-job-radar` CLI and ported to embedded SQLite
