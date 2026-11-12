@@ -118,6 +118,40 @@ describe('VacancyDetail', () => {
     expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeInTheDocument();
   });
 
+  it('orders the actions by priority and ties the safety note to the primary one', () => {
+    renderDetail(worldwideResult());
+
+    const prepare = screen.getByRole('button', { name: 'Get ready to apply' });
+    expect(prepare).toHaveClass('btn-primary');
+    expect(prepare).toHaveAccessibleDescription('Builds a draft for you to review. Nothing is sent.');
+    const actions = Array.from(prepare.parentElement!.querySelectorAll('button, a'));
+    expect(actions.map((action) => action.textContent)).toEqual([
+      'Get ready to apply',
+      'Save job',
+      'Compare with my CV',
+      'Open posting',
+    ]);
+    // The outbound link is the quietest action; Save and Compare are secondary.
+    expect(screen.getByRole('link', { name: 'Open posting' })).toHaveClass('btn-ghost');
+    expect(screen.getByRole('button', { name: 'Save job' })).toHaveClass('btn-outline');
+  });
+
+  it('groups the fit, reasons and description apart from the overview facts for wide panes', () => {
+    renderDetail(worldwideResult({ description: 'Join our team.' }));
+
+    const body = document.querySelector('.ovr-vacancy-body')!;
+    const [main, side] = Array.from(body.children);
+    expect(within(main as HTMLElement).getByRole('region', { name: 'Profile fit summary' })).toBeInTheDocument();
+    expect(within(main as HTMLElement).getByText('Join our team.')).toBeInTheDocument();
+    expect(within(side as HTMLElement).getByText('Overview')).toBeInTheDocument();
+    expect(within(side as HTMLElement).queryByText('Join our team.')).not.toBeInTheDocument();
+  });
+
+  it('says "Not scored yet" once in the fit summary', () => {
+    renderDetail(worldwideResult({ profileScore: null }));
+    expect(within(screen.getByRole('region', { name: 'Profile fit summary' })).getAllByText(/not scored yet/i)).toHaveLength(1);
+  });
+
   it('holds preparation until a streamed vacancy belongs to the final report', () => {
     renderDetail(worldwideResult(), { prepareAvailable: false });
     expect(screen.getByRole('button', { name: 'Finishing scan…' })).toBeDisabled();

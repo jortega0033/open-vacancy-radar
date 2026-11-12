@@ -516,6 +516,50 @@ describe('App shell sidebar collapse', () => {
   });
 });
 
+describe('App shell resizable sidebar', () => {
+  beforeEach(() => window.localStorage.removeItem('ovr.layout.sidebarWidth.v1'));
+
+  it('resizes the expanded sidebar from the keyboard, clamps it and remembers the width', async () => {
+    render(<App />);
+    const handle = await screen.findByRole('separator', { name: 'Resize sidebar' });
+    const aside = document.querySelector('aside')!;
+    expect(handle).toHaveAttribute('aria-orientation', 'vertical');
+    expect(handle).toHaveAttribute('aria-controls', aside.id);
+    expect(handle).toHaveAttribute('aria-valuenow', '236');
+    expect(handle).toHaveAttribute('aria-valuemin', '200');
+    expect(handle).toHaveAttribute('aria-valuemax', '360');
+
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(aside).toHaveStyle({ width: '252px' });
+    expect(window.localStorage.getItem('ovr.layout.sidebarWidth.v1')).toBe('252');
+
+    fireEvent.keyDown(handle, { key: 'End' });
+    expect(handle).toHaveAttribute('aria-valuenow', '360');
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true });
+    expect(handle).toHaveAttribute('aria-valuenow', '360');
+
+    fireEvent.doubleClick(handle);
+    expect(handle).toHaveAttribute('aria-valuenow', '236');
+    expect(window.localStorage.getItem('ovr.layout.sidebarWidth.v1')).toBeNull();
+  });
+
+  it('offers no resize handle on the collapsed sidebar or the narrow-window rail', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }));
+    expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).not.toBeInTheDocument();
+    expect(document.querySelector('aside')).toHaveClass('ovr-sidebar-collapsed');
+  });
+
+  it('keeps the rail fixed below the rail breakpoint', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 760 });
+    window.localStorage.setItem('ovr.layout.sidebarWidth.v1', '320');
+    render(<App />);
+    await screen.findByRole('button', { name: 'Expand sidebar' });
+    expect(screen.queryByRole('separator', { name: 'Resize sidebar' })).not.toBeInTheDocument();
+    expect(document.querySelector('aside')).not.toHaveAttribute('style');
+  });
+});
+
 describe('App shell sidebar on a narrow window (#451)', () => {
   function setWindowWidth(width: number) {
     Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });

@@ -474,6 +474,59 @@ describe('SearchPage', () => {
       expect(screen.queryByRole('button', { name: 'Back to results' })).not.toBeInTheDocument();
     });
 
+    it('puts a keyboard-operable, clamped and remembered divider between the list and the detail', async () => {
+      window.localStorage.removeItem('ovr.layout.searchListWidth.v1');
+      stubPageWidth(1400);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      const handle = await screen.findByRole('separator', { name: 'Resize results list' });
+      const list = document.getElementById(handle.getAttribute('aria-controls')!)!;
+      expect(list).toContainElement(await screen.findByLabelText('Vacancy results'));
+      expect(handle).toHaveAttribute('aria-orientation', 'vertical');
+      // Default: the old 40%-up-to-448px width; the detail keeps at least 420px of the 1400px page.
+      expect(handle).toHaveAttribute('aria-valuenow', '448');
+      expect(handle).toHaveAttribute('aria-valuemin', '320');
+      expect(handle).toHaveAttribute('aria-valuemax', '960');
+      expect(list).toHaveStyle({ width: '448px' });
+
+      fireEvent.keyDown(handle, { key: 'ArrowLeft', shiftKey: true });
+      expect(list).toHaveStyle({ width: '384px' });
+      expect(window.localStorage.getItem('ovr.layout.searchListWidth.v1')).toBe('384');
+      fireEvent.keyDown(handle, { key: 'Home' });
+      expect(handle).toHaveAttribute('aria-valuenow', '320');
+      fireEvent.keyDown(handle, { key: 'End' });
+      expect(handle).toHaveAttribute('aria-valuenow', '960');
+
+      fireEvent.doubleClick(handle);
+      expect(handle).toHaveAttribute('aria-valuenow', '448');
+      expect(window.localStorage.getItem('ovr.layout.searchListWidth.v1')).toBeNull();
+    });
+
+    it('grows the default list width on an ultrawide page and clamps a remembered width to the page', async () => {
+      window.localStorage.setItem('ovr.layout.searchListWidth.v1', '5000');
+      stubPageWidth(2300);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      const handle = await screen.findByRole('separator', { name: 'Resize results list' });
+      expect(handle).toHaveAttribute('aria-valuenow', '960');
+      fireEvent.doubleClick(handle);
+      // A quarter of the 2300px page instead of the 448px cap used on ordinary windows.
+      expect(handle).toHaveAttribute('aria-valuenow', '575');
+    });
+
+    it('has no divider in the single-pane layout', async () => {
+      stubPageWidth(700);
+      installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
+      render(<SearchPage />);
+
+      await screen.findByLabelText('Vacancy results');
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByRole('button', { name: /beta engineer/i }));
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+    });
+
     it('has no Scan details line on a narrow page', async () => {
       stubPageWidth(700);
       installAllBridges({ getReport: vi.fn().mockResolvedValue(twoVacancies()) });
@@ -2032,6 +2085,30 @@ describe('SearchPage', () => {
   });
 
   describe('progressive search results (issue #252)', () => {
+    it('shows an honest zero-match list on a first scan before any source answers, then each row as it arrives', async () => {
+      const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(new Promise(() => {})) });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+      enterSearchQuery('Frontend');
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+
+      // The live list itself, at zero, not a skeleton that hides whether anything matched yet.
+      expect(await screen.findByText(/^0 vacancies so far$/i)).toBeInTheDocument();
+      expect(screen.getByLabelText('Vacancy results')).toHaveTextContent(/searching job sites/i);
+      expect(screen.getByText(/0 new matches so far/i)).toBeInTheDocument();
+      // No saved report means no toggle back to one.
+      expect(screen.queryByRole('button', { name: 'Show previous results' })).not.toBeInTheDocument();
+
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'first-live', title: 'First Live Frontend Role', profileScore: null })],
+      });
+      await waitFor(() => expect(screen.getByText(/^1 vacancy so far$/i)).toBeInTheDocument());
+      expect(screen.getByText(/1 new match so far/i)).toBeInTheDocument();
+      expect(screen.getAllByText('First Live Frontend Role').length).toBeGreaterThan(0);
+    });
+
     it('shows a vacancy pushed via vacancy:scan-progress before the scan promise resolves, and the final report replaces it exactly', async () => {
       let resolveScan: (report: GlobalRemoteReport) => void = () => {};
       const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
@@ -2054,14 +2131,14 @@ describe('SearchPage', () => {
 
       await waitFor(() => expect(screen.getAllByText('Streamed Frontend Role').length).toBeGreaterThan(0));
       // Honest "not yet scored" state, not a real-looking match percentage.
-      expect(screen.getByText(/new jobs appear as they are found/i)).toBeInTheDocument();
+      expect(screen.getByText(/jobs appear here as they are found/i)).toBeInTheDocument();
 
       resolveScan(makeWorldwideReport([makeWorldwideVacancy({ title: 'Frontend Developer' })]));
 
       await waitFor(() => expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0));
       // The final, non-streaming list is exactly what loaded -- no partial-only row survives.
       expect(screen.queryByText('Streamed Frontend Role')).not.toBeInTheDocument();
-      expect(screen.queryByText(/new jobs appear as they are found/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/jobs appear here as they are found/i)).not.toBeInTheDocument();
     });
 
     it('filters live rows by the just-submitted role and country instead of showing every raw streamed hit (issue #394)', async () => {
@@ -2217,6 +2294,14 @@ describe('SearchPage', () => {
       fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
       await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
 
+      // The current search owns the view immediately, before any source has emitted a row. Keeping
+      // the old report here made the scan look non-progressive and left the old query label visible.
+      expect(screen.queryByText('Existing Role')).not.toBeInTheDocument();
+      expect(screen.getByText(/^0 vacancies so far$/i)).toBeInTheDocument();
+      expect(screen.getByText(/0 new matches so far/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Press Enter to search/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Show previous results' })).toBeInTheDocument();
+
       // Provably before `runScan`'s own promise resolves: nothing has resolved it yet.
       emit({
         sourceId: 'himalayas',
@@ -2229,14 +2314,15 @@ describe('SearchPage', () => {
       expect(screen.queryByText('Existing Role')).not.toBeInTheDocument();
       // Marked as not final, and never a real-looking score.
       expect(screen.getByText(/live · not yet scored/i)).toBeInTheDocument();
+      expect(screen.getByText(/1 new match so far/i)).toBeInTheDocument();
 
       // An explicit, discoverable way back to the saved report while the rescan keeps running.
-      fireEvent.click(screen.getByRole('button', { name: 'Show saved results' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Show previous results' }));
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
       expect(screen.queryByText('Mid Rescan Streamed Role')).not.toBeInTheDocument();
 
       // And back to live from there.
-      fireEvent.click(screen.getByRole('button', { name: /show live results/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show current search/i }));
       await waitFor(() => expect(screen.getAllByText('Mid Rescan Streamed Role').length).toBeGreaterThan(0));
     });
 
@@ -2407,7 +2493,11 @@ describe('SearchPage', () => {
       // detail pane's actions) stayed fully clickable.
       expect(container.querySelector('.opacity-60')).toBeNull();
 
-      // A saved-report row (not provisional) keeps its safe actions enabled during the rescan.
+      // The rescan owns the view from its start; the saved report is one explicit toggle away, and
+      // its row (not provisional) keeps its safe actions enabled during the rescan.
+      fireEvent.click(screen.getByRole('button', { name: 'Show previous results' }));
+      await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
+      expect(container.querySelector('.opacity-60')).toBeNull();
       expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Get ready to apply' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeEnabled();
@@ -2460,6 +2550,76 @@ describe('SearchPage', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
     expect(screen.getByLabelText('Vacancy results').scrollTop).toBe(84);
     expect(screen.getByLabelText('Vacancy details').scrollTop).toBe(128);
+  });
+
+  describe('the previous report keeps its own page, selection and scroll during a rescan', () => {
+    async function openPreviousView(runScan: VacancyRadarBridge['runScan']) {
+      const vacancies = Array.from({ length: 30 }, (_, index) =>
+        makeWorldwideVacancy({ key: `ww-${index}`, title: `Frontend Role ${String(index).padStart(2, '0')}` }),
+      );
+      const harness = installProgressCapturingBridge({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport(vacancies)),
+        runScan,
+      });
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
+      enterSearchQuery('Frontend');
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /Frontend Role 29/ }));
+      const listScroller = screen.getByLabelText('Vacancy results');
+      Object.defineProperty(listScroller, 'scrollTop', { configurable: true, value: 84, writable: true });
+      fireEvent.scroll(listScroller);
+      const detailScroller = screen.getByLabelText('Vacancy details');
+      Object.defineProperty(detailScroller, 'scrollTop', { configurable: true, value: 128, writable: true });
+      fireEvent.scroll(detailScroller);
+      return harness;
+    }
+
+    function expectPreviousView() {
+      expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Vacancy results').scrollTop).toBe(84);
+      expect(screen.getByLabelText('Vacancy details').scrollTop).toBe(128);
+    }
+
+    const liveRow = () =>
+      makeWorldwideVacancy({ key: 'live-1', title: 'Frontend Live Role', profileScore: null });
+
+    it('restores it when a live row arrived and then the scan failed', async () => {
+      let rejectScan: (error: Error) => void = () => {};
+      const { emit } = await openPreviousView(
+        vi.fn().mockReturnValue(new Promise<GlobalRemoteReport>((_, reject) => { rejectScan = reject; })),
+      );
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      emit({ sourceId: 'himalayas', vacancies: [liveRow()] });
+      // The live view follows its own first row.
+      await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Frontend Live Role' })).toBeInTheDocument());
+
+      rejectScan(new Error('network unreachable'));
+      await waitFor(() => expect(screen.getByText(/network unreachable/i)).toBeInTheDocument());
+      expectPreviousView();
+    });
+
+    it('restores it when the person switches back during the scan, and keeps the live view for switching again', async () => {
+      const { emit } = await openPreviousView(vi.fn().mockReturnValue(new Promise<GlobalRemoteReport>(() => {})));
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      emit({ sourceId: 'himalayas', vacancies: [liveRow()] });
+      await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Frontend Live Role' })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show previous results' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument());
+      expectPreviousView();
+
+      fireEvent.click(screen.getByRole('button', { name: /show current search/i }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Frontend Live Role' })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show previous results' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument());
+      expectPreviousView();
+    });
   });
 
   it('does not resurrect scan-start filters when Clear filters is clicked during the scan', async () => {

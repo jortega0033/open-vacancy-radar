@@ -153,6 +153,10 @@ export interface SearchResultListProps {
   /** Side-by-side with the detail pane (a fixed-width column), or on its own taking the whole width
    * (#451). Chosen by the page from the width it actually has, not from the viewport. */
   split?: boolean;
+  /** Split layout only: the list's width in pixels, set by the page's resize handle. Without it the
+   * split list keeps its CSS width. */
+  width?: number;
+  id?: string;
 }
 
 export const SearchResultList = memo(function SearchResultList({
@@ -171,15 +175,20 @@ export const SearchResultList = memo(function SearchResultList({
   scrollTop = 0,
   onScrollTopChange,
   split = true,
+  width,
+  id,
 }: SearchResultListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop) scrollRef.current.scrollTop = scrollTop;
   }, [scrollTop]);
+  const sized = split && width !== undefined;
   return (
     <div
+      id={id}
+      {...(sized ? { style: { width } } : {})}
       className={`flex min-h-0 flex-col border-base-300 ${
-        split ? 'w-2/5 min-w-80 max-w-md flex-none border-r' : 'flex-1'
+        sized ? 'flex-none border-r' : split ? 'w-2/5 min-w-80 max-w-md flex-none border-r' : 'flex-1'
       }`}
     >
       <div className="sticky top-0 z-10 border-b border-base-300 bg-base-100 px-4 py-2 text-xs text-base-content/60">

@@ -310,9 +310,31 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  /* Fit summary and the CV card share one row instead of the card sitting alone under it. */
+  .ovr-vacancy-details .ovr-vacancy-fit {
+    grid-column: span 2 / span 2;
+  }
+
   .ovr-vacancy-details .ovr-vacancy-overview,
   .ovr-vacancy-details .ovr-vacancy-verification {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Wide panes (an ultrawide window, or a narrow results list): fit, reasons and description in a
+   main column, the overview and verification facts in a side column beside them. */
+@container (min-width: 64rem) {
+  .ovr-vacancy-details .ovr-vacancy-body {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem);
+  }
+
+  .ovr-vacancy-details .ovr-vacancy-side > :first-child {
+    margin-top: 0.75rem;
+  }
+
+  .ovr-vacancy-details .ovr-vacancy-side .ovr-vacancy-overview,
+  .ovr-vacancy-details .ovr-vacancy-side .ovr-vacancy-verification {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { FileDashed, Info } from '@phosphor-icons/react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowSquareOut, FileDashed, Info } from '@phosphor-icons/react';
 import { describeLeadQueries } from './search-plan-view.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
@@ -92,7 +92,7 @@ function FitSummary({ result }: { result: SearchResult }) {
   const { signals, gaps } = fitHighlights(result.profileMatch);
 
   return (
-    <section aria-label="Profile fit summary" className="col-span-full rounded-box border border-base-300 p-3.5">
+    <section aria-label="Profile fit summary" className="ovr-vacancy-fit col-span-full rounded-box border border-base-300 p-3.5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <h3 className="ovr-eyebrow">Profile fit</h3>
         {score === null ? (
@@ -113,11 +113,7 @@ function FitSummary({ result }: { result: SearchResult }) {
           </>
         )}
       </div>
-      <p className="mt-1 text-xs text-base-content/60">
-        {score === null
-          ? 'Not scored yet.'
-          : 'Based on what you are looking for.'}
-      </p>
+      {score !== null && <p className="mt-1 text-xs text-base-content/60">Based on what you are looking for.</p>}
       {(signals.length > 0 || gaps.length > 0) && (
         <div className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm text-base-content/70 sm:grid-cols-2">
           {signals.length > 0 && (
@@ -270,6 +266,7 @@ export function VacancyDetail({
     }
     onToggleAssistant();
   }
+  const prepareNoteId = useId();
   const subtitle = [orNotStated(result.location), result.salary]
     .filter((part): part is string => !!part)
     .join(' · ');
@@ -281,9 +278,11 @@ export function VacancyDetail({
       className="ovr-vacancy-details min-w-0 flex-1 overflow-y-auto"
       onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
     >
-      <div className="max-w-3xl px-6 py-5 pb-10">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
+      {/* Wide panes get a main column and a facts column (see `.ovr-vacancy-body` in tokens.css)
+          rather than one 768px column beside an empty half; long text keeps a readable measure. */}
+      <div className="max-w-7xl px-6 py-5 pb-10">
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0 flex-1 basis-64">
             <h2 data-vacancy-heading="" tabIndex={-1} className="break-words text-xl font-semibold outline-none">
               {result.title}
             </h2>
@@ -298,11 +297,15 @@ export function VacancyDetail({
             )}
           </div>
 
-          <div className="flex max-w-full flex-none flex-wrap gap-2">
-            <div className="flex flex-col gap-1">
+          {/* One row of actions in priority order: the primary apply step, then Save and Compare,
+              then the outbound link as the quietest. The safety note sits under the whole row and
+              describes the primary button. */}
+          <div className="flex max-w-full flex-none flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 className="btn btn-primary btn-sm whitespace-normal"
                 type="button"
+                aria-describedby={prepareNoteId}
                 onClick={onPrepare}
                 disabled={prepareState === 'preparing' || !prepareAvailable}
               >
@@ -315,8 +318,6 @@ export function VacancyDetail({
                     ? 'Get ready to apply'
                     : 'Finishing scan…'}
               </button>
-              <div className="text-xs text-base-content/60">Builds a draft for you to review. Nothing is sent.</div>
-            </div>
             <button
               className="btn btn-outline btn-sm whitespace-normal"
               type="button"
@@ -342,16 +343,21 @@ export function VacancyDetail({
             </button>
             {isWebUrl(result.url) ? (
               <a
-                className="btn btn-outline btn-sm whitespace-normal"
+                className="btn btn-ghost btn-sm whitespace-normal"
                 href={result.url}
                 target="_blank"
                 rel="noopener noreferrer"
               >
                 Open posting
+                <ArrowSquareOut size={14} aria-hidden="true" />
               </a>
             ) : (
               <span className="badge badge-outline badge-sm">Link not available</span>
             )}
+            </div>
+            <p id={prepareNoteId} className="text-xs text-base-content/60">
+              Builds a draft for you to review. Nothing is sent.
+            </p>
           </div>
         </div>
 
@@ -368,6 +374,8 @@ export function VacancyDetail({
 
         <VerificationRow verification={result.verification} />
 
+        <div className="ovr-vacancy-body grid grid-cols-1 gap-x-8">
+        <div className="min-w-0">
         <div className="ovr-vacancy-summary-grid mt-3 grid grid-cols-1 gap-2.5">
           <FitSummary result={result} />
 
@@ -397,12 +405,7 @@ export function VacancyDetail({
             </p>
           ) : result.profileMatch ? (
             <div className="mt-3 space-y-4">
-              <p className="text-sm text-base-content/70">
-                <span className="font-semibold text-base-content">
-                  Profile fit: {result.profileScore} out of 100.
-                </span>{' '}
-                Based on what you are looking for.
-              </p>
+              <p className="text-sm font-semibold">Profile fit: {result.profileScore} out of 100.</p>
 
               {result.profileMatch.matchingSkills.length > 0 && (
                 <div>
@@ -442,7 +445,7 @@ export function VacancyDetail({
         <section className="mt-6">
           <SectionHeading>Job description</SectionHeading>
           {result.description ? (
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-base-content/70">
+            <p className="mt-3 max-w-prose whitespace-pre-wrap text-sm leading-relaxed text-base-content/70">
               {result.description}
             </p>
           ) : (
@@ -465,7 +468,9 @@ export function VacancyDetail({
             </div>
           )}
         </section>
+        </div>
 
+        <div className="ovr-vacancy-side min-w-0">
         <section className="mt-6">
           <SectionHeading>Overview</SectionHeading>
           <dl className="ovr-vacancy-overview mt-1 grid grid-cols-1 gap-x-8">
@@ -482,6 +487,8 @@ export function VacancyDetail({
         </section>
 
         <VerificationSection result={result} />
+        </div>
+        </div>
 
         {assistantOpen && (
           <section ref={assistantRef} className="mt-6 border-t border-base-300 pt-5">

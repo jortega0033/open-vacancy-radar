@@ -64,10 +64,15 @@ export interface AppSidebarProps {
   runtimeState: RuntimeState;
   /** The job search engine, shown beside the AI runtime so one cannot mask the other (#477). */
   engine?: EngineHealth;
+  /** Expanded width in pixels when the person resized it; the 236px default otherwise. */
+  width?: number;
 }
 
+/** The in-layout sidebar's id, for the resize handle's `aria-controls`. */
+export const MAIN_SIDEBAR_ID = 'ovr-main-sidebar';
+
 /**
- * The persistent left rail: 236px expanded, 64px collapsed.
+ * The persistent left rail: 236px expanded (resizable on wide windows), 64px collapsed.
  *
  * Collapsed is a real mode, not a visual trick. The labels are removed from the accessibility
  * tree along with the pixels, and each button keeps an `aria-label` plus a `title` so it is still
@@ -84,11 +89,14 @@ export function AppSidebar({
   runtimeLabel,
   runtimeState,
   engine = { state: 'checking' },
+  width,
 }: AppSidebarProps) {
   const toggleLabel = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  const resized = !collapsed && width !== undefined;
 
   return (
     <aside
+      {...(resized ? { id: MAIN_SIDEBAR_ID, style: { width } } : {})}
       className={`${collapsed ? 'ovr-sidebar-collapsed' : 'ovr-sidebar'} flex flex-none flex-col border-r border-base-300 bg-base-200`}
       aria-label="Main"
     >
