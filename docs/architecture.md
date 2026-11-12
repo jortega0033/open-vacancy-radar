@@ -10,8 +10,8 @@ links out rather than duplicating any of those.
 
 ```
 ┌─────────────────────────┐
-│   Renderer (React)        │   window.{agentDock,vacancyRadar,workspace,cv,system}.*: a fixed
-│                            │   set of narrow IPC bridges (see electron.md). Never receives
+│   Renderer (React)        │   window.{agentDock,vacancyRadar,workspace,...}.*: sixteen fixed,
+│                            │   narrow IPC bridges (see electron.md). Never receives
 │                            │   the daemon's token or base URL.
 └─────────────┬────────────┘
               │ Electron IPC (contextBridge, same machine, no network)
@@ -48,8 +48,15 @@ links out rather than duplicating any of those.
 ```
 packages/shared  ←  packages/agent-runtime  ←  apps/daemon
        ↑
-       └──────────  packages/client  ←  apps/desktop
+       └──────────  packages/client  ←  apps/desktop  →  packages/vacancy-engine
+                                                     →  packages/application-executor
 ```
+
+`packages/vacancy-engine` (the discovery pipeline, run in-process by Electron main against its own
+SQLite database) and `packages/application-executor` (CDP application-form primitives) are leaf
+packages with no workspace dependencies; only `apps/desktop` imports them. `apps/daemon` imports
+`packages/client` only from `src/live-smoke/`, the opt-in real-CLI smoke runner, never from the
+server itself.
 
 `packages/shared` sits underneath everything: it's the one place `ProviderId`, `ProviderStatus`,
 `ProviderCapabilities`, `AgentSession`, `AgentEvent`/`AgentEventEnvelope`, the protocol version, and
@@ -69,6 +76,8 @@ Nothing depends "sideways" or "up": `apps/daemon` never imports from `apps/deskt
 | Anything the daemon exposes to a caller (HTTP/SSE handling, error typing) | `packages/client` | `apps/desktop/electron/main.ts`: main should only ever call `AgentDockClient` methods, never hand-roll a daemon request |
 | Electron main-process logic, IPC handlers, the daemon sidecar lifecycle | `apps/desktop/electron/main.ts` | the renderer (see [electron.md](electron.md)) |
 | UI rendering, provider/session forms | `apps/desktop/src/` (renderer) | never a place that imports `@agent-dock/client` or touches the daemon's token |
+| A job source, ATS adapter, eligibility/relevance rule, or the discovery pipeline | `packages/vacancy-engine` | `apps/desktop/electron/`: main orchestrates scans (`vacancy-scan-*.ts`) but never re-implements engine rules |
+| Application-form field mapping, readiness, submit control, receipt detection | `packages/application-executor` | `apps/desktop/electron/`: main owns the review session and policy, not the CDP primitives |
 
 ## Trust boundaries
 
@@ -83,8 +92,9 @@ Three boundaries matter, in decreasing order of "who might be hostile":
    against the Zod schemas at the `ipcMain.handle` boundary (see [electron.md](electron.md)), and
    it structurally cannot reach the daemon's token or make an arbitrary daemon call: only the
    `agentDock` bridge talks to the daemon at all, and even it exposes only a fixed set of named
-   functions, never a generic passthrough. The preload script's four other, product-specific
-   bridges (`vacancyRadar`, `workspace`, `cv`, `system`) never touch the daemon or its client SDK.
+   functions, never a generic passthrough. The preload script's other fifteen bridges never hand
+   the renderer the daemon's client SDK, base URL, or token; see
+   [electron.md](electron.md#the-preload-bridge) for each one.
 3. **The daemon → the provider CLI.** The daemon trusts the CLI it spawns (it's the user's own,
    already-authenticated installation) but never trusts *what a request asked it to spawn*: the
    executable is always resolved internally via `findExecutable()`, never from request input, and

@@ -49,7 +49,7 @@ app-shell test verifies the effective bounds after a resize below the minimum.
 
 ## The preload bridge
 
-`electron/preload.ts` exposes seven separate `contextBridge` namespaces on `window`, each a fixed,
+`electron/preload.ts` exposes sixteen separate `contextBridge` namespaces on `window`, each a fixed,
 narrow set of functions: never a generic "invoke this channel with this payload" tunnel, and never
 the daemon's base URL or bearer token. `getDaemonStatus`/`onDaemonStatus` specifically reconstruct a
 clean status object from the IPC payload rather than passing it through once its shape looks
@@ -63,6 +63,7 @@ ride along even by mistake. Every namespace's exact allowlist is asserted agains
 ```ts
 interface AgentDockBridge {
   getDaemonStatus(): Promise<DaemonStatus>;
+  restartDaemon(): Promise<DaemonStatus>;
   onDaemonStatus(callback: (status: DaemonStatus) => void): () => void;
   listProviders(): Promise<ProviderStatus[]>;
   listMcpProviders(): Promise<McpConnectionStatus[]>;
@@ -76,17 +77,20 @@ interface AgentDockBridge {
 }
 ```
 
-The other six namespaces never go through `AgentDockClient`. Four are product-specific to Open
-Vacancy Radar and never touch the daemon at all; the other two (`workspaceGrant`, `agentWorkspace`)
-reach the daemon directly over loopback, but only from the main process:
+None of the other fifteen namespaces exposes `AgentDockClient` or any daemon detail to the
+renderer. The first six below are the core ones; `workspaceGrant` and `agentWorkspace` reach the
+daemon over loopback, but only from the main process:
 
-- **`window.vacancyRadar`** (`VacancyRadarBridge`) — `getStatus`, `getReport`, `runScan`,
-  `getSearchProfile`, `saveSearchProfile`: reads and triggers scans against the vendored
-  `vacancy-engine` package's worldwide/remote pipeline and its own SQLite database.
-- **`window.workspace`** (`WorkspaceBridge`, defined in `electron/workspace/types.ts`) — CRUD over
-  the workspace SQLite database's saved jobs, applications, CV documents, and letters (21 methods:
-  `getSettings`, `updateSettings`, `getCounts`, `list/create/update/delete` for each of the four
-  record types, plus `setDefaultCvDocument` and `duplicateLetter`).
+- **`window.vacancyRadar`** (`VacancyRadarBridge`) — scans (`runScan`, `getScanStatus`,
+  `getScanProgress`, `cancelScan`, `onScanProgress`), reports (`getStatus`, `getReport`,
+  `getReportSummary`, `rebuildCache`), the search profile and search plan (`get`/`save`/`reset`,
+  suggestions), and the ATS roster and source-scout controls. It runs the vendored
+  `vacancy-engine` package's worldwide/remote pipeline in-process against its own SQLite database.
+- **`window.workspace`** (`WorkspaceBridge`, defined in `electron/workspace/types.ts`) — the
+  workspace SQLite database: settings, counts and data reset; CRUD for saved jobs, applications,
+  CV documents, letters and saved application answers; CV evidence overlays, tailoring proposals and
+  CV artifact review/export; MCP client grants; application attempts and artifacts; and automation
+  grants. The exact method list is asserted in `test/preload.test.ts`.
 - **`window.cv`** (`CvBridge`) — `selectAndRead`, `getWorkspaceDir`: the native file-picker/read path
   for importing a CV, kept separate from `workspace` because it touches the OS file-picker dialog
   rather than the database.
@@ -102,15 +106,43 @@ reach the daemon directly over loopback, but only from the main process:
   43-character handle plus a bounded folder basename — and there is no `trust()` verb, because no
   daemon route would accept one (see [daemon.md](daemon.md#workspace-trust-routes)).
 - **`window.agentWorkspace`** (`AgentWorkspaceBridge`, ADI-07) — `listSessions`, `getSession`,
-  `getSessionEvents`, `attachActivity`, `detachActivity` (five `guardedIpc.handle` channels), plus
+  `getSessionEvents`, `searchSessions`, `getAttachment`, `attachActivity`, `detachActivity` (seven
+  `guardedIpc.handle` channels), plus
   `onActivity` (a local listener over the one-way `agent-workspace:activity` push channel main sends
   on, not an `invoke`). Read-only views over the daemon's v2 sessions for the AI Workspace page:
   every response is rebuilt field by field from a bounded, sanitized shape rather than passed
   through, so it carries no filesystem path and no daemon-authored text. See the doc comment at the
-  top of `electron/agent-workspace-ipc.ts` for the no-location rule all six functions keep.
+  top of `electron/agent-workspace-ipc.ts` for the no-location rule all of its functions keep.
 
-Each function maps to one `guardedIpc.handle(...)` registered directly in `main.ts`, except
-`agentWorkspace`'s five, which `main.ts` registers by handing `guardedIpc` to
+The application-workflow namespaces each match one feature module in `electron/` (types in the
+named file):
+
+- **`window.applicationQueue`** (`application-queue-types.ts`) — `enqueue`, `pause`, `resume`,
+  `skip`, `cancel`, `getStatus`, `onActivity`: the application queue the daemon holds.
+- **`window.applicationExecutor`** (`application-executor-types.ts`) — the review-mode form session:
+  `openReview`, `applyFieldMap`, `confirmApplicationAnswer`, `submitReview`, `closeReview`, the
+  visible handoff, target-policy resolution, automation grants and scheduled submission,
+  user-reported submissions, and artifact save/open.
+- **`window.applicationPipeline`** (`application-pipeline-types.ts`) — the Search→Apply checkpoint
+  pipeline: `start`, `startFromVacancy`, `resume`, tailoring retry or original CV, posting
+  verification and liveness, `attachLetter`, `onOpenAttempt`.
+- **`window.blindApply`** (`blind-apply-types.ts`) — `status`, `enable`, `stop`, `feed`,
+  `evidence`, `answer`, `open`.
+- **`window.companyEvidence`** (`company-evidence.ts`) — company facts with confirm, correct and
+  withdraw, contradiction and link decisions, `refresh`, and `research`/`cancel`.
+- **`window.applicationBrief`** (`application-brief.ts`) — `get`, `prepareAssessment`,
+  `commitAssessment`, `correctPreference`.
+- **`window.applicationCritique`** (`application-critique-types.ts`) — `get`, `run`, `cancel`,
+  `reject`, `accept`.
+- **`window.interviewContext`** (`interview-context-types.ts`) — `get`, `stateDocuments`,
+  `saveRound`, `deleteRound`.
+- **`window.applicationActions`** (`application-actions-types.ts`) — follow-up actions (`create`,
+  `update`, `reschedule`, `complete`, `dismiss`, `setSuppressed`) and their drafts (`generate`,
+  `cancel`, `edit`, `approve`, `discard`, `reportDraftSent`).
+
+Most of these keep their Zod input schemas and handler bodies in a sibling `<feature>-ipc.ts` as
+plain functions, which `main.ts` registers. Each function maps to one `guardedIpc.handle(...)`
+registered in `main.ts`, except `agentWorkspace`'s seven, which `main.ts` registers by handing `guardedIpc` to
 `registerAgentWorkspaceHandlers` in its own module, `electron/agent-workspace-ipc.ts` (ADI-07's
 registrar-parameter pattern, so that feature's whole IPC surface is one call to roll back rather
 than fifty handler bodies tangled through `main.ts`). `guardedIpc` is `ipcMain` wrapped by

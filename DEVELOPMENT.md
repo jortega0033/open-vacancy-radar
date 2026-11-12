@@ -26,16 +26,22 @@ If both pass on a clean checkout, your environment is set up correctly.
 
 ```
 apps/
-  desktop/        Electron + React demo client (secure defaults, no provider-specific logic)
+  desktop/        Open Vacancy Radar Electron + React app (secure defaults, no provider-specific logic)
   daemon/         Standalone local Node.js service (Fastify), runnable without Electron
+  landing/        Static marketing page served by Firebase Hosting (see AGENTS.md before deploying)
 packages/
   agent-runtime/  Provider-neutral runtime: process management, adapters, normalized events
   client/         @agent-dock/client: typed daemon SDK (HTTP+SSE, auth, protocol version check)
   shared/         Types, Zod schemas, and the protocol v1 AgentEvent contract everything else uses
+  vacancy-engine/ Worldwide/remote job discovery pipeline with its own SQLite DB and CLI
+  application-executor/  CDP application-form primitives (field map, readiness, submit, receipt)
 ```
 
+For a file-level index of each area and the `electron/` feature-module convention, see
+[docs/repo-map.md](docs/repo-map.md).
+
 Dependencies only flow one direction: `shared ← agent-runtime ← daemon`, and separately
-`shared ← client ← desktop`. See [docs/architecture.md#dependency-graph](docs/architecture.md#dependency-graph)
+`shared ← client ← desktop → {vacancy-engine, application-executor}`. See [docs/architecture.md#dependency-graph](docs/architecture.md#dependency-graph)
 for the full picture and a "what belongs where" table.
 
 ## "I want to change X": where to start
