@@ -67,6 +67,8 @@ type DimensionAssessment = {
 const CONCEPTS: readonly ConceptDefinition[] = [
   { label: 'Angular', kind: 'core', pattern: /\bangular(?:\s+\d+)?\b/i },
   { label: 'React', kind: 'core', pattern: /\breact(?:\.js|js|\s+native)?\b/i },
+  { label: 'Vue', kind: 'core', pattern: /\bvue(?:\.js|js)?\b|\bnuxt(?:\.js|js)?\b/i },
+  { label: 'Svelte', kind: 'core', pattern: /\bsvelte(?:kit)?\b/i },
   { label: 'TypeScript', kind: 'core', pattern: /\btypescript\b/i },
   { label: 'JavaScript', kind: 'core', pattern: /\bjavascript\b/i },
   { label: 'RxJS', kind: 'core', pattern: /\brxjs\b/i },
@@ -323,7 +325,7 @@ function classifyPrimaryRole(
   if (/\b(?:product manager|product owner|project manager|program manager|scrum master)\b/.test(title)) {
     return assessment('management', 5, 'Product/project management', 'The title is a management role rather than hands-on frontend engineering.');
   }
-  if (/\b(?:qa|quality assurance|sdet|test automation|automation test|test engineer)\b/.test(title)) {
+  if (/\b(?:qa|quality assurance|sdet|test automation|automation test|test engineer|engineer in test)\b/.test(title)) {
     return assessment('quality-assurance', 5, 'QA / test automation', 'The title makes quality assurance or test automation the primary role family.');
   }
   if (/\b(?:data engineer|data scientist|machine learning|ml engineer|ai researcher|analytics engineer)\b/.test(title)) {
@@ -366,7 +368,7 @@ function classifyPrimaryRole(
     return assessment('backend', 5, 'Backend engineering', 'The title makes backend technology or backend engineering primary.');
   }
   if (
-    /\b(?:front[ -]?end|angular|react|ui engineer|web platform|design systems? engineer|typescript frontend)\b/.test(title)
+    /\b(?:front[ -]?end|angular|react|vue(?:\.js|js)?|nuxt(?:\.js|js)?|svelte(?:kit)?|ui engineer|web platform|design systems? engineer|typescript frontend)\b/.test(title)
   ) {
     return assessment('frontend', 96, 'Frontend / UI engineering', 'The title directly identifies a target frontend role family.');
   }

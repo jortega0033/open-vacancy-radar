@@ -12,7 +12,7 @@ import type {
 
 const FRONTEND_ROLE = /\b(?:front[\s-]?end|angular)\b.*\b(?:engineer|developer|architect)\b|\b(?:engineer|developer|architect)\b.*\b(?:front[\s-]?end|angular)\b/iu;
 const UI_ROLE = /\bui\s+(?:software\s+)?(?:engineer|developer)\b/iu;
-const ROLE_EXCLUSIONS = /\b(?:full[\s-]?stack|back[\s-]?end|manager|director|head|vp|vice president|mobile|android|ios|qa|quality assurance|compiler|salesforce)\b/iu;
+const ROLE_EXCLUSIONS = /\b(?:full[\s-]?stack|back[\s-]?end|manager|director|head|vp|vice president|mobile|android|ios|qa|quality assurance|engineer in test|compiler|salesforce)\b/iu;
 const ELIGIBLE_LOCATION = /\b(?:worldwide|anywhere|global|europe|emea|netherlands|european union|eu(?: residents?)?|all countries)\b/iu;
 const NON_VACANCY = /\b(?:talent (?:network|community|pool)|general application|future opportunities|expression of interest)\b|not an application for (?:a|this) specific job/iu;
 
