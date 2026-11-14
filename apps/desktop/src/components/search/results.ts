@@ -10,6 +10,10 @@ import {
   type SalaryFilterCriteria,
 } from '@open-vacancy-radar/vacancy-engine/salary';
 import {
+  createExcludedCompanyMatcher,
+  type ExcludedCompany,
+} from '@open-vacancy-radar/vacancy-engine/excluded-companies';
+import {
   detectWorkArrangement,
   isOnsiteOrHybrid,
   type WorkArrangementDetection,
@@ -440,6 +444,12 @@ export interface SearchFilters {
   salaryMinimum: string;
   salaryCurrency: string;
   includeUnknownSalary: boolean;
+  /**
+   * #736: show rows from companies the person excluded in Settings > Search profile, greyed out. Off
+   * by default and session-only like every other refinement here; the exclusion list itself lives in
+   * the profile, not in the filters.
+   */
+  showExcludedCompanies: boolean;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -454,6 +464,7 @@ export const DEFAULT_FILTERS: SearchFilters = {
   salaryMinimum: '',
   salaryCurrency: 'EUR',
   includeUnknownSalary: true,
+  showExcludedCompanies: false,
 };
 
 /** The backend `browse_all` request carries none of the scan-bound criteria (`query`, `country`,
@@ -601,11 +612,18 @@ export interface SearchResultIndexEntry {
   countries: string[];
   employmentTypes: string[];
   postedAtMs: number | null;
+  /** #736: the row's company is on the person's excluded list (by name or by domain alias). */
+  excludedCompany: boolean;
 }
 
-export function buildSearchResultIndex(results: SearchResult[]): SearchResultIndexEntry[] {
+export function buildSearchResultIndex(
+  results: SearchResult[],
+  excludedCompanies: readonly ExcludedCompany[] = [],
+): SearchResultIndexEntry[] {
+  const excluded = createExcludedCompanyMatcher(excludedCompanies);
   return results.map((result) => ({
     result,
+    excludedCompany: excluded({ company: result.company, urls: [result.url, result.raw.applyUrl?.url] }) !== null,
     titleLower: result.title.toLowerCase(),
     companyLower: result.company.toLowerCase(),
     locationLower: (result.location ?? '').toLowerCase(),
@@ -625,8 +643,14 @@ export function filterResults(
   results: SearchResult[],
   filters: SearchFilters,
   now: Date = new Date(),
+  excludedCompanies: readonly ExcludedCompany[] = [],
 ): SearchResult[] {
-  return filterSearchResultIndex(buildSearchResultIndex(results), filters, now).map((entry) => entry.result);
+  return filterSearchResultIndex(buildSearchResultIndex(results, excludedCompanies), filters, now).map((entry) => entry.result);
+}
+
+/** The keys of every indexed row whose company is excluded (#736), for the list and detail pane to mark. */
+export function excludedResultKeys(index: readonly SearchResultIndexEntry[]): Set<string> {
+  return new Set(index.filter((entry) => entry.excludedCompany).map((entry) => entry.result.key));
 }
 
 export function filterSearchResultIndex(
@@ -641,6 +665,9 @@ export function filterSearchResultIndex(
   const salary = salaryCriteriaFromFilters(filters);
 
   return index.filter((entry) => {
+    // #736: hidden by default; the toggle shows them greyed out rather than removing the exclusion.
+    if (entry.excludedCompany && !filters.showExcludedCompanies) return false;
+
     if (hasAnyQuery(queries) && bestQueryMatchTier(entry, queries) === 0) return false;
 
     if (location && !entry.locationLower.includes(location)) return false;

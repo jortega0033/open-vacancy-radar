@@ -174,6 +174,22 @@ export {
   type CandidateProfile,
   type ProfileFieldSource,
 } from './candidate/profile.js';
+export {
+  EXCLUDED_COMPANY_LIMITS,
+  LEGAL_FORM_TOKENS,
+  createExcludedCompanyMatcher,
+  findExcludedCompany,
+  normalizeCompanyName,
+  normalizeDomainAlias,
+  domainAliasProblem,
+  ATS_APEX_HOSTS,
+  JOB_SITE_HOSTS,
+  SHARED_POD_APEXES,
+  SHARED_TENANT_HOSTS,
+  type ExcludableVacancy,
+  type ExcludedCompany,
+  type ExcludedCompanyMatcher,
+} from './companies/excluded-companies.js';
 
 /**
  * The ATS-roster import step (issue #251/#264): re-runnable on a deliberate refresh cadence, never

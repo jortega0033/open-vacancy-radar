@@ -24,6 +24,8 @@ export interface SearchResultRowProps {
   scanActive?: boolean;
   /** What is known about whether this posting is open (#720). Absent = "Not checked yet". */
   liveness?: PostingLivenessView;
+  /** #736: the company is on the person's excluded list. Shown greyed out with a text chip, never a score. */
+  excluded?: boolean;
 }
 
 /** Chip for a detected on-site or hybrid hint. Remote and unknown get none, to keep rows quiet. */
@@ -41,6 +43,7 @@ export const SearchResultRow = memo(function SearchResultRow({
   saved,
   scanActive = false,
   liveness,
+  excluded = false,
 }: SearchResultRowProps) {
   const stale = isStalePosting(result.postedAt);
   // #720: no fit score without a plain liveness state beside it. A row with no score shows the state
@@ -67,6 +70,8 @@ export const SearchResultRow = memo(function SearchResultRow({
   // already has an accurate home, unchanged, in the detail pane's Overview section ("Discovery
   // decision" -- see `VacancyDetail.tsx`).
   const badges = [
+    // #736: an excluded row says so in words, in place of the fit score; dimming alone is not a signal.
+    excluded ? { text: 'Excluded company', tone: null } : null,
     // Always first: a provisional row (issue #364's live view) must never read as an ordinary,
     // fully-final result -- it has no score and no official-source cross-reference yet. Only while a
     // scan is actually running: the badge claims the row is still arriving (issue #464).
@@ -82,10 +87,11 @@ export const SearchResultRow = memo(function SearchResultRow({
       type="button"
       aria-current={selected}
       data-result-key={result.key}
+      {...(excluded ? { 'data-excluded-company': '' } : {})}
       onClick={() => onSelect(result)}
       className={`ovr-row flex w-full gap-2.5 border-b border-base-300 px-4 text-left short:[--ovr-row-padding:0.4375rem] ${
         selected ? 'ovr-row-selected' : 'hover:bg-base-200'
-      }`}
+      }${excluded ? ' opacity-60' : ''}`}
     >
       <div className="avatar avatar-placeholder flex-none pt-0.5" aria-hidden="true">
         <div className="w-8 rounded-full bg-neutral text-neutral-content">
@@ -113,7 +119,7 @@ export const SearchResultRow = memo(function SearchResultRow({
 
         {(result.profileScore != null || showLiveness || badges.length > 0) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1 short:mt-1 short:flex-nowrap short:overflow-hidden">
-          {result.profileScore != null && (
+          {result.profileScore != null && !excluded && (
             <span
               className="badge badge-xs badge-soft badge-primary flex-none whitespace-nowrap font-mono"
               title="Deterministic score against what you are looking for. It does not compare this vacancy to a CV."
@@ -155,6 +161,8 @@ export interface SearchResultListProps {
   savedKeys: ReadonlySet<string>;
   /** What is known about each result's posting (#720), by result key. */
   liveness?: ReadonlyMap<string, PostingLivenessView>;
+  /** #736: keys of rows whose company the person excluded; shown only while the toggle is on. */
+  excludedKeys?: ReadonlySet<string>;
   summary: string;
   /** Whether a scan is running right now; passed through to each row's "Live" badge. */
   scanActive?: boolean;
@@ -184,6 +192,7 @@ export const SearchResultList = memo(function SearchResultList({
   onSelect,
   savedKeys,
   liveness,
+  excludedKeys,
   summary,
   scanActive = false,
   checkedCount,
@@ -251,6 +260,7 @@ export const SearchResultList = memo(function SearchResultList({
                 saved={savedKeys.has(result.key)}
                 scanActive={scanActive}
                 liveness={livenessFor(result.key, liveness)}
+                excluded={excludedKeys?.has(result.key) ?? false}
               />
             </Fragment>
           ))

@@ -15,6 +15,51 @@ describe('vacancy profile input validation', () => {
     expect(parsed).not.toHaveProperty('profileVersion');
   });
 
+  it('parses excluded companies (#736): trimmed names, optional domains, bounded, and never passes extra keys', () => {
+    expect(
+      parseCandidateProfilePatch({
+        excludedCompanies: [
+          { name: '  Acme, Inc. ', domains: [' acme.com ', ''] },
+          { name: 'Northwind', extra: 'dropped' },
+        ],
+      }),
+    ).toEqual({
+      excludedCompanies: [
+        { name: 'Acme, Inc.', domains: ['acme.com'] },
+        { name: 'Northwind', domains: [] },
+      ],
+    });
+    expect(parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: ['https://www.Acme.com/'] }] })).toEqual({
+      excludedCompanies: [{ name: 'Acme', domains: ['acme.com'] }],
+    });
+    expect(parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: ['acme.com', 'www.acme.com', 'https://acme.com/careers'] }] })).toEqual({
+      excludedCompanies: [{ name: 'Acme', domains: ['acme.com'] }],
+    });
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: ['jobs.lever.co/acme'] }] })).toThrow('shared by many companies');
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: ['boards.greenhouse.io'] }] })).toThrow('job board');
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: ['co.uk'] }] })).toThrow('public suffix');
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: ['acme'] }] })).toThrow('must be a domain');
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: 'Acme' })).toThrow('must be an array');
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: [{ name: '   ' }] })).toThrow('must not be empty');
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: [{ name: 1 }] })).toThrow('must be a string');
+    expect(() => parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: 'acme.com' }] })).toThrow('must be an array');
+    expect(() =>
+      parseCandidateProfilePatch({ excludedCompanies: [{ name: 'Acme', domains: ['a.com', 'b.com', 'c.com', 'd.com', 'e.com', 'f.com'] }] }),
+    ).toThrow('at most 5');
+    expect(() =>
+      parseCandidateProfilePatch({ excludedCompanies: Array.from({ length: 51 }, (_, i) => ({ name: `Company ${i}` })) }),
+    ).toThrow('at most 50');
+    const secret = 'super-secret-value-'.repeat(20);
+    let message = '';
+    try {
+      parseCandidateProfilePatch({ excludedCompanies: [{ name: secret }] });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('at most');
+    expect(message).not.toContain('super-secret');
+  });
+
   it('accepts an empty patch', () => {
     expect(parseCandidateProfilePatch({})).toEqual({});
   });

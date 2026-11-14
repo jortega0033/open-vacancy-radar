@@ -1,3 +1,4 @@
+import type { ExcludedCompany } from '@open-vacancy-radar/vacancy-engine/excluded-companies';
 import type { BlindApplyCandidate, BlindApplyCurrentFacts } from './blind-apply-eligibility.js';
 import {
   BLIND_APPLY_STATE_LABELS,
@@ -57,6 +58,7 @@ export function candidateFromAuditRow(row: BlindApplyAuditRow): BlindApplyCandid
     company: row.company,
     role: row.title,
     applyUrl: verified ? (row.applyUrl!.url as string) : row.url,
+    listingUrl: row.url,
     family: row.profileMatch?.primaryFit === FRONTEND_PRIMARY_FIT ? 'frontend' : null,
     filters,
     linkStatus: verified ? 'verified' : row.applyUrl ? 'unverified' : 'unknown',
@@ -72,6 +74,24 @@ export interface BlindApplyProfileFilters {
   professionalLanguage: string;
   minimumMonthlyBaseEur: number;
   dutchRequired: boolean;
+  /** #736: the person's excluded companies at confirmation time. */
+  excludedCompanies: ExcludedCompany[];
+}
+
+/**
+ * The excluded companies a stored authorization was confirmed with (#736), read back from its JSON
+ * snapshot. Tolerant of a snapshot written before the field existed, and of anything that is not an
+ * entry: the snapshot is this app's own write, but a defensive read costs nothing.
+ */
+export function excludedCompaniesFromSnapshot(snapshot: Record<string, unknown>): ExcludedCompany[] {
+  const raw = snapshot.excludedCompanies;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): ExcludedCompany[] => {
+    if (typeof entry !== 'object' || entry === null) return [];
+    const { name, domains } = entry as { name?: unknown; domains?: unknown };
+    if (typeof name !== 'string' || name.trim() === '') return [];
+    return [{ name, domains: Array.isArray(domains) ? domains.filter((domain): domain is string => typeof domain === 'string') : [] }];
+  });
 }
 
 /** One plain line per filter that is actually set. An unset filter is not invented into a line. */
@@ -79,6 +99,9 @@ export function blindFilterLines(filters: Partial<BlindApplyProfileFilters>): st
   const lines: string[] = [];
   if (filters.targetRoles && filters.targetRoles.length > 0) lines.push(`Target roles: ${filters.targetRoles.join(', ')}`);
   if (filters.excludedRoleFamilies && filters.excludedRoleFamilies.length > 0) lines.push(`Excluded: ${filters.excludedRoleFamilies.join(', ')}`);
+  if (filters.excludedCompanies && filters.excludedCompanies.length > 0) {
+    lines.push(`Excluded companies: ${filters.excludedCompanies.map((company) => company.name).join(', ')}`);
+  }
   if (filters.primaryCountry) lines.push(`Work country: ${filters.primaryCountry}`);
   if (filters.location) lines.push(`Based in: ${filters.location}`);
   if (filters.professionalLanguage) lines.push(`Working language: ${filters.professionalLanguage}`);

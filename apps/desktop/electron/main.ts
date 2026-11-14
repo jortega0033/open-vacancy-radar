@@ -3439,6 +3439,7 @@ guardedIpc.handle('blind-apply:enable', async () => {
     professionalLanguage: profile?.constraints.professionalLanguage ?? '',
     minimumMonthlyBaseEur: profile?.constraints.minimumMonthlyBaseEur ?? 0,
     dutchRequired: profile?.constraints.dutchRequired ?? false,
+    excludedCompanies: profile?.excludedCompanies ?? [],
   };
   const targets = listBlindSubmissionTargets();
   const result = await requestBlindApplyAuthorization(
@@ -3755,6 +3756,7 @@ guardedIpc.handle('workspace:data:reset', async () => {
           targetRoles: [],
           consideredRoles: [],
           excludedRoleFamilies: [],
+          excludedCompanies: [],
           constraints: {
             professionalLanguage: 'English',
             dutchRequired: false,

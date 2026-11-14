@@ -19,7 +19,7 @@ interface FilterChip {
 }
 
 /** The secondary filters that are currently narrowing the list. All default to off. */
-function activeFilterChips(filters: SearchFilters): FilterChip[] {
+function activeFilterChips(filters: SearchFilters, excludedCompanyCount: number): FilterChip[] {
   const chips: FilterChip[] = [];
   if (filters.postedWithin !== 'any') {
     chips.push({
@@ -47,6 +47,9 @@ function activeFilterChips(filters: SearchFilters): FilterChip[] {
   }
   if (filters.sponsorOnly) {
     chips.push({ key: 'sponsor', label: 'IND sponsor match', reset: { sponsorOnly: false } });
+  }
+  if (filters.showExcludedCompanies && excludedCompanyCount > 0) {
+    chips.push({ key: 'excluded', label: 'Excluded companies shown', reset: { showExcludedCompanies: false } });
   }
   return chips;
 }
@@ -98,6 +101,11 @@ export interface SearchFilterBarProps {
   searchPlanTitles?: readonly string[];
   useSearchPlan?: boolean;
   onUseSearchPlanChange?: (value: boolean) => void;
+  /**
+   * #736: how many companies the person excluded in Settings > Search profile. The "show excluded
+   * companies" toggle appears only when there is at least one, so an empty list leaves the panel as is.
+   */
+  excludedCompanyCount?: number;
 }
 
 /**
@@ -130,6 +138,7 @@ export function SearchFilterBar({
   searchPlanTitles = [],
   useSearchPlan = false,
   onUseSearchPlanChange,
+  excludedCompanyCount = 0,
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
   const draftQuery = filters.query.trim();
@@ -147,7 +156,7 @@ export function SearchFilterBar({
   const filtersWrapRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const aiWebHelpId = useId();
-  const chips = activeFilterChips(filters);
+  const chips = activeFilterChips(filters, excludedCompanyCount);
 
   const closeFilters = useCallback((returnFocus: boolean) => {
     setFiltersOpen(false);
@@ -331,6 +340,19 @@ export function SearchFilterBar({
                   />
                   Hide on-site and hybrid
                 </label>
+
+                {excludedCompanyCount > 0 && (
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
+                    <input
+                      className="checkbox checkbox-sm"
+                      type="checkbox"
+                      aria-label="Show excluded companies"
+                      checked={filters.showExcludedCompanies ?? false}
+                      onChange={(event) => onFiltersChange({ showExcludedCompanies: event.target.checked })}
+                    />
+                    Show excluded companies
+                  </label>
+                )}
 
                 {/* The engine only ever attempts this check for a Netherlands-located vacancy (see
                     `worldwideSponsorMatch`'s own gate), so the filter is meaningless -- and would just

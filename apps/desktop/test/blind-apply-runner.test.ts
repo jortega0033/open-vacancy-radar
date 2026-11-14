@@ -73,7 +73,7 @@ interface Harness {
   prepare(itemId: string): void;
 }
 
-function harness(overrides: { minIntervalMs?: number } = {}): Harness {
+function harness(overrides: { minIntervalMs?: number; excludedCompanies?: Array<{ name: string; domains: string[] }> } = {}): Harness {
   const clock = { now: new Date('2026-11-04T10:00:00Z') };
   const facts = { cvContentHash: 'cv-1', profileVersion: 'p1' };
   const candidates: BlindApplyCandidate[] = [];
@@ -84,7 +84,7 @@ function harness(overrides: { minIntervalMs?: number } = {}): Harness {
 
   const authorization = store.createBlindApplyAuthorization(db, {
     roleFamilies: ['frontend'],
-    filtersSnapshot: { country: 'PT' },
+    filtersSnapshot: { country: 'PT', ...(overrides.excludedCompanies ? { excludedCompanies: overrides.excludedCompanies } : {}) },
     filtersHash: 'fh',
     profileVersion: 'p1',
     sourceCvId: null,
@@ -262,6 +262,26 @@ describe('postings that must cost nothing', () => {
     expect(itemFor(h, 'vac-1')).toMatchObject({ state: 'skipped', skipReason: 'closed' });
     expect(h.spies.start).not.toHaveBeenCalled();
     expect(h.spies.tailoring).not.toHaveBeenCalled();
+    expect(h.spies.submit).not.toHaveBeenCalled();
+  });
+
+  it('an excluded company (#736) is skipped with zero liveness checks, zero preparation, zero tailoring and zero sends', async () => {
+    const h = harness({ excludedCompanies: [{ name: 'Company 1 B.V.', domains: [] }, { name: 'Northwind', domains: ['northwind.example'] }] });
+    h.candidates.push(
+      candidate(1), // excluded by name: "Company 1" vs "Company 1 B.V."
+      candidate(2, { company: 'Fine Co' }), // not excluded: the control
+      candidate(3, { company: 'Also fine', listingUrl: 'https://jobs.northwind.example/3' }), // excluded by domain alias
+    );
+    await h.runner.tick();
+    expect(itemFor(h, 'vac-1')).toMatchObject({ state: 'skipped', skipReason: 'excluded_company', stateDetail: 'You excluded Company 1 B.V. in Settings > Search profile' });
+    expect(itemFor(h, 'vac-3')).toMatchObject({ state: 'skipped', skipReason: 'excluded_company' });
+    expect(itemFor(h, 'vac-2').state).not.toBe('skipped');
+    // Only the control reached any later port.
+    expect(h.spies.checkLiveness).toHaveBeenCalledTimes(1);
+    expect(h.spies.checkLiveness.mock.calls[0]![0]).toMatchObject({ vacancyKey: 'vac-2' });
+    expect(h.spies.start).toHaveBeenCalledTimes(1);
+    expect(h.spies.start.mock.calls[0]![0]).toMatchObject({ vacancy: { company: 'Fine Co' } });
+    expect(h.spies.tailoring).toHaveBeenCalledTimes(1);
     expect(h.spies.submit).not.toHaveBeenCalled();
   });
 

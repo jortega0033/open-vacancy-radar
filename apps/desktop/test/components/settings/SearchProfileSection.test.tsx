@@ -144,6 +144,104 @@ describe('SearchProfileSection', () => {
     );
   });
 
+  it('adds an excluded company (#736), saving name and domains as one list with no field source', async () => {
+    const saveSearchProfile = vi
+      .fn()
+      .mockResolvedValueOnce(configuredProfile({ excludedCompanies: [{ name: 'Acme, Inc.', domains: [] }] }))
+      .mockResolvedValueOnce(configuredProfile({ excludedCompanies: [{ name: 'Acme, Inc.', domains: ['acme.com', 'acme.nl'] }] }));
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
+      saveSearchProfile,
+    });
+
+    render(<SearchProfileSection {...baseProps()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add company' }));
+    const name = screen.getByLabelText('Excluded company 1 name');
+    fireEvent.change(name, { target: { value: 'Acme, Inc.' } });
+    fireEvent.blur(name);
+    await waitFor(() => expect(saveSearchProfile).toHaveBeenCalledWith({ excludedCompanies: [{ name: 'Acme, Inc.', domains: [] }] }));
+
+    const domains = screen.getByLabelText('Excluded company 1 domains');
+    fireEvent.change(domains, { target: { value: 'acme.com, acme.nl' } });
+    fireEvent.blur(domains);
+    await waitFor(() =>
+      expect(saveSearchProfile).toHaveBeenLastCalledWith({ excludedCompanies: [{ name: 'Acme, Inc.', domains: ['acme.com', 'acme.nl'] }] }),
+    );
+    // A comma in the name survives the round trip: it is not a comma-separated list field.
+    expect((await screen.findByLabelText('Excluded company 1 name')).getAttribute('value')).toBe('Acme, Inc.');
+  });
+
+  it('removes an excluded company immediately, and does not save an empty row', async () => {
+    const saveSearchProfile = vi.fn().mockResolvedValue(configuredProfile({ excludedCompanies: [] }));
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile({ excludedCompanies: [{ name: 'Northwind', domains: [] }] })),
+      saveSearchProfile,
+    });
+
+    render(<SearchProfileSection {...baseProps()} />);
+    expect((await screen.findByLabelText('Excluded company 1 name')).getAttribute('value')).toBe('Northwind');
+    fireEvent.click(screen.getByRole('button', { name: 'Add company' }));
+    fireEvent.blur(screen.getByLabelText('Excluded company 2 name'));
+    expect(saveSearchProfile).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove excluded company 1' }));
+    await waitFor(() => expect(saveSearchProfile).toHaveBeenCalledWith({ excludedCompanies: [] }));
+  });
+
+  it('shows the normalised domain once saved, and a later blur does not save again (review N1)', async () => {
+    const saveSearchProfile = vi.fn().mockResolvedValue(configuredProfile({ excludedCompanies: [{ name: 'Acme', domains: ['acme.com'] }] }));
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile({ excludedCompanies: [{ name: 'Acme', domains: [] }] })),
+      saveSearchProfile,
+    });
+
+    render(<SearchProfileSection {...baseProps()} />);
+    const domains = await screen.findByLabelText('Excluded company 1 domains');
+    fireEvent.change(domains, { target: { value: 'https://www.Acme.com/' } });
+    fireEvent.blur(domains);
+    await waitFor(() => expect(screen.getByLabelText('Excluded company 1 domains').getAttribute('value')).toBe('acme.com'));
+    expect(saveSearchProfile).toHaveBeenCalledTimes(1);
+
+    fireEvent.blur(screen.getByLabelText('Excluded company 1 name'));
+    fireEvent.blur(screen.getByLabelText('Excluded company 1 domains'));
+    expect(saveSearchProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a company row added while another field's save is in flight (review N2)", async () => {
+    let resolveSave: (profile: CandidateProfile) => void = () => {};
+    const saveSearchProfile = vi.fn(() => new Promise<CandidateProfile>((resolve) => (resolveSave = resolve)));
+    installVacancyRadarBridge({ getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()), saveSearchProfile });
+    const onSaved = vi.fn();
+
+    render(<SearchProfileSection {...baseProps({ onSaved })} />);
+    const targetRoles = await screen.findByLabelText('Target roles');
+    fireEvent.change(targetRoles, { target: { value: 'Frontend, Backend' } });
+    fireEvent.blur(targetRoles);
+    fireEvent.click(screen.getByRole('button', { name: 'Add company' }));
+    fireEvent.change(screen.getByLabelText('Excluded company 1 name'), { target: { value: 'Northw' } });
+
+    resolveSave(configuredProfile({ targetRoles: ['Frontend', 'Backend'] }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(screen.getByLabelText('Target roles')).toHaveValue('Frontend, Backend');
+    expect(screen.getByLabelText('Excluded company 1 name').getAttribute('value')).toBe('Northw');
+  });
+
+  it('keeps a refused domain on screen so it can be corrected (review N2)', async () => {
+    const onSaveError = vi.fn();
+    const saveSearchProfile = vi.fn().mockRejectedValue(new Error('"excludedCompanies[0].domains[0]" is a job board or ATS address'));
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile({ excludedCompanies: [{ name: 'Acme', domains: [] }] })),
+      saveSearchProfile,
+    });
+
+    render(<SearchProfileSection {...baseProps({ onSaveError })} />);
+    const domains = await screen.findByLabelText('Excluded company 1 domains');
+    fireEvent.change(domains, { target: { value: 'boards.greenhouse.io' } });
+    fireEvent.blur(domains);
+    await waitFor(() => expect(onSaveError).toHaveBeenCalled());
+    expect(screen.getByLabelText('Excluded company 1 domains').getAttribute('value')).toBe('boards.greenhouse.io');
+  });
+
   it('shows a load error instead of the form when the profile fails to load', async () => {
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockRejectedValue(new Error('disk read failed')),

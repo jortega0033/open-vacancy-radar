@@ -240,6 +240,8 @@ export interface VacancyDetailProps {
    * which is recorded with its time.
    */
   onPrepareAnyway?: () => void;
+  /** #736: the company is on the person's excluded list. Stated plainly; Apply stays their own choice. */
+  excludedCompany?: boolean;
 }
 
 /**
@@ -269,6 +271,7 @@ export function VacancyDetail({
   liveness,
   livenessChecking = false,
   onPrepareAnyway,
+  excludedCompany = false,
 }: VacancyDetailProps) {
   const live = liveness ?? livenessFor(result.key, undefined);
   // #720: a posting a check found closed cannot use the primary action.
@@ -344,6 +347,12 @@ export function VacancyDetail({
               <span className="badge badge-warning badge-soft badge-sm mt-1.5" role="status">
                 Live result · not yet scored or verified
               </span>
+            )}
+            {excludedCompany && (
+              <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-base-content/70" role="note">
+                <span className="badge badge-ghost badge-sm">Excluded company</span>
+                <span>You excluded this company in Settings &gt; Search profile. Blind Apply skips it; applying here is your choice.</span>
+              </p>
             )}
           </div>
 

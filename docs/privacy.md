@@ -246,7 +246,8 @@ stored in the local workspace database and goes nowhere else.
   itself (`on delete set null`); deleting `workspace.db` removes the database records, but not the
   generated files under `application-artifacts/` themselves. Settings > Advanced > Reset
   application data deletes all attempt rows, submission receipts, automation grants, queue ids,
-  generated files and the search profile together with saved jobs, applications, CVs and letters.
+  generated files and the search profile (including its excluded-companies list, #736) together with saved
+  jobs, applications, CVs and letters.
   Generated artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
   row whose staged file no longer exists on disk — are surfaced by a reconciliation check the app
   runs, rather than silently ignored. Submission receipts follow the attempt they belong to: they

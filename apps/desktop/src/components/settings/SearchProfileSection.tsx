@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
+import {
+  EXCLUDED_COMPANY_LIMITS,
+  normalizeDomainAlias,
+} from '@open-vacancy-radar/vacancy-engine/excluded-companies';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
 import { SettingsRow, SettingsSubheading } from './controls.js';
 import { FillProfileFromCv } from './FillProfileFromCv.js';
@@ -23,6 +27,40 @@ interface Draft {
   excludedRoleFamilies: string;
   professionalLanguage: string;
   primaryCountry: string;
+  /** #736: one row per excluded company; domains stay one comma-separated string while being typed. */
+  excludedCompanies: ExcludedCompanyDraft[];
+}
+
+interface ExcludedCompanyDraft {
+  name: string;
+  domains: string;
+}
+
+/** The fields that record a `fieldSources` origin (#635). Excluded companies never come from a CV. */
+type SourcedField = Exclude<keyof Draft, 'excludedCompanies'>;
+
+function excludedCompaniesToDraft(profile: CandidateProfile): ExcludedCompanyDraft[] {
+  return (profile.excludedCompanies ?? []).map((company) => ({ name: company.name, domains: company.domains.join(', ') }));
+}
+
+/**
+ * The list as the validator will store it: domains normalised and de-duplicated the same way, so comparing
+ * it with the saved profile does not see "Acme.com" vs "acme.com" as an edit and save again on every blur.
+ */
+function comparableExcludedCompanies(companies: NonNullable<CandidateProfile['excludedCompanies']>): string {
+  return JSON.stringify(
+    companies.map((company) => ({
+      name: company.name.trim(),
+      domains: [...new Set(company.domains.map((domain) => normalizeDomainAlias(domain) ?? domain.trim()))],
+    })),
+  );
+}
+
+/** Rows with an empty name are not entries yet and are left out; domains split on commas like the lists above. */
+function excludedCompaniesFromDraft(rows: readonly ExcludedCompanyDraft[]): NonNullable<CandidateProfile['excludedCompanies']> {
+  return rows
+    .map((row) => ({ name: row.name.trim(), domains: textToSkills(row.domains) }))
+    .filter((row) => row.name.length > 0);
 }
 
 function toDraft(profile: CandidateProfile): Draft {
@@ -38,6 +76,7 @@ function toDraft(profile: CandidateProfile): Draft {
     excludedRoleFamilies: skillsToText(profile.excludedRoleFamilies),
     professionalLanguage: profile.constraints.professionalLanguage,
     primaryCountry: profile.constraints.primaryCountry,
+    excludedCompanies: excludedCompaniesToDraft(profile),
   };
 }
 
@@ -95,20 +134,33 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
   }, []);
 
   const commit = useCallback(
-    (patch: CandidateProfilePatch, edited: keyof Draft) => {
+    (patch: CandidateProfilePatch, edited: SourcedField | null) => {
       const seq = ++saveSeq.current;
       void (async () => {
         try {
-          const saved = await window.vacancyRadar.saveSearchProfile({ ...patch, fieldSources: { [edited]: 'user' } });
+          const saved = await window.vacancyRadar.saveSearchProfile(
+            edited ? { ...patch, fieldSources: { [edited]: 'user' } } : patch,
+          );
           if (seq !== saveSeq.current) return;
           setProfile(saved);
-          setDraft(toDraft(saved));
+          // Excluded-company rows are only replaced by the saved copy when this save was theirs and nothing
+          // was typed into them since it was sent; then the person sees what is stored (normalised domains).
+          // Otherwise -- another field's save, or more typing in flight -- the rows being edited stay as typed.
+          setDraft((current) => {
+            const next = toDraft(saved);
+            if (!current) return next;
+            const sent = patch.excludedCompanies;
+            const untouched =
+              sent !== undefined && JSON.stringify(excludedCompaniesFromDraft(current.excludedCompanies)) === JSON.stringify(sent);
+            return untouched && current.excludedCompanies.length === sent.length ? next : { ...next, excludedCompanies: current.excludedCompanies };
+          });
           onSaved();
         } catch (err) {
           if (seq !== saveSeq.current) return;
           if (profile) {
             setProfile(profile);
-            setDraft(toDraft(profile));
+            // Keep the excluded-company rows as typed, so a refused domain can be corrected rather than retyped.
+            setDraft((current) => ({ ...toDraft(profile), excludedCompanies: current?.excludedCompanies ?? toDraft(profile).excludedCompanies }));
           }
           onSaveError('Could not save what you are looking for.', ...(err instanceof Error && err.message ? [err.message] : []));
         }
@@ -163,7 +215,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
     onChange: (event: { currentTarget: { value: string } }) => setDraft({ ...draft, [key]: event.currentTarget.value }),
   });
 
-  const commitText = (key: keyof Omit<Draft, 'experienceYears'>, current: string) => {
+  const commitText = (key: Exclude<SourcedField, 'experienceYears'>, current: string) => {
     const next = draft[key].trim();
     if (next === current) return;
     if (key === 'strongestSkills' || key === 'additionalSkills' || key === 'targetRoles' || key === 'consideredRoles' || key === 'excludedRoleFamilies') {
@@ -173,6 +225,27 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
     } else {
       commit({ [key]: next }, key);
     }
+  };
+
+  // #736: excluded companies commit as one list, on blur of any of their inputs or on Remove.
+  const commitExcludedCompanies = (rows: readonly ExcludedCompanyDraft[]) => {
+    const next = excludedCompaniesFromDraft(rows);
+    if (comparableExcludedCompanies(next) === comparableExcludedCompanies(profile.excludedCompanies ?? [])) return;
+    commit({ excludedCompanies: next }, null);
+  };
+  const updateExcludedCompany = (index: number, change: Partial<ExcludedCompanyDraft>) => {
+    setDraft({
+      ...draft,
+      excludedCompanies: draft.excludedCompanies.map((row, i) => (i === index ? { ...row, ...change } : row)),
+    });
+  };
+  const addExcludedCompany = () => {
+    setDraft({ ...draft, excludedCompanies: [...draft.excludedCompanies, { name: '', domains: '' }] });
+  };
+  const removeExcludedCompany = (index: number) => {
+    const rows = draft.excludedCompanies.filter((_, i) => i !== index);
+    setDraft({ ...draft, excludedCompanies: rows });
+    commitExcludedCompanies(rows);
   };
 
   const commitExperienceYears = () => {
@@ -269,6 +342,57 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
             {...field('excludedRoleFamilies')}
             onBlur={() => commitText('excludedRoleFamilies', skillsToText(profile.excludedRoleFamilies))}
           />
+        </SettingsRow>
+        <SettingsSubheading>Companies to skip</SettingsSubheading>
+        <SettingsRow
+          label="Excluded companies"
+          description="Hidden in Search and skipped by Blind Apply. Matching ignores case and legal suffixes such as BV, Inc. or GmbH. Domains are optional: up to 5 company domains such as acme.com, comma-separated, not job-board links."
+        >
+          <div className="flex w-full max-w-md flex-col gap-2" data-testid="excluded-companies">
+            {draft.excludedCompanies.map((row, index) => (
+              // Rows have no stable id; position is the identity until saved, so index is the key here.
+              <div key={index} className="flex items-start gap-2">
+                <input
+                  type="text"
+                  className="input input-sm min-w-0 flex-1"
+                  aria-label={`Excluded company ${index + 1} name`}
+                  placeholder="Company name"
+                  value={row.name}
+                  onChange={(event) => updateExcludedCompany(index, { name: event.currentTarget.value })}
+                  onBlur={() => commitExcludedCompanies(draft.excludedCompanies)}
+                />
+                <input
+                  type="text"
+                  className="input input-sm min-w-0 flex-1"
+                  aria-label={`Excluded company ${index + 1} domains`}
+                  placeholder="acme.com"
+                  value={row.domains}
+                  onChange={(event) => updateExcludedCompany(index, { domains: event.currentTarget.value })}
+                  onBlur={() => commitExcludedCompanies(draft.excludedCompanies)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-label={`Remove excluded company ${index + 1}`}
+                  disabled={disabled}
+                  onClick={() => removeExcludedCompany(index)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="btn btn-outline btn-sm self-start"
+              disabled={disabled || draft.excludedCompanies.length >= EXCLUDED_COMPANY_LIMITS.entries}
+              onClick={addExcludedCompany}
+            >
+              Add company
+            </button>
+            {draft.excludedCompanies.length >= EXCLUDED_COMPANY_LIMITS.entries && (
+              <p className="text-xs text-base-content/60">You can exclude up to {EXCLUDED_COMPANY_LIMITS.entries} companies.</p>
+            )}
+          </div>
         </SettingsRow>
         <SettingsSubheading>About you</SettingsSubheading>
         <SettingsRow label="Name" htmlFor="profile-candidate-name">

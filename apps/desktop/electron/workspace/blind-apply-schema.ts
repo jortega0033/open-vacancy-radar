@@ -46,6 +46,8 @@ export const BLIND_APPLY_SKIP_REASONS = [
   'filters',
   'unverified_link',
   'unverifiable_posting',
+  /** #736: the person's own excluded-companies list, confirmed with the authorization. */
+  'excluded_company',
 ] as const;
 export type BlindApplySkipReason = (typeof BLIND_APPLY_SKIP_REASONS)[number];
 

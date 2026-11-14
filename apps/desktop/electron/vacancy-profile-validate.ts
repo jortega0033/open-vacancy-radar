@@ -9,6 +9,18 @@
  */
 
 import type { CandidateProfile, ProfileFieldSource } from '@open-vacancy-radar/vacancy-engine';
+import {
+  EXCLUDED_COMPANY_LIMITS,
+  domainAliasProblem,
+  normalizeDomainAlias,
+  type ExcludedCompany,
+} from '@open-vacancy-radar/vacancy-engine/excluded-companies';
+
+const DOMAIN_ALIAS_PROBLEMS = {
+  not_a_domain: 'must be a domain such as acme.com',
+  shared_host: 'is a job board or ATS address shared by many companies, not a company domain',
+  public_suffix: 'is a public suffix, not a company domain',
+} as const;
 
 export const CANDIDATE_PROFILE_LIMITS = {
   /** candidateName / currentRole / location / a single skill or role entry */
@@ -66,6 +78,41 @@ function stringList(value: unknown, field: string): string[] {
     fail(`"${field}" must have at most ${CANDIDATE_PROFILE_LIMITS.listEntries} entries`);
   }
   return value.map((entry, index) => str(entry, `${field}[${index}]`, CANDIDATE_PROFILE_LIMITS.shortField));
+}
+
+/**
+ * Excluded companies (#736): a bounded list of `{ name, domains }` entries. The name is required and
+ * trimmed; domains are optional, trimmed, and empties dropped. Same rules as every list above: allow-list
+ * the two keys, bound every string and array, never echo a value back.
+ */
+function excludedCompanyList(value: unknown, field: string): ExcludedCompany[] {
+  if (!Array.isArray(value)) fail(`"${field}" must be an array`);
+  if (value.length > EXCLUDED_COMPANY_LIMITS.entries) {
+    fail(`"${field}" must have at most ${EXCLUDED_COMPANY_LIMITS.entries} entries`);
+  }
+  return value.map((entry, index) => {
+    const record = asRecord(entry, `"${field}[${index}]"`);
+    const name = str(record.name, `${field}[${index}].name`, EXCLUDED_COMPANY_LIMITS.nameLength).trim();
+    if (name.length === 0) fail(`"${field}[${index}].name" must not be empty`);
+    const rawDomains = record.domains ?? [];
+    if (!Array.isArray(rawDomains)) fail(`"${field}[${index}].domains" must be an array of strings`);
+    if (rawDomains.length > EXCLUDED_COMPANY_LIMITS.domainsPerEntry) {
+      fail(`"${field}[${index}].domains" must have at most ${EXCLUDED_COMPANY_LIMITS.domainsPerEntry} entries`);
+    }
+    const domains = rawDomains
+      .map((domain, domainIndex) => {
+        const label = `${field}[${index}].domains[${domainIndex}]`;
+        const raw = str(domain, label, EXCLUDED_COMPANY_LIMITS.domainLength).trim();
+        if (raw.length === 0) return null;
+        const problem = domainAliasProblem(raw);
+        if (problem) fail(`"${label}" ${DOMAIN_ALIAS_PROBLEMS[problem]}`);
+        // Stored normalised, so what Settings shows back is exactly what is matched.
+        return normalizeDomainAlias(raw)!;
+      })
+      .filter((domain): domain is string => domain !== null);
+    // "acme.com, www.acme.com" is one domain; keep one slot for it.
+    return { name, domains: [...new Set(domains)] };
+  });
 }
 
 /**
@@ -145,6 +192,7 @@ export function parseCandidateProfilePatch(value: unknown): CandidateProfilePatc
   patch(input, out, 'targetRoles', (v) => stringList(v, 'targetRoles'));
   patch(input, out, 'consideredRoles', (v) => stringList(v, 'consideredRoles'));
   patch(input, out, 'excludedRoleFamilies', (v) => stringList(v, 'excludedRoleFamilies'));
+  patch(input, out, 'excludedCompanies', (v) => excludedCompanyList(v, 'excludedCompanies'));
   patch(input, out, 'constraints', (v) => parseConstraintsPatch(v));
   patch(input, out, 'fieldSources', (v) => parseFieldSources(v));
   return out;
