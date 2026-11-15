@@ -394,6 +394,13 @@ describe('electron/preload.ts: workspace bridge', () => {
     'updateLetter',
     'deleteLetter',
     'duplicateLetter',
+    // #738: letter versions, soft-delete undo, and which applications used a letter.
+    'restoreLetter',
+    'purgeLetter',
+    'listLetterVersions',
+    'restoreLetterVersion',
+    'listLetterUsage',
+    'listLetterUsageSummaries',
     'listApplicationAttempts',
     'getApplicationAttempt',
     'updateApplicationAttempt',
@@ -446,6 +453,27 @@ describe('electron/preload.ts: workspace bridge', () => {
       expect(invoke, name).toHaveBeenCalledTimes(1);
       expect(invoke.mock.calls[0]?.[0], name).toBe(channel);
     }
+  });
+
+  it('#738 letter verbs send { id } (and { id, versionId }) envelopes to their own workspace:letters channels', async () => {
+    const api = await loadPreload('workspace');
+    const cases: [name: string, args: unknown[], channel: string, payload: unknown][] = [
+      ['restoreLetter', ['l1'], 'workspace:letters:restore', { id: 'l1' }],
+      ['purgeLetter', ['l1'], 'workspace:letters:purge', { id: 'l1' }],
+      ['listLetterVersions', ['l1'], 'workspace:letters:versions', { id: 'l1' }],
+      ['restoreLetterVersion', ['l1', 'v1'], 'workspace:letters:restore-version', { id: 'l1', versionId: 'v1' }],
+      ['listLetterUsage', ['l1'], 'workspace:letters:usage', { id: 'l1' }],
+    ];
+    for (const [name, args, channel, payload] of cases) {
+      invoke.mockReset();
+      invoke.mockResolvedValue(null);
+      await (api[name] as (...values: unknown[]) => Promise<unknown>)(...args);
+      expect(invoke, name).toHaveBeenCalledWith(channel, payload);
+    }
+    invoke.mockReset();
+    invoke.mockResolvedValue([]);
+    await (api.listLetterUsageSummaries as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledWith('workspace:letters:usage-summaries');
   });
 
   it('wraps id-and-patch verbs in a { id, patch } envelope rather than passing positional values', async () => {
@@ -819,6 +847,13 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'updateLetter',
     'deleteLetter',
     'duplicateLetter',
+    // #738: letter versions, soft-delete undo, and which applications used a letter.
+    'restoreLetter',
+    'purgeLetter',
+    'listLetterVersions',
+    'restoreLetterVersion',
+    'listLetterUsage',
+    'listLetterUsageSummaries',
     // Added by issue #202, unrelated to ADI-06/07's own scope-boundary concern (whether *those*
     // tickets leaked capability into the wrong namespace) -- `workspace` legitimately grows here,
     // so the literal below is updated rather than left blocking real growth.

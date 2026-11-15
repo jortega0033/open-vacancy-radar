@@ -269,6 +269,12 @@ export function parseIdAndPatch(value: unknown): { id: string; patch: Record<str
   return { id: parseId(input.id), patch: asRecord(input.patch, '"patch"') };
 }
 
+/** #738: `{ id, versionId }` for restoring a letter version. */
+export function parseLetterVersionEnvelope(value: unknown): { id: string; versionId: string } {
+  const input = asRecord(value, 'payload');
+  return { id: parseId(input.id), versionId: parseId(input.versionId) };
+}
+
 /** `{ id }` envelope shared by the delete / set-default / duplicate verbs. */
 export function parseIdEnvelope(value: unknown): string {
   return parseId(asRecord(value, 'payload').id);

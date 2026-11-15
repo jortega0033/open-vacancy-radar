@@ -6,7 +6,7 @@ import { SearchPage, createSearchSessionState } from './components/search/index.
 import { SavedJobsPage } from './components/saved/index.js';
 import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
-import { LettersPage, type SelectedVacancy } from './components/letters/index.js';
+import { LettersPage, type LetterPreviewTarget, type SelectedVacancy } from './components/letters/index.js';
 import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage, type SettingsFocusSection, type SettingsTab } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
@@ -95,6 +95,9 @@ export function App() {
   // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
   // never replays a stale handoff.
   const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
+  // #738: a letter (and version) an application asked to open in the Letters library. Same lifecycle
+  // as `pendingVacancy`: cleared once LettersPage has taken its own copy.
+  const [pendingLetterPreview, setPendingLetterPreview] = useState<LetterPreviewTarget | null>(null);
   // Where Settings should open when something other than the sidebar sent the user there ("Fill
   // search profile", the first-launch checklist). Held here, not in SettingsPage, so it survives
   // that page remounting; a plain sidebar visit clears it in `handleNavigate`.
@@ -256,6 +259,7 @@ export function App() {
     // a manual click on Letters itself. Clearing unconditionally (not just when the destination is
     // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
     setPendingVacancy(null);
+    setPendingLetterPreview(null);
     setLetterReturnAttemptId(null);
     setSettingsTarget(undefined);
     if (page !== 'applications') setApplicationAttemptToOpen(null);
@@ -322,6 +326,14 @@ export function App() {
     void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
     void refreshCounts();
   }, [letterReturnAttemptId, refreshCounts, searchSession.applyAttemptId]);
+
+  const handleOpenLetter = useCallback((target: LetterPreviewTarget) => {
+    hasNavigatedRef.current = true;
+    setPendingVacancy(null);
+    setPendingLetterPreview(target);
+    setNav('letters');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
+  }, []);
 
   const handleViewApplicationAttempt = useCallback((attemptId: string) => {
     hasNavigatedRef.current = true;
@@ -601,6 +613,7 @@ export function App() {
               focusAttemptId={applicationAttemptToOpen}
               onFocusAttemptConsumed={() => setApplicationAttemptToOpen(null)}
               onGenerateLetter={handleGenerateApplicationLetter}
+              onOpenLetter={handleOpenLetter}
               onGoToSavedJobs={() => handleNavigate('saved')}
             />
           )}
@@ -613,6 +626,8 @@ export function App() {
               onLettersChanged={handleLettersChanged}
               onBackToVacancy={handleBackToVacancy}
               onOpenCvPage={() => handleNavigate('cv')}
+              openLetter={pendingLetterPreview}
+              onOpenLetterConsumed={() => setPendingLetterPreview(null)}
             />
           )}
           {nav === 'settings' && (

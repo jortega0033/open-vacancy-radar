@@ -30,6 +30,8 @@ export interface InterviewPrepDrawerProps {
   cvDocuments: readonly CvDocumentRecord[];
   letters: readonly LetterRecord[];
   onClose: () => void;
+  /** #738: opens a recorded library letter version in the Letters page. */
+  onOpenLetter?: (target: { letterId: string; versionId: string | null }) => void;
 }
 
 type CopyState = 'idle' | 'copied' | 'failed';
@@ -83,6 +85,7 @@ export function InterviewPrepDrawer({
   cvDocuments,
   letters,
   onClose,
+  onOpenLetter,
 }: InterviewPrepDrawerProps) {
   const run = useAgentRun();
 
@@ -360,6 +363,7 @@ export function InterviewPrepDrawer({
                   linked={linked}
                   disabled={run.isBusy || saving}
                   onBusyChange={setSaving}
+                  {...(onOpenLetter ? { onOpenLetter } : {})}
                 />
               )}
 

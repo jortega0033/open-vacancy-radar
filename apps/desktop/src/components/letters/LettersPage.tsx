@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LetterRecord } from '../../window.js';
 import { ConfirmDialog, TabPanel, Tabs } from '../shell/index.js';
 import { LetterGenerator, type UnsavedKind } from './LetterGenerator.js';
-import { LettersLibrary } from './LettersLibrary.js';
+import { LettersLibrary, type LetterPreviewTarget } from './LettersLibrary.js';
 import type { SelectedVacancy } from './types.js';
 
 /**
@@ -43,6 +43,13 @@ export interface LettersPageProps {
   onBackToVacancy?: (vacancy: SelectedVacancy) => void;
   /** Opens the CV page, for the generator's "No CVs yet" link. */
   onOpenCvPage?: () => void;
+  /**
+   * #738: "Open in Letters" from an application: land on the Library with this letter's preview open
+   * (at the recorded version when one is given). Captured once at mount, like `vacancy`.
+   */
+  openLetter?: LetterPreviewTarget | null;
+  /** Fired once after mount when `openLetter` was supplied, so the caller can clear its copy. */
+  onOpenLetterConsumed?: () => void;
 }
 
 /**
@@ -72,7 +79,10 @@ export function LettersPage({
   onVacancyConsumed,
   onBackToVacancy,
   onOpenCvPage,
+  openLetter = null,
+  onOpenLetterConsumed,
 }: LettersPageProps) {
+  const openLetterTarget = useRef(openLetter).current;
   // Captured once at mount, not read reactively: `onVacancyConsumed` below tells the caller to
   // clear its own copy of `vacancy` right after this page starts, which must not yank the job out
   // from under a generator that has already opened on it. Every use of the handed-off vacancy for
@@ -80,7 +90,7 @@ export function LettersPage({
   const handoffVacancy = useRef(vacancy).current;
 
   const [view, setView] = useState<View>(() =>
-    handoffVacancy && openOnGenerator ? { tab: 'generator', letter: null, seq: 0 } : { tab: 'library' },
+    handoffVacancy && openOnGenerator && !openLetterTarget ? { tab: 'generator', letter: null, seq: 0 } : { tab: 'library' },
   );
   const [refreshToken, setRefreshToken] = useState(0);
   // A ref, not state: this counter only ever feeds the editor's key, and incrementing it inside a
@@ -94,6 +104,7 @@ export function LettersPage({
   // user to navigate elsewhere.
   useEffect(() => {
     if (handoffVacancy) onVacancyConsumed?.();
+    if (openLetterTarget) onOpenLetterConsumed?.();
   }, []);
 
   const [unsaved, setUnsaved] = useState<UnsavedKind>(null);
@@ -178,6 +189,7 @@ export function LettersPage({
             onOpen={openGenerator}
             onNew={() => openGenerator(null)}
             onCountChanged={handleCountChanged}
+            initialPreview={openLetterTarget}
           />
         ) : (
           <LetterGenerator

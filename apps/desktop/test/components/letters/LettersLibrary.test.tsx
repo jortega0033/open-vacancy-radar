@@ -4,6 +4,16 @@ import { LettersLibrary } from '../../../src/components/letters/index.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
 import { makeLetter } from './fixtures.js';
 
+// The preview draws pages with pdf.js; jsdom has no canvas, so the page renderer is stood in for.
+vi.mock('../../../src/components/cv/pdf-pages.js', () => ({
+  openPdfForReview: vi.fn(async () => ({
+    pageCount: 1,
+    renderPage: async () => undefined,
+    extractText: async () => 'page text',
+    destroy: async () => undefined,
+  })),
+}));
+
 /** The row for a letter, found by its title cell: the actions are only unique within it. */
 function rowFor(title: string): HTMLElement {
   const cell = screen.getByRole('cell', { name: title });
@@ -37,8 +47,10 @@ describe('LettersLibrary', () => {
     await waitFor(() => expect(screen.getByText('Motivation letter — Redwood')).toBeInTheDocument());
     expect(screen.getByText('Recruiter note — Freeday')).toBeInTheDocument();
     // Labels come from LETTER_TYPE_OPTIONS / LETTER_STATUS_OPTIONS, never the raw column value.
-    expect(screen.getByText('Motivation letter')).toBeInTheDocument();
-    expect(screen.getByText('Recruiter message')).toBeInTheDocument();
+    // Scoped to the table: the type filter's options carry the same labels.
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('Motivation letter')).toBeInTheDocument();
+    expect(within(table).getByText('Recruiter message')).toBeInTheDocument();
     expect(screen.getByText('Draft')).toBeInTheDocument();
     expect(screen.getByText('Sent')).toBeInTheDocument();
     expect(screen.queryByText('recruiter_message')).not.toBeInTheDocument();
@@ -181,7 +193,7 @@ describe('LettersLibrary', () => {
   });
 
   describe('delete with undo', () => {
-    it('offers Undo after a delete, and Undo writes the same letter back', async () => {
+    it('offers Undo after a delete, and Undo restores the same letter (same id), never a copy', async () => {
       const letter = makeLetter({
         id: 'del-1',
         title: 'Cover letter, Synthetic Co',
@@ -196,9 +208,11 @@ describe('LettersLibrary', () => {
         body: 'Dear team, synthetic body.',
       });
       const deleteLetter = vi.fn().mockResolvedValue({ deleted: true });
-      const createLetter = vi.fn().mockResolvedValue({ ...letter, id: 'new-id' });
+      const createLetter = vi.fn();
+      const restoreLetter = vi.fn().mockResolvedValue(letter);
+      const purgeLetter = vi.fn().mockResolvedValue({ deleted: true });
       const onCountChanged = vi.fn();
-      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([letter]), deleteLetter, createLetter });
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([letter]), deleteLetter, createLetter, restoreLetter, purgeLetter });
 
       render(<LettersLibrary onOpen={vi.fn()} onCountChanged={onCountChanged} />);
       await waitFor(() => expect(screen.getByText(letter.title)).toBeInTheDocument());
@@ -214,20 +228,10 @@ describe('LettersLibrary', () => {
 
       fireEvent.click(within(toast).getByRole('button', { name: /^undo$/i }));
 
-      await waitFor(() =>
-        expect(createLetter).toHaveBeenCalledWith({
-          title: letter.title,
-          company: 'Synthetic Co',
-          role: 'Data Analyst',
-          type: 'cover_letter',
-          tone: 'formal',
-          length: 'short',
-          status: 'sent',
-          vacancyKey: 'vk-1',
-          cvId: 'cv-1',
-          body: 'Dear team, synthetic body.',
-        }),
-      );
+      await waitFor(() => expect(restoreLetter).toHaveBeenCalledWith('del-1'));
+      expect(createLetter).not.toHaveBeenCalled();
+      // The toast closing because of Undo must not purge the letter being restored.
+      expect(purgeLetter).not.toHaveBeenCalled();
       expect(await screen.findByRole('cell', { name: letter.title })).toBeInTheDocument();
       expect(screen.queryByRole('status')).not.toBeInTheDocument();
       expect(onCountChanged).toHaveBeenCalledTimes(2);
@@ -248,8 +252,8 @@ describe('LettersLibrary', () => {
 
     it('reports a failed Undo instead of silently losing the letter', async () => {
       const deleteLetter = vi.fn().mockResolvedValue({ deleted: true });
-      const createLetter = vi.fn().mockRejectedValue(new Error('database is locked'));
-      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]), deleteLetter, createLetter });
+      const restoreLetter = vi.fn().mockRejectedValue(new Error('database is locked'));
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]), deleteLetter, restoreLetter });
 
       render(<LettersLibrary onOpen={vi.fn()} />);
       await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
@@ -258,6 +262,93 @@ describe('LettersLibrary', () => {
       fireEvent.click(await screen.findByRole('button', { name: /^undo$/i }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent('database is locked');
+    });
+  });
+
+  it('purges the deleted letter for good once the undo window closes without Undo', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const purgeLetter = vi.fn().mockResolvedValue({ deleted: true });
+      installWorkspaceBridge({
+        listLetters: vi.fn().mockResolvedValue([makeLetter()]),
+        deleteLetter: vi.fn().mockResolvedValue({ deleted: true }),
+        purgeLetter,
+      });
+      render(<LettersLibrary onOpen={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^delete$/i }));
+      await screen.findByRole('button', { name: /^undo$/i });
+      expect(purgeLetter).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await waitFor(() => expect(purgeLetter).toHaveBeenCalledWith('letter-1'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe('#738 search, preview and usage', () => {
+    const letters = [
+      makeLetter({ id: 'a', title: 'Redwood cover', company: 'Redwood Software', type: 'cover_letter', body: 'About design systems.' }),
+      makeLetter({ id: 'b', title: 'Freeday note', company: 'Freeday', role: 'Analyst', type: 'recruiter_message', body: 'Quick hello about Kafka.' }),
+    ];
+
+    it('searches title, company, role and body, filters by type, and offers a way back from no matches', async () => {
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue(letters) });
+      render(<LettersLibrary onOpen={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText('Redwood cover')).toBeInTheDocument());
+      const search = screen.getByRole('searchbox', { name: /search letters/i });
+
+      fireEvent.change(search, { target: { value: 'KAFKA' } });
+      expect(screen.queryByText('Redwood cover')).not.toBeInTheDocument();
+      expect(screen.getByText('Freeday note')).toBeInTheDocument();
+
+      fireEvent.change(search, { target: { value: 'redwood' } });
+      expect(screen.getByText('Redwood cover')).toBeInTheDocument();
+      expect(screen.queryByText('Freeday note')).not.toBeInTheDocument();
+
+      fireEvent.change(search, { target: { value: '' } });
+      fireEvent.change(screen.getByRole('combobox', { name: /type/i }), { target: { value: 'recruiter_message' } });
+      expect(screen.queryByText('Redwood cover')).not.toBeInTheDocument();
+
+      fireEvent.change(search, { target: { value: 'redwood' } });
+      expect(screen.getByText('No letters match.')).toBeInTheDocument();
+      expect(screen.queryByText(/no letters yet/i)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /clear search/i }));
+      expect(screen.getByText('Redwood cover')).toBeInTheDocument();
+      expect(screen.getByText('Freeday note')).toBeInTheDocument();
+    });
+
+    it('shows created date (or that it was not recorded), the usage count and an "Edited since sent" marker', async () => {
+      installWorkspaceBridge({
+        listLetters: vi.fn().mockResolvedValue([
+          { ...letters[0]!, createdAt: null, currentVersion: 3 },
+          letters[1]!,
+        ]),
+        listLetterUsageSummaries: vi.fn().mockResolvedValue([
+          { letterId: 'a', usedIn: 2, latestSentVersion: 2 },
+          { letterId: 'b', usedIn: 1, latestSentVersion: 1 },
+        ]),
+      });
+      render(<LettersLibrary onOpen={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText('2 applications')).toBeInTheDocument());
+      const rowA = rowFor('Redwood cover');
+      expect(within(rowA).getByText('Not recorded')).toBeInTheDocument();
+      expect(within(rowA).getByText('Edited since sent')).toBeInTheDocument();
+      expect(within(rowA).getByText('Version 3')).toBeInTheDocument();
+      const rowB = rowFor('Freeday note');
+      expect(within(rowB).getByText('1 application')).toBeInTheDocument();
+      expect(within(rowB).queryByText('Edited since sent')).not.toBeInTheDocument();
+    });
+
+    it('opens the preview requested by an application, or says the letter is gone', async () => {
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue(letters) });
+      const { unmount } = render(<LettersLibrary onOpen={vi.fn()} initialPreview={{ letterId: 'missing', versionId: 'v9' }} />);
+      expect(await screen.findByText(/that letter has been deleted/i)).toBeInTheDocument();
+      unmount();
+
+      render(<LettersLibrary onOpen={vi.fn()} initialPreview={{ letterId: 'a', versionId: null }} />);
+      expect(await screen.findByRole('region', { name: 'Preview of Redwood cover' })).toBeInTheDocument();
     });
   });
 });

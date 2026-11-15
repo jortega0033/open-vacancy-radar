@@ -148,6 +148,12 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     updateLetter: vi.fn(),
     deleteLetter: vi.fn().mockResolvedValue({ deleted: true }),
     duplicateLetter: vi.fn(),
+    restoreLetter: vi.fn(),
+    purgeLetter: vi.fn().mockResolvedValue({ deleted: true }),
+    listLetterVersions: vi.fn().mockResolvedValue([]),
+    restoreLetterVersion: vi.fn(),
+    listLetterUsage: vi.fn().mockResolvedValue([]),
+    listLetterUsageSummaries: vi.fn().mockResolvedValue([]),
 
     listApplicationAttempts: vi.fn().mockResolvedValue([]),
     getApplicationAttempt: vi.fn(),

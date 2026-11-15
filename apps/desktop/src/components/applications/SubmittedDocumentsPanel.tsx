@@ -31,6 +31,8 @@ export interface SubmittedDocumentsPanelProps {
   /** True while something else in the drawer is busy (a run, another save). */
   disabled: boolean;
   onBusyChange(busy: boolean): void;
+  /** #738: opens a library letter (at the recorded version) in the Letters page. */
+  onOpenLetter?: (target: { letterId: string; versionId: string | null }) => void;
 }
 
 /**
@@ -48,6 +50,7 @@ export function SubmittedDocumentsPanel({
   linked,
   disabled,
   onBusyChange,
+  onOpenLetter,
 }: SubmittedDocumentsPanelProps) {
   const groupId = useId();
   const selected = view.packages.find((pkg) => pkg.id === selectedId) ?? null;
@@ -97,6 +100,7 @@ export function SubmittedDocumentsPanel({
           linked={linked}
           disabled={disabled}
           onBusyChange={onBusyChange}
+          {...(onOpenLetter ? { onOpenLetter } : {})}
         />
       )}
     </section>
@@ -110,6 +114,7 @@ function PackageDetails({
   linked,
   disabled,
   onBusyChange,
+  onOpenLetter,
 }: {
   applicationId: string;
   pkg: InterviewPackageView;
@@ -117,6 +122,7 @@ function PackageDetails({
   linked: { cv: boolean; letter: boolean };
   disabled: boolean;
   onBusyChange(busy: boolean): void;
+  onOpenLetter?: SubmittedDocumentsPanelProps['onOpenLetter'];
 }) {
   const formId = useId();
   const [open, setOpen] = useState(false);
@@ -205,6 +211,7 @@ function PackageDetails({
                     {line}
                   </p>
                 ))}
+                {doc.slot === 'letter' && <LibraryLetterLine doc={doc} {...(onOpenLetter ? { onOpenLetter } : {})} />}
               </li>
             );
           })}
@@ -290,5 +297,47 @@ function PackageDetails({
         </form>
       )}
     </div>
+  );
+}
+
+/**
+ * #738: which library letter a recorded letter came from. Only shown where a record names it (or a
+ * person's "my linked letter" statement from before #738, which never recorded one).
+ */
+function LibraryLetterLine({
+  doc,
+  onOpenLetter,
+}: {
+  doc: InterviewPackageView['documents'][number];
+  onOpenLetter?: SubmittedDocumentsPanelProps['onOpenLetter'];
+}) {
+  const ref = doc.libraryLetter;
+  if (!ref) {
+    return doc.source === 'linked_copy' ? (
+      <p className="mt-1 text-xs text-base-content/70">Source letter not recorded.</p>
+    ) : null;
+  }
+  if (ref.title === null) {
+    return (
+      <p className="mt-1 text-xs text-base-content/70" data-testid="library-letter-deleted">
+        Source letter deleted. The recorded copy is kept.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-1 flex flex-wrap items-center gap-1 text-xs" data-testid="library-letter">
+      <span>
+        From your letter “{ref.title}”, version {ref.version}
+      </span>
+      {onOpenLetter && (
+        <button
+          type="button"
+          className="btn btn-link btn-xs px-0"
+          onClick={() => onOpenLetter({ letterId: ref.letterId, versionId: ref.versionId })}
+        >
+          Open in Letters
+        </button>
+      )}
+    </p>
   );
 }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { draftContentHash, draftText } from './application-critique.js';
 import {
   applyStatements,
@@ -40,6 +40,7 @@ import {
   submissionBoundPackage,
 } from './workspace/submission-package-store.js';
 import { createRound, deleteRound, listRounds, updateRound } from './workspace/interview-round-store.js';
+import { getLetterVersion } from './workspace/letter-version-store.js';
 
 /**
  * #691: which documents an interview should be prepared from, for ONE Applications row.
@@ -114,7 +115,20 @@ function documentBasis(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocument): D
     fileName: doc.fileName,
     statedAt: doc.statedAt,
     ...textOf(db, doc),
+    libraryLetter: libraryLetterView(db, doc),
   };
+}
+
+/** #738: the recorded library letter, with its CURRENT title (null once the letter is deleted). */
+function libraryLetterView(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocument): InterviewDocumentView['libraryLetter'] {
+  const ref = doc.libraryLetter;
+  if (!ref) return null;
+  const live = db
+    .select({ title: letters.title })
+    .from(letters)
+    .where(and(eq(letters.id, ref.letterId), isNull(letters.deletedAt)))
+    .get();
+  return { letterId: ref.letterId, versionId: ref.versionId, version: ref.version, title: live?.title ?? null };
 }
 
 async function documentView(db: Pick<WorkspaceDb, 'select'>, doc: PackageDocument): Promise<InterviewDocumentView> {
@@ -318,12 +332,22 @@ export async function stateDocuments(deps: InterviewContextDeps, input: StateDoc
                 ? db.select().from(cvDocuments).where(eq(cvDocuments.id, row.cvId)).get()
                 : undefined
               : row.letterId
-                ? db.select().from(letters).where(eq(letters.id, row.letterId)).get()
+                ? db.select().from(letters).where(and(eq(letters.id, row.letterId), isNull(letters.deletedAt))).get()
                 : undefined;
           if (!linked) return { code: 'no_linked_document' as const };
           const text = 'body' in linked ? linked.body : linked.text;
           const kind = 'type' in linked && (linked.type === 'cover_letter' || linked.type === 'motivation_letter') ? linked.type : statement.slot === 'cv' ? 'cv' : null;
-          statements.push({ slot: statement.slot, choice: 'linked_document', text: text.slice(0, VIEW_TEXT_LIMITS.suppliedTextChars), kind });
+          // #738: name the exact library version whose text is being copied, so the letter can link back
+          // and a later edit (a new version) is visible as "edited since sent".
+          const version =
+            'currentVersionId' in linked && linked.currentVersionId ? getLetterVersion(db, linked.currentVersionId) : undefined;
+          statements.push({
+            slot: statement.slot,
+            choice: 'linked_document',
+            text: text.slice(0, VIEW_TEXT_LIMITS.suppliedTextChars),
+            kind,
+            ...(version ? { libraryLetter: { letterId: version.letterId, versionId: version.id, version: version.version } } : {}),
+          });
         } else {
           statements.push({ slot: statement.slot, choice: statement.choice, ...(statement.text !== undefined ? { text: statement.text } : {}) });
         }

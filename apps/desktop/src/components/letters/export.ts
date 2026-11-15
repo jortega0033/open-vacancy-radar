@@ -28,7 +28,18 @@ export async function exportMarkdown(title: string, body: string): Promise<SaveF
   });
 }
 
-export async function exportDocx(title: string, body: string): Promise<SaveFileResult> {
+/**
+ * #738: pins what would otherwise vary between two renders of the same letter (jsPDF stamps the
+ * current time and a random file id), so the same version always produces the same bytes. The
+ * library passes the version's own creation time and content hash.
+ */
+export interface LetterRenderPin {
+  createdAt: string;
+  /** Any hex string; the first 32 characters become the PDF file id. */
+  contentHash: string;
+}
+
+export async function buildLetterDocxBase64(title: string, body: string): Promise<string> {
   const doc = new Document({
     sections: [
       {
@@ -39,17 +50,25 @@ export async function exportDocx(title: string, body: string): Promise<SaveFileR
       },
     ],
   });
-  const base64 = await Packer.toBase64String(doc);
+  return Packer.toBase64String(doc);
+}
+
+export async function exportDocx(title: string, body: string): Promise<SaveFileResult> {
   return window.system.saveFile({
     suggestedName: `${sanitizeFileName(title)}.docx`,
-    data: base64,
+    data: await buildLetterDocxBase64(title, body),
     encoding: 'base64',
     filters: [{ name: 'Word document', extensions: ['docx'] }],
   });
 }
 
-export async function exportPdf(title: string, body: string): Promise<SaveFileResult> {
+/** The PDF a letter exports as. The library preview draws exactly these bytes. */
+export function buildLetterPdf(title: string, body: string, pin?: LetterRenderPin): Uint8Array {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  if (pin) {
+    doc.setCreationDate(new Date(pin.createdAt));
+    doc.setFileId(pin.contentHash.slice(0, 32).toUpperCase().padEnd(32, '0'));
+  }
   const margin = 56;
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -78,11 +97,28 @@ export async function exportPdf(title: string, body: string): Promise<SaveFileRe
     y += 10;
   }
 
-  const base64 = doc.output('datauristring').split(',')[1] ?? '';
+  return new Uint8Array(doc.output('arraybuffer'));
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** Saves already-built PDF bytes, so what the preview showed is exactly what is written. */
+export async function savePdfBytes(title: string, bytes: Uint8Array): Promise<SaveFileResult> {
   return window.system.saveFile({
     suggestedName: `${sanitizeFileName(title)}.pdf`,
-    data: base64,
+    data: toBase64(bytes),
     encoding: 'base64',
     filters: [{ name: 'PDF document', extensions: ['pdf'] }],
   });
+}
+
+export async function exportPdf(title: string, body: string): Promise<SaveFileResult> {
+  return savePdfBytes(title, buildLetterPdf(title, body));
 }

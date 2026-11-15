@@ -515,6 +515,63 @@ export interface LetterRecord {
   body: string;
   /** ISO-8601 */
   updatedAt: string;
+  /** #738: ISO-8601, or null for a letter created before creation dates were recorded. */
+  createdAt: string | null;
+  /** #738: the id and number of the version the fields above are a copy of. */
+  currentVersionId: string | null;
+  currentVersion: number | null;
+}
+
+/** #738: one saved content of a library letter. Insert-only: never edited after it is written. */
+export interface LetterVersionRecord {
+  id: string;
+  letterId: string;
+  version: number;
+  title: string;
+  type: LetterType;
+  tone: LetterTone;
+  length: LetterLength;
+  cvId: string | null;
+  body: string;
+  contentHash: string;
+  /** ISO-8601 */
+  createdAt: string;
+}
+
+/**
+ * #738: one application that used (or links) a library letter.
+ *  - `recorded`: a #691 submission record names this letter's version (`provenance` says how it is known).
+ *  - `prepared`: an application attempt staged this letter's version but no submission is recorded.
+ *  - `linked`: the Applications row links the letter, and nothing records it as sent.
+ */
+export interface LetterUsageRecord {
+  kind: 'recorded' | 'prepared' | 'linked';
+  /** The Applications row this belongs to, when there is one. */
+  applicationId: string | null;
+  attemptId: string | null;
+  company: string;
+  role: string;
+  versionId: string | null;
+  version: number | null;
+  provenance: 'prepared' | 'user_confirmed' | 'receipt_backed' | 'unknown' | null;
+  /** ISO-8601: when the record was made (statement, binding, staging), or null for a plain link. */
+  at: string | null;
+}
+
+/** #738: the per-letter numbers the library table shows. */
+export interface LetterUsageSummary {
+  letterId: string;
+  /** Distinct applications with a recorded, prepared or linked use. */
+  usedIn: number;
+  /** The newest version a submission record names as sent (person-confirmed or receipt-backed), if any. */
+  latestSentVersion: number | null;
+}
+
+/** #738: what a letter's identity looked like where a record names it. */
+export interface LibraryLetterRef {
+  letterId: string;
+  versionId: string;
+  version: number;
 }
 
 export interface LetterInput {
@@ -1094,8 +1151,16 @@ export interface WorkspaceBridge {
   listLetters(): Promise<LetterRecord[]>;
   createLetter(input: LetterInput): Promise<LetterRecord>;
   updateLetter(id: string, patch: LetterPatch): Promise<LetterRecord>;
+  /** #738: soft delete. Undo with `restoreLetter`; `purgeLetter` (or the next start) removes it for good. */
   deleteLetter(id: string): Promise<DeleteResult>;
   duplicateLetter(id: string): Promise<LetterRecord>;
+  restoreLetter(id: string): Promise<LetterRecord>;
+  purgeLetter(id: string): Promise<DeleteResult>;
+  listLetterVersions(id: string): Promise<LetterVersionRecord[]>;
+  /** Saves an older version's content as a new version; never rewrites history. */
+  restoreLetterVersion(id: string, versionId: string): Promise<LetterRecord>;
+  listLetterUsage(id: string): Promise<LetterUsageRecord[]>;
+  listLetterUsageSummaries(): Promise<LetterUsageSummary[]>;
 
   /**
    * Read/patch-only (issue #202): the renderer can list, inspect, and update the checkpoint/detail

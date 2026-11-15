@@ -9,7 +9,9 @@ export type { LettersPageProps } from './LettersPage.js';
 export { LetterGenerator } from './LetterGenerator.js';
 export type { LetterGeneratorProps } from './LetterGenerator.js';
 export { LettersLibrary } from './LettersLibrary.js';
-export type { LettersLibraryProps } from './LettersLibrary.js';
+export type { LetterPreviewTarget, LettersLibraryProps } from './LettersLibrary.js';
+export { LetterPreview } from './LetterPreview.js';
+export type { LetterPreviewProps } from './LetterPreview.js';
 export { buildLetterPrompt, MAX_INSTRUCTION_CHARS } from './prompt.js';
 export type { LetterPromptOptions } from './prompt.js';
 export {

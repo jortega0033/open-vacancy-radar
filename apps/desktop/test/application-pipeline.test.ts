@@ -98,6 +98,7 @@ const { fetchWorkableJobDetail, workableJobReferenceFromUrl, createPostingVerifi
 const verification = await import('../electron/application-posting-verification.js');
 const engineModule = await import('@open-vacancy-radar/vacancy-engine');
 const store = await import('../electron/workspace/posting-verification-store.js');
+const { currentDrafts } = await import('../electron/workspace/application-critique-store.js');
 import type { AtsHttpClient, AtsHttpRequestOptions, AtsHttpResponse } from '@open-vacancy-radar/vacancy-engine';
 import type { WorkspaceDb } from '../electron/workspace/client.js';
 import type {
@@ -1044,7 +1045,7 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     // Nothing saved yet for this vacancy.
     await expect(pipeline.attachLetterToAttempt(deps, attemptId)).resolves.toMatchObject({ ok: false });
 
-    workspace.createLetter(db, {
+    const saved = workspace.createLetter(db, {
       title: 'Cover Letter',
       company: VACANCY.company,
       role: VACANCY.role,
@@ -1057,6 +1058,12 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     const attached = await pipeline.attachLetterToAttempt(deps, attemptId);
 
     expect(attached.ok).toBe(true);
+    // #738: the draft names the exact library version it was staged from.
+    const draft = currentDrafts(db, attemptId).find((candidate) => candidate.kind === 'cover_letter');
+    expect(draft?.content).toMatchObject({
+      authored: 'user',
+      libraryLetter: { letterId: saved.id, versionId: saved.currentVersionId, version: 1 },
+    });
     expect(workspace.listApplicationArtifacts(db, attemptId).map((artifact) => artifact.kind))
       .toEqual(['cv_pdf', 'cover_letter_pdf']);
     const attempt = workspace.getApplicationAttempt(db, attemptId);

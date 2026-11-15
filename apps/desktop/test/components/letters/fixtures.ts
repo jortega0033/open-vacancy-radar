@@ -103,6 +103,9 @@ export function makeLetter(overrides: Partial<LetterRecord> = {}): LetterRecord 
     cvId: 'cv-1',
     body: 'Dear hiring team, I am writing about the Senior Frontend Engineer role.',
     updatedAt: '2026-08-20T10:00:00.000Z',
+    createdAt: '2026-08-19T10:00:00.000Z',
+    currentVersionId: 'letter-1-v1',
+    currentVersion: 1,
     ...overrides,
   };
 }

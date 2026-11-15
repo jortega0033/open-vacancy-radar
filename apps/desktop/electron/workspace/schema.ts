@@ -274,7 +274,46 @@ export const letters = sqliteTable('letters', {
   /** The generated letter body, as returned by the AI session: plain text, user-editable. */
   body: text('body').notNull().default(''),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /**
+   * #738: when the letter was created. Null for a letter that existed before this column did: its real
+   * creation date was never recorded, and the library says so rather than inventing one.
+   */
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }),
+  /**
+   * #738: the `letter_versions` row the head columns above are a copy of. A plain id (no foreign key),
+   * because the version row itself references this letter.
+   */
+  currentVersionId: text('current_version_id'),
+  /**
+   * #738: set while a delete can still be undone. A soft-deleted letter is invisible to every reader
+   * and is purged with its versions when the undo window closes, or at the next start.
+   */
+  deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
 });
+
+/**
+ * #738: every saved content of a library letter, INSERT-ONLY. A save that changes the title, type or
+ * body appends the next version; status, job and CV-link changes do not. Nothing edits a row, so the
+ * version a submission record names always reads as it did when it was sent. Cascades with the letter.
+ */
+export const letterVersions = sqliteTable('letter_versions', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  letterId: text('letter_id')
+    .notNull()
+    .references(() => letters.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  title: text('title').notNull(),
+  type: text('type', { enum: ['motivation_letter', 'cover_letter', 'recruiter_message', 'short_application_message'] }).notNull(),
+  tone: text('tone', { enum: ['formal', 'natural', 'confident', 'concise'] }).notNull(),
+  length: text('length', { enum: ['short', 'standard', 'detailed'] }).notNull(),
+  cvId: text('cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
+  body: text('body').notNull(),
+  /** sha256 of title, type and body (see `letterContentHash`). */
+  contentHash: text('content_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  uniqueIndex('letter_versions_version_idx').on(table.letterId, table.version),
+]);
 
 export const applications = sqliteTable('applications', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),

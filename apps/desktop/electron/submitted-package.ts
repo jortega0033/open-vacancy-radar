@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { reportedBaseName, stagedArtifactFileName } from './application-artifact-naming.js';
 import type { DraftKind } from './application-critique-types.js';
-import type { PreparedApplicationFields } from './workspace/types.js';
+import type { LibraryLetterRef, PreparedApplicationFields } from './workspace/types.js';
 
 /**
  * #691: the record of which documents went with one recorded submission, as pure functions.
@@ -53,6 +53,13 @@ export interface PackageDocument {
   text: string | null;
   /** When the person made the statement this entry rests on (null for entries bound by the submission). */
   statedAt: string | null;
+  /**
+   * #738: the library letter version this document is, when that was recorded (a "my linked letter"
+   * statement, or an attempt draft staged from a library letter). ABSENT, not null, when unknown: the
+   * field is additive, so a manifest written before it existed hashes and compares exactly as it did,
+   * and records from before #738 are never retro-linked to a letter by text or title.
+   */
+  libraryLetter?: LibraryLetterRef;
 }
 
 export interface PackageManifestContent {
@@ -114,6 +121,8 @@ export interface BindDraft {
   version: number;
   contentHash: string;
   artifactHash: string;
+  /** #738: the library letter version this draft was staged from, when it was. */
+  libraryLetter?: LibraryLetterRef;
 }
 export interface BindArtifact {
   id: string;
@@ -228,6 +237,7 @@ export function buildSubmissionManifest(input: BindInput): PackageManifestConten
       fileName: artifact?.fileName ?? null,
       text: null,
       statedAt: null,
+      ...(draft?.libraryLetter ? { libraryLetter: draft.libraryLetter } : {}),
     });
   }
 
@@ -264,6 +274,8 @@ export interface DocumentStatement {
   text?: string;
   /** `linked_document` / `supplied_text` letters: the letter type, when known. */
   kind?: DraftKind | null;
+  /** #738: `linked_document` letters: the exact library letter version whose text was copied. */
+  libraryLetter?: LibraryLetterRef;
 }
 
 export type StatementRefusal =
@@ -316,6 +328,7 @@ export function applyStatements(
           fileName: null,
           text,
           statedAt: now,
+          ...(statement.choice === 'linked_document' && statement.libraryLetter ? { libraryLetter: statement.libraryLetter } : {}),
         };
         break;
       }

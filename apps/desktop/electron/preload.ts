@@ -591,6 +591,24 @@ const workspaceApi: WorkspaceBridge = {
   duplicateLetter(id) {
     return ipcRenderer.invoke('workspace:letters:duplicate', { id });
   },
+  restoreLetter(id) {
+    return ipcRenderer.invoke('workspace:letters:restore', { id });
+  },
+  purgeLetter(id) {
+    return ipcRenderer.invoke('workspace:letters:purge', { id });
+  },
+  listLetterVersions(id) {
+    return ipcRenderer.invoke('workspace:letters:versions', { id });
+  },
+  restoreLetterVersion(id, versionId) {
+    return ipcRenderer.invoke('workspace:letters:restore-version', { id, versionId });
+  },
+  listLetterUsage(id) {
+    return ipcRenderer.invoke('workspace:letters:usage', { id });
+  },
+  listLetterUsageSummaries() {
+    return ipcRenderer.invoke('workspace:letters:usage-summaries');
+  },
 
   listApplicationAttempts() {
     return ipcRenderer.invoke('workspace:application-attempts:list');
