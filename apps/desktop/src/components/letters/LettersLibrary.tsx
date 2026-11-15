@@ -404,13 +404,13 @@ export function LettersLibrary({
                     {labelFor(LETTER_TYPE_OPTIONS, letter.type)}
                   </td>
                   <td
-                    className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"
+                    className="ovr-responsive-table__cell text-base-content/60"
                     data-label="Created"
                   >
                     {letter.createdAt ? formatUpdatedAt(letter.createdAt) : <NotSet label="Not recorded" />}
                   </td>
                   <td
-                    className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"
+                    className="ovr-responsive-table__cell text-base-content/60"
                     data-label="Updated"
                   >
                     {formatUpdatedAt(letter.updatedAt)}
@@ -425,7 +425,7 @@ export function LettersLibrary({
                       {labelFor(LETTER_STATUS_OPTIONS, letter.status)}
                     </span>
                   </td>
-                  <td className="ovr-responsive-table__cell whitespace-nowrap text-base-content/70" data-label="Used in">
+                  <td className="ovr-responsive-table__cell text-base-content/70" data-label="Used in">
                     {summary && summary.usedIn > 0 ? (
                       `${summary.usedIn} ${summary.usedIn === 1 ? 'application' : 'applications'}`
                     ) : (
@@ -436,7 +436,7 @@ export function LettersLibrary({
                     )}
                   </td>
                   <td
-                    className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
+                    className="ovr-responsive-table__cell ovr-responsive-table__actions text-right"
                     data-label="Actions"
                   >
                     <button
