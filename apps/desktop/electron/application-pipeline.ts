@@ -69,6 +69,8 @@ import type {
   ApplicationAttemptCheckpoint,
   ApplicationAttemptRecord,
   CvDocumentRecord,
+  LetterRecord,
+  LibraryLetterRef,
 } from './workspace/types.js';
 
 /**
@@ -625,15 +627,24 @@ function requestedLetters(db: WorkspaceDb, attempt: ApplicationAttemptRecord): R
   for (const letter of workspace.listLetters(db)) {
     if (letter.vacancyKey !== attempt.vacancyKey || letter.status !== 'final') continue;
     if (letter.type !== 'cover_letter' && letter.type !== 'motivation_letter') continue;
-    requested.push({ kind: letter.type, title: letter.title, body: letter.body });
+    requested.push({ kind: letter.type, title: letter.title, body: letter.body, libraryLetter: libraryLetterRef(letter) });
   }
   return requested;
+}
+
+/** #738: which library letter version a staged letter is, so the draft (and later the submission
+ * record) can name it. Undefined only for a letter that somehow has no version yet. */
+function libraryLetterRef(letter: LetterRecord): LibraryLetterRef | undefined {
+  return letter.currentVersionId && letter.currentVersion !== null
+    ? { letterId: letter.id, versionId: letter.currentVersionId, version: letter.currentVersion }
+    : undefined;
 }
 
 interface RequestedLetter {
   kind: 'cover_letter' | 'motivation_letter';
   title: string;
   body: string;
+  libraryLetter?: LibraryLetterRef | undefined;
 }
 
 /** The current accepted-revision draft of a kind, if it still describes this attempt's inputs. */
@@ -894,7 +905,13 @@ export async function runApplicationAttempt(
     Pick<LetterDraftContent, 'authored' | 'factIds' | 'companyClaims'> & { revisedFrom: string | null; reusedVersion: boolean }
   >();
   for (const requested of letters) {
-    letterMeta.set(requested.kind, { authored: 'user', factIds: [], companyClaims: [], revisedFrom: null, reusedVersion: false });
+    letterMeta.set(requested.kind, {
+      authored: 'user',
+      factIds: [],
+      companyClaims: [],
+      revisedFrom: null,
+      reusedVersion: false,
+    });
   }
   if (letters.length === 0) {
     let companyEvidence: CompanyEvidenceProseFact[] = [];
@@ -1021,6 +1038,9 @@ export async function runApplicationAttempt(
           authored: meta?.authored ?? 'user',
           factIds: meta?.factIds ?? [],
           companyClaims: meta?.companyClaims ?? [],
+          // Taken from this letter, not from `letterMeta` (keyed by kind): two final letters of one
+          // kind must each name their own library version.
+          ...(meta?.authored === 'user' && letter.libraryLetter ? { libraryLetter: letter.libraryLetter } : {}),
         },
         artifactHash: stagedLetter.contentHash,
         origin: meta?.reusedVersion ? 'critique_revision' : meta?.authored === 'generated' ? 'prepared' : 'user_letter',
@@ -1279,7 +1299,10 @@ export async function attachLetterToAttempt(
         attemptId,
         kind: letter.type,
         origin: 'user_letter',
-        content: { type: 'letter', title: letter.title, body: letter.body, authored: 'user', factIds: [], companyClaims: [] },
+        content: (() => {
+          const ref = libraryLetterRef(letter);
+          return { type: 'letter', title: letter.title, body: letter.body, authored: 'user', factIds: [], companyClaims: [], ...(ref ? { libraryLetter: ref } : {}) } as const;
+        })(),
         artifactHash: staged.contentHash,
         jdHash: attempt.jdSnapshotHash,
         sourceCvHash: attempt.sourceCvContentHash,

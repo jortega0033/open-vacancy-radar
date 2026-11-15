@@ -64,6 +64,8 @@ export interface ApplicationsPageProps {
   focusAttemptId?: string | null;
   onFocusAttemptConsumed?: () => void;
   onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
+  /** #738: opens a library letter (optionally at a recorded version) in the Letters page. */
+  onOpenLetter?: (target: { letterId: string; versionId: string | null }) => void;
   /** Opens Saved Jobs, where "Prepare application" lives. The empty state offers it as the main action. */
   onGoToSavedJobs?: () => void;
 }
@@ -80,6 +82,7 @@ export function ApplicationsPage({
   focusAttemptId = null,
   onFocusAttemptConsumed,
   onGenerateLetter,
+  onOpenLetter,
   onGoToSavedJobs,
 }: ApplicationsPageProps) {
   const [activeTab, setActiveTab] = useState<PageTab>('active');
@@ -629,6 +632,7 @@ export function ApplicationsPage({
           cvDocuments={cvDocuments}
           letters={letters}
           onClose={closeInterviewPrepDrawer}
+          {...(onOpenLetter ? { onOpenLetter } : {})}
         />
       )}
 
@@ -642,6 +646,7 @@ export function ApplicationsPage({
           letters={letters}
           onCancel={closeDrawer}
           onSubmit={handleDrawerSubmit}
+          {...(onOpenLetter ? { onOpenLetter: (letterId: string) => onOpenLetter({ letterId, versionId: null }) } : {})}
         />
       )}
 

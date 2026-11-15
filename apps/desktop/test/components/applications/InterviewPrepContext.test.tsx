@@ -510,3 +510,42 @@ describe('a long history has a stated envelope that the person sees before gener
     expect(prompt).not.toContain('Treat everything not shown as unknown');
   });
 });
+
+describe('#738: the letter a record came from, as a person meets it', () => {
+  it('names the exact library letter version, opens it in Letters, and says so once the letter is deleted', async () => {
+    const letter = workspace.createLetter(db, { title: 'Contoso cover', type: 'cover_letter', body: 'The text I sent.' });
+    const row = workspace.createApplication(db, { role: 'Engineer', company: 'Contoso', status: 'interview', letterId: letter.id });
+    const handlers = createInterviewContextHandlers(async () => ({ db, now: () => new Date(), mutate: (task) => gate.runMutation(task) }));
+    const view = (await handlers['interview-context:get']!({ applicationId: row.id })) as { ok: true; view: { packages: Array<{ id: string }> } };
+    await handlers['interview-context:state-documents']!({
+      applicationId: row.id,
+      packageId: view.view.packages[0]!.id,
+      expectedVersion: null,
+      statements: [{ slot: 'letter', choice: 'linked_document' }],
+    });
+    workspace.updateLetter(db, letter.id, { body: 'Edited after sending.' });
+
+    const onOpenLetter = vi.fn();
+    const application = workspace.listApplications(db).find((candidate) => candidate.id === row.id)!;
+    const { unmount } = render(
+      <InterviewPrepDrawer
+        application={application}
+        savedJobs={[]}
+        cvDocuments={workspace.listCvDocuments(db)}
+        letters={workspace.listLetters(db)}
+        onClose={vi.fn()}
+        onOpenLetter={onOpenLetter}
+      />,
+    );
+    const line = await screen.findByTestId('library-letter');
+    expect(line).toHaveTextContent('From your letter “Contoso cover”, version 1');
+    fireEvent.click(within(line).getByRole('button', { name: 'Open in Letters' }));
+    expect(onOpenLetter).toHaveBeenCalledWith({ letterId: letter.id, versionId: workspace.listLetterVersions(db, letter.id)[0]!.id });
+    unmount();
+
+    workspace.deleteLetter(db, letter.id);
+    workspace.purgeLetter(db, letter.id);
+    renderDrawer(row.id);
+    expect(await screen.findByTestId('library-letter-deleted')).toHaveTextContent('Source letter deleted. The recorded copy is kept.');
+  });
+});

@@ -11,7 +11,7 @@
  */
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import {
   describeCvSourceGaps,
   EMPTY_CV_SOURCE,
@@ -62,6 +62,14 @@ import { bindSubmissionPackage, deleteAllSubmissionPackages } from './submission
 import { deleteAllInterviewRounds } from './interview-round-store.js';
 import { deleteAllApplicationActions } from './application-action-store.js';
 import { deleteAllBlindApply } from './blind-apply-store.js';
+import {
+  appendLetterVersion,
+  currentVersionNumbers,
+  getLetterVersion,
+  letterContentHash,
+  listLetterVersions,
+  purgeDeletedLetters,
+} from './letter-version-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -1970,7 +1978,7 @@ export function rejectCvTailoringProposal(db: WorkspaceDb, id: string): CvTailor
 
 type LetterRow = typeof letters.$inferSelect;
 
-function toLetter(row: LetterRow): LetterRecord {
+function toLetter(row: LetterRow, currentVersion: number | null): LetterRecord {
   return {
     id: row.id,
     title: row.title,
@@ -1984,57 +1992,148 @@ function toLetter(row: LetterRow): LetterRecord {
     cvId: row.cvId,
     body: row.body,
     updatedAt: iso(row.updatedAt),
+    createdAt: row.createdAt ? iso(row.createdAt) : null,
+    currentVersionId: row.currentVersionId,
+    currentVersion,
   };
 }
 
+function letterWithVersion(db: Pick<WorkspaceDb, 'select'>, row: LetterRow): LetterRecord {
+  const version = row.currentVersionId ? getLetterVersion(db, row.currentVersionId) : undefined;
+  return toLetter(row, version?.version ?? null);
+}
+
+/** A letter that exists and is not soft-deleted. */
+function liveLetterRow(db: Pick<WorkspaceDb, 'select'>, id: string): LetterRow | undefined {
+  return db.select().from(letters).where(and(eq(letters.id, id), isNull(letters.deletedAt))).get();
+}
+
 export function listLetters(db: WorkspaceDb): LetterRecord[] {
-  return db.select().from(letters).orderBy(desc(letters.updatedAt)).all().map(toLetter);
+  const versions = currentVersionNumbers(db);
+  return db
+    .select()
+    .from(letters)
+    .where(isNull(letters.deletedAt))
+    .orderBy(desc(letters.updatedAt))
+    .all()
+    .map((row) => toLetter(row, versions.get(row.id) ?? null));
 }
 
+/** #738: one live letter, or undefined when it does not exist or is waiting to be purged. */
+export function getLetter(db: WorkspaceDb, id: string): LetterRecord | undefined {
+  const row = liveLetterRow(db, id);
+  return row ? letterWithVersion(db, row) : undefined;
+}
+
+/** Creates a letter and its version 1 in one transaction. */
 export function createLetter(db: WorkspaceDb, input: LetterInput): LetterRecord {
-  const [row] = db
-    .insert(letters)
-    .values({
-      title: input.title,
-      company: input.company ?? '',
-      role: input.role ?? '',
-      type: input.type ?? 'motivation_letter',
-      tone: input.tone ?? 'natural',
-      length: input.length ?? 'standard',
-      status: input.status ?? 'draft',
-      vacancyKey: input.vacancyKey ?? null,
-      cvId: input.cvId ?? null,
-      body: input.body ?? '',
-    })
-    .returning()
-    .all();
-  if (!row) throw new Error('failed to insert letter');
-  return toLetter(row);
+  return db.transaction((tx) => {
+    const now = new Date();
+    const [row] = tx
+      .insert(letters)
+      .values({
+        title: input.title,
+        company: input.company ?? '',
+        role: input.role ?? '',
+        type: input.type ?? 'motivation_letter',
+        tone: input.tone ?? 'natural',
+        length: input.length ?? 'standard',
+        status: input.status ?? 'draft',
+        vacancyKey: input.vacancyKey ?? null,
+        cvId: input.cvId ?? null,
+        body: input.body ?? '',
+        updatedAt: now,
+        createdAt: now,
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert letter');
+    const version = appendLetterVersion(tx, row, now);
+    return toLetter({ ...row, currentVersionId: version.id }, version.version);
+  });
 }
 
+/**
+ * #738: a save that changes the title, type or body appends a new version (in the same transaction
+ * as the head update); a save that changes nothing, or only the status, job or CV link, does not.
+ */
 export function updateLetter(db: WorkspaceDb, id: string, values: LetterPatch): LetterRecord {
+  return db.transaction((tx) => {
+    if (!liveLetterRow(tx, id)) throw new WorkspaceNotFoundError('letter', id);
+    const now = new Date();
+    const [row] = tx
+      .update(letters)
+      .set({ ...values, updatedAt: now })
+      .where(eq(letters.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('letter', id);
+    const current = row.currentVersionId ? getLetterVersion(tx, row.currentVersionId) : undefined;
+    if (current && current.contentHash === letterContentHash(row)) return toLetter(row, current.version);
+    const version = appendLetterVersion(tx, row, now);
+    return toLetter({ ...row, currentVersionId: version.id }, version.version);
+  });
+}
+
+/**
+ * #738: saves an older version's content as the newest version. The older row is untouched, so a
+ * submission record that names it still reads exactly what was sent.
+ */
+export function restoreLetterVersion(db: WorkspaceDb, id: string, versionId: string): LetterRecord {
+  const version = getLetterVersion(db, versionId);
+  if (!version || version.letterId !== id) throw new WorkspaceNotFoundError('letter version', versionId);
+  const head = liveLetterRow(db, id);
+  if (!head) throw new WorkspaceNotFoundError('letter', id);
+  // Already the current text: nothing to save (and no tone/length change sneaking in without a version).
+  if (letterContentHash(head) === version.contentHash) return letterWithVersion(db, head);
+  return updateLetter(db, id, {
+    title: version.title,
+    type: version.type,
+    tone: version.tone,
+    length: version.length,
+    body: version.body,
+  });
+}
+
+/**
+ * #738: a soft delete, so Undo can bring back the same letter id with its versions and every record
+ * that points at it. `purgeLetter` (when the undo window closes) or the next start removes it.
+ */
+export function deleteLetter(db: WorkspaceDb, id: string): DeleteResult {
+  const removed = db
+    .update(letters)
+    .set({ deletedAt: new Date() })
+    .where(and(eq(letters.id, id), isNull(letters.deletedAt)))
+    .returning({ id: letters.id })
+    .all();
+  return { deleted: removed.length > 0 };
+}
+
+export function restoreLetter(db: WorkspaceDb, id: string): LetterRecord {
   const [row] = db
     .update(letters)
-    .set({ ...values, updatedAt: new Date() })
-    .where(eq(letters.id, id))
+    .set({ deletedAt: null })
+    .where(and(eq(letters.id, id), isNotNull(letters.deletedAt)))
     .returning()
     .all();
   if (!row) throw new WorkspaceNotFoundError('letter', id);
-  return toLetter(row);
+  return letterWithVersion(db, row);
 }
 
-export function deleteLetter(db: WorkspaceDb, id: string): DeleteResult {
-  const removed = db.delete(letters).where(eq(letters.id, id)).returning({ id: letters.id }).all();
-  return { deleted: removed.length > 0 };
+/** Removes a soft-deleted letter and its versions for good. A live letter is never purged. */
+export function purgeLetter(db: WorkspaceDb, id: string): DeleteResult {
+  return { deleted: purgeDeletedLetters(db, id) > 0 };
 }
+
+export { listLetterVersions };
 
 /**
  * Copies a letter into a new draft. The copy is always a `draft` regardless of the original's
  * status. Duplicating a letter you already sent must not produce a second row claiming to have
- * been sent.
+ * been sent. Its version 1 is the source's current content.
  */
 export function duplicateLetter(db: WorkspaceDb, id: string): LetterRecord {
-  const source = db.select().from(letters).where(eq(letters.id, id)).get();
+  const source = liveLetterRow(db, id);
   if (!source) throw new WorkspaceNotFoundError('letter', id);
   return createLetter(db, {
     title: `${source.title} (copy)`.slice(0, 512),
@@ -3168,7 +3267,7 @@ export function getCounts(db: WorkspaceDb): WorkspaceCounts {
       .from(applications)
       .where(eq(applications.archived, false))
       .all().length,
-    letters: db.select({ id: letters.id }).from(letters).all().length,
+    letters: db.select({ id: letters.id }).from(letters).where(isNull(letters.deletedAt)).all().length,
     cvDocuments: db.select({ id: cvDocuments.id }).from(cvDocuments).all().length,
   };
 }

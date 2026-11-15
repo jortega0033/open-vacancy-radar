@@ -233,6 +233,11 @@ stored in the local workspace database and goes nowhere else.
 
 - **Saved jobs, applications, CVs, letters**: retained until you delete them through the app (with
   confirm-before-delete and a short undo window on most deletes) or delete `workspace.db` directly.
+- **Letter versions** (#738): every saved change to a library letter's title, type or text is kept as a new
+  version of that letter, so an application can name the exact version it used. Versions are kept until the letter is
+  deleted. Deleting a letter hides it at once and removes it, with all its versions, when the undo window closes
+  (or at the next start if the app quits first). Records of what an application sent keep their own copy of the
+  text and are not affected.
 - **Saved gap analyses**: when you click "Save analysis" on a gap-analysis result, that result — the
   AI CLI's own text about your CV against that vacancy — is stored in `workspace.db` on the saved
   job it is about, and is kept there until you delete that saved job. Nothing is stored unless you
@@ -275,7 +280,8 @@ stored in the local workspace database and goes nowhere else.
   hashes of the drafts and files described above, the posting hash and the requisition, with how each document is
   known (prepared, confirmed by you, attached by this app when it sent the application, or unknown). It copies text
   only when you supply it: text you paste as what you sent, or your linked library CV or letter as it read when you
-  said it is what you sent. Interview rounds hold what you enter: type, optional date, planned or done, your notes and
+  said it is what you sent. When a letter came from your letter library, the record also names that letter's id and
+  version number (#738). Interview rounds hold what you enter: type, optional date, planned or done, your notes and
   topics you marked as open. Nothing is read from email, a calendar or a recording, and nothing is sent anywhere when
   you save; your notes and the recorded documents go to your chosen provider only inside a prep pack you generate
   with "Generate prep pack". Editing or deleting a library CV or letter never changes these records. Retained until

@@ -14,6 +14,8 @@ pressed "I applied"), the same database write also stores a versioned record of 
 - the source CV hash and the hash of your reviewed CV evidence (from the #690 review when one ran, otherwise taken
   from the source CV when it still matches);
 - for the CV and the letter: the #690 draft id, version and content hash, and the accepted file id and hash.
+- for a letter that came from your letter library (attached to the application, or "my linked letter"): that letter's
+  id and version number (#738). Records made before #738 do not name one, and none is guessed afterwards.
 
 Each document carries one of four states, and they never merge:
 

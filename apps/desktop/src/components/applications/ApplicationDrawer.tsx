@@ -65,6 +65,8 @@ export interface ApplicationDrawerProps {
   onCancel: () => void;
   /** Rejecting shows the thrown error's message inline; resolving closes the drawer. */
   onSubmit: (input: ApplicationInput) => Promise<void>;
+  /** #738: opens the linked library letter (as it reads now) in the Letters page. */
+  onOpenLetter?: (letterId: string) => void;
 }
 
 /**
@@ -82,6 +84,7 @@ export function ApplicationDrawer({
   letters,
   onCancel,
   onSubmit,
+  onOpenLetter,
 }: ApplicationDrawerProps) {
   const [draft, setDraft] = useState<DraftState>(() => draftFromRecord(record));
   const [error, setError] = useState<string>();
@@ -294,6 +297,25 @@ export function ApplicationDrawer({
                 ))}
               </select>
             </label>
+            {onOpenLetter && record && record.letterId && draft.letterId === record.letterId && (() => {
+              // Offered only while the drawer has no unsaved edits, since leaving the page closes it.
+              const dirty = JSON.stringify(draft) !== JSON.stringify(draftFromRecord(record));
+              return (
+                <p className="text-xs text-base-content/70">
+                  <button
+                    type="button"
+                    className="btn btn-link btn-xs px-0"
+                    disabled={dirty}
+                    onClick={() => onOpenLetter(record.letterId as string)}
+                  >
+                    Open in Letters
+                  </button>{' '}
+                  {dirty
+                    ? 'Save or cancel your changes first: leaving this page closes the drawer.'
+                    : 'The version recorded as sent is under Interview prep, Documents you sent.'}
+                </p>
+              );
+            })()}
           </div>
 
           <label className="block">

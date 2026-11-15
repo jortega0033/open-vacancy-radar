@@ -401,7 +401,13 @@ describe('the historical basis does not follow the library', () => {
     workspace.deleteCvDocument(db, cvId);
 
     const after = pkgOf(await viewOf(applicationId), attemptId);
-    expect(after.documents).toEqual(before.documents);
+    // #738: the only thing that follows the library is the CURRENT title of the source letter, which
+    // reads as deleted now. The recorded version, text and hashes are unchanged.
+    const withoutTitle = (docs: InterviewPackageView['documents']) =>
+      docs.map((doc) => ({ ...doc, libraryLetter: doc.libraryLetter ? { ...doc.libraryLetter, title: null } : doc.libraryLetter }));
+    expect(withoutTitle(after.documents)).toEqual(withoutTitle(before.documents));
+    expect(docOf(before, 'letter').libraryLetter).toMatchObject({ letterId, version: 1, title: fx.USER_LETTER_TITLE });
+    expect(docOf(after, 'letter').libraryLetter).toMatchObject({ letterId, version: 1, title: null });
     expect(after.manifestHash).toBe(before.manifestHash);
     expect(docOf(after, 'cv').text).not.toContain('Rust');
     expect(docOf(after, 'letter').text).not.toContain('completely different');
@@ -784,5 +790,159 @@ describe('restart, deletion and reset', () => {
     expect(result.deleted).toMatchObject({ submissionPackages: 1, interviewRounds: 1 });
     expect(db.select().from(schema.applicationSubmissionPackages).all()).toEqual([]);
     expect(db.select().from(schema.applicationInterviewRounds).all()).toEqual([]);
+  });
+});
+
+const usage = await import('../electron/workspace/letter-usage-store.js');
+
+describe('#738: the library letter a record came from', () => {
+  it('a letter staged by the pipeline names its library version through submission, and an edit after sending is a new version', async () => {
+    const attemptId = await prepare({ userLetter: true });
+    const letter = workspace.listLetters(db)[0]!;
+    expect(letter.currentVersion).toBe(1);
+
+    // Prepared, not yet sent.
+    expect(usage.listLetterUsage(db, letter.id)).toMatchObject([{ kind: 'prepared', attemptId, version: 1 }]);
+    expect(usage.listLetterUsageSummaries(db)).toEqual([{ letterId: letter.id, usedIn: 1, latestSentVersion: null, editedSinceSent: false }]);
+
+    review.recordUserReportedSubmission(db, attemptId);
+    const applicationId = appOf(attemptId);
+    const recorded = docOf(pkgOf(await viewOf(applicationId), attemptId), 'letter');
+    expect(recorded.libraryLetter).toMatchObject({ letterId: letter.id, versionId: letter.currentVersionId, version: 1 });
+    expect(usage.listLetterUsage(db, letter.id)).toMatchObject([
+      { kind: 'recorded', applicationId, attemptId, version: 1, provenance: 'prepared' },
+    ]);
+
+    // The person confirms the prepared file: now it counts as sent.
+    const pkg = pkgOf(await viewOf(applicationId), attemptId);
+    const confirmed = await call('interview-context:state-documents', {
+      applicationId,
+      packageId: pkg.id,
+      expectedVersion: pkg.version,
+      statements: [{ slot: 'letter', choice: 'prepared_file' }],
+    });
+    expect(confirmed.ok).toBe(true);
+    expect(usage.listLetterUsageSummaries(db)).toEqual([{ letterId: letter.id, usedIn: 1, latestSentVersion: 1, editedSinceSent: false }]);
+
+    const edited = workspace.updateLetter(db, letter.id, { body: 'Rewritten after sending.' });
+    expect(edited.currentVersion).toBe(2);
+    const after = docOf(pkgOf(await viewOf(applicationId), attemptId), 'letter');
+    expect(after.text).toBe(recorded.text);
+    expect(after.contentHash).toBe(recorded.contentHash);
+    expect(after.libraryLetter).toMatchObject({ version: 1 });
+    // Library: the current text differs from the sent text.
+    expect(usage.listLetterUsageSummaries(db)[0]).toMatchObject({ latestSentVersion: 1, editedSinceSent: true });
+    // Restoring the sent text (as version 3) clears the marker: it compares text, not numbers.
+    const v1 = workspace.listLetterVersions(db, letter.id)[0]!;
+    expect(workspace.restoreLetterVersion(db, letter.id, v1.id).currentVersion).toBe(3);
+    expect(usage.listLetterUsageSummaries(db)[0]).toMatchObject({ latestSentVersion: 1, editedSinceSent: false });
+    // One entry for the application (the record supersedes the attempt's own prepared draft).
+    expect(usage.listLetterUsage(db, letter.id).filter((use) => use.applicationId === applicationId)).toHaveLength(1);
+  });
+
+  it('two applications that sent different versions of one letter each keep their own version', async () => {
+    const letter = workspace.createLetter(db, { title: 'Shared letter', type: 'cover_letter', body: 'First text.' });
+    const rowA = workspace.createApplication(db, { role: 'A', company: 'Contoso', status: 'applied', letterId: letter.id });
+    const rowB = workspace.createApplication(db, { role: 'B', company: 'Fabrikam', status: 'applied', letterId: letter.id });
+    const state = async (applicationId: string) => {
+      const view = await viewOf(applicationId);
+      const result = await call('interview-context:state-documents', {
+        applicationId,
+        packageId: view.packages[0]!.id,
+        expectedVersion: view.packages[0]!.version,
+        statements: [{ slot: 'letter', choice: 'linked_document' }],
+      });
+      expect(result.ok).toBe(true);
+    };
+
+    await state(rowA.id);
+    const v2 = workspace.updateLetter(db, letter.id, { body: 'Second text.' });
+    await state(rowB.id);
+    workspace.updateLetter(db, letter.id, { body: 'Third text, never sent.' });
+
+    const docA = docOf((await viewOf(rowA.id)).packages[0]!, 'letter');
+    const docB = docOf((await viewOf(rowB.id)).packages[0]!, 'letter');
+    expect(docA).toMatchObject({ source: 'linked_copy', text: 'First text.', libraryLetter: { letterId: letter.id, version: 1, title: 'Shared letter' } });
+    expect(docB).toMatchObject({ source: 'linked_copy', text: 'Second text.', libraryLetter: { letterId: letter.id, versionId: v2.currentVersionId, version: 2 } });
+
+    const uses = usage.listLetterUsage(db, letter.id);
+    expect(uses.map((use) => [use.applicationId, use.version, use.provenance]).sort()).toEqual(
+      [
+        [rowA.id, 1, 'user_confirmed'],
+        [rowB.id, 2, 'user_confirmed'],
+      ].sort(),
+    );
+    expect(usage.listLetterUsageSummaries(db)).toEqual([{ letterId: letter.id, usedIn: 2, latestSentVersion: 2, editedSinceSent: true }]);
+  });
+
+  it('a link with nothing recorded is shown as linked only; a statement from before #738 names no letter', async () => {
+    const letter = workspace.createLetter(db, { title: 'Linked only', type: 'cover_letter', body: 'Text.' });
+    const row = workspace.createApplication(db, { role: 'C', company: 'Northwind', status: 'preparing', letterId: letter.id });
+    expect(usage.listLetterUsage(db, letter.id)).toEqual([
+      expect.objectContaining({ kind: 'linked', applicationId: row.id, version: null, provenance: null }),
+    ]);
+
+    // A manifest written before #738: a linked copy with no `libraryLetter`. Never retro-linked.
+    const view = await viewOf(row.id);
+    expect(
+      (
+        await call('interview-context:state-documents', {
+          applicationId: row.id,
+          packageId: view.packages[0]!.id,
+          expectedVersion: null,
+          statements: [{ slot: 'letter', choice: 'linked_document' }],
+        })
+      ).ok,
+    ).toBe(true);
+    const stored = db.select().from(schema.applicationSubmissionPackages).all()[0]!;
+    const legacy = { ...stored.manifest, documents: stored.manifest.documents.map(({ libraryLetter: _drop, ...doc }) => doc) };
+    db.update(schema.applicationSubmissionPackages).set({ manifest: legacy }).run();
+    const doc = docOf((await viewOf(row.id)).packages[0]!, 'letter');
+    expect(doc.libraryLetter ?? null).toBeNull();
+    expect(usage.listLetterUsage(db, letter.id)).toEqual([expect.objectContaining({ kind: 'linked' })]);
+  });
+
+  it('deleting a used letter keeps the recorded copy; undo restores the same letter and its link', async () => {
+    const letter = workspace.createLetter(db, { title: 'Will be deleted', type: 'cover_letter', body: 'Sent text.' });
+    const row = workspace.createApplication(db, { role: 'D', company: 'Tailspin', status: 'applied', letterId: letter.id });
+    const view = await viewOf(row.id);
+    await call('interview-context:state-documents', {
+      applicationId: row.id,
+      packageId: view.packages[0]!.id,
+      expectedVersion: null,
+      statements: [{ slot: 'letter', choice: 'linked_document' }],
+    });
+
+    workspace.deleteLetter(db, letter.id);
+    let doc = docOf((await viewOf(row.id)).packages[0]!, 'letter');
+    expect(doc).toMatchObject({ text: 'Sent text.', libraryLetter: { letterId: letter.id, title: null } });
+
+    workspace.restoreLetter(db, letter.id);
+    doc = docOf((await viewOf(row.id)).packages[0]!, 'letter');
+    expect(doc.libraryLetter).toMatchObject({ letterId: letter.id, title: 'Will be deleted', version: 1 });
+    expect(workspace.listApplications(db).find((a) => a.id === row.id)!.letterId).toBe(letter.id);
+
+    workspace.deleteLetter(db, letter.id);
+    expect(workspace.purgeLetter(db, letter.id)).toEqual({ deleted: true });
+    doc = docOf((await viewOf(row.id)).packages[0]!, 'letter');
+    expect(doc).toMatchObject({ text: 'Sent text.', libraryLetter: { letterId: letter.id, title: null } });
+    expect(workspace.listApplications(db).find((a) => a.id === row.id)!.letterId).toBeNull();
+  });
+
+  it('a linked letter too long to store whole is copied as stated but names no version', async () => {
+    const long = 'x'.repeat(60_001);
+    const letter = workspace.createLetter(db, { title: 'Very long', type: 'cover_letter', body: long });
+    const row = workspace.createApplication(db, { role: 'E', company: 'Litware', status: 'applied', letterId: letter.id });
+    const view = await viewOf(row.id);
+    const result = await call('interview-context:state-documents', {
+      applicationId: row.id,
+      packageId: view.packages[0]!.id,
+      expectedVersion: null,
+      statements: [{ slot: 'letter', choice: 'linked_document' }],
+    });
+    expect(result.ok).toBe(true);
+    const doc = docOf((await viewOf(row.id)).packages[0]!, 'letter');
+    expect(doc.source).toBe('linked_copy');
+    expect(doc.libraryLetter ?? null).toBeNull();
   });
 });

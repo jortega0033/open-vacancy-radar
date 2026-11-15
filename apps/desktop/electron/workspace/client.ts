@@ -5,6 +5,7 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { fileURLToPath } from 'node:url';
 import * as schema from './schema.js';
+import { backfillLetterVersions, purgeDeletedLetters } from './letter-version-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,6 +45,10 @@ export function createWorkspaceDb(userDataPath: string): { db: WorkspaceDb; clos
   secureDatabaseFiles(databasePath);
   const db = drizzle(connection, { schema });
   migrate(db, { migrationsFolder: path.join(__dirname, 'drizzle') });
+  // #738: a letter whose delete was never undone nor purged (the app quit inside the undo window) is
+  // removed now, and letters from before versions existed get their version 1.
+  purgeDeletedLetters(db);
+  backfillLetterVersions(db);
   secureDatabaseFiles(databasePath); // migrate() can (re)create the -wal/-shm sidecars again
   return { db, close: () => connection.close() };
 }

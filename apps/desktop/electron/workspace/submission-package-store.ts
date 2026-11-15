@@ -201,6 +201,7 @@ export function bindInputFor(tx: Pick<WorkspaceDb, 'select'>, attemptId: string,
       version: draft.version,
       contentHash: draft.contentHash,
       artifactHash: draft.artifactHash,
+      ...(draft.content.type === 'letter' && draft.content.libraryLetter ? { libraryLetter: draft.content.libraryLetter } : {}),
     })),
     artifacts: artifacts.map((artifact) => ({
       id: artifact.id,

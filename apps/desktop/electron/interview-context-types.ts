@@ -56,6 +56,15 @@ const DocumentViewSchema = z.object({
   textState: z.enum(['available', 'changed', 'missing', 'not_stored']),
   /** present | missing (file gone) | changed (bytes differ) | not_recorded (no file was recorded). */
   fileState: z.enum(['present', 'missing', 'changed', 'not_recorded']),
+  /**
+   * #738: the library letter version this document is, when that was recorded. `title` is the letter's
+   * current title, or null when the letter has since been deleted (the recorded copy above is kept).
+   * Absent or null when no library letter was recorded (including every record from before #738).
+   */
+  libraryLetter: z
+    .object({ letterId: id, versionId: id, version: z.number().int().min(1), title: z.string().max(600).nullable() })
+    .nullable()
+    .optional(),
 });
 
 const PackageViewSchema = z.object({

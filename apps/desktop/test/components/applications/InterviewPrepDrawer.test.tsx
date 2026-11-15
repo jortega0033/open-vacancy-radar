@@ -84,6 +84,9 @@ function makeLetter(overrides: Partial<LetterRecord> = {}): LetterRecord {
     cvId: 'cv-1',
     body: 'I am excited to apply for the Senior Frontend Engineer role.',
     updatedAt: '2026-08-01T10:00:00.000Z',
+    createdAt: '2026-08-01T10:00:00.000Z',
+    currentVersionId: 'letter-1-v1',
+    currentVersion: 1,
     ...overrides,
   };
 }

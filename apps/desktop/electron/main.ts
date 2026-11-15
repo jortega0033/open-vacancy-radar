@@ -211,6 +211,7 @@ import {
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
+  parseLetterVersionEnvelope,
   parseLetterInput,
   parseLetterPatch,
   parseMcpClientGrantInput,
@@ -218,6 +219,7 @@ import {
   parseSavedJobPatch,
   parseSettingsPatch,
 } from './workspace/validate.js';
+import { listLetterUsage, listLetterUsageSummaries } from './workspace/letter-usage-store.js';
 import { printHtmlToPdf } from './application-artifact-staging.js';
 import { buildCvCaseExportFileName, cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportFileName } from './cv-export.js';
 import { renderResumeDocx } from './resume-docx.js';
@@ -4219,6 +4221,36 @@ guardedIpc.handle('workspace:letters:duplicate', async (_event, input: unknown) 
     workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
   ),
 );
+
+// #738: the letter version history, soft-delete undo, and which applications used a letter.
+guardedIpc.handle('workspace:letters:restore', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.restoreLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:letters:purge', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.purgeLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:letters:versions', async (_event, input: unknown) =>
+  workspace.listLetterVersions(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:letters:restore-version', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => {
+    const { id, versionId } = parseLetterVersionEnvelope(input);
+    return workspace.restoreLetterVersion(await ensureWorkspaceDb(), id, versionId);
+  }),
+);
+
+guardedIpc.handle('workspace:letters:usage', async (_event, input: unknown) =>
+  listLetterUsage(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:letters:usage-summaries', async () => listLetterUsageSummaries(await ensureWorkspaceDb()));
 
 /**
  * Read/patch-only application attempt access for the review UI (issue #202). No `create` or

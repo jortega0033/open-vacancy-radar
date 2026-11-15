@@ -9,7 +9,7 @@ import { renderResumePlainText } from './resume-text.js';
 import { RESUME_JSON_SHAPE, type TailoredResume } from './resume-schema.js';
 import { tailoredResumeFromSource } from './resume-source.js';
 import { toTailoredResume } from './tailored-resume-response.js';
-import type { ApplicationAttemptRecord, CvDocumentRecord } from './workspace/types.js';
+import type { ApplicationAttemptRecord, CvDocumentRecord, LibraryLetterRef } from './workspace/types.js';
 
 /**
  * The optional independent critique of a prepared application package (#690), as pure functions.
@@ -60,6 +60,8 @@ export interface LetterDraftContent {
   factIds: string[];
   /** The approved company claims the finished letter carries (empty when it carries none). */
   companyClaims: string[];
+  /** #738: the library letter version a person-written letter was staged from. Absent otherwise. */
+  libraryLetter?: LibraryLetterRef;
 }
 export type DraftContent = CvDraftContent | LetterDraftContent;
 
