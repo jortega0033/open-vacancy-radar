@@ -82,7 +82,9 @@ export function LettersPage({
   openLetter = null,
   onOpenLetterConsumed,
 }: LettersPageProps) {
-  const openLetterTarget = useRef(openLetter).current;
+  // Captured at mount like `vacancy`, then cleared once the library has opened it, so coming back to
+  // the Library tab later does not reopen the same preview.
+  const [openLetterTarget, setOpenLetterTarget] = useState(openLetter);
   // Captured once at mount, not read reactively: `onVacancyConsumed` below tells the caller to
   // clear its own copy of `vacancy` right after this page starts, which must not yank the job out
   // from under a generator that has already opened on it. Every use of the handed-off vacancy for
@@ -190,6 +192,7 @@ export function LettersPage({
             onNew={() => openGenerator(null)}
             onCountChanged={handleCountChanged}
             initialPreview={openLetterTarget}
+            onInitialPreviewConsumed={() => setOpenLetterTarget(null)}
           />
         ) : (
           <LetterGenerator

@@ -293,8 +293,10 @@ export const letters = sqliteTable('letters', {
 
 /**
  * #738: every saved content of a library letter, INSERT-ONLY. A save that changes the title, type or
- * body appends the next version; status, job and CV-link changes do not. Nothing edits a row, so the
- * version a submission record names always reads as it did when it was sent. Cascades with the letter.
+ * body appends the next version; status, job and CV-link changes do not. Nothing edits a row's text, so
+ * the version a submission record names always reads as it did when it was sent. The one change a row
+ * can see is `cv_id` becoming null when that CV is deleted (it is context, never part of the text or
+ * its hash). Cascades with the letter.
  */
 export const letterVersions = sqliteTable('letter_versions', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),

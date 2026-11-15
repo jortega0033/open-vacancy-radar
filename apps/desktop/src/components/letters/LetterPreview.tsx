@@ -11,8 +11,8 @@ const MAX_PREVIEW_PAGES = 20;
 
 const USAGE_LABEL: Record<LetterUsageRecord['kind'], string> = {
   recorded: 'On record',
-  prepared: 'Prepared, not recorded as sent',
-  linked: 'Linked, not recorded as sent',
+  prepared: 'Prepared only, no send recorded',
+  linked: 'Linked only, no send recorded',
 };
 
 const PROVENANCE_LABEL: Record<NonNullable<LetterUsageRecord['provenance']>, string> = {
@@ -136,6 +136,12 @@ export function LetterPreview({ letter, initialVersionId = null, onBack, onEdit,
   const [actionError, setActionError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  // Opening the preview replaced the button that was focused; move focus to what replaced it.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -203,6 +209,10 @@ export function LetterPreview({ letter, initialVersionId = null, onBack, onEdit,
     try {
       const updated = await window.workspace.restoreLetterVersion(letter.id, shown.id);
       setSelectedId(null);
+      if (updated.currentVersionId === letter.currentVersionId) {
+        setNotice(`Version ${shown.version} has the same text as the current version, so nothing was saved.`);
+        return;
+      }
       setNotice(
         updated.currentVersion !== null
           ? `Version ${shown.version} is now the current text, saved as version ${updated.currentVersion}.`
@@ -214,7 +224,7 @@ export function LetterPreview({ letter, initialVersionId = null, onBack, onEdit,
     } finally {
       setBusy(false);
     }
-  }, [shown, isCurrent, letter.id, onChanged]);
+  }, [shown, isCurrent, letter.id, letter.currentVersionId, onChanged]);
 
   return (
     <section aria-label={`Preview of ${letter.title}`} className="flex flex-col gap-4">
@@ -242,7 +252,10 @@ export function LetterPreview({ letter, initialVersionId = null, onBack, onEdit,
       </div>
 
       <header>
-        <h2 className="text-lg font-semibold">{letter.title}</h2>
+        {/* The selected version's own title: an older version may have had a different one. */}
+        <h2 ref={headingRef} tabIndex={-1} className="text-lg font-semibold focus:outline-none">
+          {shown?.title ?? letter.title}
+        </h2>
         <p className="text-sm text-base-content/70">
           {[letter.company, letter.role, labelFor(LETTER_TYPE_OPTIONS, letter.type)].filter(Boolean).join(' · ')}
         </p>
@@ -297,8 +310,8 @@ export function LetterPreview({ letter, initialVersionId = null, onBack, onEdit,
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {usage.map((use, index) => (
-                <li key={`${use.kind}-${use.applicationId ?? use.attemptId ?? index}`} className="text-xs">
-                  <span className="font-medium">{[use.company, use.role].filter(Boolean).join(' — ') || 'Application'}</span>
+                <li key={`${use.kind}-${use.applicationId ?? use.attemptId ?? 'none'}-${index}`} className="text-xs">
+                  <span className="font-medium">{[use.role, use.company].filter(Boolean).join(' at ') || 'Application'}</span>
                   <br />
                   <span className="text-base-content/70">
                     {USAGE_LABEL[use.kind]}

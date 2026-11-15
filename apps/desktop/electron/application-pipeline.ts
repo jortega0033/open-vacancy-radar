@@ -902,7 +902,7 @@ export async function runApplicationAttempt(
   // What each staged letter is, so the draft record names its author and the facts it was built from.
   const letterMeta = new Map<
     DraftKind,
-    Pick<LetterDraftContent, 'authored' | 'factIds' | 'companyClaims' | 'libraryLetter'> & { revisedFrom: string | null; reusedVersion: boolean }
+    Pick<LetterDraftContent, 'authored' | 'factIds' | 'companyClaims'> & { revisedFrom: string | null; reusedVersion: boolean }
   >();
   for (const requested of letters) {
     letterMeta.set(requested.kind, {
@@ -911,7 +911,6 @@ export async function runApplicationAttempt(
       companyClaims: [],
       revisedFrom: null,
       reusedVersion: false,
-      ...(requested.libraryLetter ? { libraryLetter: requested.libraryLetter } : {}),
     });
   }
   if (letters.length === 0) {
@@ -1039,7 +1038,9 @@ export async function runApplicationAttempt(
           authored: meta?.authored ?? 'user',
           factIds: meta?.factIds ?? [],
           companyClaims: meta?.companyClaims ?? [],
-          ...(meta?.authored === 'user' && meta.libraryLetter ? { libraryLetter: meta.libraryLetter } : {}),
+          // Taken from this letter, not from `letterMeta` (keyed by kind): two final letters of one
+          // kind must each name their own library version.
+          ...(meta?.authored === 'user' && letter.libraryLetter ? { libraryLetter: letter.libraryLetter } : {}),
         },
         artifactHash: stagedLetter.contentHash,
         origin: meta?.reusedVersion ? 'critique_revision' : meta?.authored === 'generated' ? 'prepared' : 'user_letter',

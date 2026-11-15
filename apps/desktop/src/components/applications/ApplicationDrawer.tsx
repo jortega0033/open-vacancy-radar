@@ -297,20 +297,25 @@ export function ApplicationDrawer({
                 ))}
               </select>
             </label>
-            {onOpenLetter && record && record.letterId && draft.letterId === record.letterId && (
-              <p className="text-xs text-base-content/70">
-                {/* Offered only while the drawer has no unsaved edits, since leaving the page closes it. */}
-                <button
-                  type="button"
-                  className="btn btn-link btn-xs px-0"
-                  disabled={JSON.stringify(draft) !== JSON.stringify(draftFromRecord(record))}
-                  onClick={() => onOpenLetter(record.letterId as string)}
-                >
-                  Open in Letters
-                </button>{' '}
-                The version recorded as sent is under Interview prep, Documents you sent.
-              </p>
-            )}
+            {onOpenLetter && record && record.letterId && draft.letterId === record.letterId && (() => {
+              // Offered only while the drawer has no unsaved edits, since leaving the page closes it.
+              const dirty = JSON.stringify(draft) !== JSON.stringify(draftFromRecord(record));
+              return (
+                <p className="text-xs text-base-content/70">
+                  <button
+                    type="button"
+                    className="btn btn-link btn-xs px-0"
+                    disabled={dirty}
+                    onClick={() => onOpenLetter(record.letterId as string)}
+                  >
+                    Open in Letters
+                  </button>{' '}
+                  {dirty
+                    ? 'Save or cancel your changes first: leaving this page closes the drawer.'
+                    : 'The version recorded as sent is under Interview prep, Documents you sent.'}
+                </p>
+              );
+            })()}
           </div>
 
           <label className="block">

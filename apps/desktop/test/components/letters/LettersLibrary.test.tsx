@@ -250,10 +250,11 @@ describe('LettersLibrary', () => {
       expect(screen.queryByRole('button', { name: /^undo$/i })).not.toBeInTheDocument();
     });
 
-    it('reports a failed Undo instead of silently losing the letter', async () => {
+    it('reports a failed Undo instead of silently losing the letter, and does not purge it', async () => {
       const deleteLetter = vi.fn().mockResolvedValue({ deleted: true });
       const restoreLetter = vi.fn().mockRejectedValue(new Error('database is locked'));
-      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]), deleteLetter, restoreLetter });
+      const purgeLetter = vi.fn().mockResolvedValue({ deleted: true });
+      installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]), deleteLetter, restoreLetter, purgeLetter });
 
       render(<LettersLibrary onOpen={vi.fn()} />);
       await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
@@ -262,6 +263,39 @@ describe('LettersLibrary', () => {
       fireEvent.click(await screen.findByRole('button', { name: /^undo$/i }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent('database is locked');
+      // Undo was asked for, so the toast closing does not purge; the next start does.
+      expect(purgeLetter).not.toHaveBeenCalled();
+    });
+
+    it('purges the deleted letter when the Library is left during the undo window', async () => {
+      const purgeLetter = vi.fn().mockResolvedValue({ deleted: true });
+      installWorkspaceBridge({
+        listLetters: vi.fn().mockResolvedValue([makeLetter()]),
+        deleteLetter: vi.fn().mockResolvedValue({ deleted: true }),
+        purgeLetter,
+      });
+      const { unmount } = render(<LettersLibrary onOpen={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^delete$/i }));
+      await screen.findByRole('button', { name: /^undo$/i });
+      unmount();
+      expect(purgeLetter).toHaveBeenCalledWith('letter-1');
+    });
+
+    it('keeps the undo toast while a preview is open', async () => {
+      installWorkspaceBridge({
+        listLetters: vi.fn().mockResolvedValue([makeLetter(), makeLetter({ id: 'other', title: 'Another letter' })]),
+        deleteLetter: vi.fn().mockResolvedValue({ deleted: true }),
+      });
+      render(<LettersLibrary onOpen={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText('Another letter')).toBeInTheDocument());
+      fireEvent.click(within(rowFor(makeLetter().title)).getByRole('button', { name: /^delete /i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^delete$/i }));
+      await screen.findByRole('button', { name: /^undo$/i });
+      fireEvent.click(screen.getByRole('button', { name: 'Preview Another letter' }));
+      expect(await screen.findByRole('region', { name: 'Preview of Another letter' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^undo$/i })).toBeInTheDocument();
     });
   });
 
@@ -326,8 +360,8 @@ describe('LettersLibrary', () => {
           letters[1]!,
         ]),
         listLetterUsageSummaries: vi.fn().mockResolvedValue([
-          { letterId: 'a', usedIn: 2, latestSentVersion: 2 },
-          { letterId: 'b', usedIn: 1, latestSentVersion: 1 },
+          { letterId: 'a', usedIn: 2, latestSentVersion: 2, editedSinceSent: true },
+          { letterId: 'b', usedIn: 1, latestSentVersion: 1, editedSinceSent: false },
         ]),
       });
       render(<LettersLibrary onOpen={vi.fn()} />);

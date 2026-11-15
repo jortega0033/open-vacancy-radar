@@ -2082,6 +2082,10 @@ export function updateLetter(db: WorkspaceDb, id: string, values: LetterPatch): 
 export function restoreLetterVersion(db: WorkspaceDb, id: string, versionId: string): LetterRecord {
   const version = getLetterVersion(db, versionId);
   if (!version || version.letterId !== id) throw new WorkspaceNotFoundError('letter version', versionId);
+  const head = liveLetterRow(db, id);
+  if (!head) throw new WorkspaceNotFoundError('letter', id);
+  // Already the current text: nothing to save (and no tone/length change sneaking in without a version).
+  if (letterContentHash(head) === version.contentHash) return letterWithVersion(db, head);
   return updateLetter(db, id, {
     title: version.title,
     type: version.type,

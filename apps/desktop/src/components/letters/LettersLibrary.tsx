@@ -17,6 +17,8 @@ import {
 interface PendingUndo {
   message: string;
   letter: LetterRecord;
+  /** Gives each delete its own toast (and its own full undo window), even for two same-titled letters. */
+  seq: number;
 }
 
 /** #738: case-insensitive match on title, company, role and body. */
@@ -49,6 +51,8 @@ export interface LettersLibraryProps {
   onCountChanged?: () => void;
   /** #738: open this letter's preview once the list has loaded (the "Open in Letters" link). */
   initialPreview?: LetterPreviewTarget | null;
+  /** Fired once `initialPreview` was acted on, so the parent stops passing it to a later mount. */
+  onInitialPreviewConsumed?: () => void;
 }
 
 /**
@@ -71,6 +75,7 @@ export function LettersLibrary({
   onNew,
   onCountChanged,
   initialPreview = null,
+  onInitialPreviewConsumed,
 }: LettersLibraryProps) {
   const searchId = useId();
   const typeFilterId = useId();
@@ -86,6 +91,9 @@ export function LettersLibrary({
   const restoringId = useRef<string | null>(null);
   /** Mirrors `pendingUndo` for the callbacks that close its window. */
   const pendingUndoRef = useRef<PendingUndo | null>(null);
+  const undoSeq = useRef(0);
+  /** The row whose Preview button gets focus back when the preview closes. */
+  const returnFocusId = useRef<string | null>(null);
   const [loadError, setLoadError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -103,7 +111,11 @@ export function LettersLibrary({
           const target = initialPreviewPending.current;
           if (target) {
             initialPreviewPending.current = null;
-            if (rows.some((row) => row.id === target.letterId)) setPreview(target);
+            onInitialPreviewConsumed?.();
+            if (rows.some((row) => row.id === target.letterId)) {
+              returnFocusId.current = target.letterId;
+              setPreview(target);
+            }
             else setActionError('That letter has been deleted. The application keeps the copy it recorded.');
           }
         }
@@ -167,7 +179,8 @@ export function LettersLibrary({
         if (previous && previous.letter.id !== letter.id) {
           void window.workspace.purgeLetter(previous.letter.id).catch(() => undefined);
         }
-        const next = { message: `Deleted "${letter.title}".`, letter };
+        undoSeq.current += 1;
+        const next = { message: `Deleted "${letter.title}".`, letter, seq: undoSeq.current };
         pendingUndoRef.current = next;
         setPendingUndo(next);
       } else {
@@ -194,6 +207,32 @@ export function LettersLibrary({
     setPendingUndo(null);
   }, []);
 
+  // Leaving the Library (another tab or page) closes the undo window, so the letter is purged now
+  // rather than lingering until the next start.
+  useEffect(
+    () => () => {
+      const current = pendingUndoRef.current;
+      if (current && restoringId.current !== current.letter.id) {
+        void window.workspace.purgeLetter(current.letter.id).catch(() => undefined);
+      }
+      pendingUndoRef.current = null;
+    },
+    [],
+  );
+
+  // Back from a preview: focus returns to the row's Preview button instead of the page body.
+  useEffect(() => {
+    if (preview || !returnFocusId.current) return;
+    const id = returnFocusId.current;
+    returnFocusId.current = null;
+    document.querySelector<HTMLElement>(`[data-preview-for="${CSS.escape(id)}"]`)?.focus();
+  }, [preview]);
+
+  const openPreview = useCallback((target: LetterPreviewTarget) => {
+    returnFocusId.current = target.letterId;
+    setPreview(target);
+  }, []);
+
   /** Restores the SAME letter (same id, versions and links), not a fresh copy. */
   const handleUndo = useCallback(async () => {
     const undo = pendingUndo;
@@ -218,8 +257,14 @@ export function LettersLibrary({
   );
   const previewLetter = preview ? allRows.find((row) => row.id === preview.letterId) ?? null : null;
 
+  // Rendered in both views, so opening a preview neither hides the toast nor restarts its window.
+  const undoToast = pendingUndo && (
+    <UndoToast key={pendingUndo.seq} message={pendingUndo.message} onUndo={handleUndo} onDismiss={dismissUndo} />
+  );
+
   if (previewLetter && preview) {
     return (
+      <>
       <LetterPreview
         key={`${previewLetter.id}-${preview.versionId ?? 'current'}`}
         letter={previewLetter}
@@ -231,6 +276,8 @@ export function LettersLibrary({
           setUsageToken((token) => token + 1);
         }}
       />
+      {undoToast}
+      </>
     );
   }
 
@@ -335,10 +382,7 @@ export function LettersLibrary({
             <tbody>
               {rows.map((letter) => {
                 const summary = summaries.get(letter.id);
-                const editedSinceSent =
-                  summary?.latestSentVersion != null &&
-                  letter.currentVersion !== null &&
-                  letter.currentVersion > summary.latestSentVersion;
+                const editedSinceSent = summary?.editedSinceSent === true;
                 return (
                 <tr key={letter.id} className="ovr-row hover:bg-base-200">
                   <td className="ovr-responsive-table__cell font-medium" data-label="Title">
@@ -398,7 +442,8 @@ export function LettersLibrary({
                     <button
                       className="btn btn-ghost btn-sm px-1.5"
                       type="button"
-                      onClick={() => setPreview({ letterId: letter.id })}
+                      onClick={() => openPreview({ letterId: letter.id })}
+                      data-preview-for={letter.id}
                       disabled={busyId === letter.id}
                       aria-label={`Preview ${letter.title}`}
                     >
@@ -449,9 +494,7 @@ export function LettersLibrary({
         />
       )}
 
-      {pendingUndo && (
-        <UndoToast message={pendingUndo.message} onUndo={handleUndo} onDismiss={dismissUndo} />
-      )}
+      {undoToast}
     </div>
   );
 }

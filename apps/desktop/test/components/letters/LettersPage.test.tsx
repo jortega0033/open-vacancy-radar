@@ -5,6 +5,15 @@ import { installBridges } from '../../cv-bridges.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
 import { FACT_SELECTION, LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
 
+vi.mock('../../../src/components/cv/pdf-pages.js', () => ({
+  openPdfForReview: vi.fn(async () => ({
+    pageCount: 1,
+    renderPage: async () => undefined,
+    extractText: async () => 'page text',
+    destroy: async () => undefined,
+  })),
+}));
+
 function setup(workspace: Parameters<typeof installWorkspaceBridge>[0] = {}) {
   const bridges = installBridges();
   const ws = installWorkspaceBridge({
@@ -261,5 +270,19 @@ describe('LettersPage', () => {
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
       expect(await screen.findByRole('table')).toBeInTheDocument();
     });
+  });
+
+  it('#738: "Open in Letters" opens the preview once; coming back to the Library later shows the list', async () => {
+    setup({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
+    const onOpenLetterConsumed = vi.fn();
+    render(<LettersPage openLetter={{ letterId: 'letter-1', versionId: null }} onOpenLetterConsumed={onOpenLetterConsumed} />);
+    expect(await screen.findByRole('region', { name: /^preview of/i })).toBeInTheDocument();
+    expect(onOpenLetterConsumed).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('tab', { name: /generator/i }));
+    await screen.findByRole('textbox', { name: /letter title/i });
+    fireEvent.click(screen.getByRole('tab', { name: /library/i }));
+    expect(await screen.findByRole('table')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /^preview of/i })).not.toBeInTheDocument();
   });
 });

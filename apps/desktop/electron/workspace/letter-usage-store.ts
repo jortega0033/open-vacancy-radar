@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { WorkspaceDb } from './client.js';
 import {
   applicationAttempts,
@@ -6,6 +6,7 @@ import {
   applications,
   applicationSubmissionPackages,
   letters,
+  letterVersions,
 } from './schema.js';
 import type { LetterUsageRecord, LetterUsageSummary } from './types.js';
 
@@ -13,7 +14,7 @@ import type { LetterUsageRecord, LetterUsageSummary } from './types.js';
  * #738: which applications used a library letter, read from the records that already exist. Nothing
  * here writes, and nothing infers a use: a letter is only linked to an application where a record
  * names its exact version (a #691 submission record or a #690 attempt draft), or where the
- * Applications row links it (shown as "linked, not recorded as sent").
+ * Applications row links it (shown as "Linked only, no send recorded").
  *
  * Records from before #738 carry no letter reference and are never matched to a letter by text or
  * title, so they simply do not appear here.
@@ -80,6 +81,8 @@ function collectUsage(db: Db, onlyLetterId?: string): Map<string, LetterUsageRec
     const ref = draft.content.libraryLetter;
     if (recordedAttempts.has(`${ref.letterId}|${draft.attemptId}`)) continue;
     const attempt = attempts.get(draft.attemptId);
+    // The Applications row already has a record naming this letter: one entry per application.
+    if (attempt?.applicationId && coveredRows.has(`${ref.letterId}|${attempt.applicationId}`)) continue;
     add(ref.letterId, {
       kind: 'prepared',
       applicationId: attempt?.applicationId ?? null,
@@ -124,6 +127,10 @@ function isLive(db: Db, letterId: string): boolean {
   return db.select({ id: letters.id }).from(letters).where(and(eq(letters.id, letterId), isNull(letters.deletedAt))).get() !== undefined;
 }
 
+function isSent(use: LetterUsageRecord): boolean {
+  return use.kind === 'recorded' && SENT_PROVENANCES.has(use.provenance) && use.versionId !== null && use.version !== null;
+}
+
 /** Every recorded, prepared or linked use of one live letter, newest first. */
 export function listLetterUsage(db: Db, letterId: string): LetterUsageRecord[] {
   if (!isLive(db, letterId)) return [];
@@ -135,18 +142,35 @@ export function listLetterUsageSummaries(db: Db): LetterUsageSummary[] {
   const live = new Set(
     db.select({ id: letters.id }).from(letters).where(isNull(letters.deletedAt)).all().map((row) => row.id),
   );
-  const summaries: LetterUsageSummary[] = [];
-  for (const [letterId, usages] of collectUsage(db)) {
-    if (!live.has(letterId)) continue;
-    const applicationsUsed = new Set(usages.map((usage) => usage.applicationId ?? `attempt:${usage.attemptId}`));
-    const sent = usages
-      .filter((usage) => usage.kind === 'recorded' && SENT_PROVENANCES.has(usage.provenance) && usage.version !== null)
-      .map((usage) => usage.version as number);
-    summaries.push({
+  const usage = [...collectUsage(db)].filter(([letterId]) => live.has(letterId));
+  // Content hashes of every version a sent record names, and of each letter's current version, so
+  // "edited since sent" compares text, not version numbers (restoring the sent text clears it).
+  const sentVersionIds = usage.flatMap(([, uses]) => uses.filter(isSent).map((use) => use.versionId as string));
+  const hashes = new Map(
+    (sentVersionIds.length > 0
+      ? db.select({ id: letterVersions.id, hash: letterVersions.contentHash }).from(letterVersions).where(inArray(letterVersions.id, sentVersionIds)).all()
+      : []
+    ).map((row) => [row.id, row.hash]),
+  );
+  const currentHashes = new Map(
+    db
+      .select({ letterId: letters.id, hash: letterVersions.contentHash })
+      .from(letters)
+      .innerJoin(letterVersions, eq(letters.currentVersionId, letterVersions.id))
+      .all()
+      .map((row) => [row.letterId, row.hash]),
+  );
+  return usage.map(([letterId, usages]) => {
+    const applicationsUsed = new Set(usages.map((use) => use.applicationId ?? `attempt:${use.attemptId}`));
+    const sent = usages.filter(isSent);
+    const latest = sent.reduce<LetterUsageRecord | null>((best, use) => (best && (best.version ?? 0) >= (use.version ?? 0) ? best : use), null);
+    const sentHash = latest?.versionId ? hashes.get(latest.versionId) : undefined;
+    const currentHash = currentHashes.get(letterId);
+    return {
       letterId,
       usedIn: applicationsUsed.size,
-      latestSentVersion: sent.length > 0 ? Math.max(...sent) : null,
-    });
-  }
-  return summaries;
+      latestSentVersion: latest?.version ?? null,
+      editedSinceSent: latest !== null && sentHash !== undefined && currentHash !== undefined && sentHash !== currentHash,
+    };
+  });
 }

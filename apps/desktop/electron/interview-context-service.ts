@@ -339,8 +339,12 @@ export async function stateDocuments(deps: InterviewContextDeps, input: StateDoc
           const kind = 'type' in linked && (linked.type === 'cover_letter' || linked.type === 'motivation_letter') ? linked.type : statement.slot === 'cv' ? 'cv' : null;
           // #738: name the exact library version whose text is being copied, so the letter can link back
           // and a later edit (a new version) is visible as "edited since sent".
+          // A copy cut at the stored-text limit is not that version's text, so it names no version.
+          const truncated = text.length > VIEW_TEXT_LIMITS.suppliedTextChars;
           const version =
-            'currentVersionId' in linked && linked.currentVersionId ? getLetterVersion(db, linked.currentVersionId) : undefined;
+            !truncated && 'currentVersionId' in linked && linked.currentVersionId
+              ? getLetterVersion(db, linked.currentVersionId)
+              : undefined;
           statements.push({
             slot: statement.slot,
             choice: 'linked_document',

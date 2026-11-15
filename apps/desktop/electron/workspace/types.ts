@@ -565,6 +565,8 @@ export interface LetterUsageSummary {
   usedIn: number;
   /** The newest version a submission record names as sent (person-confirmed or receipt-backed), if any. */
   latestSentVersion: number | null;
+  /** The current text differs from that sent version's text (restoring the sent text clears it). */
+  editedSinceSent: boolean;
 }
 
 /** #738: what a letter's identity looked like where a record names it. */

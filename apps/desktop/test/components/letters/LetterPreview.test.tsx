@@ -77,7 +77,8 @@ describe('LetterPreview (#738)', () => {
     render(<LetterPreview letter={letter} onBack={vi.fn()} onEdit={vi.fn()} onChanged={vi.fn()} />);
     const usedIn = await screen.findByRole('complementary', { name: 'Used in' });
     await waitFor(() => expect(within(usedIn).getByText(/On record, version 1 \(you confirmed you sent it\)/)).toBeInTheDocument());
-    expect(within(usedIn).getByText('Linked, not recorded as sent')).toBeInTheDocument();
+    expect(within(usedIn).getByText('Linked only, no send recorded')).toBeInTheDocument();
+    expect(within(usedIn).getByText('Engineer at Redwood')).toBeInTheDocument();
   });
 
   it('an older version is read-only; restoring it saves it as a new version', async () => {

@@ -83,6 +83,12 @@ describe('letter versions', () => {
     expect(after.slice(0, 2)).toEqual([v1, v2]);
     expect(after[2]).toMatchObject({ body: 'Body one.', contentHash: v1!.contentHash });
 
+    // Restoring a version whose text is already current saves nothing, and changes nothing.
+    const current = workspace.listLetterVersions(db, letter.id)[2]!;
+    const same = workspace.restoreLetterVersion(db, letter.id, v1!.id);
+    expect(same).toMatchObject({ currentVersionId: current.id, currentVersion: 3 });
+    expect(workspace.listLetterVersions(db, letter.id)).toHaveLength(3);
+
     const other = workspace.createLetter(db, { title: 'Other', body: 'x' });
     expect(() => workspace.restoreLetterVersion(db, other.id, v1!.id)).toThrow(WorkspaceNotFoundError);
   });
@@ -189,6 +195,9 @@ describe('manifest letter references are additive', () => {
   it('a draft with no library letter produces exactly the pre-#738 document shape and hash', () => {
     const manifest = buildSubmissionManifest(bind);
     expect(manifest.schema).toBe(1);
+    // Pinned from `master`'s submitted-package.ts (before #738) over this same input, so a change
+    // that alters legacy manifests is caught here rather than compared against its own output.
+    expect(manifestHash(manifest)).toBe('5bcd5559da1a0b568643af941febc2a2c15af6d5901856096b3eaa98ac512f03');
     expect(Object.keys(manifest.documents[0]!)).not.toContain('libraryLetter');
     // Re-binding against a manifest written before #738 is still a no-op.
     expect(manifestHash(buildSubmissionManifest({ ...bind, previous: manifest }))).toBe(manifestHash(manifest));
