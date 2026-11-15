@@ -126,7 +126,12 @@ export function normalizeDomainAlias(value: string): string | null {
   host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
   host = host.split(/[/?#]/)[0] ?? '';
   host = host.replace(/^[^@]*@/, '').replace(/:\d+$/, '');
-  host = host.replace(/^www\./, '').replace(/\.+$/, '');
+  host = host.replace(/^www\./, '');
+  // Trailing dots are removed with a loop rather than `/\.+$/`: CodeQL (js/polynomial-redos) flags that
+  // pattern as quadratic on input with many dots, and this runs on text the person is still typing.
+  let end = host.length;
+  while (end > 0 && host[end - 1] === '.') end -= 1;
+  host = host.slice(0, end);
   if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(host)) return null;
   return host;
 }

@@ -273,7 +273,7 @@ describe('postings that must cost nothing', () => {
       candidate(3, { company: 'Also fine', listingUrl: 'https://jobs.northwind.example/3' }), // excluded by domain alias
     );
     await h.runner.tick();
-    expect(itemFor(h, 'vac-1')).toMatchObject({ state: 'skipped', skipReason: 'excluded_company', stateDetail: 'You excluded Company 1 B.V. in Settings > Search profile' });
+    expect(itemFor(h, 'vac-1')).toMatchObject({ state: 'skipped', skipReason: 'excluded_company', stateDetail: 'You excluded Company 1 B.V. under What you are looking for' });
     expect(itemFor(h, 'vac-3')).toMatchObject({ state: 'skipped', skipReason: 'excluded_company' });
     expect(itemFor(h, 'vac-2').state).not.toBe('skipped');
     // Only the control reached any later port.

@@ -351,7 +351,7 @@ export function VacancyDetail({
             {excludedCompany && (
               <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-base-content/70" role="note">
                 <span className="badge badge-ghost badge-sm">Excluded company</span>
-                <span>You excluded this company in Settings &gt; Search profile. Blind Apply skips it; applying here is your choice.</span>
+                <span>You excluded this company under What you are looking for. Blind Apply skips it; applying here is your choice.</span>
               </p>
             )}
           </div>

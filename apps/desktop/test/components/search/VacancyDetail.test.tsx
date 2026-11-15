@@ -74,7 +74,7 @@ describe('VacancyDetail excluded company (#736)', () => {
     renderDetail(worldwideResult(), { excludedCompany: true });
     const note = screen.getByRole('note');
     expect(note).toHaveTextContent('Excluded company');
-    expect(note).toHaveTextContent('You excluded this company in Settings > Search profile');
+    expect(note).toHaveTextContent('You excluded this company under What you are looking for');
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 

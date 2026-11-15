@@ -102,7 +102,7 @@ export interface SearchFilterBarProps {
   useSearchPlan?: boolean;
   onUseSearchPlanChange?: (value: boolean) => void;
   /**
-   * #736: how many companies the person excluded in Settings > Search profile. The "show excluded
+   * #736: how many companies the person excluded under "What you are looking for". The "show excluded
    * companies" toggle appears only when there is at least one, so an empty list leaves the panel as is.
    */
   excludedCompanyCount?: number;

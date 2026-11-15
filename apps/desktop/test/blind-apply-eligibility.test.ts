@@ -72,7 +72,7 @@ describe('Blind Apply gates', () => {
     });
     // Wrong family and an unverified link too: the excluded-company reason still wins, and no later port runs.
     const decision = await evaluateBlindApplyCandidate({ ...CANDIDATE, family: 'backend', linkStatus: 'unverified' }, p);
-    expect(decision).toMatchObject({ kind: 'skip', reason: 'excluded_company', detail: 'You excluded northwind b.v. in Settings > Search profile' });
+    expect(decision).toMatchObject({ kind: 'skip', reason: 'excluded_company', detail: 'You excluded northwind b.v. under What you are looking for' });
     expect(p.calls.isDuplicate).not.toHaveBeenCalled();
     expect(p.calls.resolvePolicy).not.toHaveBeenCalled();
     expect(p.calls.checkLiveness).not.toHaveBeenCalled();

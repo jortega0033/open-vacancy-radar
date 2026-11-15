@@ -133,7 +133,7 @@ export async function evaluateBlindApplyCandidate(
     return {
       kind: 'skip',
       reason: 'excluded_company',
-      detail: `You excluded ${excluded.name} in Settings > Search profile`,
+      detail: `You excluded ${excluded.name} under What you are looking for`,
       evidence: evidenceOf(candidate),
     };
   }

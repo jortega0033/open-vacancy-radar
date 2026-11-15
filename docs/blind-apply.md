@@ -17,7 +17,7 @@ flow is unchanged and stays available.
 
 There is **no daily limit**, per-employer cap or pacing rule, expiry or artificial wait, by the owner's explicit
 choice on 2026-10-30. The schema has no column that could hold one, and a test fails if one appears. The one
-employer-level rule is the person's own: companies listed under Settings > Search profile > Excluded companies
+employer-level rule is the person's own: companies listed under What you are looking for > More options > Companies to skip
 (#736) are skipped as "Excluded company" right after the authorization check and before any role, filter,
 link, duplicate, policy or posting check, and the confirmation names them. Editing that list changes the profile, so
 Blind Apply pauses until it is confirmed again, like any other profile edit.

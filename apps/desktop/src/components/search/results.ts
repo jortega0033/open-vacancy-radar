@@ -445,7 +445,7 @@ export interface SearchFilters {
   salaryCurrency: string;
   includeUnknownSalary: boolean;
   /**
-   * #736: show rows from companies the person excluded in Settings > Search profile, greyed out. Off
+   * #736: show rows from companies the person excluded under "What you are looking for", greyed out. Off
    * by default and session-only like every other refinement here; the exclusion list itself lives in
    * the profile, not in the filters.
    */

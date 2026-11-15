@@ -346,7 +346,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError, focusOnLo
         <SettingsSubheading>Companies to skip</SettingsSubheading>
         <SettingsRow
           label="Excluded companies"
-          description="Hidden in Search and skipped by Blind Apply. Matching ignores case and legal suffixes such as BV, Inc. or GmbH. Domains are optional: up to 5 company domains such as acme.com, comma-separated, not job-board links."
+          description="Hidden in Search and skipped by Blind Apply. Matching ignores case and legal suffixes such as BV, Inc. or GmbH. Domains are optional: up to 5 company domains such as acme.com, comma-separated. Job-board and ATS links are refused."
         >
           <div className="flex w-full max-w-md flex-col gap-2" data-testid="excluded-companies">
             {draft.excludedCompanies.map((row, index) => (
