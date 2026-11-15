@@ -114,6 +114,13 @@ describe('excluded companies (#736): domain aliases', () => {
     expect(normalizeDomainAlias('   ')).toBeNull();
   });
 
+  it('handles long runs of dots in linear time (CodeQL js/polynomial-redos)', () => {
+    const started = performance.now();
+    expect(normalizeDomainAlias(`acme${'.'.repeat(100_000)}x`)).toBeNull();
+    expect(normalizeDomainAlias(`acme.com${'.'.repeat(100_000)}`)).toBe('acme.com');
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it('matches the host and its subdomains, not an unrelated host that merely contains the alias', () => {
     const matcher = createExcludedCompanyMatcher([{ name: 'Northwind', domains: ['acme.com'] }]);
     expect(matcher({ company: 'Someone else', urls: ['https://careers.acme.com/jobs/1'] })).not.toBeNull();
