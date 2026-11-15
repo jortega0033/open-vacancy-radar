@@ -7,6 +7,7 @@ import {
   type BlindApplyGateDecision,
   type BlindApplyLiveness,
 } from './blind-apply-eligibility.js';
+import { excludedCompaniesFromSnapshot } from './blind-apply-views.js';
 import type {
   BlindApplyAnswerInput,
   BlindApplyAnswerResult,
@@ -308,6 +309,7 @@ export function createBlindApplyRunner(deps: BlindApplyRunnerDeps): BlindApplyRu
             roleFamilies: auth.roleFamilies,
             sourceCvContentHash: auth.sourceCvContentHash,
             profileVersion: auth.profileVersion,
+            excludedCompanies: excludedCompaniesFromSnapshot(auth.filtersSnapshot),
           },
           current,
           resolvePolicy: deps.resolvePolicy,

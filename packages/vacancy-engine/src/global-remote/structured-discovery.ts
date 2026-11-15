@@ -65,7 +65,8 @@ import type {
  * does not restrict user-agent patterns.
  */
 
-const FREEHIRE_ATS_HOSTS = [
+/** Exported only so `excluded-companies.test.ts` can pin that every one of these is refused as an alias (#736). */
+export const FREEHIRE_ATS_HOSTS = [
   'ashbyhq.com',
   'bamboohr.com',
   'breezy.hr',

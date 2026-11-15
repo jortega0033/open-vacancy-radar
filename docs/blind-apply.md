@@ -15,8 +15,12 @@ flow is unchanged and stays available.
    **Details**.
 3. **Stop Blind Apply** is one control. It is immediate.
 
-There is **no daily limit**, per-employer rule, expiry or artificial wait, by the owner's explicit choice on
-2026-10-30. The schema has no column that could hold one, and a test fails if one appears.
+There is **no daily limit**, per-employer cap or pacing rule, expiry or artificial wait, by the owner's explicit
+choice on 2026-10-30. The schema has no column that could hold one, and a test fails if one appears. The one
+employer-level rule is the person's own: companies listed under What you are looking for > More options > Companies to skip
+(#736) are skipped as "Excluded company" right after the authorization check and before any role, filter,
+link, duplicate, policy or posting check, and the confirmation names them. Editing that list changes the profile, so
+Blind Apply pauses until it is confirmed again, like any other profile edit.
 
 ## What it does and does not do
 
@@ -26,7 +30,8 @@ There is **no daily limit**, per-employer rule, expiry or artificial wait, by th
   Every other target is **Apply yourself**: no tailoring is spent on it, it is never reported as submitted,
   and **Open** starts the existing reviewed flow.
 - **Order of checks, all before any tailoring:** the authorization is active and the CV and profile are unchanged
-  since it was confirmed; the role family is confirmed (frontend); the hard filters pass (`unknown` does not
+  since it was confirmed; the employer is not on the excluded-companies list the person confirmed (name or domain
+  alias, case and legal suffixes ignored); the role family is confirmed (frontend); the hard filters pass (`unknown` does not
   pass); the apply link is verified; the role is not a duplicate (an attempt in progress or sent, a Blind
   item, or a row tracked by hand); a policy permits unattended sending; the posting is confirmed open now.
 - **Truthful answers, deterministically.** A field is filled only when its whole label equals a known label for

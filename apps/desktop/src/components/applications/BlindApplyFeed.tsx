@@ -202,7 +202,7 @@ export function BlindApplyFeed({ onOpened }: BlindApplyFeedProps) {
           ))}
         </ul>
       )}
-      {skipped > 0 && <p className="mt-3 text-xs text-base-content/60">{skipped} skipped (closed, already applied, or outside your filters).</p>}
+      {skipped > 0 && <p className="mt-3 text-xs text-base-content/60">{skipped} skipped (closed, already applied, outside your filters, or an excluded company).</p>}
     </section>
   );
 }

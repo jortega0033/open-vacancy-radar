@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./salary": "./src/global-remote/salary.ts",
+    "./excluded-companies": "./src/companies/excluded-companies.ts",
     "./work-arrangement": "./src/global-remote/work-arrangement.ts"
   },
   "engines": {

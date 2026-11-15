@@ -42,6 +42,7 @@ export const BLIND_APPLY_SKIP_LABELS: Readonly<Record<BlindApplySkipReason, stri
   filters: 'Outside your filters',
   unverified_link: 'The apply link is not confirmed',
   unverifiable_posting: 'This posting could not be confirmed open',
+  excluded_company: 'Excluded company',
 };
 
 export const BLIND_APPLY_INTERVENTION_LABELS: Readonly<Record<BlindApplyIntervention, string>> = {

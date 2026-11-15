@@ -10,9 +10,9 @@ Evidence date: 2026-10-30, against `master` at `d31a4b88` (after #693 merged in 
 **Status:** Accepted for this delivery. The user chose "keep frontend focus" on 2026-10-28, and this research
 found no safety or correctness reason to narrow it further.
 
-**Context.** The Search profile accepts any target-role text (`packages/vacancy-engine/src/candidate/profile.ts:25`).
+**Context.** The Search profile accepts any target-role text (`packages/vacancy-engine/src/candidate/profile.ts:32`).
 The evaluator that orders Search is frontend-shaped (`packages/vacancy-engine/src/filtering/relevance.ts:272`).
-It reads `targetRoles` only to decide whether a profile is configured at all (`packages/vacancy-engine/src/candidate/profile.ts:130`),
+It reads `targetRoles` only to decide whether a profile is configured at all (`packages/vacancy-engine/src/candidate/profile.ts:144`),
 never to decide what a good role is. So a backend or data target gets a frontend ranking, presented as if it fitted the stated target.
 
 **Decision.** OVR stays **frontend-only** (option A):
@@ -79,7 +79,7 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
 | Concern | Owner reused | How |
 |---|---|---|
 | Scoring | `scoreWorldwideVacancy` (`packages/vacancy-engine/src/filtering/relevance.ts:640`) and the pipeline step that calls it per row (`packages/vacancy-engine/src/pipeline/global-remote.ts:275`) | Called unchanged. The evaluator is not re-exported from the package index, so it is reached through its module's own export, the same way `apps/desktop/test/vacancy-scan-run.test.ts` reaches the pipeline |
-| Score breakdown and ordering (#367/#395/#464) | `sortSearchResultIndex` (`apps/desktop/src/components/search/results.ts:723`) via `sortResults` | Real Search order of the scored rows |
+| Score breakdown and ordering (#367/#395/#464) | `sortSearchResultIndex` (`apps/desktop/src/components/search/results.ts:750`) via `sortResults` | Real Search order of the scored rows |
 | Reviewed titles and languages (#686) | `approveSearchPlanDraft` (`packages/vacancy-engine/src/candidate/search-plan.ts:244`), `captureSearchPlanSnapshot` (`packages/vacancy-engine/src/candidate/search-plan.ts:322`), `compileSearchPlanQueries` (`packages/vacancy-engine/src/global-remote/search-plan.ts:123`), `vacancyMatchesRole` / `vacancyTitleMatches` (`packages/vacancy-engine/src/global-remote/focused-scan.ts:280`, `packages/vacancy-engine/src/global-remote/focused-scan.ts:288`) | Plans are approved, snapshotted and compiled exactly as a run does. Unapproved suggestions stay unapproved |
 | Eligibility (#280) | `assessWorkEligibility` with a fixed clock | Answers reported as `yes / no / unknown`, never combined |
 | Comparator / model benchmark (#412) | Not duplicated | No AI comparator, model, SDK or provider call. §9 offers this corpus as a shared fixture contract |
@@ -119,13 +119,13 @@ OVR_LATENCY_OUT=<file>.json pnpm exec vitest run test/role-scope-research/evalua
   It also has a fixed exclusion list (`packages/vacancy-engine/src/global-remote/evaluation.ts:15`). A #686-approved title
   stands in for the positive rule only (`packages/vacancy-engine/src/pipeline/global-remote.ts:1067`).
   This decision is shown as "Discovery decision" in the detail pane and counted in report statistics. Search **neither hides
-  nor reorders** a `role_mismatch` row (`apps/desktop/src/components/search/SearchResultList.tsx:62`), so in Search a
+  nor reorders** a `role_mismatch` row (`apps/desktop/src/components/search/SearchResultList.tsx:65`), so in Search a
   `role_mismatch` is not a hidden result, and this research does not treat it as one. The generated HTML report is different:
   its "Discovery-board title matches" table omits `role_mismatch` and `non_vacancy` rows
   (`packages/vacancy-engine/src/global-remote/report.ts:89`) and names the full per-listing audit file, `latest.audit.ndjson`,
   instead (`packages/vacancy-engine/src/global-remote/report.ts:194`). A reader of that table alone does not see those rows.
 - **Queries do read target roles.** The scheduled scan searches the first target role
-  (`apps/desktop/electron/vacancy-scan-query.ts:135`), and Search's default query is the first role (`apps/desktop/src/components/search/SearchPage.tsx:1055`).
+  (`apps/desktop/electron/vacancy-scan-query.ts:135`), and Search's default query is the first role (`apps/desktop/src/components/search/SearchPage.tsx:1064`).
   The Resume Toolkit's best-fit prompt can propose stretch directions and titles outside frontend
   (`apps/desktop/src/components/cv/prompts.ts:395`). Those land only as reviewable plan suggestions
   (`packages/vacancy-engine/src/candidate/search-plan.ts:268`). So a non-frontend title can be **searched**, but its results are **ranked** by the frontend rule.

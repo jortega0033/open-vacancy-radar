@@ -7,6 +7,13 @@ import { z } from 'zod';
 export const profileFieldSourceSchema = z.enum(['cv', 'user']);
 export type ProfileFieldSource = z.infer<typeof profileFieldSourceSchema>;
 
+/** One excluded employer (#736): a name, plus optional domain aliases. See `companies/excluded-companies.ts`. */
+export const excludedCompanySchema = z.object({
+  name: z.string(),
+  domains: z.array(z.string()).default([]),
+});
+export type ExcludedCompanyEntry = z.infer<typeof excludedCompanySchema>;
+
 /**
  * `.min(1)`/`.positive()` constraints were dropped deliberately: a profile the user hasn't
  * configured yet is a legitimate, expected state (a fresh install ships with every field empty,
@@ -25,6 +32,12 @@ export const candidateProfileSchema = z.object({
   targetRoles: z.array(z.string()),
   consideredRoles: z.array(z.string()),
   excludedRoleFamilies: z.array(z.string()),
+  /**
+   * Employers the person never wants to see or apply to (#736): hidden in Search, skipped by Blind
+   * Apply. Optional so a profile file written before this field existed still parses; every reader
+   * treats absence as an empty list. The matching rules live in `companies/excluded-companies.ts`.
+   */
+  excludedCompanies: z.array(excludedCompanySchema).optional(),
   constraints: z.object({
     /**
      * Free text, and read as a list: "English", "English, Dutch" and "English / German" all name
@@ -88,6 +101,7 @@ export const EMPTY_CANDIDATE_PROFILE: CandidateProfile = {
   targetRoles: [],
   consideredRoles: [],
   excludedRoleFamilies: [],
+  excludedCompanies: [],
   constraints: {
     professionalLanguage: '',
     dutchRequired: false,

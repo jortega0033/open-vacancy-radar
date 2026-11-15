@@ -50,11 +50,12 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
 
 function renderDetail(
   result: SearchResult,
-  overrides: { prepareAvailable?: boolean } = {},
+  overrides: { prepareAvailable?: boolean; excludedCompany?: boolean } = {},
 ) {
   return render(
     <VacancyDetail
       result={result}
+      {...(overrides.excludedCompany ? { excludedCompany: true } : {})}
       defaultCvName={null}
       saveState="idle"
       prepareState="idle"
@@ -67,6 +68,21 @@ function renderDetail(
     />,
   );
 }
+
+describe('VacancyDetail excluded company (#736)', () => {
+  it('says the company is excluded, in words, and keeps Apply available', () => {
+    renderDetail(worldwideResult(), { excludedCompany: true });
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent('Excluded company');
+    expect(note).toHaveTextContent('You excluded this company under What you are looking for');
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+  });
+
+  it('shows nothing of the kind for an ordinary vacancy', () => {
+    renderDetail(worldwideResult());
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
+});
 
 describe('VacancyDetail work arrangement hint (#565a)', () => {
   it('names the setup and quotes the wording it rests on', () => {

@@ -1,4 +1,5 @@
 import type { ApplicationTargetPolicy } from '@agent-dock/application-executor';
+import { findExcludedCompany, type ExcludedCompany } from '@open-vacancy-radar/vacancy-engine/excluded-companies';
 import type {
   BlindApplyGateEvidence,
   BlindApplySkipReason,
@@ -17,6 +18,7 @@ import type {
  * Gate order (cheapest and most decisive first, the network check last):
  *
  *   B0  an active authorization, and the CV/profile it was confirmed against are unchanged
+ *   B0' the employer is not on the person's excluded-companies list (#736), as confirmed in the snapshot
  *   B1  the role family is one the person confirmed (v1: frontend only)
  *   B2  the person's hard filters pass -- `unknown` does NOT pass
  *   B3  the apply link is verified, not a careers page or an aggregator listing
@@ -44,6 +46,8 @@ export interface BlindApplyCandidate {
   company: string;
   role: string;
   applyUrl: string;
+  /** The listing URL as discovered, when it differs from `applyUrl`; read only for domain matching (#736). */
+  listingUrl?: string;
   /** The deterministic role family from the relevance assessment, or null when it could not be told. */
   family: string | null;
   /** The person's hard filters and the official eligibility state, folded to one answer. */
@@ -56,6 +60,8 @@ export interface BlindApplyAuthorizationFacts {
   roleFamilies: readonly string[];
   sourceCvContentHash: string;
   profileVersion: string;
+  /** The excluded companies the person confirmed (#736), from the authorization's snapshot. Absent = none. */
+  excludedCompanies?: readonly ExcludedCompany[];
 }
 
 export interface BlindApplyCurrentFacts {
@@ -115,6 +121,21 @@ export async function evaluateBlindApplyCandidate(
   }
   if (current.profileVersion !== authorization.profileVersion) {
     return { kind: 'paused', reason: 'profile_changed', detail: 'Your profile changed after you turned Blind Apply on. Confirm it again to continue.' };
+  }
+
+  // B0' (#736): the cheapest check and the most decisive. Nothing about this employer is looked at, so it
+  // runs before the role family and leaves a skipped record the person can see was deliberate.
+  const excluded = findExcludedCompany(
+    { company: candidate.company, urls: [candidate.applyUrl, candidate.listingUrl] },
+    authorization.excludedCompanies ?? [],
+  );
+  if (excluded) {
+    return {
+      kind: 'skip',
+      reason: 'excluded_company',
+      detail: `You excluded ${excluded.name} under What you are looking for`,
+      evidence: evidenceOf(candidate),
+    };
   }
 
   // B1

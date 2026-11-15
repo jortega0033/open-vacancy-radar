@@ -4,10 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { SearchFilterBar } from '../../../src/components/search/SearchFilterBar.js';
 import { DEFAULT_FILTERS, type SearchFilters } from '../../../src/components/search/results.js';
 
-function renderBar(filters: SearchFilters, onFiltersChange = vi.fn(), onClear = vi.fn()) {
+function renderBar(filters: SearchFilters, onFiltersChange = vi.fn(), onClear = vi.fn(), excludedCompanyCount = 0) {
   render(
     <SearchFilterBar
       filters={filters}
+      excludedCompanyCount={excludedCompanyCount}
       onFiltersChange={onFiltersChange}
       onLocationChange={vi.fn()}
       onSearch={vi.fn()}
@@ -76,6 +77,35 @@ describe('SearchFilterBar primary controls', () => {
   it('keeps Browse all vacancies reachable while no role is typed', () => {
     renderBar({ ...DEFAULT_FILTERS });
     expect(screen.getByRole('button', { name: 'Browse all vacancies' })).toBeEnabled();
+  });
+});
+
+describe('SearchFilterBar excluded companies toggle (#736)', () => {
+  it('is absent while the profile excludes nothing', () => {
+    renderBar({ ...DEFAULT_FILTERS, query: 'nurse' });
+    fireEvent.click(filtersButton());
+    expect(screen.queryByRole('checkbox', { name: 'Show excluded companies' })).not.toBeInTheDocument();
+  });
+
+  it('appears once there is an excluded company, is off by default, and reports the change', () => {
+    const onFiltersChange = renderBar({ ...DEFAULT_FILTERS, query: 'nurse' }, vi.fn(), vi.fn(), 2);
+    fireEvent.click(filtersButton());
+    const toggle = screen.getByRole('checkbox', { name: 'Show excluded companies' });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(onFiltersChange).toHaveBeenCalledWith({ showExcludedCompanies: true });
+  });
+
+  it('drops the chip once the list is emptied in Settings, since nothing is excluded any more', () => {
+    renderBar({ ...DEFAULT_FILTERS, query: 'nurse', showExcludedCompanies: true }, vi.fn(), vi.fn(), 0);
+    expect(screen.queryByRole('button', { name: 'Remove filter: Excluded companies shown' })).not.toBeInTheDocument();
+  });
+
+  it('shows a chip while excluded companies are shown, and removing it hides them again', () => {
+    const onFiltersChange = renderBar({ ...DEFAULT_FILTERS, query: 'nurse', showExcludedCompanies: true }, vi.fn(), vi.fn(), 1);
+    expect(screen.getByRole('list', { name: 'Active filters' })).toHaveTextContent('Excluded companies shown');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter: Excluded companies shown' }));
+    expect(onFiltersChange).toHaveBeenCalledWith({ showExcludedCompanies: false });
   });
 });
 

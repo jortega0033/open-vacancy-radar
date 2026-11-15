@@ -65,6 +65,31 @@ describe('Blind Apply gates', () => {
     }
   });
 
+  it("B0' (#736): an excluded company is skipped before the family, link, duplicate, policy and liveness checks", async () => {
+    const excluded = [{ name: 'northwind b.v.', domains: ['northwind.example'] }];
+    const p = ports({
+      authorization: { active: true, roleFamilies: ['frontend'], sourceCvContentHash: 'cv-1', profileVersion: 'p1', excludedCompanies: excluded },
+    });
+    // Wrong family and an unverified link too: the excluded-company reason still wins, and no later port runs.
+    const decision = await evaluateBlindApplyCandidate({ ...CANDIDATE, family: 'backend', linkStatus: 'unverified' }, p);
+    expect(decision).toMatchObject({ kind: 'skip', reason: 'excluded_company', detail: 'You excluded northwind b.v. under What you are looking for' });
+    expect(p.calls.isDuplicate).not.toHaveBeenCalled();
+    expect(p.calls.resolvePolicy).not.toHaveBeenCalled();
+    expect(p.calls.checkLiveness).not.toHaveBeenCalled();
+
+    // By domain alias on the listing URL, with a company name that does not match.
+    const byDomain = await evaluateBlindApplyCandidate(
+      { ...CANDIDATE, company: 'Someone Else', listingUrl: 'https://careers.northwind.example/jobs/9' },
+      p,
+    );
+    expect(byDomain).toMatchObject({ kind: 'skip', reason: 'excluded_company' });
+
+    // A near miss is not excluded and goes on to the normal gates.
+    expect(await evaluateBlindApplyCandidate({ ...CANDIDATE, company: 'Northwind Group' }, p)).toMatchObject({ kind: 'eligible' });
+    // No list, or an older authorization without the field: nothing changes.
+    expect(await evaluateBlindApplyCandidate(CANDIDATE, ports())).toMatchObject({ kind: 'eligible' });
+  });
+
   it('B1: a role outside the confirmed family is skipped', async () => {
     const p = ports();
     for (const family of ['backend', null]) {

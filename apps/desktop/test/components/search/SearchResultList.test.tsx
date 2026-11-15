@@ -83,6 +83,33 @@ describe('SearchResultList work arrangement chip (#565a)', () => {
   });
 });
 
+describe('SearchResultList excluded companies (#736)', () => {
+  it('greys out an excluded row with a text chip in place of the fit score, and leaves other rows alone', () => {
+    render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Excluded one', { profileScore: 80 }), worldwideResult('2', 'Kept one', { profileScore: 70 })]}
+        totalCount={2}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        excludedKeys={new Set(['1'])}
+        summary="rows"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+    const excludedRow = screen.getByRole('button', { name: /Excluded one/ });
+    expect(excludedRow).toHaveAttribute('data-excluded-company');
+    expect(excludedRow.className).toContain('opacity-60');
+    expect(screen.getAllByText('Excluded company')).toHaveLength(1);
+    expect(screen.queryByText('80%')).not.toBeInTheDocument();
+    const keptRow = screen.getByRole('button', { name: /Kept one/ });
+    expect(keptRow).not.toHaveAttribute('data-excluded-company');
+    expect(keptRow.className).not.toContain('opacity-60');
+  });
+});
+
 describe('SearchResultList', () => {
   // UX audit finding: `decisionLabel(result.raw.decision)` used to render as a badge chip styled
   // identically to the salary/employment-type chips. In every populated screenshot reviewed,

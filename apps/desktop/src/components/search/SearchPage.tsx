@@ -51,6 +51,7 @@ import {
   describeReportSummary,
   duplicateResultKeys,
   employmentOptions,
+  excludedResultKeys,
   filterSearchResultIndex,
   isWebUrl,
   reportSearchContext,
@@ -829,14 +830,17 @@ export function SearchPage({
     () => pendingScanFilters ?? withReportQueryAlternatives(appliedFilters, session.report),
     [appliedFilters, pendingScanFilters, session.report],
   );
+  // #736: the person's excluded companies, from the same loaded search profile the page already reads.
+  const excludedCompanies = useMemo(() => searchProfile?.excludedCompanies ?? [], [searchProfile]);
+  const liveIndex = useMemo(() => buildSearchResultIndex(liveResults, excludedCompanies), [excludedCompanies, liveResults]);
   const liveVisible = useMemo(
     () =>
       sortSearchResultIndex(
-        filterSearchResultIndex(buildSearchResultIndex(liveResults), liveFilters),
+        filterSearchResultIndex(liveIndex, liveFilters),
         liveFilters.query,
         liveFilters.queryAlternatives,
       ),
-    [liveFilters, liveResults],
+    [liveFilters, liveIndex],
   );
   // Count matches for the submitted search, never every raw listing emitted by a source. The latter
   // made a zero-match search announce thousands of "live vacancies" while the list correctly showed 0.
@@ -904,7 +908,12 @@ export function SearchPage({
     [worldwideReport],
   );
 
-  const resultIndex = useMemo(() => buildSearchResultIndex(results), [results]);
+  const resultIndex = useMemo(() => buildSearchResultIndex(results, excludedCompanies), [excludedCompanies, results]);
+  // Keys of excluded rows across both views, so a row and its detail pane agree on the marking (#736).
+  const excludedKeys = useMemo(
+    () => new Set([...excludedResultKeys(resultIndex), ...excludedResultKeys(liveIndex)]),
+    [liveIndex, resultIndex],
+  );
   // The filters that actually describe what's currently on screen: while live/provisional rows are
   // shown, that's the just-submitted scan criteria, not the last-applied report's filters --
   // otherwise a fresh scan's live rows render against stale (or, on a first-ever scan, empty)
@@ -1645,6 +1654,7 @@ export function SearchPage({
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
+          excludedCompanyCount={excludedCompanies.length}
           searchPlanTitleCount={planTitles.length}
           searchPlanTitles={planTitles}
           useSearchPlan={planActive}
@@ -1943,6 +1953,7 @@ export function SearchPage({
                 onSelect={handleSelect}
                 savedKeys={savedKeys}
                 liveness={liveness}
+                excludedKeys={excludedKeys}
                 summary={summary}
                 scanActive={scanning}
                 checkedCount={worldwideReport?.statistics.rawRowsFetched ?? worldwideReport?.statistics.discoveryListings}
@@ -1988,6 +1999,7 @@ export function SearchPage({
                 )}
               <VacancyDetail
                 result={selected}
+                excludedCompany={excludedKeys.has(selected.key)}
                 defaultCvName={defaultCvName}
                 saveState={saveState}
                 prepareState={prepareState}

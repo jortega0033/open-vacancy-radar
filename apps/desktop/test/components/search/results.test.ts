@@ -4,6 +4,7 @@ import {
   DEFAULT_FILTERS,
   buildSearchResultIndex,
   dedupeResultsByKey,
+  excludedResultKeys,
   descriptionExcerpt,
   duplicateResultKeys,
   fitHighlights,
@@ -189,6 +190,33 @@ describe('filterResults: sponsorOnly', () => {
 
     const filtered = filterResults([matched, unmatched], { ...DEFAULT_FILTERS, sponsorOnly: true });
     expect(filtered.map((r) => r.key)).toEqual(['1']);
+  });
+});
+
+describe('filterResults: excluded companies (#736)', () => {
+  const excluded = [{ name: 'Acme B.V.', domains: ['northwind.example'] }];
+
+  it('hides an excluded company by default, by name (case and legal suffix ignored) or by domain alias', () => {
+    const byName = worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' });
+    const byDomain = { ...worldwideResult({ key: '2', location: 'Lisbon, Portugal' }), company: 'Someone Else', url: 'https://jobs.northwind.example/2' };
+    const kept = { ...worldwideResult({ key: '3', location: 'Lisbon, Portugal' }), company: 'Acme Group' };
+
+    const filtered = filterResults([byName, byDomain, kept], DEFAULT_FILTERS, new Date(), excluded);
+    expect(filtered.map((r) => r.key)).toEqual(['3']);
+  });
+
+  it('shows them again with the toggle on, and marks them in the index for the list to grey out', () => {
+    const rows = [worldwideResult({ key: '1', location: null }), { ...worldwideResult({ key: '2', location: null }), company: 'Other' }];
+    const index = buildSearchResultIndex(rows, excluded);
+    expect(index.map((entry) => entry.excludedCompany)).toEqual([true, false]);
+    expect(filterSearchResultIndex(index, { ...DEFAULT_FILTERS, showExcludedCompanies: true }).map((e) => e.result.key)).toEqual(['1', '2']);
+    expect(excludedResultKeys(index)).toEqual(new Set(['1']));
+  });
+
+  it('with no excluded companies nothing is hidden and nothing is marked', () => {
+    const index = buildSearchResultIndex([worldwideResult({ key: '1', location: null })]);
+    expect(index[0]!.excludedCompany).toBe(false);
+    expect(filterSearchResultIndex(index, DEFAULT_FILTERS)).toHaveLength(1);
   });
 });
 
