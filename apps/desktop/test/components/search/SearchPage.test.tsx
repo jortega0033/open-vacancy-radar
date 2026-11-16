@@ -2350,6 +2350,48 @@ describe('SearchPage', () => {
       expect(prepareButton).toBeDisabled();
     });
 
+    it('saves a live row as coming from the running scan, even when the previous report lists the same job (#709)', async () => {
+      const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // still running for the whole test
+      const { emit } = installProgressCapturingBridge({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ key: 'shared-1', title: 'Shared Role' })])),
+        runScan: vi.fn().mockReturnValue(scanPromise),
+      });
+      const workspace = installWorkspaceBridge({
+        createSavedJob: vi.fn().mockResolvedValue({
+          id: 'saved-live-1',
+          role: 'Shared Role',
+          company: 'Acme Corp',
+          location: 'Worldwide',
+          vacancyKey: 'shared-1',
+          salary: null,
+          arrangement: null,
+          verification: null,
+          matchPercent: null,
+          sourceUrl: null,
+          notes: '',
+          status: 'considering',
+          savedAt: '2026-11-16T12:00:00.000Z',
+          gapAnalysis: null,
+          gapAnalysisAt: null,
+        }),
+      });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Shared Role').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getAllByRole('button', { name: 'Search' })[0]!);
+      await waitFor(() => expect(screen.getByText(/searching job sites/i)).toBeInTheDocument());
+
+      // The rescan streams the SAME job (same key) as the report already on disk.
+      emit({ sourceId: 'himalayas', vacancies: [makeWorldwideVacancy({ key: 'shared-1', title: 'Shared Role' })] });
+      await waitFor(() => expect(screen.getByText(/live · not yet scored/i)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save job' }));
+      await waitFor(() => expect(workspace.createSavedJob).toHaveBeenCalledTimes(1));
+      expect(workspace.createSavedJob).toHaveBeenCalledWith(expect.objectContaining({ vacancyKey: 'shared-1' }), { fromLiveScan: true });
+    });
+
     it('shows job-site rows while the AI web search is still running, says what the run waits for, and keeps them unpreparable (#685)', async () => {
       const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // the AI step never finishes in this test
       const { emit } = installProgressCapturingBridge({

@@ -10,6 +10,7 @@ import type {
 } from '../../window.js';
 import { Dialog } from '../shell/Dialog.js';
 import { APPLICATION_STATUS_LABEL, APPLICATION_STATUS_ORDER, toDateInputValue } from './application-status.js';
+import { StatusHistory } from './StatusHistory.js';
 
 interface DraftState {
   savedJobId: string;
@@ -18,6 +19,8 @@ interface DraftState {
   location: string;
   status: ApplicationStatus;
   appliedAt: string;
+  /** #708: the date the person says the status change happened. Empty means not given. */
+  statusOccurredOn: string;
   nextStep: string;
   contact: string;
   cvId: string;
@@ -34,6 +37,7 @@ function draftFromRecord(record: ApplicationRecord | null): DraftState {
       location: '',
       status: 'preparing',
       appliedAt: '',
+      statusOccurredOn: '',
       nextStep: '',
       contact: '',
       cvId: '',
@@ -48,12 +52,20 @@ function draftFromRecord(record: ApplicationRecord | null): DraftState {
     location: record.location,
     status: record.status,
     appliedAt: toDateInputValue(record.appliedAt),
+    statusOccurredOn: '',
     nextStep: record.nextStep,
     contact: record.contact,
     cvId: record.cvId ?? '',
     letterId: record.letterId ?? '',
     notes: record.notes,
   };
+}
+
+/** Today's local calendar date, YYYY-MM-DD: the latest date the person can give for a change. */
+function todayLocal(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 export interface ApplicationDrawerProps {
@@ -87,8 +99,17 @@ export function ApplicationDrawer({
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
 
+  // The status the row has now (a new row starts as Preparing). The date field belongs to a change
+  // away from it, so it is shown only while the selected status differs, and cleared when it is put back.
+  const savedStatus: ApplicationStatus = record?.status ?? 'preparing';
+  const statusChanged = draft.status !== savedStatus;
+
   function update<K extends keyof DraftState>(key: K, value: DraftState[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateStatus(status: ApplicationStatus) {
+    setDraft((prev) => ({ ...prev, status, statusOccurredOn: status === savedStatus ? '' : prev.statusOccurredOn }));
   }
 
   async function handleSave() {
@@ -111,6 +132,8 @@ export function ApplicationDrawer({
       cvId: draft.cvId === '' ? null : draft.cvId,
       letterId: draft.letterId === '' ? null : draft.letterId,
       notes: draft.notes,
+      // Never defaulted: an empty field is sent as null, "date not given".
+      statusOccurredOn: statusChanged && draft.statusOccurredOn !== '' ? draft.statusOccurredOn : null,
     };
 
     setSubmitting(true);
@@ -211,7 +234,7 @@ export function ApplicationDrawer({
               <select
                 className="select w-full"
                 value={draft.status}
-                onChange={(e) => update('status', e.target.value as ApplicationStatus)}
+                onChange={(e) => updateStatus(e.target.value as ApplicationStatus)}
                 disabled={submitting}
               >
                 {APPLICATION_STATUS_ORDER.map((status) => (
@@ -235,6 +258,26 @@ export function ApplicationDrawer({
               />
             </label>
           </div>
+
+          {statusChanged && (
+            <label className="block">
+              <span className="mb-1.5 block ovr-eyebrow">
+                Date this happened (optional)
+              </span>
+              <input
+                className="input w-full"
+                type="date"
+                value={draft.statusOccurredOn}
+                max={todayLocal()}
+                onChange={(e) => update('statusOccurredOn', e.target.value)}
+                disabled={submitting}
+                aria-label="Date this happened"
+              />
+              <span className="mt-1 block text-xs text-base-content/70">
+                Leave it empty if you do not know. It is saved with this status change only.
+              </span>
+            </label>
+          )}
 
           <label className="block">
             <span className="mb-1.5 block ovr-eyebrow">
@@ -309,6 +352,8 @@ export function ApplicationDrawer({
               aria-label="Notes"
             />
           </label>
+
+          {mode === 'edit' && record && <StatusHistory applicationId={record.id} />}
 
           {error && <p className="text-sm text-error">{error}</p>}
         </div>

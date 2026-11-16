@@ -4,6 +4,7 @@ import {
   BRIEF_JD_MAX_CHARS,
   BRIEF_MAX_NOTICES,
   type BriefNotice,
+  type BriefQueryProvenance,
   type BriefSourceFacts,
   type FrozenBrief,
   type StoredAssessment,
@@ -20,7 +21,12 @@ import { applicationAttempts, applicationBriefAliases, applicationBriefPins, app
  *    caller passes scan data only);
  *  - update or delete a pin other than through the owning attempt's cascade or a full reset;
  *  - merge two briefs that carry different requisition identities;
- *  - keep CV text, notes or letters.
+ *  - keep CV text, notes or letters;
+ *  - rewrite an alias row's `queryProvenance` (#709): it is set when the row is inserted; the only
+ *    later write completes a `no_scan_row` placeholder, once, with a capture from a scan that was
+ *    already running when the copy was saved. A `recorded` / `no_plan` capture and a NULL (a copy
+ *    from before #709) are never touched, and `mergeInto` moves alias rows rather than folding them,
+ *    so each saved copy keeps its own captured variants through a brief merge.
  */
 
 export type AliasKind = 'requisition' | 'canonical_url' | 'semantic' | 'vacancy_key' | 'saved_job' | 'attempt';
@@ -32,6 +38,11 @@ export interface BriefAlias {
   label?: string;
   provider?: string | null;
   url?: string | null;
+  /**
+   * #709: the query variants that produced this copy. Written on INSERT; for an alias that already
+   * exists it only completes a stored `no_scan_row` placeholder (see `upsertBrief`), never a rewrite.
+   */
+  queryProvenance?: BriefQueryProvenance | null;
 }
 
 export interface StoredBrief {
@@ -63,6 +74,8 @@ export interface StoredAlias {
   label: string;
   provider: string | null;
   url: string | null;
+  /** #709: null when this copy predates the feature or had no usable scan row at capture. */
+  queryProvenance: BriefQueryProvenance | null;
   firstSeenAt: string;
   lastSeenAt: string;
 }
@@ -108,6 +121,7 @@ function toAlias(row: AliasRow): StoredAlias {
     label: row.label,
     provider: row.provider,
     url: row.url,
+    queryProvenance: row.queryProvenance ?? null,
     firstSeenAt: row.firstSeenAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };
@@ -209,6 +223,23 @@ function mergeInto(tx: Pick<WorkspaceDb, 'select' | 'update' | 'delete'>, keep: 
   return updated ?? keep;
 }
 
+/**
+ * #709: the one permitted later write of a copy's `queryProvenance`. A copy saved while no eligible
+ * scan row was in hand (typically saved from a run's live rows before that run's report landed, or
+ * whose save-time capture failed) holds a `no_scan_row` placeholder; the first capture from a run that
+ * had started by the save completes it. NULL (saved before #709) and any other stored status stay.
+ * The caller only ever offers captures that passed the "run started by the save" rule.
+ *
+ * A placeholder that names the running scan it was saved from (`awaitingScanId`) is completed only by
+ * a capture from THAT scan's report. The previous report, which was the loaded one while that scan was
+ * running and may list the same job under other queries, never qualifies, and nor does a later scan.
+ */
+function completesPlaceholder(stored: BriefQueryProvenance | null, offered: BriefQueryProvenance | null): boolean {
+  if (stored === null || stored.status !== 'no_scan_row' || offered === null || offered.status === 'no_scan_row') return false;
+  if (stored.awaitingScanId === undefined) return true;
+  return (offered.scanId ?? null) === stored.awaitingScanId;
+}
+
 export function upsertBrief(db: WorkspaceDb, input: UpsertBriefInput): UpsertBriefResult {
   return db.transaction((tx) => {
     const { now } = input;
@@ -292,6 +323,9 @@ export function upsertBrief(db: WorkspaceDb, input: UpsertBriefInput): UpsertBri
             label: alias.label ?? owner.label,
             provider: alias.provider ?? owner.provider,
             url: alias.url ?? owner.url,
+            ...(completesPlaceholder(owner.queryProvenance ?? null, alias.queryProvenance ?? null)
+              ? { queryProvenance: alias.queryProvenance }
+              : {}),
           })
           .where(eq(applicationBriefAliases.aliasKey, alias.key))
           .run();
@@ -304,6 +338,10 @@ export function upsertBrief(db: WorkspaceDb, input: UpsertBriefInput): UpsertBri
             label: alias.label ?? '',
             provider: alias.provider ?? null,
             url: alias.url ?? null,
+            // #709: the first write of this column. The refresh branch above only ever completes a
+            // `no_scan_row` placeholder, so a rescan, a plan edit or a later re-read never rewrites
+            // what a copy recorded.
+            queryProvenance: alias.queryProvenance ?? null,
             firstSeenAt: now,
             lastSeenAt: now,
           })

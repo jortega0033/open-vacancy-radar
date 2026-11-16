@@ -7,6 +7,7 @@ import {
   freezeBrief,
   matchOverlay,
   pickEligibility,
+  pickQueryProvenance,
   preferenceGroups,
   summariseAssessment,
   type ApplicationBriefView,
@@ -20,6 +21,8 @@ import {
   type BriefPin,
   type BriefPostingSection,
   type BriefPostingStatus,
+  type BriefQueryProvenance,
+  type BriefSearchProvenanceEntry,
   type BriefSourceFacts,
   type BriefSourceRef,
   type AssessmentRefusalCode,
@@ -85,8 +88,20 @@ import type {
 export interface BriefReportRow {
   row: DiscoveryVacancyAudit;
   runId: string;
+  /** Stamped when the report was assembled, at the END of the run. */
   generatedAt: string;
   profileVersion: string;
+  /**
+   * #709: when the run that produced this report STARTED (ISO), or null/absent when unknown (a report
+   * hydrated from disk). Search shows a run's rows while it is still going, so a job can be saved
+   * from a run whose report only lands afterwards.
+   */
+  scanStartedAt?: string | null;
+  /**
+   * #709: the desktop scan id whose report this row belongs to, or null/absent when unknown (a report
+   * hydrated from disk). Lets a copy saved from a running scan's live rows wait for THAT scan.
+   */
+  scanId?: string | null;
 }
 
 export interface BriefProfile extends PreferenceProfile {
@@ -109,7 +124,11 @@ export interface BriefServiceDeps {
   log?(message: string, meta?: Record<string, unknown>): void;
 }
 
-export type BriefTarget = { savedJobId: string } | { attemptId: string };
+/**
+ * `liveScanId` is set only by the save handler, for a job saved from a running scan's live rows (#709).
+ * It is not part of the `application-brief:*` IPC input, so the renderer cannot set it on a read.
+ */
+export type BriefTarget = { savedJobId: string; liveScanId?: string } | { attemptId: string };
 
 // ------------------------------------------------------------------------------------ identity
 
@@ -167,7 +186,59 @@ interface Resolved {
   attempt: ApplicationAttemptRecord | null;
 }
 
-function resolveContext(deps: BriefServiceDeps, target: BriefTarget): Resolved {
+/**
+ * #709: what this copy of the job records about the queries that produced it. The store writes it
+ * when the reference row is inserted, and may complete a `no_scan_row` placeholder once later (see
+ * `upsertBrief`); a `recorded` or `no_plan` capture is never rewritten.
+ *
+ * A scan row is accepted as the one that found this copy only when its run had STARTED by the time
+ * the copy was saved: the run the job was saved from (possibly while it was still going, from its
+ * live rows) or an earlier one. A run that started after the save cannot be what found it, so a job
+ * saved before this feature, or one whose save-time capture failed and was only retried after a
+ * rescan, reads as "not recorded" instead of being filled in from a later scan. Without a known start
+ * time (a report hydrated from disk) the run's end (`generatedAt`) is used, which is stricter. When
+ * neither timestamp can be read, the row in hand is recorded as-is: it carries its own `runId` and
+ * `generatedAt`, so what was captured stays checkable.
+ *
+ * One more rule decides BETWEEN two eligible runs. While a rescan is running, the report loaded here
+ * is the PREVIOUS one, and Search can show either the running scan's live rows or that previous report
+ * (behind a toggle). Only Search knows which list the row came from, so a save from the live rows says
+ * so (`liveScanId`, resolved by the main process to the running scan). That copy then holds a
+ * placeholder naming the scan, and `upsertBrief` completes it only from THAT scan's report: never from
+ * the previous report, even when both found the job, and never after the scan was stopped. A save from
+ * the previous report's view, or any save with no scan running, is recorded from the loaded report.
+ * A scan being in flight is deliberately NOT a reason to wait on its own: it cannot tell the two views
+ * apart, and once a stopped scan is no longer in flight the previous report would complete the
+ * placeholder anyway.
+ */
+function captureQueryProvenance(
+  reportRow: BriefReportRow | null,
+  savedAt: string | null,
+  now: Date,
+  liveScanId: string | null = null,
+): BriefQueryProvenance {
+  const capturedAt = now.toISOString();
+  // Saved from a running scan's live rows: the loaded report is the PREVIOUS one unless that scan's own
+  // report has already landed, and the previous one may list the same job under other queries. Wait for
+  // the named scan instead of attributing the copy to a scan the person was not looking at.
+  if (liveScanId !== null && (reportRow?.scanId ?? null) !== liveScanId) {
+    return { status: 'no_scan_row', capturedAt, awaitingScanId: liveScanId };
+  }
+  if (reportRow === null) return { status: 'no_scan_row', capturedAt };
+  const startedAtMs = Date.parse(reportRow.scanStartedAt ?? reportRow.generatedAt);
+  const savedAtMs = savedAt === null ? Number.NaN : Date.parse(savedAt);
+  if (Number.isFinite(startedAtMs) && Number.isFinite(savedAtMs) && startedAtMs > savedAtMs) {
+    return { status: 'no_scan_row', capturedAt };
+  }
+  return pickQueryProvenance(reportRow.row.queryProvenance, {
+    capturedAt,
+    runId: reportRow.runId,
+    scanId: reportRow.scanId ?? null,
+    generatedAt: reportRow.generatedAt,
+  });
+}
+
+function resolveContext(deps: BriefServiceDeps, target: BriefTarget, now: Date): Resolved {
   let savedJob: SavedJobRecord | null = null;
   let attempt: ApplicationAttemptRecord | null = null;
   if ('savedJobId' in target) {
@@ -242,9 +313,16 @@ function resolveContext(deps: BriefServiceDeps, target: BriefTarget): Resolved {
   if (attempt?.vacancyKey && !otherAliases.some((alias) => alias.key === `key:${attempt!.vacancyKey}`)) {
     otherAliases.push({ key: `key:${attempt.vacancyKey}`, kind: 'vacancy_key', label: 'prepared', provider: null, url: attempt.canonicalUrl || null });
   }
+  // #709: each reference row is one saved copy, and carries the variants that produced THAT copy.
   const refs: BriefAlias[] = [];
-  if (savedJob) refs.push(savedJobAlias(savedJob.id));
-  if (attempt) refs.push(attemptAlias(attempt.id));
+  if (savedJob) {
+    const liveScanId = 'savedJobId' in target ? (target.liveScanId ?? null) : null;
+    refs.push({ ...savedJobAlias(savedJob.id), queryProvenance: captureQueryProvenance(reportRow, savedJob.savedAt, now, liveScanId) });
+  }
+  if (attempt) {
+    // An attempt is never prepared from a live row (Search gates Prepare on it), so it never waits.
+    refs.push({ ...attemptAlias(attempt.id), queryProvenance: captureQueryProvenance(reportRow, attempt.createdAt, now) });
+  }
 
   // The semantic fingerprint is added only where it IS the identity: a requisition never gets it,
   // so two openings at one employer with the same title cannot be joined through it.
@@ -545,9 +623,23 @@ function sourceRefs(deps: BriefServiceDeps, briefId: string): BriefSourceRef[] {
     .filter((ref, index, all) => all.findIndex((other) => other.url === ref.url) === index);
 }
 
+/** #709: one entry per saved copy, oldest first. Never invents a value for a copy that recorded none. */
+function searchProvenance(deps: BriefServiceDeps, briefId: string): BriefSearchProvenanceEntry[] {
+  return listAliases(deps.db, briefId)
+    .filter((alias): alias is typeof alias & { kind: 'saved_job' | 'attempt' } =>
+      alias.kind === 'saved_job' || alias.kind === 'attempt',
+    )
+    .map((alias) => ({
+      aliasKey: alias.aliasKey,
+      kind: alias.kind,
+      firstSeenAt: alias.firstSeenAt,
+      provenance: alias.queryProvenance,
+    }));
+}
+
 async function build(deps: BriefServiceDeps, target: BriefTarget): Promise<Built> {
   const now = deps.now();
-  const context = resolveContext(deps, target);
+  const context = resolveContext(deps, target, now);
   const profile = await deps.loadProfile().catch(() => null);
   const currentPreferences: PreferenceGroups | null = profile ? preferenceGroups(profile) : null;
 
@@ -638,6 +730,7 @@ async function build(deps: BriefServiceDeps, target: BriefTarget): Promise<Built
     assessment,
     cv: { name: cv?.name ?? null, reviewed: cv !== null && isReviewedSource(cv.source) },
     sources: sourceRefs(deps, reread.id),
+    searchProvenance: searchProvenance(deps, reread.id),
     attempts: evidence,
     postingCheck: postingSection(deps, activeAttempt),
     companyEvidence: companySection(deps, activeAttempt),

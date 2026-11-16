@@ -428,6 +428,15 @@ describe('workspace application attempts (#198)', () => {
     ).toThrow(/"completionEvidence" must be one of/);
   });
 
+  it('#708: a renderer completion cannot clear its evidence, so the history never reads it as app-observed', () => {
+    for (const checkpoint of ['submitted', 'user_reported'] as const) {
+      expect(parseApplicationAttemptPatch({ checkpoint, completionEvidence: null })).toEqual({
+        checkpoint,
+        completionEvidence: 'user_reported',
+      });
+    }
+  });
+
   it('#275: does not invent completion evidence for a patch that is not a completion', () => {
     expect(parseApplicationAttemptPatch({ checkpoint: 'skipped' })).toEqual({ checkpoint: 'skipped' });
     expect(parseApplicationAttemptPatch({ completionEvidence: null })).toEqual({ completionEvidence: null });

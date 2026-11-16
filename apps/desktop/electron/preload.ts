@@ -453,8 +453,11 @@ const workspaceApi: WorkspaceBridge = {
   listSavedJobs() {
     return ipcRenderer.invoke('workspace:saved-jobs:list');
   },
-  createSavedJob(input) {
-    return ipcRenderer.invoke('workspace:saved-jobs:create', input);
+  createSavedJob(input, capture) {
+    // #709: the hint is a second argument so it never mixes with the saved job's own stored fields.
+    return capture === undefined
+      ? ipcRenderer.invoke('workspace:saved-jobs:create', input)
+      : ipcRenderer.invoke('workspace:saved-jobs:create', input, capture);
   },
   updateSavedJob(id, patch) {
     return ipcRenderer.invoke('workspace:saved-jobs:update', { id, patch });
@@ -490,6 +493,9 @@ const workspaceApi: WorkspaceBridge = {
   },
   deleteApplication(id) {
     return ipcRenderer.invoke('workspace:applications:delete', { id });
+  },
+  listApplicationStatusEvents(applicationId) {
+    return ipcRenderer.invoke('workspace:application-status-events:list', { id: applicationId });
   },
 
   listCvDocuments() {

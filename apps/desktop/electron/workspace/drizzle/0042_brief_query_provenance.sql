@@ -1,0 +1,1 @@
+ALTER TABLE `application_brief_aliases` ADD `query_provenance` text;

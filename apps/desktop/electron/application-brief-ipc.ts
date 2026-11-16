@@ -28,6 +28,20 @@ const TargetInput = z
 
 const PrepareInput = z.object({ savedJobId: Id }).strict();
 
+/**
+ * #709: the optional second argument of `workspace:saved-jobs:create`. `fromLiveScan: true` says the
+ * job was saved from the running scan's live (provisional) rows rather than from the loaded report; the
+ * main process, which knows which scan is running, turns that into the scan id the capture waits for.
+ * It only ever changes how a capture is attributed; nothing else reads it. Omitted means the row came
+ * from the loaded report.
+ */
+const SavedJobCaptureHint = z.object({ fromLiveScan: z.boolean().optional() }).strict();
+
+export function parseSavedJobCaptureHint(value: unknown): { fromLiveScan?: boolean } {
+  if (value === undefined) return {};
+  return SavedJobCaptureHint.parse(value);
+}
+
 const CommitInput = z
   .object({
     savedJobId: Id,

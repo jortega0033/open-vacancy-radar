@@ -33,7 +33,10 @@ describe('the outcome/gap prototype stays non-production', () => {
 
   it('adds no migration, table, IPC channel or UI for itself', () => {
     const schema = readFileSync(join(desktop, 'electron', 'workspace', 'schema.ts'), 'utf8');
-    expect(schema).not.toMatch(/outcome_gap|outcome_event|status_event|suggestion_dismiss/iu);
+    // #708 (follow-up A of this research) is the one sanctioned production table: `application_status_events`.
+    // Any other outcome or status-event table, including one the prototype adds for itself, still fails here.
+    expect(schema).not.toMatch(/outcome_gap|outcome_event|(?<!application_)status_event|suggestion_dismiss/iu);
+    expect(schema.match(/\w*status_event\w*/giu) ?? []).toEqual(['application_status_events', 'application_status_events_application_idx']);
     const ipc = files(join(desktop, 'electron'), /\.ts$/u).filter((path) => /outcome-gap|outcome_gap/iu.test(readFileSync(path, 'utf8')));
     expect(ipc).toEqual([]);
   });

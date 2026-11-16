@@ -293,10 +293,24 @@ stored in the local workspace database and goes nowhere else.
   an employer, read from email or written to a calendar, and "sent" is only ever your own statement. Retained until
   you delete the application, delete `workspace.db`, or use Settings > Advanced > Reset application data (which
   deletes all three tables). See [follow-ups.md](follow-ups.md).
+- **Status history** (#708): each time an application's status actually changes, one entry in `workspace.db`: the
+  status it changed from and to, who said so (you, or this app when it saw the submission itself), whether a send
+  rested on an employer confirmation, on your own "I sent it" or on nothing recorded, the date you gave for the change
+  (only if you typed one; it is never filled in for you), the time this app saw a submission it observed, and when
+  the entry was written. No reason, cause, note or free text is stored, and nothing is inferred from silence or from
+  time passing. Saving without changing the status writes nothing. Applications from before this version have no
+  history. The entries are only shown in the application drawer: they never change a score, a search, a preference
+  or what you are looking for, and nothing is sent anywhere. Entries cannot be edited. Retained until you delete the
+  application, delete `workspace.db`, or use Settings > Advanced > Reset application data (which deletes and counts
+  them).
 - **Application brief** (#688): one decision record per job, kept in `workspace.db`: the scan's own score and
   reasons, work-eligibility answers with their sources, every original source link of the job, the posting text
   saved with it (cut at 80,000 characters), a summary of the CV assessment with the versions it was made under, and
-  a short list of why a section went out of date. The assessment summary, in the brief and in its pinned copy, keeps
+  a short list of why a section went out of date. Each saved copy of the job also keeps the search queries that
+  produced it (#709): the words you typed, the plan titles you approved, which source was asked for each, and the
+  plan revision. That is recorded when the copy is saved, from the scan it was saved from; if that scan's result was
+  not loaded yet, the next read of the brief fills it in from that same scan, and nothing else ever
+  rewrites it. It holds no CV, profile or model text, and it goes when that copy goes. The assessment summary, in the brief and in its pinned copy, keeps
   short labels derived from your CV for each strength: a role title and employer, a project name, or the first 80
   characters of a statement you confirmed. It holds no other CV text, and no letters or notes. Viewing it makes no
   request and starts no model session. The only AI in this feature is the explicit "Assess selected jobs" action,

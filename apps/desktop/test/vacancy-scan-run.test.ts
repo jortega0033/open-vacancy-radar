@@ -240,6 +240,8 @@ function harness(runs: Array<{ engine: Engine; daemon?: Daemon }>, options: { gr
   const guard = createScanGuard(() => undefined);
   const progress: VacancyScanProgressEvent[] = [];
   const adopted: GlobalRemoteReport[] = [];
+  /** #709: the run each adopted report came from, as main records it for live-row attribution. */
+  const adoptedRuns: { startedAt: number; scanId: string }[] = [];
   const completed: GlobalRemoteReport[] = [];
   const failed: string[] = [];
   const warnings: string[] = [];
@@ -270,7 +272,10 @@ function harness(runs: Array<{ engine: Engine; daemon?: Daemon }>, options: { gr
     now: () => Date.now(),
     progressSourceTotal: SCAN_PROGRESS_SOURCE_IDS.length,
     sendProgress: (event) => progress.push(event),
-    adoptReport: (report) => adopted.push(report),
+    adoptReport: (report, run) => {
+      adopted.push(report);
+      adoptedRuns.push(run);
+    },
     notifyCompleted: (report) => completed.push(report),
     notifyFailed: (detail) => failed.push(detail),
     isQuietError: (error) => isExpectedScanBusyError(error) || isScanCancelledError(error),
@@ -278,7 +283,7 @@ function harness(runs: Array<{ engine: Engine; daemon?: Daemon }>, options: { gr
       throw new ScanCancelledError();
     },
   });
-  return { runner, guard, progress, adopted, completed, failed, warnings };
+  return { runner, guard, progress, adopted, adoptedRuns, completed, failed, warnings };
 }
 
 const WITH_AI = parseVacancyScanRequest({ mode: 'query', query: 'UI engineer', aiWebDiscovery: true });
@@ -339,6 +344,9 @@ describe('one scan run with the AI web search alongside the job-site sources (#6
     expect(engine.calls).toHaveLength(1);
     expect(engine.persisted).toEqual([report]);
     expect(h.adopted).toEqual([report]);
+    // #709: the report is adopted under the same scan id its live rows were streamed with.
+    expect(h.adoptedRuns).toEqual([{ startedAt: expect.any(Number), scanId: 'scan-1' }]);
+    expect(h.progress.every((event) => event.scanId === 'scan-1')).toBe(true);
     expect(h.completed).toEqual([report]);
     expect(h.failed).toEqual([]);
     expect(h.runner.status()).toBeUndefined();
