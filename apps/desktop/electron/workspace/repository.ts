@@ -2540,6 +2540,16 @@ export function updateApplicationAttempt(
       .from(applicationAttempts)
       .where(eq(applicationAttempts.id, id))
       .get();
+    // #708: on a completed attempt, the stored evidence is who said it was sent, and the status
+    // history attributes a later promotion by it. Nothing in the main process ever writes null here,
+    // so a null can only be a renderer clearing it -- applied, it would relabel a person's own
+    // report as a submission this app observed. The null write is dropped; the rest of the patch stays.
+    if (
+      set.completionEvidence === null &&
+      COMPLETED_ATTEMPT_CHECKPOINTS.includes(values.checkpoint ?? before?.checkpoint ?? 'queued')
+    ) {
+      delete set.completionEvidence;
+    }
     const [row] = tx.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
     if (!row) throw new WorkspaceNotFoundError('application attempt', id);
     // Same transaction as the checkpoint write, so the tracker can never show a state the attempt

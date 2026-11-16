@@ -264,6 +264,18 @@ describe('status events from the attempt sync (#708)', () => {
     expect(readable(direct.applicationId!)[0]).toMatchObject({ source: 'user_set', evidence: 'user_statement' });
   });
 
+  it('keeps the stored report even when a renderer clears the evidence, so a re-promotion stays user_set', () => {
+    const attempt = startAttempt('cleared');
+    workspace.updateApplicationAttempt(db, attempt.id, parseApplicationAttemptPatch({ checkpoint: 'submitted' }));
+    // A later renderer patch that sends only `completionEvidence: null` must not erase who said it was sent.
+    workspace.updateApplicationAttempt(db, attempt.id, parseApplicationAttemptPatch({ completionEvidence: null }));
+    workspace.updateApplication(db, attempt.applicationId!, { status: 'preparing' });
+    workspace.reconcileApplicationRows(db);
+    const events = readable(attempt.applicationId!);
+    expect(events[0]).toMatchObject({ toStatus: 'applied', source: 'user_set', evidence: 'user_statement' });
+    expect(events.filter((e) => e.source === 'app_observed')).toEqual([]);
+  });
+
   it('treats any person report behind a submission as user_set', () => {
     expect(attemptSyncAssertion({ checkpoint: 'submitted', completionEvidence: 'user_reported', submittedAt: new Date() })).toEqual({
       source: 'user_set',
