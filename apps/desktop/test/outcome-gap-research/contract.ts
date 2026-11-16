@@ -52,7 +52,7 @@ export interface QueryRef {
   field?: 'title' | 'description';
 }
 
-/** One source copy of a requisition. `queryRefs: 'not_recorded'` is the production reality for a saved job today. */
+/** One source copy of a requisition. `queryRefs: 'not_recorded'` is what this reader saw at research time. */
 export interface SourceContribution {
   provider: string | null;
   url: string | null;

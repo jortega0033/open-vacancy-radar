@@ -146,7 +146,9 @@ export function readWorkspaceObservations(db: WorkspaceDb): WorkspaceReadResult 
       outcomeReason: 'not_recorded',
     };
 
-    // Source copies: every alias that names a provider/url for this brief. The query side is not stored.
+    // Source copies: every alias that names a provider/url for this brief. The query side is left
+    // unread on purpose: at research time nothing stored it, and this reader is kept as it was so the
+    // committed evaluation stays reproducible (#709 stores it on the saved copy's own reference row).
     const contributions: SourceContribution[] = [];
     if (brief) {
       const seen = new Set<string>();

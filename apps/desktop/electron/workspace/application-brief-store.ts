@@ -4,6 +4,7 @@ import {
   BRIEF_JD_MAX_CHARS,
   BRIEF_MAX_NOTICES,
   type BriefNotice,
+  type BriefQueryProvenance,
   type BriefSourceFacts,
   type FrozenBrief,
   type StoredAssessment,
@@ -20,7 +21,10 @@ import { applicationAttempts, applicationBriefAliases, applicationBriefPins, app
  *    caller passes scan data only);
  *  - update or delete a pin other than through the owning attempt's cascade or a full reset;
  *  - merge two briefs that carry different requisition identities;
- *  - keep CV text, notes or letters.
+ *  - keep CV text, notes or letters;
+ *  - rewrite an alias row's `queryProvenance` (#709): it is set when the row is inserted and never
+ *    updated, and `mergeInto` moves alias rows rather than folding them, so each saved copy keeps its
+ *    own captured variants through a brief merge.
  */
 
 export type AliasKind = 'requisition' | 'canonical_url' | 'semantic' | 'vacancy_key' | 'saved_job' | 'attempt';
@@ -32,6 +36,11 @@ export interface BriefAlias {
   label?: string;
   provider?: string | null;
   url?: string | null;
+  /**
+   * #709: the query variants that produced this copy. Written on INSERT only (see `upsertBrief`), so
+   * passing it for an alias that already exists is a no-op, never a rewrite.
+   */
+  queryProvenance?: BriefQueryProvenance | null;
 }
 
 export interface StoredBrief {
@@ -63,6 +72,8 @@ export interface StoredAlias {
   label: string;
   provider: string | null;
   url: string | null;
+  /** #709: null when this copy predates the feature or had no usable scan row at capture. */
+  queryProvenance: BriefQueryProvenance | null;
   firstSeenAt: string;
   lastSeenAt: string;
 }
@@ -108,6 +119,7 @@ function toAlias(row: AliasRow): StoredAlias {
     label: row.label,
     provider: row.provider,
     url: row.url,
+    queryProvenance: row.queryProvenance ?? null,
     firstSeenAt: row.firstSeenAt.toISOString(),
     lastSeenAt: row.lastSeenAt.toISOString(),
   };
@@ -304,6 +316,9 @@ export function upsertBrief(db: WorkspaceDb, input: UpsertBriefInput): UpsertBri
             label: alias.label ?? '',
             provider: alias.provider ?? null,
             url: alias.url ?? null,
+            // #709: the ONLY write of this column. The refresh branch above deliberately leaves it
+            // alone, so a rescan, a plan edit or a later re-read never rewrites what a copy recorded.
+            queryProvenance: alias.queryProvenance ?? null,
             firstSeenAt: now,
             lastSeenAt: now,
           })

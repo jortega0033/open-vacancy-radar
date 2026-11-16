@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { eq } from 'drizzle-orm';
 import { postingContentHash, vacancyIdentityFor, type AtsHttpClient, type DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -1062,5 +1063,205 @@ describe('pure policy', () => {
     expect(Object.keys(brief)).toEqual(expect.arrayContaining(['relevance', 'eligibility', 'assessment', 'readiness', 'submission', 'postingCheck', 'companyEvidence']));
     expect(brief.submission).toEqual({ attempts: [] });
     expect(brief.readiness.notes).toEqual(['Add a CV before preparing an application.']);
+  });
+});
+
+/* ============================== 10. #709 search provenance: which query variants produced each copy */
+
+/** A plan run that asked Greenhouse the typed query, and matched one approved title locally only. */
+const PLAN_R3 = {
+  planRevision: 3,
+  fetchedBy: [{ variantId: 'literal', query: 'platform engineer', language: null, provider: 'ats_roster_greenhouse' }],
+  matchedLocally: [
+    { variantId: 'literal', query: 'platform engineer', language: null, field: 'title' },
+    { variantId: 'v-infra', query: 'infrastructure engineer', language: 'English', field: 'title' },
+  ],
+};
+
+/** The same job found again under an edited plan: a different revision, a different variant. */
+const PLAN_R4 = {
+  planRevision: 4,
+  fetchedBy: [{ variantId: 'v-sre', query: 'site reliability engineer', language: null, provider: 'remotive' }],
+  matchedLocally: [{ variantId: 'v-sre', query: 'site reliability engineer', language: null, field: 'title' }],
+};
+
+function copyOf(brief: ApplicationBriefView, kind: 'saved_job' | 'attempt' = 'saved_job') {
+  const entry = brief.searchProvenance.find((candidate) => candidate.kind === kind);
+  if (!entry) throw new Error(`no ${kind} copy in the brief`);
+  return entry;
+}
+
+/** The entry for ONE specific saved copy. Copies saved in the same tick have no stable order. */
+function copyFor(brief: ApplicationBriefView, savedJobId: string) {
+  const entry = brief.searchProvenance.find((candidate) => candidate.aliasKey === `saved:${savedJobId}`);
+  if (!entry) throw new Error(`no copy for saved job ${savedJobId}`);
+  return entry;
+}
+
+function fetchedProviders(entry: { provenance: { status: string } | null }): string[] | null {
+  const provenance = entry.provenance as { status: string; fetchedBy?: { provider: string }[] } | null;
+  return provenance?.status === 'recorded' ? (provenance.fetchedBy ?? []).map((query) => query.provider) : null;
+}
+
+describe('#709 search provenance kept with each saved copy', () => {
+  it('records the variants that found a copy, and a rescan, a plan edit and a pruned report never rewrite them', async () => {
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z');
+    // The real capture path: create the saved job, then build the brief, exactly as `workspace:saved-jobs:create` does.
+    const job = saveJob(world.rows.get('gh:1001')!);
+    const first = await view(job.id);
+
+    const captured = copyOf(first).provenance;
+    expect(captured).toMatchObject({ status: 'recorded', planRevision: 3, runId: 'run-2026-10-19T08:00:00.000Z', truncated: false });
+    expect(captured).toMatchObject({
+      fetchedBy: [{ variantId: 'literal', query: 'platform engineer', provider: 'ats_roster_greenhouse', language: null }],
+    });
+
+    // A rescan under an EDITED plan: the brief's employer facts move on, the recorded variants do not.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], '2026-10-26T08:00:00.000Z');
+    const second = await view(job.id);
+    expect(briefStore.listBriefs(db)[0]!.facts?.generatedAt).toBe('2026-10-26T08:00:00.000Z'); // the rescan really landed
+    expect(copyOf(second).provenance).toEqual(captured);
+
+    // Report retention: the scan row is gone and the app restarted. Still the variants from the save.
+    reopen();
+    world.rows = new Map();
+    expect(copyOf(await view(job.id)).provenance).toEqual(captured);
+  });
+
+  it('keeps a variant the source never received as matched locally, never as fetched upstream', async () => {
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z');
+    const brief = await view(saveJob(world.rows.get('gh:1001')!).id);
+    const captured = copyOf(brief).provenance;
+    if (captured === null || captured.status !== 'recorded') throw new Error('expected a recorded capture');
+
+    expect(captured.matchedLocally.map((query) => query.variantId)).toEqual(['literal', 'v-infra']);
+    expect(captured.matchedLocally.find((query) => query.variantId === 'v-infra')).toMatchObject({
+      query: 'infrastructure engineer',
+      language: 'English',
+      field: 'title',
+    });
+    // The one that only matched locally is in no `fetchedBy` entry, under any provider.
+    expect(captured.fetchedBy.some((query) => query.variantId === 'v-infra')).toBe(false);
+    expect(captured.fetchedBy).toHaveLength(1);
+  });
+
+  it('two saved copies of one requisition each keep their own provider and variants, with nothing summed', async () => {
+    const aggregator = scanRow({
+      key: 'remotive:77',
+      url: AGG_URL,
+      sources: [
+        { provider: 'remotive', key: 'remotive:77', url: AGG_URL },
+        { provider: 'ats_roster_greenhouse', key: 'gh:1001', url: ATS_URL },
+      ],
+      queryProvenance: PLAN_R4,
+    });
+    (aggregator as { identity: unknown }).identity = vacancyIdentityFor({ url: ATS_URL, company: 'Northwind Freight', title: 'Platform Engineer', location: 'Remote - Europe' });
+    setScan([aggregator], '2026-10-19T08:00:00.000Z');
+    const savedFromAggregator = saveJob(aggregator);
+    await view(savedFromAggregator.id);
+
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-22T08:00:00.000Z');
+    const savedFromAts = saveJob(world.rows.get('gh:1001')!);
+    const merged = await view(savedFromAts.id);
+
+    // One brief, two copies: each still answers for itself.
+    expect(briefStore.listBriefs(db)).toHaveLength(1);
+    const copies = merged.searchProvenance.filter((entry) => entry.kind === 'saved_job');
+    expect(copies).toHaveLength(2);
+    const fromAggregator = copyFor(merged, savedFromAggregator.id);
+    const fromAts = copyFor(merged, savedFromAts.id);
+    expect(fetchedProviders(fromAggregator)).toEqual(['remotive']);
+    expect(fetchedProviders(fromAts)).toEqual(['ats_roster_greenhouse']);
+    // Each copy keeps its own plan revision: they are not folded into one record or one count.
+    expect(fromAggregator.provenance).toMatchObject({ planRevision: 4 });
+    expect(fromAts.provenance).toMatchObject({ planRevision: 3 });
+  });
+
+  it('reads as "not recorded" for a copy saved before this existed, and no later scan fills it in', async () => {
+    // Saved before #709: the job exists, but no brief was ever built for it, so there is no capture.
+    world.rows = new Map();
+    const old = workspace.createSavedJob(db, { role: 'Platform Engineer', company: 'Northwind Freight', location: 'Remote - Europe', vacancyKey: 'gh:1001', sourceUrl: ATS_URL, status: 'considering' });
+    db.update(schema.savedJobs).set({ savedAt: new Date('2026-10-01T00:00:00.000Z') }).where(eq(schema.savedJobs.id, old.id)).run();
+
+    // A LATER scan (19 Oct) now has the job, with variants. It cannot be what found a job saved on 1 Oct.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z');
+    const brief = await view(old.id);
+    expect(copyOf(brief).provenance).toMatchObject({ status: 'no_scan_row' });
+
+    // And it stays not recorded through later scans: the capture is written once, on insert.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], '2026-10-27T08:00:00.000Z');
+    expect(copyOf(await view(old.id)).provenance).toMatchObject({ status: 'no_scan_row' });
+  });
+
+  it('says WHY nothing was recorded: a scan with no plan is not the same as no scan row', async () => {
+    // A scan that ran without a search plan: the row carries no provenance at all.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL })], '2026-10-19T08:00:00.000Z');
+    const planless = await view(saveJob(world.rows.get('gh:1001')!).id);
+    expect(copyOf(planless).provenance).toMatchObject({ status: 'no_plan' });
+
+    // A job saved with no scan row in hand at all.
+    world.rows = new Map();
+    const manual = workspace.createSavedJob(db, { role: 'Solo Role', company: 'Harbor Systems', location: 'Lisbon', sourceUrl: AGG_ONLY_URL, status: 'considering' });
+    expect(copyOf(await view(manual.id)).provenance).toMatchObject({ status: 'no_scan_row' });
+  });
+
+  it('is capped, and never moves the employer-facts fence or the assessment', async () => {
+    const many = {
+      planRevision: 9,
+      fetchedBy: Array.from({ length: 80 }, (_, index) => ({
+        variantId: `v-${index}`,
+        query: 'q'.repeat(400),
+        language: null,
+        provider: 'ats_roster_greenhouse',
+      })),
+      matchedLocally: [],
+    };
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: many })], '2026-10-19T08:00:00.000Z');
+    const job = saveJob(world.rows.get('gh:1001')!);
+    const brief = await view(job.id);
+    const captured = copyOf(brief).provenance;
+    if (captured === null || captured.status !== 'recorded') throw new Error('expected a recorded capture');
+    expect(captured.fetchedBy).toHaveLength(64);
+    expect(captured.fetchedBy[0]!.query).toHaveLength(200);
+    expect(captured.truncated).toBe(true);
+
+    // The capture is not an employer fact: it writes nothing into `facts` and never moves `factsVersion`.
+    const stored = briefStore.listBriefs(db)[0]!;
+    expect(JSON.stringify(stored.facts)).not.toContain('planRevision');
+    expect(JSON.stringify(stored.facts)).not.toContain('fetchedBy');
+    // A second copy captured against the same brief leaves the employer-facts fence exactly where it was.
+    const fenceBefore = stored.factsVersion;
+    const secondCopy = saveJob(world.rows.get('gh:1001')!);
+    await view(secondCopy.id);
+    expect(briefStore.listBriefs(db)[0]!.factsVersion).toBe(fenceBefore);
+    expect(copyFor(await view(job.id), secondCopy.id).provenance).toMatchObject({ status: 'recorded', planRevision: 9 });
+  });
+
+  it('lives and dies with its own copy: deleting the saved job takes its capture with it', async () => {
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z');
+    const row = world.rows.get('gh:1001')!;
+    const job = saveJob(row);
+    const brief = await view(job.id);
+    expect(copyOf(brief).provenance).toMatchObject({ status: 'recorded' });
+
+    // An attempt for the same job is a second copy with its own capture, so the brief survives the delete.
+    const attempt = workspace.createApplicationAttempt(db, {
+      vacancyKey: row.key,
+      canonicalUrl: ATS_URL,
+      company: row.company,
+      role: row.title,
+      sourceCvId: null,
+      sourceCvContentHash: 'cv-hash',
+      jdSnapshot: JD_V1,
+      jdSnapshotHash: briefStore.sha256(JD_V1),
+      jdComplete: true,
+      workflowVersion: 'test',
+    });
+    await getBrief(makeDeps(), { attemptId: attempt.id });
+
+    workspace.deleteSavedJob(db, job.id);
+    const afterDelete = await getBrief(makeDeps(), { attemptId: attempt.id });
+    expect(afterDelete.searchProvenance.map((entry) => entry.kind)).toEqual(['attempt']);
+    expect(copyOf(afterDelete, 'attempt').provenance).toMatchObject({ status: 'recorded', planRevision: 3 });
   });
 });

@@ -25,7 +25,10 @@ import {
  * A synthetic job-search workspace written ENTIRELY through the app's real writers (repository, brief
  * service, interview-round store) into a migrated SQLite database, so the adapter reads exactly the shapes
  * production produces. Every employer, person and posting is invented. The scan rows carry a real #686
- * `queryProvenance` -- on purpose: the evaluation then shows it does NOT reach the workspace.
+ * `queryProvenance` -- on purpose: the evaluation then shows what this research-time reader could get at.
+ * (#709 later began storing that provenance per saved copy, on the brief's `saved:`/`attempt:` alias row.
+ * `observations.ts` is deliberately left as it read at research time, so the committed evaluation stays a
+ * record of what the workspace answered THEN; `workspace-contract.test.ts` asserts the new column instead.)
  */
 
 export const AS_OF = '2026-10-30T10:00:00.000Z';
