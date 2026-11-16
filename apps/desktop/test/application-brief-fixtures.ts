@@ -84,6 +84,8 @@ export function scanRow(over: {
   sources?: { provider: string; key: string; url: string }[];
   profileScore?: number | null;
   eligibility?: unknown;
+  /** #686 provenance exactly as a plan run stamps it; omitted means the scan ran without a plan. */
+  queryProvenance?: unknown;
 }): DiscoveryVacancyAudit {
   const title = over.title ?? 'Platform Engineer';
   const identity = vacancyIdentityFor({ url: over.url, company: 'Northwind Freight', title, location: 'Remote - Europe', provider: 'ats_roster_greenhouse', key: over.key });
@@ -124,6 +126,7 @@ export function scanRow(over: {
     sourceUrl: over.url,
     applyUrl: { status: 'unresolved', url: over.url, evidence: '' },
     sources: over.sources ?? [{ provider: 'ats_roster_greenhouse', key: over.key, url: over.url }],
+    ...(over.queryProvenance === undefined ? {} : { queryProvenance: over.queryProvenance }),
   } as unknown as DiscoveryVacancyAudit;
 }
 

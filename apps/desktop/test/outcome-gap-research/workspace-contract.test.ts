@@ -176,16 +176,30 @@ describe('what the current workspace tables can answer', () => {
 });
 
 describe('what the current workspace tables CANNOT answer (each proven on this database)', () => {
-  it('has no query-variant attribution: #686 provenance reached the scan rows but was never stored with the saved job or brief', () => {
+  it('still has no query-variant attribution in the brief FACTS; #709 records it per saved copy instead, and this prototype does not read it', () => {
     expect(world.world.rows.get('gh:1001')).toHaveProperty('queryProvenance.planRevision', 3);
     const briefs = briefStore.listBriefs(db);
     expect(briefs.length).toBeGreaterThan(0);
+    // Unchanged by #709: employer-side facts are replaced wholesale by a newer scan, so nothing that
+    // must survive a rescan is stored there.
     for (const brief of briefs) {
       const stored = JSON.stringify(brief.facts);
       expect(stored).not.toContain('queryProvenance');
       expect(stored).not.toContain('fetchedBy');
       expect(stored).not.toContain('planRevision');
     }
+    // #709: the saved copy's own reference row now carries it, written once when that row was inserted.
+    const captures = briefs.flatMap((brief) =>
+      briefStore
+        .listAliases(db, brief.id)
+        .filter((alias) => alias.kind === 'saved_job' || alias.kind === 'attempt')
+        .map((alias) => alias.queryProvenance),
+    );
+    expect(captures.length).toBeGreaterThan(0);
+    expect(captures.some((capture) => capture?.status === 'recorded' && capture.planRevision === 3)).toBe(true);
+
+    // The #693 prototype's reader was written before #709 and still reports "not recorded": its funnel
+    // and the evaluation snapshot are a record of what the workspace answered at research time.
     const read = readWorkspaceObservations(db);
     for (const observation of read.observations) {
       expect(observation.availability.queryAttribution).toBe('not_recorded');

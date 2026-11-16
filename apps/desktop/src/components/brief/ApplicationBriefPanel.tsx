@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   ApplicationBriefView,
   BriefRequirementItem,
+  BriefSearchProvenanceEntry,
   BriefTargetInput,
   EligibilityItem,
 } from '../../../electron/application-brief.js';
@@ -11,12 +12,15 @@ import {
   ASSESSMENT_HEADLINE,
   BRIEF_INTRO,
   CLASSIFICATION_LABEL,
+  COPY_LABEL,
   ELIGIBILITY_EXPLAIN,
   ELIGIBILITY_HEADLINE,
   GROUP_FIELD_LABEL,
   MISSING_ASSESSMENT_NOTE,
   POSTING_HEADLINE,
   PREFERENCE_NOTE,
+  QUERY_NOT_RECORDED,
+  SEARCH_PROVENANCE_NOTE,
   formatDay,
   isHttpUrl,
 } from './brief-text.js';
@@ -126,6 +130,58 @@ function EligibilityRow({ item }: { item: EligibilityItem }) {
         {item.observedAt ? ` · seen ${formatDay(item.observedAt)}` : ' · no date'}
         {item.freshness ? ` (${item.freshness})` : ''}
       </div>
+    </li>
+  );
+}
+
+/**
+ * #709: one saved copy and the query variants recorded for it. A copy that recorded none says why,
+ * and a variant the source never received is marked as matched here only -- never as one it was sent.
+ */
+function SavedCopyProvenance({ copy }: { copy: BriefSearchProvenanceEntry }) {
+  const recorded = copy.provenance !== null && copy.provenance.status === 'recorded' ? copy.provenance : null;
+  const fetchedIds = new Set(recorded?.fetchedBy.map((query) => query.variantId) ?? []);
+  // Only read when `recorded` is null, so the unreachable 'recorded' case falls back to "missing".
+  const reason = copy.provenance === null || copy.provenance.status === 'recorded' ? 'missing' : copy.provenance.status;
+  return (
+    <li>
+      <span className="font-medium">{COPY_LABEL[copy.kind]}</span>
+      <span className="text-base-content/60"> · kept from {formatDay(copy.firstSeenAt)}</span>
+      {recorded === null ? (
+        <p className="text-base-content/60">{QUERY_NOT_RECORDED[reason]}</p>
+      ) : (
+        <>
+          <ul className="ml-3 list-disc">
+            {recorded.fetchedBy.map((query) => (
+              <li key={`f:${query.provider}:${query.variantId}`}>
+                Asked {discoveryProviderLabel(query.provider)} for “{query.query}”
+                {query.language ? ` (${query.language})` : ''}
+              </li>
+            ))}
+            {recorded.matchedLocally.map((query) => {
+              // A query can be both: sent upstream AND found again by this app's own filter. A query
+              // no source ever received says so plainly, so it can never read as one that was sent.
+              const alsoFetched = fetchedIds.has(query.variantId);
+              const where = query.field === 'title' ? ' (in the title)' : query.field === 'description' ? ' (in the description)' : '';
+              const language = query.language ? ` (${query.language})` : '';
+              return (
+                <li key={`m:${query.variantId}`}>
+                  {alsoFetched
+                    ? `Also matched here by “${query.query}”${where}${language}`
+                    : `No source was asked for “${query.query}”${language}; this app matched it here${where}`}
+                </li>
+              );
+            })}
+          </ul>
+          {recorded.fetchedBy.length === 0 && recorded.matchedLocally.length === 0 && (
+            <p className="text-base-content/60">No query of that plan was recorded against this copy.</p>
+          )}
+          <p className="text-base-content/60">
+            Search plan revision {recorded.planRevision} · scan of {formatDay(recorded.generatedAt)}
+            {recorded.truncated ? ' · long list shortened' : ''}
+          </p>
+        </>
+      )}
     </li>
   );
 }
@@ -462,6 +518,17 @@ export function ApplicationBriefPanel({ target, reloadKey }: ApplicationBriefPan
           ))}
           {view.sources.length === 0 && <li className="text-base-content/60">No source link is stored for this job.</li>}
         </ul>
+        {view.searchProvenance.length > 0 && (
+          <div className="mt-2 border-t border-base-300 pt-1.5">
+            <p className="text-xs font-medium">Which search found it</p>
+            <ul className="mt-1 space-y-1.5 text-xs">
+              {view.searchProvenance.map((copy) => (
+                <SavedCopyProvenance key={copy.aliasKey} copy={copy} />
+              ))}
+            </ul>
+            <p className="mt-1.5 text-base-content/60 text-xs">{SEARCH_PROVENANCE_NOTE}</p>
+          </div>
+        )}
         <p className="mt-1.5 text-xs text-base-content/60">
           Every copy of this job found by Search shares this one brief. Identity: {view.identity.kind.replace(/_/gu, ' ')}.
         </p>

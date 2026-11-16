@@ -329,4 +329,42 @@ describe('source copies in one brief', () => {
     expect(within(region).getByRole('link', { name: AGG_URL })).toBeInTheDocument();
     expect(within(region).getByRole('link', { name: ATS_URL })).toBeInTheDocument();
   });
+
+  it('names the query variants that found a saved copy, keeping a locally matched one apart (#709)', async () => {
+    const row = scanRow({
+      key: 'gh:1001',
+      url: ATS_URL,
+      queryProvenance: {
+        planRevision: 3,
+        fetchedBy: [{ variantId: 'literal', query: 'platform engineer', language: null, provider: 'ats_roster_greenhouse' }],
+        matchedLocally: [
+          { variantId: 'literal', query: 'platform engineer', language: null, field: 'title' },
+          { variantId: 'v-infra', query: 'infrastructure engineer', language: null, field: 'title' },
+        ],
+      },
+    });
+    setScan(world, [row], '2026-10-19T08:00:00.000Z');
+    const job = saveJob(row);
+    render(<ApplicationBriefPanel target={{ savedJobId: job.id }} />);
+    const region = await screen.findByRole('region', { name: 'Application brief' });
+    await within(region).findByText(/Search score/u);
+    fireEvent.click(within(region).getByText(/Where this came from/u));
+
+    const text = region.textContent ?? '';
+    expect(text).toContain('Asked Greenhouse (ATS roster) for “platform engineer”');
+    // The variant no source received says so; the one that WAS sent upstream is not described that way.
+    expect(text).toContain('No source was asked for “infrastructure engineer”; this app matched it here (in the title)');
+    expect(text).toContain('Also matched here by “platform engineer” (in the title)');
+    expect(text).not.toContain('No source was asked for “platform engineer”');
+    expect(text).toContain('Search plan revision 3');
+  });
+
+  it('says why a copy has no variants instead of showing an empty list (#709)', async () => {
+    const manual = workspace.createSavedJob(db, { role: 'Solo Role', company: 'Harbor Systems', location: 'Lisbon', status: 'considering' });
+    render(<ApplicationBriefPanel target={{ savedJobId: manual.id }} />);
+    const region = await screen.findByRole('region', { name: 'Application brief' });
+    await within(region).findByText(/Where this came from/u);
+    fireEvent.click(within(region).getByText(/Where this came from/u));
+    expect(region.textContent ?? '').toContain('No scan row from the scan that found this copy was still loaded');
+  });
 });

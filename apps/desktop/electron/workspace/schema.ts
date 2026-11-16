@@ -22,7 +22,7 @@ import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js
 import type { SupportPromptState } from './support-prompt.js';
 import type { CompanyResearchDiagnostics } from '../company-evidence.js';
 import type { PreparedApplicationFields } from './types.js';
-import type { BriefNotice, BriefSourceFacts, FrozenBrief, StoredAssessment } from '../application-brief.js';
+import type { BriefNotice, BriefQueryProvenance, BriefSourceFacts, FrozenBrief, StoredAssessment } from '../application-brief.js';
 import type { DraftContent, InputFence, RefusedFinding, StoredFinding, StoredProposal } from '../application-critique.js';
 import type { PackageManifestContent } from '../submitted-package.js';
 import type { FollowUpDraftBasis } from '../application-actions-core.js';
@@ -992,6 +992,14 @@ export const applicationBriefAliases = sqliteTable('application_brief_aliases', 
   label: text('label').notNull().default(''),
   provider: text('provider'),
   url: text('url'),
+  /**
+   * #709: the query variants that produced THIS copy of the job, captured once when the row was
+   * inserted and never updated afterwards, so a rescan or a plan edit cannot rewrite it. Only the
+   * `saved_job` / `attempt` reference rows carry it. Null means "not recorded": a copy saved before
+   * #709, or one captured with no usable scan row. It is deliberately NOT part of `source_facts`,
+   * which a strictly newer scan replaces wholesale, and it takes no part in `facts_version`.
+   */
+  queryProvenance: text('query_provenance', { mode: 'json' }).$type<BriefQueryProvenance | null>(),
   firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
   lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
 }, (table) => [

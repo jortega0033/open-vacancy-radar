@@ -1,4 +1,6 @@
 import {
+  BRIEF_MAX_QUERY_CHARS,
+  BRIEF_MAX_QUERY_REFS,
   ELIGIBILITY_KEYS,
   type ApplicationBriefView,
   type AssessmentSection,
@@ -7,13 +9,17 @@ import {
   type BriefAttemptEvidence,
   type BriefCompanyFactSummary,
   type BriefCompanySection,
+  type BriefFetchedQuery,
+  type BriefMatchedQuery,
   type BriefNotice,
   type BriefPin,
   type BriefPostingSection,
   type BriefPostingStatus,
+  type BriefQueryProvenance,
   type BriefReadiness,
   type BriefRequirementItem,
   type BriefResult,
+  type BriefSearchProvenanceEntry,
   type BriefSourceRef,
   type CommitAssessmentResult,
   type EligibilityClass,
@@ -333,6 +339,58 @@ function parsePin(value: unknown): BriefPin | null {
   return attemptId !== null && pinnedAt !== null && snapshot ? { attemptId, pinnedAt, snapshot } : null;
 }
 
+/** #709: one saved copy's captured query variants, rebuilt field by field like everything else here. */
+function parseQueryProvenance(value: unknown): BriefQueryProvenance | null {
+  const source = rec(value);
+  if (!source) return null;
+  const status = oneOf(source.status, ['recorded', 'no_plan', 'no_scan_row'] as const);
+  const capturedAt = str(source, 'capturedAt', 40) ?? '';
+  if (status === null) return null;
+  if (status !== 'recorded') return { status, capturedAt };
+  const planRevision = num(source, 'planRevision');
+  const runId = str(source, 'runId', 200);
+  if (planRevision === null || runId === null) return null;
+  const common = (item: Rec): { variantId: string; query: string; language: string | null } | null => {
+    const variantId = str(item, 'variantId', 100);
+    const query = str(item, 'query', BRIEF_MAX_QUERY_CHARS);
+    return variantId === null || query === null ? null : { variantId, query, language: strOrNull(item, 'language', 40) };
+  };
+  return {
+    status,
+    capturedAt,
+    runId,
+    generatedAt: strOrNull(source, 'generatedAt', 40),
+    planRevision,
+    fetchedBy: list(source.fetchedBy, BRIEF_MAX_QUERY_REFS, (item): BriefFetchedQuery | null => {
+      const entry = rec(item);
+      const base = entry ? common(entry) : null;
+      const provider = entry ? str(entry, 'provider', 100) : null;
+      return base && provider !== null ? { ...base, provider } : null;
+    }),
+    matchedLocally: list(source.matchedLocally, BRIEF_MAX_QUERY_REFS, (item): BriefMatchedQuery | null => {
+      const entry = rec(item);
+      const base = entry ? common(entry) : null;
+      return base ? { ...base, field: entry ? oneOf(entry.field, ['title', 'description'] as const) : null } : null;
+    }),
+    truncated: bool(source, 'truncated') === true,
+  };
+}
+
+function parseSearchProvenance(value: unknown): BriefSearchProvenanceEntry | null {
+  const source = rec(value);
+  if (!source) return null;
+  const aliasKey = str(source, 'aliasKey', 400);
+  const kind = oneOf(source.kind, ['saved_job', 'attempt'] as const);
+  if (aliasKey === null || kind === null) return null;
+  return {
+    aliasKey,
+    kind,
+    firstSeenAt: str(source, 'firstSeenAt', 40) ?? '',
+    // An unparseable capture reads as "not recorded", never as a guess.
+    provenance: source.provenance === null || source.provenance === undefined ? null : parseQueryProvenance(source.provenance),
+  };
+}
+
 export function parseBriefView(value: unknown): ApplicationBriefView | null {
   const source = rec(value);
   if (!source) return null;
@@ -371,6 +429,7 @@ export function parseBriefView(value: unknown): ApplicationBriefView | null {
     company: str(source, 'company', 300) ?? '',
     location: str(source, 'location', 300) ?? '',
     sources: list(source.sources, 20, parseSource),
+    searchProvenance: list(source.searchProvenance, 40, parseSearchProvenance),
     posting: {
       hasText: posting.hasText === true,
       complete: posting.complete !== false,
