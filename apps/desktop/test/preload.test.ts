@@ -362,6 +362,8 @@ describe('electron/preload.ts: workspace bridge', () => {
     'createApplication',
     'updateApplication',
     'deleteApplication',
+    // #708: the read-only status history, next to the application verbs it belongs to.
+    'listApplicationStatusEvents',
     'listCvDocuments',
     'createCvDocument',
     'updateCvDocument',
@@ -467,6 +469,8 @@ describe('electron/preload.ts: workspace bridge', () => {
     let api = await loadPreload('workspace');
     await (api.deleteApplication as (id: string) => Promise<unknown>)('app-9');
     expect(invoke).toHaveBeenCalledWith('workspace:applications:delete', { id: 'app-9' });
+    await (api.listApplicationStatusEvents as (id: string) => Promise<unknown>)('app-9');
+    expect(invoke).toHaveBeenCalledWith('workspace:application-status-events:list', { id: 'app-9' });
 
     invoke.mockReset();
     invoke.mockResolvedValue([]);
@@ -782,6 +786,8 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'createApplication',
     'updateApplication',
     'deleteApplication',
+    // #708: the read-only status history, next to the application verbs it belongs to.
+    'listApplicationStatusEvents',
     'listCvDocuments',
     'createCvDocument',
     'updateCvDocument',

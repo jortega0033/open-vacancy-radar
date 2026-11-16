@@ -1231,5 +1231,39 @@ export const applicationFollowUpDrafts = sqliteTable('application_follow_up_draf
   index('application_follow_up_drafts_application_idx').on(table.applicationId),
 ]);
 
+/* ================================================================================ #708 ===== */
+
+/**
+ * #708: an append-only history of one Applications row's status. `applications.status` stays the
+ * source of truth for the row; these rows only say what it was changed from and to, who asserted it,
+ * and a date when somebody actually knows one. Written only in the same transaction as a status
+ * write that really changes the value (`application-status-event-store.ts`); never by silence, time
+ * passing, a receipt on its own or a checkpoint move that leaves the status alone. Never edited.
+ *
+ * `source` is who asserted the change: `user_set` for the person (including a "I sent it" report the
+ * attempt sync carries onto the row), `app_observed` only for a submission this app saw. `via` is
+ * which code path wrote it, for diagnosis only. `occurred_on` is a date the person typed, never
+ * defaulted; `observed_at` is the app's own submission time, kept apart from it. No backfill: a row
+ * created before this table has no events and no timing.
+ */
+export const applicationStatusEvents = sqliteTable('application_status_events', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  applicationId: text('application_id')
+    .notNull()
+    .references(() => applications.id, { onDelete: 'cascade' }),
+  eventVersion: integer('event_version').notNull(),
+  fromStatus: text('from_status'),
+  toStatus: text('to_status').notNull(),
+  source: text('source', { enum: ['user_set', 'app_observed'] }).notNull(),
+  via: text('via', { enum: ['application_edit', 'application_create', 'attempt_sync'] }).notNull(),
+  attemptId: text('attempt_id').references(() => applicationAttempts.id, { onDelete: 'set null' }),
+  evidence: text('evidence', { enum: ['receipt_confirmed', 'not_recorded', 'user_statement'] }),
+  occurredOn: text('occurred_on'),
+  observedAt: integer('observed_at', { mode: 'timestamp_ms' }),
+  recordedAt: integer('recorded_at', { mode: 'timestamp_ms' }).notNull(),
+}, (table) => [
+  index('application_status_events_application_idx').on(table.applicationId, table.recordedAt),
+]);
+
 // Blind Apply (#722): defined in its own module, re-exported so drizzle-kit and the repository see one schema.
 export * from './blind-apply-schema.js';

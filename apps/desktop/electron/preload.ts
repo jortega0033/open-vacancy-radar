@@ -494,6 +494,9 @@ const workspaceApi: WorkspaceBridge = {
   deleteApplication(id) {
     return ipcRenderer.invoke('workspace:applications:delete', { id });
   },
+  listApplicationStatusEvents(applicationId) {
+    return ipcRenderer.invoke('workspace:application-status-events:list', { id: applicationId });
+  },
 
   listCvDocuments() {
     return ipcRenderer.invoke('workspace:cv-documents:list');
