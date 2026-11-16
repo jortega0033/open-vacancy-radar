@@ -298,8 +298,9 @@ stored in the local workspace database and goes nowhere else.
   saved with it (cut at 80,000 characters), a summary of the CV assessment with the versions it was made under, and
   a short list of why a section went out of date. Each saved copy of the job also keeps the search queries that
   produced it (#709): the words you typed, the plan titles you approved, which source was asked for each, and the
-  plan revision. That is recorded once, when the copy is saved, and is never rewritten by a later scan; it holds no
-  CV, profile or model text, and it goes when that copy goes. The assessment summary, in the brief and in its pinned copy, keeps
+  plan revision. That is recorded when the copy is saved, from the scan it was saved from; if that scan's result was
+  not loaded yet, the next read of the brief fills it in from that same scan, and nothing else ever
+  rewrites it. It holds no CV, profile or model text, and it goes when that copy goes. The assessment summary, in the brief and in its pinned copy, keeps
   short labels derived from your CV for each strength: a role title and employer, a project name, or the first 80
   characters of a statement you confirmed. It holds no other CV text, and no letters or notes. Viewing it makes no
   request and starts no model session. The only AI in this feature is the explicit "Assess selected jobs" action,
