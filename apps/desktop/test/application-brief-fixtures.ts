@@ -138,12 +138,14 @@ export interface BriefWorld {
   generatedAt: string;
   /** #709: when the run behind the report started, or null when unknown (as for a hydrated report). */
   startedAt: string | null;
+  /** #709: when the run currently in flight started, or null when no scan is running. */
+  scanInFlightSince: string | null;
   profileVersion: string;
   rows: Map<string, DiscoveryVacancyAudit>;
 }
 
 export function makeWorld(): BriefWorld {
-  return { clock: new Date(T0), profile: structuredClone(PROFILE), runId: '', generatedAt: '', startedAt: null, profileVersion: PROFILE.profileVersion, rows: new Map() };
+  return { clock: new Date(T0), profile: structuredClone(PROFILE), runId: '', generatedAt: '', startedAt: null, scanInFlightSince: null, profileVersion: PROFILE.profileVersion, rows: new Map() };
 }
 
 export function setScan(
@@ -175,6 +177,7 @@ export function makeDeps(
         ? { row, runId: world.runId, generatedAt: world.generatedAt, profileVersion: world.profileVersion, scanStartedAt: world.startedAt }
         : null;
     },
+    scanInFlightSince: () => world.scanInFlightSince,
     loadProfile: async () => world.profile,
     postingView(attemptId) {
       calls.postingView += 1;

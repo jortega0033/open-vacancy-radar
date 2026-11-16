@@ -1258,6 +1258,34 @@ describe('#709 search provenance kept with each saved copy', () => {
     expect(copyOf(await view(job.id)).provenance).toEqual(completed);
   });
 
+  it('saved during a rescan that the previous report also has: the running scan is credited, not the older one', async () => {
+    // The previous run found this job and is still the report in hand. Search is showing the RUNNING
+    // scan's own rows, so that is the list this copy was taken from, even though both runs found it.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z', undefined, '2026-10-19T07:40:00.000Z');
+    world.scanInFlightSince = '2026-10-26T07:40:00.000Z';
+    const job = saveJob(world.rows.get('gh:1001')!);
+
+    // While that run is going, nothing is recorded: naming the previous run would name the wrong one.
+    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'no_scan_row' });
+    // Reading the brief again mid-run does not quietly settle for the older report either.
+    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'no_scan_row' });
+
+    // The running scan lands. Its report, not the previous one, completes the capture.
+    world.scanInFlightSince = null;
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], '2026-10-26T08:00:00.000Z', undefined, '2026-10-26T07:40:00.000Z');
+    const completed = copyOf(await view(job.id)).provenance;
+    expect(completed).toMatchObject({ status: 'recorded', planRevision: 4 });
+    expect(completed).toMatchObject({ fetchedBy: [{ variantId: 'v-sre', provider: 'remotive' }] });
+  });
+
+  it('a scan that starts after the save never defers the capture: the loaded report still counts', async () => {
+    // Saved with the report in hand, but the brief is first built later, while a NEW run is going.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z', undefined, '2026-10-19T07:40:00.000Z');
+    const job = saveJob(world.rows.get('gh:1001')!);
+    world.scanInFlightSince = shifted(job.savedAt, 60_000);
+    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'recorded', planRevision: 3 });
+  });
+
   it('when the save-time capture fails, a retry against the SAME scan records it, and one after a later scan does not', async () => {
     setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z', undefined, '2026-10-19T07:40:00.000Z');
     const failing = makeDeps({

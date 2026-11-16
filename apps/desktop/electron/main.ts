@@ -2223,6 +2223,13 @@ async function applicationBriefDeps(): Promise<BriefServiceDeps> {
         ? { row, runId: report.runId, generatedAt: report.generatedAt, profileVersion: report.profileVersion, scanStartedAt }
         : null;
     },
+    // #709: Search shows a running scan's own rows, so a copy saved while one is in flight belongs to
+    // THAT run, not to the older report `findReportRow` still reads. `vacancyScanRunner` is created
+    // further down in this module, so this is read lazily, per call, never captured at wiring time.
+    scanInFlightSince: () => {
+      const startedAt = vacancyScanRunner.status()?.startedAt;
+      return startedAt === undefined ? null : new Date(startedAt).toISOString();
+    },
     async loadProfile() {
       try {
         return await loadCandidateProfile(await candidateProfilePath());

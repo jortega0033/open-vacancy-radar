@@ -114,6 +114,12 @@ export interface BriefServiceDeps {
   postingView(attemptId: string): PostingVerificationView | null;
   /** The #689 evidence for an attempt as a summary. Reads only. */
   companyEvidence(attemptId: string): BriefCompanySection;
+  /**
+   * #709: when the scan currently running started (ISO), or null when none is running. Search shows a
+   * running scan's own rows by default, so a copy saved while one is in flight was almost certainly
+   * taken from THAT run's list, not from the older report still loaded here.
+   */
+  scanInFlightSince?(): string | null;
   /** Saves an allow-listed profile patch through the app's one serialized profile writer. */
   saveProfilePatch?(patch: { constraints: Record<string, unknown> }): Promise<void>;
   log?(message: string, meta?: Record<string, unknown>): void;
@@ -190,12 +196,29 @@ interface Resolved {
  * time (a report hydrated from disk) the run's end (`generatedAt`) is used, which is stricter. When
  * neither timestamp can be read, the row in hand is recorded as-is: it carries its own `runId` and
  * `generatedAt`, so what was captured stays checkable.
+ *
+ * One more rule decides BETWEEN two eligible runs. While a run that started by the save is still
+ * going, the report loaded here is the PREVIOUS one, and Search is showing the running scan's own
+ * rows (the older report is behind an explicit toggle). Recording the previous run then would name a
+ * run the person was most likely not looking at, even when both found the job. So this holds the
+ * placeholder while such a run is in flight, and the completion in `upsertBrief` fills it in from
+ * that run's report once it lands. If that run never lands, or lands without this job, the copy keeps
+ * reading "not recorded" rather than naming the other run.
  */
-function captureQueryProvenance(reportRow: BriefReportRow | null, savedAt: string | null, now: Date): BriefQueryProvenance {
+function captureQueryProvenance(
+  reportRow: BriefReportRow | null,
+  savedAt: string | null,
+  now: Date,
+  scanInFlightSince: string | null,
+): BriefQueryProvenance {
   const capturedAt = now.toISOString();
+  const savedAtMs = savedAt === null ? Number.NaN : Date.parse(savedAt);
+  const inFlightMs = scanInFlightSince === null ? Number.NaN : Date.parse(scanInFlightSince);
+  if (Number.isFinite(inFlightMs) && Number.isFinite(savedAtMs) && inFlightMs <= savedAtMs) {
+    return { status: 'no_scan_row', capturedAt };
+  }
   if (reportRow === null) return { status: 'no_scan_row', capturedAt };
   const startedAtMs = Date.parse(reportRow.scanStartedAt ?? reportRow.generatedAt);
-  const savedAtMs = savedAt === null ? Number.NaN : Date.parse(savedAt);
   if (Number.isFinite(startedAtMs) && Number.isFinite(savedAtMs) && startedAtMs > savedAtMs) {
     return { status: 'no_scan_row', capturedAt };
   }
@@ -283,11 +306,18 @@ function resolveContext(deps: BriefServiceDeps, target: BriefTarget, now: Date):
   }
   // #709: each reference row is one saved copy, and carries the variants that produced THAT copy.
   const refs: BriefAlias[] = [];
+  const scanInFlightSince = deps.scanInFlightSince?.() ?? null;
   if (savedJob) {
-    refs.push({ ...savedJobAlias(savedJob.id), queryProvenance: captureQueryProvenance(reportRow, savedJob.savedAt, now) });
+    refs.push({
+      ...savedJobAlias(savedJob.id),
+      queryProvenance: captureQueryProvenance(reportRow, savedJob.savedAt, now, scanInFlightSince),
+    });
   }
   if (attempt) {
-    refs.push({ ...attemptAlias(attempt.id), queryProvenance: captureQueryProvenance(reportRow, attempt.createdAt, now) });
+    refs.push({
+      ...attemptAlias(attempt.id),
+      queryProvenance: captureQueryProvenance(reportRow, attempt.createdAt, now, scanInFlightSince),
+    });
   }
 
   // The semantic fingerprint is added only where it IS the identity: a requisition never gets it,
