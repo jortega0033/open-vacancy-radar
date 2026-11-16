@@ -1451,7 +1451,11 @@ export function SearchPage({
       return rest;
     });
     try {
-      await window.workspace.createSavedJob(savedJobInputFor(selected));
+      // #709: a live row belongs to the running scan, not to the previous report on disk, even when
+      // that report lists the same job, so say so and let the main process attribute it correctly.
+      await (selected.provisional
+        ? window.workspace.createSavedJob(savedJobInputFor(selected), { fromLiveScan: true })
+        : window.workspace.createSavedJob(savedJobInputFor(selected)));
       setSaveStates((current) => ({ ...current, [key]: 'saved' }));
       setSavedKeys((current) => new Set(current).add(key));
       onSavedJobsChanged?.();
