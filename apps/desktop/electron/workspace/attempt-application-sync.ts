@@ -19,6 +19,7 @@
 import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import type { WorkspaceDb } from './client.js';
 import { applicationAttempts, applications, savedJobs } from './schema.js';
+import { attemptSyncAssertion, recordStatusChange } from './application-status-event-store.js';
 import { NON_TERMINAL_ATTEMPT_CHECKPOINTS, type ApplicationAttemptCheckpoint } from './types.js';
 
 type AttemptRow = typeof applicationAttempts.$inferSelect;
@@ -196,6 +197,26 @@ export function syncApplicationForAttempt(tx: WorkspaceDb, attemptId: string): v
   }
   if (row.cvId === null && attempt.sourceCvId) patch.cvId = attempt.sourceCvId;
   if (Object.keys(patch).length > 0) tx.update(applications).set(patch).where(eq(applications.id, row.id)).run();
+
+  // #708: one event per real status move, in this same transaction. A re-run (another attempt event,
+  // the start-up reconcile) finds the row already `applied`, so `patch.status` is unset and nothing
+  // is written. Who asserted it follows the attempt, not this code path: a person's "I sent it"
+  // stays `user_set`. `occurredOn` stays null: no date here was typed by the person.
+  if (patch.status !== undefined && patch.status !== row.status) {
+    const assertion = attemptSyncAssertion(attempt);
+    recordStatusChange(tx, {
+      applicationId: row.id,
+      fromStatus: row.status,
+      toStatus: patch.status,
+      source: assertion.source,
+      via: 'attempt_sync',
+      attemptId: attempt.id,
+      evidence: assertion.evidence,
+      occurredOn: null,
+      observedAt: assertion.observedAt,
+      now: new Date(),
+    });
+  }
 
   syncSavedJobStatus(tx, attempt, row.savedJobId, derived);
 }

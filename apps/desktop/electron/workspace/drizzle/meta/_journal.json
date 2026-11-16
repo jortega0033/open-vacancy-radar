@@ -302,6 +302,13 @@
       "when": 1794830975529,
       "tag": "0042_brief_query_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1794863511419,
+      "tag": "0043_application_status_events",
+      "breakpoints": true
     }
   ]
 }

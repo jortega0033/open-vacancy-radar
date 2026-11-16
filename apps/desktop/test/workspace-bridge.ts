@@ -103,6 +103,7 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     createApplication: vi.fn(),
     updateApplication: vi.fn(),
     deleteApplication: vi.fn().mockResolvedValue({ deleted: true }),
+    listApplicationStatusEvents: vi.fn().mockResolvedValue([]),
 
     listCvDocuments: vi.fn().mockResolvedValue([]),
     createCvDocument: vi.fn(),

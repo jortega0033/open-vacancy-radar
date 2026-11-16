@@ -3889,6 +3889,11 @@ guardedIpc.handle('workspace:applications:update', async (_event, input: unknown
   });
 });
 
+// #708: read-only, so not behind the reset gate's mutation lock (like `workspace:applications:list`).
+guardedIpc.handle('workspace:application-status-events:list', async (_event, input: unknown) =>
+  workspace.listApplicationStatusEvents(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
 guardedIpc.handle('workspace:applications:delete', async (_event, input: unknown) =>
   applicationDataResetGate.runMutation(async () =>
     workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
