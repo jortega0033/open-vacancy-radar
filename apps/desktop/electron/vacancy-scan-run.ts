@@ -61,8 +61,13 @@ export interface VacancyScanRunnerDeps {
   progressSourceTotal: number;
   /** The renderer-facing `vacancy:scan-progress` push. */
   sendProgress(event: VacancyScanProgressEvent): void;
-  /** Makes a finished run's report the app's current state (#561 rules live with the caller). */
-  adoptReport(report: GlobalRemoteReport): void;
+  /**
+   * Makes a finished run's report the app's current state (#561 rules live with the caller).
+   * `startedAt` (epoch ms) is when this run began: the report's own `generatedAt` is stamped at the
+   * end, and a saved job's search provenance (#709) needs to know whether the run was already under
+   * way when the job was saved.
+   */
+  adoptReport(report: GlobalRemoteReport, run: { startedAt: number }): void;
   notifyCompleted(report: GlobalRemoteReport): void;
   notifyFailed(detail: string): void;
   /** Errors that are not a failure of this run: another scan held the lock, or the person stopped it. */
@@ -180,7 +185,7 @@ export function createVacancyScanRunner(deps: VacancyScanRunnerDeps): VacancySca
             },
             intent,
           );
-          deps.adoptReport(result.report);
+          deps.adoptReport(result.report, { startedAt: scan.startedAt });
           return result.report;
         } finally {
           if (active === scan) active = undefined;

@@ -362,6 +362,11 @@ let vacancyScanLock: ScanLock | undefined;
 /** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
 let vacancyEngineFailure: VacancyEngineFailure | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
+/**
+ * #709: when the run behind `latestVacancyReport` started (epoch ms), or null when unknown (a report
+ * hydrated from disk does not record it). Only ever set together with `latestVacancyReport`.
+ */
+let latestVacancyReportStartedAt: number | null = null;
 /** Set at startup when the report on disk was the kept one from before a zero-match scan (#577). */
 let hydratedZeroMatch: { checked: number } | undefined;
 let lastVacancyScanAt: string | undefined;
@@ -447,6 +452,7 @@ async function hydrateLatestVacancyReport(): Promise<void> {
   try {
     const loaded = await readGlobalRemoteReportWithFallback(await vacancyEngineDataRoot());
     latestVacancyReport = loaded?.report;
+    latestVacancyReportStartedAt = null;
     hydratedZeroMatch = loaded?.keptPrevious;
   } catch {
     // Tolerated -- see doc comment above.
@@ -2212,7 +2218,10 @@ async function applicationBriefDeps(): Promise<BriefServiceDeps> {
     findReportRow(vacancyKey) {
       const report = latestVacancyReport;
       const row = report?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
-      return report && row ? { row, runId: report.runId, generatedAt: report.generatedAt, profileVersion: report.profileVersion } : null;
+      const scanStartedAt = latestVacancyReportStartedAt === null ? null : new Date(latestVacancyReportStartedAt).toISOString();
+      return report && row
+        ? { row, runId: report.runId, generatedAt: report.generatedAt, profileVersion: report.profileVersion, scanStartedAt }
+        : null;
     },
     async loadProfile() {
       try {
@@ -3032,13 +3041,14 @@ const vacancyScanRunner = createVacancyScanRunner({
   now: () => Date.now(),
   progressSourceTotal: SCAN_PROGRESS_SOURCE_IDS.length,
   sendProgress: (event) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
-  adoptReport: (report) => {
+  adoptReport: (report, run) => {
     // A scan with no matches must not displace the last report that had some (#561): saved jobs
     // and prepare still resolve rows against it, and the renderer keeps showing it.
     lastVacancyScanAt = report.generatedAt;
     hydratedZeroMatch = undefined;
     if (report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
       latestVacancyReport = report;
+      latestVacancyReportStartedAt = run.startedAt;
     }
   },
   notifyCompleted: (report) =>

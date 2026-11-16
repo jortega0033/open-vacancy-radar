@@ -341,12 +341,13 @@ export interface BriefMatchedQuery {
  *
  * `fetchedBy` and `matchedLocally` are kept as two separate lists, exactly as the engine reports them
  * (`LeadQueryProvenance`), so a variant that only the local filter matched can never be read back as
- * one the source received. Nothing here is ever rewritten: see `upsertBrief`, which writes this on
- * alias INSERT only.
+ * one the source received. A `recorded` or `no_plan` capture is never rewritten (see `upsertBrief`).
  *
  * `no_plan` = the scan ran without a search plan, so there was nothing to record. `no_scan_row` = no
- * scan row was in hand for this copy at capture (the report had already been replaced), or the only
- * row in hand came from a scan that ran AFTER this copy was saved, so it cannot be what found it.
+ * eligible scan row was in hand at capture: none at all (the job was saved from a run's live rows
+ * before its report landed, or the report had been replaced), or the only row in hand came from a
+ * run that started AFTER this copy was saved, so it cannot be what found it. It is the one status a
+ * later capture may complete, and only from a run that had started by the save.
  */
 export type BriefQueryProvenance =
   | {

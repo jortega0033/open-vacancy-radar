@@ -75,7 +75,7 @@ export const QUERY_NOT_RECORDED: Record<'missing' | 'no_plan' | 'no_scan_row', s
 };
 
 export const SEARCH_PROVENANCE_NOTE =
-  'Recorded once, when each copy was saved. A later scan or a change to your search plan does not rewrite it.';
+  'Recorded once, from the scan each copy was saved from. A later scan or a change to your search plan does not rewrite it.';
 
 export const COPY_LABEL: Record<'saved_job' | 'attempt', string> = {
   saved_job: 'Saved copy',

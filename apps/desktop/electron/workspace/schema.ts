@@ -993,8 +993,9 @@ export const applicationBriefAliases = sqliteTable('application_brief_aliases', 
   provider: text('provider'),
   url: text('url'),
   /**
-   * #709: the query variants that produced THIS copy of the job, captured once when the row was
-   * inserted and never updated afterwards, so a rescan or a plan edit cannot rewrite it. Only the
+   * #709: the query variants that produced THIS copy of the job, captured when the row was inserted.
+   * A `recorded` capture is never updated, so a rescan or a plan edit cannot rewrite it; the only later
+   * write completes a `no_scan_row` placeholder once (see `upsertBrief`). Only the
    * `saved_job` / `attempt` reference rows carry it. Null means "not recorded": a copy saved before
    * #709, or one captured with no usable scan row. It is deliberately NOT part of `source_facts`,
    * which a strictly newer scan replaces wholesale, and it takes no part in `facts_version`.

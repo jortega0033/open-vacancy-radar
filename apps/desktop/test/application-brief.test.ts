@@ -76,8 +76,13 @@ let world: fx.BriefWorld;
 let fetchSpy: ReturnType<typeof vi.fn>;
 let calls: { postingView: number };
 
-function setScan(rows: DiscoveryVacancyAudit[], generatedAt: string, profileVersion?: string): void {
-  fx.setScan(world, rows, generatedAt, profileVersion);
+function setScan(rows: DiscoveryVacancyAudit[], generatedAt: string, profileVersion?: string, startedAt: string | null = null): void {
+  fx.setScan(world, rows, generatedAt, profileVersion, startedAt);
+}
+
+/** An ISO time `ms` milliseconds after (or, negative, before) another ISO time. */
+function shifted(iso: string, ms: number): string {
+  return new Date(Date.parse(iso) + ms).toISOString();
 }
 
 function makeDeps(extra: Partial<BriefServiceDeps> = {}): BriefServiceDeps {
@@ -1177,8 +1182,8 @@ describe('#709 search provenance kept with each saved copy', () => {
     expect(fromAts.provenance).toMatchObject({ planRevision: 3 });
   });
 
-  it('reads as "not recorded" for a copy saved before this existed, and no later scan fills it in', async () => {
-    // Saved before #709: the job exists, but no brief was ever built for it, so there is no capture.
+  it('a copy first read only after a LATER scan reads as "not recorded", and no later scan fills it in', async () => {
+    // The job exists but its brief was never built (saved before #688, or its save-time capture never ran).
     world.rows = new Map();
     const old = workspace.createSavedJob(db, { role: 'Platform Engineer', company: 'Northwind Freight', location: 'Remote - Europe', vacancyKey: 'gh:1001', sourceUrl: ATS_URL, status: 'considering' });
     db.update(schema.savedJobs).set({ savedAt: new Date('2026-10-01T00:00:00.000Z') }).where(eq(schema.savedJobs.id, old.id)).run();
@@ -1235,6 +1240,53 @@ describe('#709 search provenance kept with each saved copy', () => {
     await view(secondCopy.id);
     expect(briefStore.listBriefs(db)[0]!.factsVersion).toBe(fenceBefore);
     expect(copyFor(await view(job.id), secondCopy.id).provenance).toMatchObject({ status: 'recorded', planRevision: 9 });
+  });
+
+  it('a job saved from a running scan\'s live rows is completed from that scan\'s report, once', async () => {
+    // The report in hand when the job is saved is the PREVIOUS one, which does not have this job yet.
+    setScan([scanRow({ key: 'gh:2002', url: ATS_URL_OTHER_REQ })], '2026-10-19T08:00:00.000Z');
+    const job = saveJob(scanRow({ key: 'gh:1001', url: ATS_URL }));
+    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'no_scan_row' });
+
+    // The run the job was saved from had started before the save and lands its report afterwards.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], shifted(job.savedAt, 60_000), undefined, shifted(job.savedAt, -60_000));
+    const completed = copyOf(await view(job.id)).provenance;
+    expect(completed).toMatchObject({ status: 'recorded', planRevision: 3 });
+
+    // Completed once: a run that started after the save, with an edited plan, changes nothing.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], shifted(job.savedAt, 6 * 60_000), undefined, shifted(job.savedAt, 5 * 60_000));
+    expect(copyOf(await view(job.id)).provenance).toEqual(completed);
+  });
+
+  it('when the save-time capture fails, a retry against the SAME scan records it, and one after a later scan does not', async () => {
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z', undefined, '2026-10-19T07:40:00.000Z');
+    const failing = makeDeps({
+      findReportRow() {
+        throw new Error('the report could not be read');
+      },
+    });
+
+    // Same scan still loaded when the brief is next read: the deferred capture is the save-time one.
+    const sameScan = saveJob(world.rows.get('gh:1001')!);
+    await expect(getBrief(failing, { savedJobId: sameScan.id })).rejects.toThrow('the report could not be read');
+    expect(briefStore.listBriefs(db)).toHaveLength(0); // nothing was written, not even the reference row
+    expect(copyOf(await view(sameScan.id)).provenance).toMatchObject({ status: 'recorded', planRevision: 3 });
+
+    // A second copy whose capture failed, first read only after a run that STARTED after its save.
+    const late = saveJob(world.rows.get('gh:1001')!);
+    await expect(getBrief(failing, { savedJobId: late.id })).rejects.toThrow();
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], shifted(late.savedAt, 3 * 60_000), undefined, shifted(late.savedAt, 60_000));
+    const merged = await view(late.id);
+    expect(copyFor(merged, late.id).provenance).toMatchObject({ status: 'no_scan_row' });
+    // ... and the first copy, recorded earlier, is untouched by that later run.
+    expect(copyFor(merged, sameScan.id).provenance).toMatchObject({ status: 'recorded', planRevision: 3 });
+  });
+
+  it('a report without a known start time falls back to its end time, which never admits a later scan', async () => {
+    const job = saveJob(scanRow({ key: 'gh:1001', url: ATS_URL }));
+    // Hydrated from disk: no start time. It ended after the save, so it may have started after it too.
+    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], shifted(job.savedAt, 60_000));
+    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'no_scan_row' });
   });
 
   it('lives and dies with its own copy: deleting the saved job takes its capture with it', async () => {

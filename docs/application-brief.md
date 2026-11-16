@@ -89,9 +89,11 @@ deletes all three tables with counts. See [privacy.md](privacy.md).
 
 Each saved copy of a job (a saved job, or an application attempt) keeps on its own reference row the query variants that produced it (#709):
 the typed query and approved plan titles, kept apart as the ones a source was actually asked for and the ones only this app's filter matched,
-with the plan revision and the scan they came from. It is written once, when that copy is first attached to the brief, so a rescan, a plan edit
-or report pruning never rewrites it, and two saved copies of one requisition each keep their own. A copy saved before this existed, or saved with
-no scan row in hand, reads as "not recorded" with the reason, and is never filled in from a later scan. It takes no part in the employer-facts
+with the plan revision and the scan they came from. It is captured when that copy is first attached to the brief, so a rescan, a plan edit
+or report pruning never rewrites it, and two saved copies of one requisition each keep their own. Only a scan that had started by the time the
+copy was saved counts: a job saved from a scan's live rows, before that scan's report landed, is completed from that scan's report the next time
+its brief is read (as long as no later scan has replaced it), while a scan that started after the save is never used. A copy saved before this
+existed reads as "not recorded", and so does one with no such scan row, each with the reason. It takes no part in the employer-facts
 version fence, and "Where this came from" shows it.
 
 ## Limits

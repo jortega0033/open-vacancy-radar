@@ -88,8 +88,15 @@ import type {
 export interface BriefReportRow {
   row: DiscoveryVacancyAudit;
   runId: string;
+  /** Stamped when the report was assembled, at the END of the run. */
   generatedAt: string;
   profileVersion: string;
+  /**
+   * #709: when the run that produced this report STARTED (ISO), or null/absent when unknown (a report
+   * hydrated from disk). Search shows a run's rows while it is still going, so a job can be saved
+   * from a run whose report only lands afterwards.
+   */
+  scanStartedAt?: string | null;
 }
 
 export interface BriefProfile extends PreferenceProfile {
@@ -171,21 +178,25 @@ interface Resolved {
 }
 
 /**
- * #709: what this copy of the job records about the queries that produced it, captured ONCE (the
- * store writes it only when the reference row is inserted).
+ * #709: what this copy of the job records about the queries that produced it. The store writes it
+ * when the reference row is inserted, and may complete a `no_scan_row` placeholder once later (see
+ * `upsertBrief`); a `recorded` or `no_plan` capture is never rewritten.
  *
- * A scan row is accepted as the one that found this copy only when its scan did not run AFTER the
- * copy was saved. That is what keeps a job saved before this feature -- or one whose capture at save
- * time found no row -- reading as "not recorded" instead of being filled in from a later scan. When
- * either timestamp cannot be read, the row in hand is recorded as-is: it carries its own `runId` and
+ * A scan row is accepted as the one that found this copy only when its run had STARTED by the time
+ * the copy was saved: the run the job was saved from (possibly while it was still going, from its
+ * live rows) or an earlier one. A run that started after the save cannot be what found it, so a job
+ * saved before this feature, or one whose save-time capture failed and was only retried after a
+ * rescan, reads as "not recorded" instead of being filled in from a later scan. Without a known start
+ * time (a report hydrated from disk) the run's end (`generatedAt`) is used, which is stricter. When
+ * neither timestamp can be read, the row in hand is recorded as-is: it carries its own `runId` and
  * `generatedAt`, so what was captured stays checkable.
  */
 function captureQueryProvenance(reportRow: BriefReportRow | null, savedAt: string | null, now: Date): BriefQueryProvenance {
   const capturedAt = now.toISOString();
   if (reportRow === null) return { status: 'no_scan_row', capturedAt };
-  const scannedAtMs = Date.parse(reportRow.generatedAt);
+  const startedAtMs = Date.parse(reportRow.scanStartedAt ?? reportRow.generatedAt);
   const savedAtMs = savedAt === null ? Number.NaN : Date.parse(savedAt);
-  if (Number.isFinite(scannedAtMs) && Number.isFinite(savedAtMs) && scannedAtMs > savedAtMs) {
+  if (Number.isFinite(startedAtMs) && Number.isFinite(savedAtMs) && startedAtMs > savedAtMs) {
     return { status: 'no_scan_row', capturedAt };
   }
   return pickQueryProvenance(reportRow.row.queryProvenance, {
