@@ -97,6 +97,11 @@ export interface BriefReportRow {
    * from a run whose report only lands afterwards.
    */
   scanStartedAt?: string | null;
+  /**
+   * #709: the desktop scan id whose report this row belongs to, or null/absent when unknown (a report
+   * hydrated from disk). Lets a copy saved from a running scan's live rows wait for THAT scan.
+   */
+  scanId?: string | null;
 }
 
 export interface BriefProfile extends PreferenceProfile {
@@ -114,18 +119,16 @@ export interface BriefServiceDeps {
   postingView(attemptId: string): PostingVerificationView | null;
   /** The #689 evidence for an attempt as a summary. Reads only. */
   companyEvidence(attemptId: string): BriefCompanySection;
-  /**
-   * #709: when the scan currently running started (ISO), or null when none is running. Search shows a
-   * running scan's own rows by default, so a copy saved while one is in flight was almost certainly
-   * taken from THAT run's list, not from the older report still loaded here.
-   */
-  scanInFlightSince?(): string | null;
   /** Saves an allow-listed profile patch through the app's one serialized profile writer. */
   saveProfilePatch?(patch: { constraints: Record<string, unknown> }): Promise<void>;
   log?(message: string, meta?: Record<string, unknown>): void;
 }
 
-export type BriefTarget = { savedJobId: string } | { attemptId: string };
+/**
+ * `liveScanId` is set only by the save handler, for a job saved from a running scan's live rows (#709).
+ * It is not part of the `application-brief:*` IPC input, so the renderer cannot set it on a read.
+ */
+export type BriefTarget = { savedJobId: string; liveScanId?: string } | { attemptId: string };
 
 // ------------------------------------------------------------------------------------ identity
 
@@ -197,34 +200,40 @@ interface Resolved {
  * neither timestamp can be read, the row in hand is recorded as-is: it carries its own `runId` and
  * `generatedAt`, so what was captured stays checkable.
  *
- * One more rule decides BETWEEN two eligible runs. While a run that started by the save is still
- * going, the report loaded here is the PREVIOUS one, and Search is showing the running scan's own
- * rows (the older report is behind an explicit toggle). Recording the previous run then would name a
- * run the person was most likely not looking at, even when both found the job. So this holds the
- * placeholder while such a run is in flight, and the completion in `upsertBrief` fills it in from
- * that run's report once it lands. If that run never lands, or lands without this job, the copy keeps
- * reading "not recorded" rather than naming the other run.
+ * One more rule decides BETWEEN two eligible runs. While a rescan is running, the report loaded here
+ * is the PREVIOUS one, and Search can show either the running scan's live rows or that previous report
+ * (behind a toggle). Only Search knows which list the row came from, so a save from the live rows says
+ * so (`liveScanId`, resolved by the main process to the running scan). That copy then holds a
+ * placeholder naming the scan, and `upsertBrief` completes it only from THAT scan's report: never from
+ * the previous report, even when both found the job, and never after the scan was stopped. A save from
+ * the previous report's view, or any save with no scan running, is recorded from the loaded report.
+ * A scan being in flight is deliberately NOT a reason to wait on its own: it cannot tell the two views
+ * apart, and once a stopped scan is no longer in flight the previous report would complete the
+ * placeholder anyway.
  */
 function captureQueryProvenance(
   reportRow: BriefReportRow | null,
   savedAt: string | null,
   now: Date,
-  scanInFlightSince: string | null,
+  liveScanId: string | null = null,
 ): BriefQueryProvenance {
   const capturedAt = now.toISOString();
-  const savedAtMs = savedAt === null ? Number.NaN : Date.parse(savedAt);
-  const inFlightMs = scanInFlightSince === null ? Number.NaN : Date.parse(scanInFlightSince);
-  if (Number.isFinite(inFlightMs) && Number.isFinite(savedAtMs) && inFlightMs <= savedAtMs) {
-    return { status: 'no_scan_row', capturedAt };
+  // Saved from a running scan's live rows: the loaded report is the PREVIOUS one unless that scan's own
+  // report has already landed, and the previous one may list the same job under other queries. Wait for
+  // the named scan instead of attributing the copy to a scan the person was not looking at.
+  if (liveScanId !== null && (reportRow?.scanId ?? null) !== liveScanId) {
+    return { status: 'no_scan_row', capturedAt, awaitingScanId: liveScanId };
   }
   if (reportRow === null) return { status: 'no_scan_row', capturedAt };
   const startedAtMs = Date.parse(reportRow.scanStartedAt ?? reportRow.generatedAt);
+  const savedAtMs = savedAt === null ? Number.NaN : Date.parse(savedAt);
   if (Number.isFinite(startedAtMs) && Number.isFinite(savedAtMs) && startedAtMs > savedAtMs) {
     return { status: 'no_scan_row', capturedAt };
   }
   return pickQueryProvenance(reportRow.row.queryProvenance, {
     capturedAt,
     runId: reportRow.runId,
+    scanId: reportRow.scanId ?? null,
     generatedAt: reportRow.generatedAt,
   });
 }
@@ -306,18 +315,13 @@ function resolveContext(deps: BriefServiceDeps, target: BriefTarget, now: Date):
   }
   // #709: each reference row is one saved copy, and carries the variants that produced THAT copy.
   const refs: BriefAlias[] = [];
-  const scanInFlightSince = deps.scanInFlightSince?.() ?? null;
   if (savedJob) {
-    refs.push({
-      ...savedJobAlias(savedJob.id),
-      queryProvenance: captureQueryProvenance(reportRow, savedJob.savedAt, now, scanInFlightSince),
-    });
+    const liveScanId = 'savedJobId' in target ? (target.liveScanId ?? null) : null;
+    refs.push({ ...savedJobAlias(savedJob.id), queryProvenance: captureQueryProvenance(reportRow, savedJob.savedAt, now, liveScanId) });
   }
   if (attempt) {
-    refs.push({
-      ...attemptAlias(attempt.id),
-      queryProvenance: captureQueryProvenance(reportRow, attempt.createdAt, now, scanInFlightSince),
-    });
+    // An attempt is never prepared from a live row (Search gates Prepare on it), so it never waits.
+    refs.push({ ...attemptAlias(attempt.id), queryProvenance: captureQueryProvenance(reportRow, attempt.createdAt, now) });
   }
 
   // The semantic fingerprint is added only where it IS the identity: a requisition never gets it,

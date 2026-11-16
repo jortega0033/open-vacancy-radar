@@ -92,9 +92,9 @@ the typed query and approved plan titles, kept apart as the ones a source was ac
 with the plan revision and the scan they came from. It is captured when that copy is first attached to the brief, so a rescan, a plan edit
 or report pruning never rewrites it, and two saved copies of one requisition each keep their own. Only a scan that had started by the time the
 copy was saved counts: a job saved from a scan's live rows, before that scan's report landed, is completed from that scan's report the next time
-its brief is read (as long as no later scan has replaced it), while a scan that started after the save is never used. While such a scan is still
-running nothing is recorded, even when the previous report also holds the job: Search shows the running scan's own rows, so crediting the earlier
-run would name a run the person was not looking at. If that run never lands, or lands without the job, the copy keeps reading "not recorded". A copy saved before this
+its brief is read (as long as no later scan has replaced it), while a scan that started after the save is never used. Search tells the app when
+a job was saved from those live rows, so the copy waits for that running scan specifically: the previous report, which is still the loaded one
+and may list the same job under other queries, never fills it in, and if the running scan is stopped the copy stays "not recorded". A copy saved before this
 existed reads as "not recorded", and so does one with no such scan row, each with the reason. It takes no part in the employer-facts
 version fence, and "Where this came from" shows it.
 

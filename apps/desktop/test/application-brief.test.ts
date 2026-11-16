@@ -18,7 +18,7 @@ import {
   type BriefEligibility,
   type PreferenceProfile,
 } from '../electron/application-brief.js';
-import { createApplicationBriefHandlers } from '../electron/application-brief-ipc.js';
+import { createApplicationBriefHandlers, parseSavedJobCaptureHint } from '../electron/application-brief-ipc.js';
 import {
   parseBriefResult,
   parseCommitAssessment,
@@ -1258,34 +1258,6 @@ describe('#709 search provenance kept with each saved copy', () => {
     expect(copyOf(await view(job.id)).provenance).toEqual(completed);
   });
 
-  it('saved during a rescan that the previous report also has: the running scan is credited, not the older one', async () => {
-    // The previous run found this job and is still the report in hand. Search is showing the RUNNING
-    // scan's own rows, so that is the list this copy was taken from, even though both runs found it.
-    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z', undefined, '2026-10-19T07:40:00.000Z');
-    world.scanInFlightSince = '2026-10-26T07:40:00.000Z';
-    const job = saveJob(world.rows.get('gh:1001')!);
-
-    // While that run is going, nothing is recorded: naming the previous run would name the wrong one.
-    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'no_scan_row' });
-    // Reading the brief again mid-run does not quietly settle for the older report either.
-    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'no_scan_row' });
-
-    // The running scan lands. Its report, not the previous one, completes the capture.
-    world.scanInFlightSince = null;
-    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], '2026-10-26T08:00:00.000Z', undefined, '2026-10-26T07:40:00.000Z');
-    const completed = copyOf(await view(job.id)).provenance;
-    expect(completed).toMatchObject({ status: 'recorded', planRevision: 4 });
-    expect(completed).toMatchObject({ fetchedBy: [{ variantId: 'v-sre', provider: 'remotive' }] });
-  });
-
-  it('a scan that starts after the save never defers the capture: the loaded report still counts', async () => {
-    // Saved with the report in hand, but the brief is first built later, while a NEW run is going.
-    setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z', undefined, '2026-10-19T07:40:00.000Z');
-    const job = saveJob(world.rows.get('gh:1001')!);
-    world.scanInFlightSince = shifted(job.savedAt, 60_000);
-    expect(copyOf(await view(job.id)).provenance).toMatchObject({ status: 'recorded', planRevision: 3 });
-  });
-
   it('when the save-time capture fails, a retry against the SAME scan records it, and one after a later scan does not', async () => {
     setScan([scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], '2026-10-19T08:00:00.000Z', undefined, '2026-10-19T07:40:00.000Z');
     const failing = makeDeps({
@@ -1343,5 +1315,79 @@ describe('#709 search provenance kept with each saved copy', () => {
     const afterDelete = await getBrief(makeDeps(), { attemptId: attempt.id });
     expect(afterDelete.searchProvenance.map((entry) => entry.kind)).toEqual(['attempt']);
     expect(copyOf(afterDelete, 'attempt').provenance).toMatchObject({ status: 'recorded', planRevision: 3 });
+  });
+});
+
+/* =========== #709 regression: saving a running scan's live row when the previous report has the job */
+
+describe('#709 a copy saved from a running scan is attributed to THAT scan, never to the previous report', () => {
+  // The previous report (scan A) found the job under plan revision 3. A rescan (scan B, under an edited
+  // plan) is running, and Search shows its live rows; the person saves the job from those live rows.
+  // The previous report also has the job, so the row in hand at save time is scan A's, not scan B's.
+  const SCAN_A = { id: 'scan-A', startedAt: '2026-10-19T07:00:00.000Z', generatedAt: '2026-10-19T08:00:00.000Z' };
+  const SCAN_B = { id: 'scan-B', startedAt: '2026-10-26T07:00:00.000Z', generatedAt: '2026-10-26T08:00:00.000Z' };
+
+  function previousReport(): void {
+    fx.setScan(world, [scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R3 })], SCAN_A.generatedAt, undefined, SCAN_A.startedAt, SCAN_A.id);
+  }
+  function scanBLands(): void {
+    fx.setScan(world, [scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], SCAN_B.generatedAt, undefined, SCAN_B.startedAt, SCAN_B.id);
+  }
+
+  it('waits for the running scan instead of taking the previous report’s variants, then records the running scan’s', async () => {
+    previousReport();
+    const job = saveJob(world.rows.get('gh:1001')!);
+    // What `workspace:saved-jobs:create` does for a live row: the capture names the scan it came from.
+    const atSave = copyFor(await getBrief(makeDeps(), { savedJobId: job.id, liveScanId: SCAN_B.id }), job.id);
+    expect(atSave.provenance).toMatchObject({ status: 'no_scan_row', awaitingScanId: SCAN_B.id });
+
+    // Reading the brief again while scan B is still running: the previous report must not fill it in.
+    expect(copyFor(await view(job.id), job.id).provenance).toMatchObject({ status: 'no_scan_row', awaitingScanId: SCAN_B.id });
+
+    // Scan B's report lands: its own variants, under its own plan revision.
+    scanBLands();
+    const landed = copyFor(await view(job.id), job.id).provenance;
+    expect(landed).toMatchObject({ status: 'recorded', planRevision: 4, scanId: SCAN_B.id });
+    expect(landed?.status === 'recorded' && landed.fetchedBy.map((query) => query.provider)).toEqual(['remotive']);
+
+    // And it is final from then on.
+    previousReport();
+    expect(copyFor(await view(job.id), job.id).provenance).toEqual(landed);
+  });
+
+  it('still takes the previous report’s variants when the person saved from the previous report’s view', async () => {
+    previousReport();
+    // No live scan named: the row came from the report on screen, which is the loaded report.
+    const job = saveJob(world.rows.get('gh:1001')!);
+    const brief = await getBrief(makeDeps(), { savedJobId: job.id });
+    expect(copyFor(brief, job.id).provenance).toMatchObject({ status: 'recorded', planRevision: 3, scanId: SCAN_A.id });
+  });
+
+  it('records the running scan straight away when its report already landed before the save was handled', async () => {
+    scanBLands();
+    const job = saveJob(world.rows.get('gh:1001')!);
+    const brief = await getBrief(makeDeps(), { savedJobId: job.id, liveScanId: SCAN_B.id });
+    expect(copyFor(brief, job.id).provenance).toMatchObject({ status: 'recorded', planRevision: 4, scanId: SCAN_B.id });
+  });
+
+  it('takes the save hint only in its strict shape', () => {
+    expect(parseSavedJobCaptureHint(undefined)).toEqual({});
+    expect(parseSavedJobCaptureHint({ fromLiveScan: true })).toEqual({ fromLiveScan: true });
+    expect(() => parseSavedJobCaptureHint({ fromLiveScan: 'yes' })).toThrow();
+    // The scan id is resolved by the main process, never taken from the renderer.
+    expect(() => parseSavedJobCaptureHint({ liveScanId: 'scan-X' })).toThrow();
+  });
+
+  it('stays "not recorded" when the running scan is stopped: neither the previous report nor a later scan completes it', async () => {
+    previousReport();
+    const job = saveJob(world.rows.get('gh:1001')!);
+    await getBrief(makeDeps(), { savedJobId: job.id, liveScanId: SCAN_B.id });
+
+    // Scan B was stopped, so its report never lands; the previous report is still the loaded one.
+    expect(copyFor(await view(job.id), job.id).provenance).toMatchObject({ status: 'no_scan_row', awaitingScanId: SCAN_B.id });
+
+    // A later scan C finds the job too. It cannot be what this copy was saved from.
+    fx.setScan(world, [scanRow({ key: 'gh:1001', url: ATS_URL, queryProvenance: PLAN_R4 })], '2026-10-27T08:00:00.000Z', undefined, '2026-10-19T07:30:00.000Z', 'scan-C');
+    expect(copyFor(await view(job.id), job.id).provenance).toMatchObject({ status: 'no_scan_row', awaitingScanId: SCAN_B.id });
   });
 });

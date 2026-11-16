@@ -348,12 +348,18 @@ export interface BriefMatchedQuery {
  * before its report landed, or the report had been replaced), or the only row in hand came from a
  * run that started AFTER this copy was saved, so it cannot be what found it. It is the one status a
  * later capture may complete, and only from a run that had started by the save.
+ *
+ * A copy saved from a running scan's LIVE rows names that scan (`awaitingScanId`): the report loaded at
+ * that moment is the previous one, which may list the same job under other queries, so only the named
+ * scan's own report may complete it. If that scan is stopped, the copy stays "not recorded".
  */
 export type BriefQueryProvenance =
   | {
       status: 'recorded';
       capturedAt: string;
       runId: string;
+      /** The desktop scan id whose report this came from, or null when unknown (a report read from disk). */
+      scanId?: string | null;
       generatedAt: string | null;
       planRevision: number;
       fetchedBy: BriefFetchedQuery[];
@@ -361,7 +367,13 @@ export type BriefQueryProvenance =
       /** True when a cap above dropped or shortened something. */
       truncated: boolean;
     }
-  | { status: 'no_plan' | 'no_scan_row'; capturedAt: string };
+  | { status: 'no_plan'; capturedAt: string; scanId?: string | null }
+  | {
+      status: 'no_scan_row';
+      capturedAt: string;
+      /** Set when the copy was saved from this running scan's live rows: only its report may complete it. */
+      awaitingScanId?: string;
+    };
 
 function clipped(value: unknown, max: number): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value.slice(0, max) : null;
@@ -373,13 +385,13 @@ function clipped(value: unknown, max: number): string | null {
  */
 export function pickQueryProvenance(
   raw: unknown,
-  meta: { capturedAt: string; runId: string; generatedAt: string | null },
+  meta: { capturedAt: string; runId: string; generatedAt: string | null; scanId?: string | null },
 ): BriefQueryProvenance {
-  if (raw === null || typeof raw !== 'object') return { status: 'no_plan', capturedAt: meta.capturedAt };
+  if (raw === null || typeof raw !== 'object') return { status: 'no_plan', capturedAt: meta.capturedAt, scanId: meta.scanId ?? null };
   const record = raw as Record<string, unknown>;
   const planRevision = record.planRevision;
   if (typeof planRevision !== 'number' || !Number.isFinite(planRevision)) {
-    return { status: 'no_plan', capturedAt: meta.capturedAt };
+    return { status: 'no_plan', capturedAt: meta.capturedAt, scanId: meta.scanId ?? null };
   }
   let truncated = false;
   const list = (value: unknown): Record<string, unknown>[] => {
@@ -414,6 +426,7 @@ export function pickQueryProvenance(
     status: 'recorded',
     capturedAt: meta.capturedAt,
     runId: meta.runId,
+    scanId: meta.scanId ?? null,
     generatedAt: meta.generatedAt,
     planRevision,
     fetchedBy,

@@ -229,9 +229,15 @@ function mergeInto(tx: Pick<WorkspaceDb, 'select' | 'update' | 'delete'>, keep: 
  * whose save-time capture failed) holds a `no_scan_row` placeholder; the first capture from a run that
  * had started by the save completes it. NULL (saved before #709) and any other stored status stay.
  * The caller only ever offers captures that passed the "run started by the save" rule.
+ *
+ * A placeholder that names the running scan it was saved from (`awaitingScanId`) is completed only by
+ * a capture from THAT scan's report. The previous report, which was the loaded one while that scan was
+ * running and may list the same job under other queries, never qualifies, and nor does a later scan.
  */
 function completesPlaceholder(stored: BriefQueryProvenance | null, offered: BriefQueryProvenance | null): boolean {
-  return stored !== null && stored.status === 'no_scan_row' && offered !== null && offered.status !== 'no_scan_row';
+  if (stored === null || stored.status !== 'no_scan_row' || offered === null || offered.status === 'no_scan_row') return false;
+  if (stored.awaitingScanId === undefined) return true;
+  return (offered.scanId ?? null) === stored.awaitingScanId;
 }
 
 export function upsertBrief(db: WorkspaceDb, input: UpsertBriefInput): UpsertBriefResult {

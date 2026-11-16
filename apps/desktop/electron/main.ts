@@ -73,7 +73,7 @@ import { createPostingLivenessService, POSTING_LIVENESS_READ_LIMIT } from './vac
 import { runCompanyResearchSession } from './company-evidence-research.js';
 import { createCompanyEvidenceHandlers } from './company-evidence-ipc.js';
 import { CompanyEvidenceRuns, getView as companyEvidenceView, proseEvidence, type CompanyEvidenceDeps } from './company-evidence-service.js';
-import { createApplicationBriefHandlers } from './application-brief-ipc.js';
+import { createApplicationBriefHandlers, parseSavedJobCaptureHint } from './application-brief-ipc.js';
 import { getBrief, pinForAttempt, summariseCompanyView, type BriefServiceDeps } from './application-brief-service.js';
 import {
   recoverInterruptedApplicationAttempts,
@@ -367,6 +367,8 @@ let latestVacancyReport: GlobalRemoteReport | undefined;
  * hydrated from disk does not record it). Only ever set together with `latestVacancyReport`.
  */
 let latestVacancyReportStartedAt: number | null = null;
+/** #709: the scan id of the run behind `latestVacancyReport`, or null when unknown (hydrated from disk). */
+let latestVacancyReportScanId: string | null = null;
 /** Set at startup when the report on disk was the kept one from before a zero-match scan (#577). */
 let hydratedZeroMatch: { checked: number } | undefined;
 let lastVacancyScanAt: string | undefined;
@@ -453,6 +455,7 @@ async function hydrateLatestVacancyReport(): Promise<void> {
     const loaded = await readGlobalRemoteReportWithFallback(await vacancyEngineDataRoot());
     latestVacancyReport = loaded?.report;
     latestVacancyReportStartedAt = null;
+    latestVacancyReportScanId = null;
     hydratedZeroMatch = loaded?.keptPrevious;
   } catch {
     // Tolerated -- see doc comment above.
@@ -2220,15 +2223,15 @@ async function applicationBriefDeps(): Promise<BriefServiceDeps> {
       const row = report?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
       const scanStartedAt = latestVacancyReportStartedAt === null ? null : new Date(latestVacancyReportStartedAt).toISOString();
       return report && row
-        ? { row, runId: report.runId, generatedAt: report.generatedAt, profileVersion: report.profileVersion, scanStartedAt }
+        ? {
+            row,
+            runId: report.runId,
+            generatedAt: report.generatedAt,
+            profileVersion: report.profileVersion,
+            scanStartedAt,
+            scanId: latestVacancyReportScanId,
+          }
         : null;
-    },
-    // #709: Search shows a running scan's own rows, so a copy saved while one is in flight belongs to
-    // THAT run, not to the older report `findReportRow` still reads. `vacancyScanRunner` is created
-    // further down in this module, so this is read lazily, per call, never captured at wiring time.
-    scanInFlightSince: () => {
-      const startedAt = vacancyScanRunner.status()?.startedAt;
-      return startedAt === undefined ? null : new Date(startedAt).toISOString();
     },
     async loadProfile() {
       try {
@@ -3056,6 +3059,7 @@ const vacancyScanRunner = createVacancyScanRunner({
     if (report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
       latestVacancyReport = report;
       latestVacancyReportStartedAt = run.startedAt;
+      latestVacancyReportScanId = run.scanId;
     }
   },
   notifyCompleted: (report) =>
@@ -3805,13 +3809,22 @@ guardedIpc.handle('workspace:data:reset', async () => {
 
 guardedIpc.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
 
-guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown, capture: unknown) =>
   applicationDataResetGate.runMutation(async () => {
+    // #709: parsed before anything is written, so a malformed hint refuses the save instead of being ignored.
+    const hint = parseSavedJobCaptureHint(capture);
     const created = workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input));
     // #688: take the brief's scan facts and posting text NOW, while the scan row is still loaded, so the
     // brief exists (and survives the next scan replacing the report). Local only; never fails the save.
+    // #709: a job saved from a running scan's live rows waits for THAT scan's report, instead of being
+    // attributed to the previous report (which may list the same job under other queries). If the scan
+    // finished before this save was handled, its report is the loaded one and is used straight away.
+    const liveScanId = hint.fromLiveScan ? (vacancyScanRunner.status()?.scanId ?? latestVacancyReportScanId) : null;
     try {
-      await getBrief(await applicationBriefDeps(), { savedJobId: created.id });
+      await getBrief(await applicationBriefDeps(), {
+        savedJobId: created.id,
+        ...(liveScanId ? { liveScanId } : {}),
+      });
     } catch (error) {
       console.warn('[application-brief] could not capture the brief for a new saved job', error instanceof Error ? error.name : 'unknown');
     }

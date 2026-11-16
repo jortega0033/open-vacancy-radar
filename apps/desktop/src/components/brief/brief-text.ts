@@ -68,10 +68,12 @@ export const CLASSIFICATION_LABEL: Record<BriefRequirementItem['classification']
  * #709: the three honest ways a saved copy can have no query variants. Each says WHY, so "nothing was
  * recorded" is never read as "no query found this job".
  */
-export const QUERY_NOT_RECORDED: Record<'missing' | 'no_plan' | 'no_scan_row', string> = {
+export const QUERY_NOT_RECORDED: Record<'missing' | 'no_plan' | 'no_scan_row' | 'awaiting_scan', string> = {
   missing: 'Search queries were not recorded for this copy. It was saved before the app kept them.',
   no_plan: 'That scan ran without a search plan, so there were no query variants to record.',
   no_scan_row: 'No scan row from the scan that found this copy was still loaded, so its queries were not recorded.',
+  awaiting_scan:
+    'Saved while its scan was still running. Its search queries are recorded once that scan finishes; if the scan was stopped, they stay unrecorded.',
 };
 
 export const SEARCH_PROVENANCE_NOTE =

@@ -142,7 +142,12 @@ function SavedCopyProvenance({ copy }: { copy: BriefSearchProvenanceEntry }) {
   const recorded = copy.provenance !== null && copy.provenance.status === 'recorded' ? copy.provenance : null;
   const fetchedIds = new Set(recorded?.fetchedBy.map((query) => query.variantId) ?? []);
   // Only read when `recorded` is null, so the unreachable 'recorded' case falls back to "missing".
-  const reason = copy.provenance === null || copy.provenance.status === 'recorded' ? 'missing' : copy.provenance.status;
+  const reason =
+    copy.provenance === null || copy.provenance.status === 'recorded'
+      ? 'missing'
+      : copy.provenance.status === 'no_scan_row' && copy.provenance.awaitingScanId !== undefined
+        ? 'awaiting_scan'
+        : copy.provenance.status;
   return (
     <li>
       <span className="font-medium">{COPY_LABEL[copy.kind]}</span>

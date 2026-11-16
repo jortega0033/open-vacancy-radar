@@ -1075,7 +1075,11 @@ export interface WorkspaceBridge {
   resetApplicationData(): Promise<ApplicationDataResetResult>;
 
   listSavedJobs(): Promise<SavedJobRecord[]>;
-  createSavedJob(input: SavedJobInput): Promise<SavedJobRecord>;
+  /**
+   * `capture.fromLiveScan` (#709): set when the job is saved from the running scan's live (provisional)
+   * rows, so its search provenance is taken from that scan's report rather than the previous one.
+   */
+  createSavedJob(input: SavedJobInput, capture?: { fromLiveScan?: boolean }): Promise<SavedJobRecord>;
   updateSavedJob(id: string, patch: SavedJobPatch): Promise<SavedJobRecord>;
   deleteSavedJob(id: string): Promise<DeleteResult>;
 

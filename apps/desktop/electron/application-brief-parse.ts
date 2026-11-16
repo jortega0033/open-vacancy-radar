@@ -346,7 +346,13 @@ function parseQueryProvenance(value: unknown): BriefQueryProvenance | null {
   const status = oneOf(source.status, ['recorded', 'no_plan', 'no_scan_row'] as const);
   const capturedAt = str(source, 'capturedAt', 40) ?? '';
   if (status === null) return null;
-  if (status !== 'recorded') return { status, capturedAt };
+  // The desktop scan id a capture came from: carried as sent (absent stays absent, null stays null).
+  const scanId = 'scanId' in source ? { scanId: strOrNull(source, 'scanId', 200) } : {};
+  if (status === 'no_plan') return { status, capturedAt, ...scanId };
+  if (status === 'no_scan_row') {
+    const awaitingScanId = str(source, 'awaitingScanId', 200);
+    return awaitingScanId === null ? { status, capturedAt } : { status, capturedAt, awaitingScanId };
+  }
   const planRevision = num(source, 'planRevision');
   const runId = str(source, 'runId', 200);
   if (planRevision === null || runId === null) return null;
@@ -359,6 +365,7 @@ function parseQueryProvenance(value: unknown): BriefQueryProvenance | null {
     status,
     capturedAt,
     runId,
+    ...scanId,
     generatedAt: strOrNull(source, 'generatedAt', 40),
     planRevision,
     fetchedBy: list(source.fetchedBy, BRIEF_MAX_QUERY_REFS, (item): BriefFetchedQuery | null => {

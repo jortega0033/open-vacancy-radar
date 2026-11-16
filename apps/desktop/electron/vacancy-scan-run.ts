@@ -65,9 +65,10 @@ export interface VacancyScanRunnerDeps {
    * Makes a finished run's report the app's current state (#561 rules live with the caller).
    * `startedAt` (epoch ms) is when this run began: the report's own `generatedAt` is stamped at the
    * end, and a saved job's search provenance (#709) needs to know whether the run was already under
-   * way when the job was saved.
+   * way when the job was saved. `scanId` is this run's id (the one its progress events and live rows
+   * carry), so a job saved from those live rows can be matched to this run's report.
    */
-  adoptReport(report: GlobalRemoteReport, run: { startedAt: number }): void;
+  adoptReport(report: GlobalRemoteReport, run: { startedAt: number; scanId: string }): void;
   notifyCompleted(report: GlobalRemoteReport): void;
   notifyFailed(detail: string): void;
   /** Errors that are not a failure of this run: another scan held the lock, or the person stopped it. */
@@ -185,7 +186,7 @@ export function createVacancyScanRunner(deps: VacancyScanRunnerDeps): VacancySca
             },
             intent,
           );
-          deps.adoptReport(result.report, { startedAt: scan.startedAt });
+          deps.adoptReport(result.report, { startedAt: scan.startedAt, scanId: scan.id });
           return result.report;
         } finally {
           if (active === scan) active = undefined;

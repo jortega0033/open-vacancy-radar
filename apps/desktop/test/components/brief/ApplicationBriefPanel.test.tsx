@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApplicationBriefBridge } from '../../../electron/application-brief.js';
 import { createApplicationBriefHandlers } from '../../../electron/application-brief-ipc.js';
-import { hashReviewedSource, pinForAttempt } from '../../../electron/application-brief-service.js';
+import { getBrief, hashReviewedSource, pinForAttempt } from '../../../electron/application-brief-service.js';
 import { ApplicationDataResetGate } from '../../../electron/application-data-reset-gate.js';
 import { createWorkspaceDb, type WorkspaceDb } from '../../../electron/workspace/client.js';
 import * as briefStore from '../../../electron/workspace/application-brief-store.js';
@@ -357,6 +357,17 @@ describe('source copies in one brief', () => {
     expect(text).toContain('Also matched here by “platform engineer” (in the title)');
     expect(text).not.toContain('No source was asked for “platform engineer”');
     expect(text).toContain('Search plan revision 3');
+  });
+
+  it('says a copy saved from a running scan is waiting for that scan, rather than not recorded (#709)', async () => {
+    const job = saveJob();
+    // What `workspace:saved-jobs:create` does for a live row while the previous report is loaded.
+    await getBrief(deps(), { savedJobId: job.id, liveScanId: 'scan-running' });
+    render(<ApplicationBriefPanel target={{ savedJobId: job.id }} />);
+    const region = await screen.findByRole('region', { name: 'Application brief' });
+    await within(region).findByText(/Where this came from/u);
+    fireEvent.click(within(region).getByText(/Where this came from/u));
+    expect(region.textContent ?? '').toContain('Saved while its scan was still running.');
   });
 
   it('says why a copy has no variants instead of showing an empty list (#709)', async () => {
