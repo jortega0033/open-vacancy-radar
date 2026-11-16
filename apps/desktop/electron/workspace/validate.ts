@@ -316,6 +316,20 @@ export function parseSavedJobPatch(value: unknown): SavedJobPatch {
 
 // -------------------------------------------------------------------------- applications
 
+/**
+ * #708: a YYYY-MM-DD calendar date the person typed for a status change, or null. Format and a real
+ * date only; "not later than today" is checked where the clock is (`application-status-event-store.ts`).
+ */
+function nullableCalendarDate(value: unknown, field: string): string | null {
+  if (value === null || value === undefined) return null;
+  const text = str(value, field, 10);
+  const parsed = new Date(`${text}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(text) || Number.isNaN(parsed.valueOf()) || !parsed.toISOString().startsWith(text)) {
+    fail(`"${field}" must be a calendar date (YYYY-MM-DD)`);
+  }
+  return text;
+}
+
 export function parseApplicationFilter(value: unknown): ApplicationFilter {
   if (value === undefined || value === null) return 'all';
   const input = asRecord(value, 'list payload');
@@ -339,6 +353,7 @@ export function parseApplicationInput(value: unknown): ApplicationInput {
     letterId: nullableStr(input.letterId, 'letterId', LIMITS.short),
     notes: input.notes === undefined ? '' : str(input.notes, 'notes', LIMITS.medium),
     archived: input.archived === undefined ? false : bool(input.archived, 'archived'),
+    statusOccurredOn: nullableCalendarDate(input.statusOccurredOn, 'statusOccurredOn'),
   };
 }
 
@@ -358,6 +373,7 @@ export function parseApplicationPatch(value: unknown): ApplicationPatch {
   patch(input, out, 'letterId', (v) => nullableStr(v, 'letterId', LIMITS.short));
   patch(input, out, 'notes', (v) => str(v, 'notes', LIMITS.medium));
   patch(input, out, 'archived', (v) => bool(v, 'archived'));
+  patch(input, out, 'statusOccurredOn', (v) => nullableCalendarDate(v, 'statusOccurredOn'));
   return out;
 }
 
@@ -961,7 +977,10 @@ export function parseApplicationAttemptPatch(value: unknown): ApplicationAttempt
   patch(input, out, 'completionEvidence', (v) =>
     v === null ? null : oneOf(v, 'completionEvidence', RENDERER_COMPLETION_EVIDENCE),
   );
-  if (out.completionEvidence === undefined && (out.checkpoint === 'submitted' || out.checkpoint === 'user_reported')) {
+  // #708: an explicit null does not opt out. A renderer completion with no evidence would otherwise
+  // read as a submission the app recorded itself (`app_observed`) in the status history, when it is
+  // the person's own statement and must stay `user_set`.
+  if (out.checkpoint === 'submitted' || out.checkpoint === 'user_reported') {
     out.completionEvidence = 'user_reported';
   }
   return out;

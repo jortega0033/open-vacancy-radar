@@ -84,6 +84,8 @@ export function scanRow(over: {
   sources?: { provider: string; key: string; url: string }[];
   profileScore?: number | null;
   eligibility?: unknown;
+  /** #686 provenance exactly as a plan run stamps it; omitted means the scan ran without a plan. */
+  queryProvenance?: unknown;
 }): DiscoveryVacancyAudit {
   const title = over.title ?? 'Platform Engineer';
   const identity = vacancyIdentityFor({ url: over.url, company: 'Northwind Freight', title, location: 'Remote - Europe', provider: 'ats_roster_greenhouse', key: over.key });
@@ -124,6 +126,7 @@ export function scanRow(over: {
     sourceUrl: over.url,
     applyUrl: { status: 'unresolved', url: over.url, evidence: '' },
     sources: over.sources ?? [{ provider: 'ats_roster_greenhouse', key: over.key, url: over.url }],
+    ...(over.queryProvenance === undefined ? {} : { queryProvenance: over.queryProvenance }),
   } as unknown as DiscoveryVacancyAudit;
 }
 
@@ -133,17 +136,30 @@ export interface BriefWorld {
   profile: BriefProfile | null;
   runId: string;
   generatedAt: string;
+  /** #709: when the run behind the report started, or null when unknown (as for a hydrated report). */
+  startedAt: string | null;
+  /** #709: the desktop scan id whose report this is, or null when unknown (as for a hydrated report). */
+  scanId: string | null;
   profileVersion: string;
   rows: Map<string, DiscoveryVacancyAudit>;
 }
 
 export function makeWorld(): BriefWorld {
-  return { clock: new Date(T0), profile: structuredClone(PROFILE), runId: '', generatedAt: '', profileVersion: PROFILE.profileVersion, rows: new Map() };
+  return { clock: new Date(T0), profile: structuredClone(PROFILE), runId: '', generatedAt: '', startedAt: null, scanId: null, profileVersion: PROFILE.profileVersion, rows: new Map() };
 }
 
-export function setScan(world: BriefWorld, rows: DiscoveryVacancyAudit[], generatedAt: string, profileVersion = PROFILE.profileVersion): void {
+export function setScan(
+  world: BriefWorld,
+  rows: DiscoveryVacancyAudit[],
+  generatedAt: string,
+  profileVersion = PROFILE.profileVersion,
+  startedAt: string | null = null,
+  scanId: string | null = null,
+): void {
   world.rows = new Map(rows.map((row) => [row.key, row]));
   world.generatedAt = generatedAt;
+  world.startedAt = startedAt;
+  world.scanId = scanId;
   world.runId = `run-${generatedAt}`;
   world.profileVersion = profileVersion;
 }
@@ -159,7 +175,16 @@ export function makeDeps(
     now: () => new Date(world.clock),
     findReportRow(vacancyKey): BriefReportRow | null {
       const row = world.rows.get(vacancyKey);
-      return row ? { row, runId: world.runId, generatedAt: world.generatedAt, profileVersion: world.profileVersion } : null;
+      return row
+        ? {
+            row,
+            runId: world.runId,
+            generatedAt: world.generatedAt,
+            profileVersion: world.profileVersion,
+            scanStartedAt: world.startedAt,
+            scanId: world.scanId,
+          }
+        : null;
     },
     loadProfile: async () => world.profile,
     postingView(attemptId) {

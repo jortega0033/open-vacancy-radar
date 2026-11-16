@@ -228,9 +228,53 @@ export interface ApplicationInput {
   letterId?: string | null;
   notes?: string;
   archived?: boolean;
+  /**
+   * #708: the date (YYYY-MM-DD, local calendar) the person says this status change happened, or null
+   * when they did not give one. Stored only on the status event this write creates; ignored when the
+   * write does not change the status. Never written to `appliedAt`, never defaulted.
+   */
+  statusOccurredOn?: string | null;
 }
 
 export type ApplicationPatch = Partial<ApplicationInput>;
+
+/** #708: who asserted a status change. A person's own "I sent it" report is `user_set`, whoever wrote it. */
+export type ApplicationStatusEventSource = 'user_set' | 'app_observed';
+/** #708: which code path wrote the event. Diagnostic only; never shown as evidence. */
+export type ApplicationStatusEventVia = 'application_edit' | 'application_create' | 'attempt_sync';
+/** #708: for an attempt-sync event, what the attempt's "sent" rested on. */
+export type ApplicationStatusEventEvidence = 'receipt_confirmed' | 'not_recorded' | 'user_statement';
+
+export interface ApplicationStatusEventRecord {
+  readable: true;
+  id: string;
+  applicationId: string;
+  eventVersion: 1;
+  /** Null only for the event written when the row was created with a status. */
+  fromStatus: ApplicationStatus | null;
+  toStatus: ApplicationStatus;
+  source: ApplicationStatusEventSource;
+  via: ApplicationStatusEventVia;
+  attemptId: string | null;
+  evidence: ApplicationStatusEventEvidence | null;
+  /** YYYY-MM-DD the person typed, or null: unknown stays unknown. */
+  occurredOn: string | null;
+  /** ISO-8601: when this app saw the submission (`app_observed` only), or null. */
+  observedAt: string | null;
+  /** ISO-8601: when the event was written. Never a substitute for `occurredOn`. */
+  recordedAt: string;
+}
+
+/** #708: an event written by a newer version of the app. Returned as-is, never reinterpreted. */
+export interface ApplicationStatusEventUnreadable {
+  readable: false;
+  id: string;
+  applicationId: string;
+  eventVersion: number;
+  recordedAt: string;
+}
+
+export type ApplicationStatusEventEntry = ApplicationStatusEventRecord | ApplicationStatusEventUnreadable;
 
 /** `list` filter for applications. 'active' is the pipeline view; 'archived' the history view. */
 export type ApplicationFilter = 'all' | 'active' | 'archived';
@@ -1054,6 +1098,8 @@ export interface ApplicationDataResetResult {
     blindApplyItems: number;
     blindApplyEvents: number;
     blindApplyAnswers: number;
+    /** #708: the recorded status-change history of every application. */
+    applicationStatusEvents: number;
   };
 }
 
@@ -1075,7 +1121,11 @@ export interface WorkspaceBridge {
   resetApplicationData(): Promise<ApplicationDataResetResult>;
 
   listSavedJobs(): Promise<SavedJobRecord[]>;
-  createSavedJob(input: SavedJobInput): Promise<SavedJobRecord>;
+  /**
+   * `capture.fromLiveScan` (#709): set when the job is saved from the running scan's live (provisional)
+   * rows, so its search provenance is taken from that scan's report rather than the previous one.
+   */
+  createSavedJob(input: SavedJobInput, capture?: { fromLiveScan?: boolean }): Promise<SavedJobRecord>;
   updateSavedJob(id: string, patch: SavedJobPatch): Promise<SavedJobRecord>;
   deleteSavedJob(id: string): Promise<DeleteResult>;
 
@@ -1083,6 +1133,8 @@ export interface WorkspaceBridge {
   createApplication(input: ApplicationInput): Promise<ApplicationRecord>;
   updateApplication(id: string, patch: ApplicationPatch): Promise<ApplicationRecord>;
   deleteApplication(id: string): Promise<DeleteResult>;
+  /** #708: one application's status history, newest first. Read-only. */
+  listApplicationStatusEvents(applicationId: string): Promise<ApplicationStatusEventEntry[]>;
 
   listCvDocuments(): Promise<CvDocumentRecord[]>;
   createCvDocument(input: CvDocumentInput): Promise<CvDocumentRecord>;

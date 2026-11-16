@@ -62,6 +62,12 @@ import { bindSubmissionPackage, deleteAllSubmissionPackages } from './submission
 import { deleteAllInterviewRounds } from './interview-round-store.js';
 import { deleteAllApplicationActions } from './application-action-store.js';
 import { deleteAllBlindApply } from './blind-apply-store.js';
+import {
+  assertOccurredOn,
+  deleteAllStatusEvents,
+  listStatusEvents,
+  recordStatusChange,
+} from './application-status-event-store.js';
 import { syncApplicationForAttempt } from './attempt-application-sync.js';
 
 export { reconcileApplicationRows } from './attempt-application-sync.js';
@@ -407,43 +413,88 @@ export function listApplications(db: WorkspaceDb, filter: ApplicationFilter = 'a
   });
 }
 
-export function createApplication(db: WorkspaceDb, input: ApplicationInput): ApplicationRecord {
-  const [row] = db
-    .insert(applications)
-    .values({
-      role: input.role,
-      company: input.company,
-      location: input.location ?? '',
-      savedJobId: input.savedJobId ?? null,
-      verification: input.verification ?? null,
-      status: input.status ?? 'preparing',
-      appliedAt: input.appliedAt ? new Date(input.appliedAt) : null,
-      nextStep: input.nextStep ?? '',
-      contact: input.contact ?? '',
-      cvId: input.cvId ?? null,
-      letterId: input.letterId ?? null,
-      notes: input.notes ?? '',
-      archived: input.archived ?? false,
-    })
-    .returning()
-    .all();
-  if (!row) throw new Error('failed to insert application');
-  return toApplication(row);
+/**
+ * A row created with a status other than the default `preparing` is the person stating that status,
+ * so it gets one #708 event from `null`. A default `preparing` row is not a status change and gets
+ * none. `now` is injectable for tests only.
+ */
+export function createApplication(db: WorkspaceDb, input: ApplicationInput, now: Date = new Date()): ApplicationRecord {
+  const occurredOn = assertOccurredOn(input.statusOccurredOn, now);
+  return db.transaction((tx) => {
+    const [row] = tx
+      .insert(applications)
+      .values({
+        role: input.role,
+        company: input.company,
+        location: input.location ?? '',
+        savedJobId: input.savedJobId ?? null,
+        verification: input.verification ?? null,
+        status: input.status ?? 'preparing',
+        appliedAt: input.appliedAt ? new Date(input.appliedAt) : null,
+        nextStep: input.nextStep ?? '',
+        contact: input.contact ?? '',
+        cvId: input.cvId ?? null,
+        letterId: input.letterId ?? null,
+        notes: input.notes ?? '',
+        archived: input.archived ?? false,
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert application');
+    if (row.status !== 'preparing') {
+      recordStatusChange(tx, {
+        applicationId: row.id,
+        fromStatus: null,
+        toStatus: row.status,
+        source: 'user_set',
+        via: 'application_create',
+        occurredOn,
+        now,
+      });
+    }
+    return toApplication(row);
+  });
 }
 
-export function updateApplication(db: WorkspaceDb, id: string, values: ApplicationPatch): ApplicationRecord {
-  const { appliedAt, ...rest } = values;
+/**
+ * The status write and its #708 event share one transaction, and the event is written only when the
+ * stored status differs from the new one. The drawer sends `status` on every save, and a retried
+ * change finds the value already set, so neither writes a second event. `statusOccurredOn` is never
+ * stored on the row. `now` is injectable for tests only.
+ */
+export function updateApplication(
+  db: WorkspaceDb,
+  id: string,
+  values: ApplicationPatch,
+  now: Date = new Date(),
+): ApplicationRecord {
+  const { appliedAt, statusOccurredOn, ...rest } = values;
+  const occurredOn = assertOccurredOn(statusOccurredOn, now);
   const set: Partial<ApplicationRow> = { ...rest };
   if ('appliedAt' in values) set.appliedAt = appliedAt ? new Date(appliedAt) : null;
 
-  if (Object.keys(set).length === 0) {
-    const existing = db.select().from(applications).where(eq(applications.id, id)).get();
+  return db.transaction((tx) => {
+    const existing = tx.select().from(applications).where(eq(applications.id, id)).get();
     if (!existing) throw new WorkspaceNotFoundError('application', id);
-    return toApplication(existing);
-  }
-  const [row] = db.update(applications).set(set).where(eq(applications.id, id)).returning().all();
-  if (!row) throw new WorkspaceNotFoundError('application', id);
-  return toApplication(row);
+    if (Object.keys(set).length === 0) return toApplication(existing);
+    const [row] = tx.update(applications).set(set).where(eq(applications.id, id)).returning().all();
+    if (!row) throw new WorkspaceNotFoundError('application', id);
+    recordStatusChange(tx, {
+      applicationId: row.id,
+      fromStatus: existing.status,
+      toStatus: row.status,
+      source: 'user_set',
+      via: 'application_edit',
+      occurredOn,
+      now,
+    });
+    return toApplication(row);
+  });
+}
+
+/** #708: one application's status history, newest first. */
+export function listApplicationStatusEvents(db: WorkspaceDb, applicationId: string) {
+  return listStatusEvents(db, applicationId);
 }
 
 export function deleteApplication(db: WorkspaceDb, id: string): DeleteResult {
@@ -2489,6 +2540,16 @@ export function updateApplicationAttempt(
       .from(applicationAttempts)
       .where(eq(applicationAttempts.id, id))
       .get();
+    // #708: on a completed attempt, the stored evidence is who said it was sent, and the status
+    // history attributes a later promotion by it. Nothing in the main process ever writes null here,
+    // so a null can only be a renderer clearing it -- applied, it would relabel a person's own
+    // report as a submission this app observed. The null write is dropped; the rest of the patch stays.
+    if (
+      set.completionEvidence === null &&
+      COMPLETED_ATTEMPT_CHECKPOINTS.includes(values.checkpoint ?? before?.checkpoint ?? 'queued')
+    ) {
+      delete set.completionEvidence;
+    }
     const [row] = tx.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
     if (!row) throw new WorkspaceNotFoundError('application attempt', id);
     // Same transaction as the checkpoint write, so the tracker can never show a state the attempt
@@ -3118,6 +3179,8 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       ...deleteAllApplicationActions(tx),
       // #722: the Blind Apply authorizations, evaluated items, event trail and remembered answers.
       ...deleteAllBlindApply(tx),
+      // #708: the status-change history. Explicit, not left to the cascade, so it is counted.
+      ...deleteAllStatusEvents(tx),
     };
 
     tx.delete(applicationAttempts).run();

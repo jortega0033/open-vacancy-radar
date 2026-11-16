@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApplicationBriefBridge } from '../../../electron/application-brief.js';
 import { createApplicationBriefHandlers } from '../../../electron/application-brief-ipc.js';
-import { hashReviewedSource, pinForAttempt } from '../../../electron/application-brief-service.js';
+import { getBrief, hashReviewedSource, pinForAttempt } from '../../../electron/application-brief-service.js';
 import { ApplicationDataResetGate } from '../../../electron/application-data-reset-gate.js';
 import { createWorkspaceDb, type WorkspaceDb } from '../../../electron/workspace/client.js';
 import * as briefStore from '../../../electron/workspace/application-brief-store.js';
@@ -328,5 +328,54 @@ describe('source copies in one brief', () => {
     expect(within(region).getByText('Remotive')).toBeInTheDocument();
     expect(within(region).getByRole('link', { name: AGG_URL })).toBeInTheDocument();
     expect(within(region).getByRole('link', { name: ATS_URL })).toBeInTheDocument();
+  });
+
+  it('names the query variants that found a saved copy, keeping a locally matched one apart (#709)', async () => {
+    const row = scanRow({
+      key: 'gh:1001',
+      url: ATS_URL,
+      queryProvenance: {
+        planRevision: 3,
+        fetchedBy: [{ variantId: 'literal', query: 'platform engineer', language: null, provider: 'ats_roster_greenhouse' }],
+        matchedLocally: [
+          { variantId: 'literal', query: 'platform engineer', language: null, field: 'title' },
+          { variantId: 'v-infra', query: 'infrastructure engineer', language: null, field: 'title' },
+        ],
+      },
+    });
+    setScan(world, [row], '2026-10-19T08:00:00.000Z');
+    const job = saveJob(row);
+    render(<ApplicationBriefPanel target={{ savedJobId: job.id }} />);
+    const region = await screen.findByRole('region', { name: 'Application brief' });
+    await within(region).findByText(/Search score/u);
+    fireEvent.click(within(region).getByText(/Where this came from/u));
+
+    const text = region.textContent ?? '';
+    expect(text).toContain('Asked Greenhouse (ATS roster) for “platform engineer”');
+    // The variant no source received says so; the one that WAS sent upstream is not described that way.
+    expect(text).toContain('No source was asked for “infrastructure engineer”; this app matched it here (in the title)');
+    expect(text).toContain('Also matched here by “platform engineer” (in the title)');
+    expect(text).not.toContain('No source was asked for “platform engineer”');
+    expect(text).toContain('Search plan revision 3');
+  });
+
+  it('says a copy saved from a running scan is waiting for that scan, rather than not recorded (#709)', async () => {
+    const job = saveJob();
+    // What `workspace:saved-jobs:create` does for a live row while the previous report is loaded.
+    await getBrief(deps(), { savedJobId: job.id, liveScanId: 'scan-running' });
+    render(<ApplicationBriefPanel target={{ savedJobId: job.id }} />);
+    const region = await screen.findByRole('region', { name: 'Application brief' });
+    await within(region).findByText(/Where this came from/u);
+    fireEvent.click(within(region).getByText(/Where this came from/u));
+    expect(region.textContent ?? '').toContain('Saved while its scan was still running.');
+  });
+
+  it('says why a copy has no variants instead of showing an empty list (#709)', async () => {
+    const manual = workspace.createSavedJob(db, { role: 'Solo Role', company: 'Harbor Systems', location: 'Lisbon', status: 'considering' });
+    render(<ApplicationBriefPanel target={{ savedJobId: manual.id }} />);
+    const region = await screen.findByRole('region', { name: 'Application brief' });
+    await within(region).findByText(/Where this came from/u);
+    fireEvent.click(within(region).getByText(/Where this came from/u));
+    expect(region.textContent ?? '').toContain('No scan row from the scan that found this copy was still loaded');
   });
 });

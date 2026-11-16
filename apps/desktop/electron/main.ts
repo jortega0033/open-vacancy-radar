@@ -73,7 +73,7 @@ import { createPostingLivenessService, POSTING_LIVENESS_READ_LIMIT } from './vac
 import { runCompanyResearchSession } from './company-evidence-research.js';
 import { createCompanyEvidenceHandlers } from './company-evidence-ipc.js';
 import { CompanyEvidenceRuns, getView as companyEvidenceView, proseEvidence, type CompanyEvidenceDeps } from './company-evidence-service.js';
-import { createApplicationBriefHandlers } from './application-brief-ipc.js';
+import { createApplicationBriefHandlers, parseSavedJobCaptureHint } from './application-brief-ipc.js';
 import { getBrief, pinForAttempt, summariseCompanyView, type BriefServiceDeps } from './application-brief-service.js';
 import {
   recoverInterruptedApplicationAttempts,
@@ -362,6 +362,13 @@ let vacancyScanLock: ScanLock | undefined;
 /** The last start-up failure of the vacancy engine, classified for the renderer (#441); cleared on success. */
 let vacancyEngineFailure: VacancyEngineFailure | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
+/**
+ * #709: when the run behind `latestVacancyReport` started (epoch ms), or null when unknown (a report
+ * hydrated from disk does not record it). Only ever set together with `latestVacancyReport`.
+ */
+let latestVacancyReportStartedAt: number | null = null;
+/** #709: the scan id of the run behind `latestVacancyReport`, or null when unknown (hydrated from disk). */
+let latestVacancyReportScanId: string | null = null;
 /** Set at startup when the report on disk was the kept one from before a zero-match scan (#577). */
 let hydratedZeroMatch: { checked: number } | undefined;
 let lastVacancyScanAt: string | undefined;
@@ -447,6 +454,8 @@ async function hydrateLatestVacancyReport(): Promise<void> {
   try {
     const loaded = await readGlobalRemoteReportWithFallback(await vacancyEngineDataRoot());
     latestVacancyReport = loaded?.report;
+    latestVacancyReportStartedAt = null;
+    latestVacancyReportScanId = null;
     hydratedZeroMatch = loaded?.keptPrevious;
   } catch {
     // Tolerated -- see doc comment above.
@@ -2212,7 +2221,17 @@ async function applicationBriefDeps(): Promise<BriefServiceDeps> {
     findReportRow(vacancyKey) {
       const report = latestVacancyReport;
       const row = report?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
-      return report && row ? { row, runId: report.runId, generatedAt: report.generatedAt, profileVersion: report.profileVersion } : null;
+      const scanStartedAt = latestVacancyReportStartedAt === null ? null : new Date(latestVacancyReportStartedAt).toISOString();
+      return report && row
+        ? {
+            row,
+            runId: report.runId,
+            generatedAt: report.generatedAt,
+            profileVersion: report.profileVersion,
+            scanStartedAt,
+            scanId: latestVacancyReportScanId,
+          }
+        : null;
     },
     async loadProfile() {
       try {
@@ -3032,13 +3051,15 @@ const vacancyScanRunner = createVacancyScanRunner({
   now: () => Date.now(),
   progressSourceTotal: SCAN_PROGRESS_SOURCE_IDS.length,
   sendProgress: (event) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
-  adoptReport: (report) => {
+  adoptReport: (report, run) => {
     // A scan with no matches must not displace the last report that had some (#561): saved jobs
     // and prepare still resolve rows against it, and the renderer keeps showing it.
     lastVacancyScanAt = report.generatedAt;
     hydratedZeroMatch = undefined;
     if (report.discoveryAudit.length > 0 || !latestVacancyReport?.discoveryAudit.length) {
       latestVacancyReport = report;
+      latestVacancyReportStartedAt = run.startedAt;
+      latestVacancyReportScanId = run.scanId;
     }
   },
   notifyCompleted: (report) =>
@@ -3788,13 +3809,22 @@ guardedIpc.handle('workspace:data:reset', async () => {
 
 guardedIpc.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
 
-guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown, capture: unknown) =>
   applicationDataResetGate.runMutation(async () => {
+    // #709: parsed before anything is written, so a malformed hint refuses the save instead of being ignored.
+    const hint = parseSavedJobCaptureHint(capture);
     const created = workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input));
     // #688: take the brief's scan facts and posting text NOW, while the scan row is still loaded, so the
     // brief exists (and survives the next scan replacing the report). Local only; never fails the save.
+    // #709: a job saved from a running scan's live rows waits for THAT scan's report, instead of being
+    // attributed to the previous report (which may list the same job under other queries). If the scan
+    // finished before this save was handled, its report is the loaded one and is used straight away.
+    const liveScanId = hint.fromLiveScan ? (vacancyScanRunner.status()?.scanId ?? latestVacancyReportScanId) : null;
     try {
-      await getBrief(await applicationBriefDeps(), { savedJobId: created.id });
+      await getBrief(await applicationBriefDeps(), {
+        savedJobId: created.id,
+        ...(liveScanId ? { liveScanId } : {}),
+      });
     } catch (error) {
       console.warn('[application-brief] could not capture the brief for a new saved job', error instanceof Error ? error.name : 'unknown');
     }
@@ -3858,6 +3888,11 @@ guardedIpc.handle('workspace:applications:update', async (_event, input: unknown
     return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
   });
 });
+
+// #708: read-only, so not behind the reset gate's mutation lock (like `workspace:applications:list`).
+guardedIpc.handle('workspace:application-status-events:list', async (_event, input: unknown) =>
+  workspace.listApplicationStatusEvents(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
 
 guardedIpc.handle('workspace:applications:delete', async (_event, input: unknown) =>
   applicationDataResetGate.runMutation(async () =>

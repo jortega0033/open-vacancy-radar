@@ -313,6 +313,138 @@ export function emptyFacts(now: Date): BriefSourceFacts {
   };
 }
 
+// ------------------------------------------------------------------------- search provenance
+
+/** Hard caps on what one capture may store (#709). A plan holds at most 12 titles plus the literal. */
+export const BRIEF_MAX_QUERY_REFS = 64;
+export const BRIEF_MAX_QUERY_CHARS = 200;
+
+/** One query a source actually received upstream and returned this copy for. */
+export interface BriefFetchedQuery {
+  variantId: string;
+  query: string;
+  language: string | null;
+  provider: string;
+}
+
+/** One query the run's own filter found in this copy, and where it found it. */
+export interface BriefMatchedQuery {
+  variantId: string;
+  query: string;
+  language: string | null;
+  field: 'title' | 'description' | null;
+}
+
+/**
+ * #709: which query variants produced ONE saved copy of a job, copied by value out of the scan row's
+ * `queryProvenance` when that copy was first attached to a brief.
+ *
+ * `fetchedBy` and `matchedLocally` are kept as two separate lists, exactly as the engine reports them
+ * (`LeadQueryProvenance`), so a variant that only the local filter matched can never be read back as
+ * one the source received. A `recorded` or `no_plan` capture is never rewritten (see `upsertBrief`).
+ *
+ * `no_plan` = the scan ran without a search plan, so there was nothing to record. `no_scan_row` = no
+ * eligible scan row was in hand at capture: none at all (the job was saved from a run's live rows
+ * before its report landed, or the report had been replaced), or the only row in hand came from a
+ * run that started AFTER this copy was saved, so it cannot be what found it. It is the one status a
+ * later capture may complete, and only from a run that had started by the save.
+ *
+ * A copy saved from a running scan's LIVE rows names that scan (`awaitingScanId`): the report loaded at
+ * that moment is the previous one, which may list the same job under other queries, so only the named
+ * scan's own report may complete it. If that scan is stopped, the copy stays "not recorded".
+ */
+export type BriefQueryProvenance =
+  | {
+      status: 'recorded';
+      capturedAt: string;
+      runId: string;
+      /** The desktop scan id whose report this came from, or null when unknown (a report read from disk). */
+      scanId?: string | null;
+      generatedAt: string | null;
+      planRevision: number;
+      fetchedBy: BriefFetchedQuery[];
+      matchedLocally: BriefMatchedQuery[];
+      /** True when a cap above dropped or shortened something. */
+      truncated: boolean;
+    }
+  | { status: 'no_plan'; capturedAt: string; scanId?: string | null }
+  | {
+      status: 'no_scan_row';
+      capturedAt: string;
+      /** Set when the copy was saved from this running scan's live rows: only its report may complete it. */
+      awaitingScanId?: string;
+    };
+
+function clipped(value: unknown, max: number): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value.slice(0, max) : null;
+}
+
+/**
+ * The structural subset of the engine's `LeadQueryProvenance` a capture stores. Defensive on purpose:
+ * the row it reads comes from a report JSON on disk that an older engine version may have written.
+ */
+export function pickQueryProvenance(
+  raw: unknown,
+  meta: { capturedAt: string; runId: string; generatedAt: string | null; scanId?: string | null },
+): BriefQueryProvenance {
+  if (raw === null || typeof raw !== 'object') return { status: 'no_plan', capturedAt: meta.capturedAt, scanId: meta.scanId ?? null };
+  const record = raw as Record<string, unknown>;
+  const planRevision = record.planRevision;
+  if (typeof planRevision !== 'number' || !Number.isFinite(planRevision)) {
+    return { status: 'no_plan', capturedAt: meta.capturedAt, scanId: meta.scanId ?? null };
+  }
+  let truncated = false;
+  const list = (value: unknown): Record<string, unknown>[] => {
+    if (!Array.isArray(value)) return [];
+    if (value.length > BRIEF_MAX_QUERY_REFS) truncated = true;
+    return value
+      .slice(0, BRIEF_MAX_QUERY_REFS)
+      .filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === 'object');
+  };
+  const common = (entry: Record<string, unknown>): { variantId: string; query: string; language: string | null } | null => {
+    const variantId = clipped(entry.variantId, 100);
+    const query = clipped(entry.query, BRIEF_MAX_QUERY_CHARS);
+    if (variantId === null || query === null) return null;
+    if (typeof entry.query === 'string' && entry.query.length > BRIEF_MAX_QUERY_CHARS) truncated = true;
+    return { variantId, query, language: clipped(entry.language, 40) };
+  };
+  const fetchedBy: BriefFetchedQuery[] = [];
+  for (const entry of list(record.fetchedBy)) {
+    const base = common(entry);
+    const provider = clipped(entry.provider, 100);
+    if (base === null || provider === null) continue;
+    fetchedBy.push({ ...base, provider });
+  }
+  const matchedLocally: BriefMatchedQuery[] = [];
+  for (const entry of list(record.matchedLocally)) {
+    const base = common(entry);
+    if (base === null) continue;
+    const field = entry.field === 'title' || entry.field === 'description' ? entry.field : null;
+    matchedLocally.push({ ...base, field });
+  }
+  return {
+    status: 'recorded',
+    capturedAt: meta.capturedAt,
+    runId: meta.runId,
+    scanId: meta.scanId ?? null,
+    generatedAt: meta.generatedAt,
+    planRevision,
+    fetchedBy,
+    matchedLocally,
+    truncated,
+  };
+}
+
+/** One saved copy of this job and the query variants recorded for it, newest capture last. */
+export interface BriefSearchProvenanceEntry {
+  aliasKey: string;
+  kind: 'saved_job' | 'attempt';
+  /** When this copy was first attached to the brief. */
+  firstSeenAt: string;
+  /** Null for a copy attached before #709 existed: not recorded, never guessed. */
+  provenance: BriefQueryProvenance | null;
+}
+
 // ----------------------------------------------------------------------------------- assessment
 
 export type EvidenceClassName = CvRequirementMapping['evidenceClass'];
@@ -791,6 +923,8 @@ export interface ApplicationBriefView {
   location: string;
   /** Every original source reference this brief covers. */
   sources: BriefSourceRef[];
+  /** #709: per saved copy, the query variants that produced it. Empty only when nothing references this brief. */
+  searchProvenance: BriefSearchProvenanceEntry[];
   posting: { hasText: boolean; complete: boolean; changedAt: string | null; capturedAt: string | null };
   relevance: RelevanceSection;
   eligibility: EligibilitySection;
@@ -820,6 +954,7 @@ export interface BriefInputs {
   assessment: AssessmentSection;
   cv: { name: string | null; reviewed: boolean };
   sources: BriefSourceRef[];
+  searchProvenance: BriefSearchProvenanceEntry[];
   attempts: BriefAttemptEvidence[];
   postingCheck: BriefPostingSection;
   companyEvidence: BriefCompanySection;
@@ -850,6 +985,7 @@ export function composeBriefView(input: BriefInputs): ApplicationBriefView {
     company: input.company,
     location: input.location,
     sources: input.sources,
+    searchProvenance: input.searchProvenance,
     posting: {
       hasText: input.jd.hasText,
       complete: input.jd.complete,

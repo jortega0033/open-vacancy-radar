@@ -33,7 +33,10 @@ describe('the outcome/gap prototype stays non-production', () => {
 
   it('adds no migration, table, IPC channel or UI for itself', () => {
     const schema = readFileSync(join(desktop, 'electron', 'workspace', 'schema.ts'), 'utf8');
-    expect(schema).not.toMatch(/outcome_gap|outcome_event|status_event|suggestion_dismiss/iu);
+    // `status_event` left this list when #708 shipped `application_status_events` as its own
+    // feature (owned by Applications, tested in test/application-status-events.test.ts). This
+    // guard still holds for everything the research merely projects.
+    expect(schema).not.toMatch(/outcome_gap|outcome_event|suggestion_dismiss/iu);
     const ipc = files(join(desktop, 'electron'), /\.ts$/u).filter((path) => /outcome-gap|outcome_gap/iu.test(readFileSync(path, 'utf8')));
     expect(ipc).toEqual([]);
   });

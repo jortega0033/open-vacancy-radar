@@ -311,6 +311,8 @@ export type {
   ApplicationPatch,
   ApplicationRecord,
   ApplicationStatus,
+  ApplicationStatusEventEntry,
+  ApplicationStatusEventRecord,
   AppSettingsPatch,
   AppSettingsRecord,
   CvApprovedWording,
