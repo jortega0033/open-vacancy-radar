@@ -64,6 +64,24 @@ export const CLASSIFICATION_LABEL: Record<BriefRequirementItem['classification']
   unclear: 'Unclear',
 };
 
+/**
+ * #709: the three honest ways a saved copy can have no query variants. Each says WHY, so "nothing was
+ * recorded" is never read as "no query found this job".
+ */
+export const QUERY_NOT_RECORDED: Record<'missing' | 'no_plan' | 'no_scan_row', string> = {
+  missing: 'Search queries were not recorded for this copy. It was saved before the app kept them.',
+  no_plan: 'That scan ran without a search plan, so there were no query variants to record.',
+  no_scan_row: 'No scan row from the scan that found this copy was still loaded, so its queries were not recorded.',
+};
+
+export const SEARCH_PROVENANCE_NOTE =
+  'Recorded once, when each copy was saved. A later scan or a change to your search plan does not rewrite it.';
+
+export const COPY_LABEL: Record<'saved_job' | 'attempt', string> = {
+  saved_job: 'Saved copy',
+  attempt: 'Preparation copy',
+};
+
 export function formatDay(iso: string | null | undefined): string {
   if (!iso) return 'an unknown date';
   const date = new Date(iso);
