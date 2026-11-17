@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Arjun Venkataraman Iyer", "confidence": "high", "evidence": "Arjun Venkataraman Iyer"},
+"currentRole": {"value": "DevOps Engineer", "confidence": "high", "evidence": "DevOps Engineer - Grachtenbank Digital, Amsterdam"},
+"location": {"value": "Amsterdam, Netherlands", "confidence": "high", "evidence": "Amsterdam, Netherlands (moved from Pune, India in 2024"},
+"primaryCountry": {"value": "Netherlands", "confidence": "high", "evidence": "Amsterdam, Netherlands"},
+"experienceYears": {"value": 10, "confidence": "high", "evidence": "Systems Engineer - Deccan Infotech, Pune, India Aug 2016 - Jun 2019"},
+"languages": {"value": ["English", "Tamil", "Hindi", "Marathi", "Dutch"], "confidence": "high", "evidence": "English (fluent), Hindi, Tamil (native), Marathi, Dutch (A1)"},
+"strongestSkills": {"value": ["Kubernetes", "Azure", "Terraform", "Helm", "Argo CD", "GitHub Actions", "Ansible"], "confidence": "high", "evidence": "Run 40+ services on Azure Kubernetes Service"},
+"additionalSkills": {"value": ["AWS", "Jenkins", "Prometheus", "Grafana", "Linux", "Bash", "Python", "Docker", "GitOps"], "confidence": "high", "evidence": "Prometheus, Grafana, Linux, Bash, Python, Docker"},
+"targetRoles": {"value": ["DevOps Engineer", "Site Reliability Engineer", "Platform Engineer"], "confidence": "high", "evidence": "DevOps Engineer"},
+"consideredRoles": {"value": ["Cloud Engineer"], "confidence": "low", "evidence": ""},
+"links": {"value": ["github.com/example-arjun-vi", "linkedin.com/in/example-arjun-vi"], "confidence": "high", "evidence": "github.com/example-arjun-vi"},
+"summary": {"value": "DevOps engineer in Amsterdam running Kubernetes on Azure, previously a systems engineer in Pune.", "confidence": "high", "evidence": "Run 40+ services on Azure Kubernetes Service"},
+"workAuthorization": {"value": "Dutch residence permit (highly skilled migrant)", "confidence": "high", "evidence": "Dutch residence permit, highly skilled migrant"}}

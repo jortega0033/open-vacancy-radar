@@ -1,0 +1,33 @@
+{
+  "candidateName": "Priya Nandakumar-Holt",
+  "currentRole": ["Lead Product Designer"],
+  "location": ["London, United Kingdom", "London, UK"],
+  "primaryCountry": "United Kingdom",
+  "experienceYears": { "value": 10, "tolerance": 1 },
+  "languages": ["English", "Tamil"],
+  "skills": [
+    "Figma",
+    "User research",
+    "Prototyping",
+    "Design systems",
+    "Usability testing",
+    "Accessibility",
+    "Miro",
+    "ProtoPie",
+    "HTML",
+    "CSS"
+  ],
+  "skillsOptional": ["Card sorting", "Tree testing", "UX design", "Mobile design"],
+  "targetRoles": [
+    "Lead Product Designer",
+    "Product Designer",
+    "Senior Product Designer",
+    "UX Designer",
+    "Senior UX Designer",
+    "Lead UX Designer",
+    "Design Lead",
+    "Product Design Lead",
+    "UX/UI Designer"
+  ],
+  "links": ["priyanh-example.design", "linkedin.com/in/example-priya-nh"]
+}

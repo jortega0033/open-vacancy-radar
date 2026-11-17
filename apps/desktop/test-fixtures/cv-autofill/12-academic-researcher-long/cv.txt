@@ -1,0 +1,51 @@
+CURRICULUM VITAE
+
+Dr. Anneleen Wouters-Ibrahim
+Postdoctoral Researcher, Department of Microbiology and Immunology
+KU Leuven, Herestraat 49, 3000 Leuven, Belgium
+anneleen.wouters@example.org | ORCID 0000-0000-0000-0012 | anneleenwi-example.org
+
+RESEARCH INTERESTS
+Host-pathogen interactions, antimicrobial resistance, single-cell transcriptomics of the gut mucosa.
+
+ACADEMIC APPOINTMENTS
+2021 - present   Postdoctoral Researcher (FWO senior postdoctoral fellow), KU Leuven
+2019 - 2021      Postdoctoral Research Associate, Wellcome Sanger Institute, Hinxton, UK
+2015 - 2019      PhD candidate, Rega Institute, KU Leuven
+
+EDUCATION
+2019  PhD in Biomedical Sciences, KU Leuven. Thesis: "Mucosal immune responses to Klebsiella colonisation"
+2015  MSc Biomedical Sciences (magna cum laude), Universiteit Antwerpen
+2013  BSc Biomedical Sciences, Universiteit Antwerpen
+
+GRANTS AND FELLOWSHIPS
+2021  FWO Senior Postdoctoral Fellowship (3 years, EUR 210,000)
+2019  EMBO Short-Term Fellowship
+2016  FWO PhD Fellowship Fundamental Research
+
+SELECTED PUBLICATIONS (of 23; h-index 11)
+1. Wouters-Ibrahim A, et al. Single-cell atlas of colonic epithelium during Klebsiella colonisation. Cell Host & Microbe. 2025.
+2. Wouters-Ibrahim A, Peeters J, et al. Antibiotic exposure reshapes mucosal IgA responses. Nature Microbiology. 2023.
+3. Smith R, Wouters-Ibrahim A, et al. A CRISPR screen for colonisation factors. PLoS Pathogens. 2021.
+4. Wouters-Ibrahim A, et al. Organoid models of bacterial invasion. Gut Microbes. 2020.
+5. Wouters A, Claes L. Mucosal immunity in mouse models. Frontiers in Immunology. 2018.
+... (18 further publications available on request)
+
+TEACHING
+2016 - 2019  Teaching assistant, Microbiology practicals (Bachelor year 2), KU Leuven
+2022 - present  Supervisor of 4 MSc theses and co-supervisor of 2 PhD students
+
+CONFERENCE TALKS
+2024  Keystone Symposium on Mucosal Immunology, Banff (invited)
+2023  ECCMID, Copenhagen
+2022  Microbiology Society Annual Conference, Belfast
+
+METHODS AND SKILLS
+Single-cell RNA-seq (10x Genomics), flow cytometry, organoid culture, CRISPR screening, mouse models, confocal microscopy, R (Seurat, DESeq2), Python, bash, grant writing, scientific writing, student supervision
+
+SERVICE
+Reviewer for Nature Communications, mBio, PLoS Pathogens
+Board member, Belgian Society for Microbiology (2022 - present)
+
+LANGUAGES
+Dutch (native), English (fluent), French (good), Arabic (conversational)

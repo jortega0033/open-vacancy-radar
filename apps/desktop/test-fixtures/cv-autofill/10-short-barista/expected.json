@@ -1,0 +1,20 @@
+{
+  "candidateName": "Mia Kowalczyk",
+  "currentRole": ["Barista"],
+  "location": ["Kraków, Poland"],
+  "primaryCountry": "Poland",
+  "experienceYears": { "value": 5, "tolerance": 1 },
+  "languages": ["Polish", "English"],
+  "skills": ["Latte art", "Espresso machine maintenance", "Cash handling"],
+  "skillsOptional": ["Opening and closing shifts", "Customer service", "Coffee", "Espresso"],
+  "targetRoles": [
+    "Barista",
+    "Senior Barista",
+    "Head Barista",
+    "Shift Supervisor",
+    "Cafe Supervisor",
+    "Coffee Shop Supervisor",
+    "Shift Lead"
+  ],
+  "links": []
+}

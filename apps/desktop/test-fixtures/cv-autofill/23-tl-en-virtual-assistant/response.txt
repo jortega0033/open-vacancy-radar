@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Ma. Cristina Bautista Lacsamana", "confidence": "high", "evidence": "Ma. Cristina \"Tin\" Bautista Lacsamana"},
+"currentRole": {"value": "Executive Virtual Assistant", "confidence": "high", "evidence": "Executive Virtual Assistant (freelance)"},
+"location": {"value": "Davao City, Philippines", "confidence": "high", "evidence": "Davao City, Philippines"},
+"primaryCountry": {"value": "Philippines", "confidence": "high", "evidence": "Davao City, Philippines"},
+"experienceYears": {"value": 8, "confidence": "high", "evidence": "Admin Assistant, Mindanao Agri Supply 2018 - 2020"},
+"languages": {"value": ["English", "Filipino", "Bisaya"], "confidence": "high", "evidence": "English (fluent), Filipino, Bisaya"},
+"strongestSkills": {"value": ["Google Workspace", "Calendly", "Xero", "QuickBooks Online", "Canva", "Inbox management"], "confidence": "high", "evidence": "Inbox at calendar management gamit ang Google Workspace at Calendly"},
+"additionalSkills": {"value": ["Microsoft 365", "HubSpot", "Meta Business Suite", "Trello", "Asana", "LinkedIn Sales Navigator"], "confidence": "high", "evidence": "Trello, Asana, LinkedIn Sales Navigator"},
+"targetRoles": {"value": ["Executive Virtual Assistant", "Executive Assistant", "Remote Administrative Assistant"], "confidence": "high", "evidence": "Executive Virtual Assistant"},
+"consideredRoles": {"value": ["Bookkeeping Assistant"], "confidence": "low", "evidence": "bookkeeping basics"},
+"links": {"value": ["tinlacsamana-example.ph"], "confidence": "high", "evidence": "tinlacsamana-example.ph"},
+"summary": {"value": "Executive virtual assistant with six years of remote work for Australian and US small business owners.", "confidence": "high", "evidence": "6 taon na sa remote work"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

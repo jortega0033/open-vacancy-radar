@@ -1,0 +1,49 @@
+{
+  "candidateName": "Ma. Cristina Bautista Lacsamana",
+  "currentRole": [
+    "Executive Virtual Assistant",
+    "Executive Virtual Assistant (freelance)",
+    "Freelance Executive Virtual Assistant"
+  ],
+  "location": ["Davao City, Philippines"],
+  "primaryCountry": "Philippines",
+  "experienceYears": { "value": 8, "tolerance": 2 },
+  "languages": ["English", "Tagalog", "Cebuano"],
+  "skills": [
+    "Google Workspace",
+    "Microsoft 365",
+    "Calendly",
+    "Xero",
+    "QuickBooks Online",
+    "HubSpot",
+    "Canva",
+    "Meta Business Suite",
+    "Trello",
+    "Asana",
+    "LinkedIn Sales Navigator"
+  ],
+  "skillsOptional": [
+    "Inbox management",
+    "Calendar management",
+    "Bookkeeping",
+    "Invoicing",
+    "Expense tracking",
+    "Social media management",
+    "Content scheduling",
+    "Data entry",
+    "Lead research",
+    "CRM",
+    "Lead generation"
+  ],
+  "targetRoles": [
+    "Executive Virtual Assistant",
+    "Virtual Assistant",
+    "Executive Assistant",
+    "Remote Executive Assistant",
+    "Administrative Assistant",
+    "Personal Assistant",
+    "Operations Assistant",
+    "Remote Administrative Assistant"
+  ],
+  "links": ["tinlacsamana-example.ph"]
+}

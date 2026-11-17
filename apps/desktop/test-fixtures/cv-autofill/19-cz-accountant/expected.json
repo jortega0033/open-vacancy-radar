@@ -1,0 +1,42 @@
+{
+  "candidateName": "Kateřina Dvořáková Šindelářová",
+  "currentRole": ["Hlavní účetní", "Chief Accountant", "Head Accountant"],
+  "location": ["Brno, Česká republika", "Brno, Czech Republic", "Brno, Czechia"],
+  "primaryCountry": "Czech Republic",
+  "experienceYears": { "value": 10, "tolerance": 1 },
+  "languages": ["Czech", "English", "German"],
+  "skills": [
+    "SAP FI/CO",
+    "Pohoda",
+    "MS Excel",
+    "IFRS",
+    "Czech accounting standards",
+    "VAT",
+    "Income tax",
+    "Power BI"
+  ],
+  "skillsOptional": [
+    "Consolidation",
+    "Month-end close",
+    "Year-end close",
+    "Payroll",
+    "Audit",
+    "Team leadership",
+    "SAP FI",
+    "Pivot tables",
+    "Tax returns",
+    "Accounting"
+  ],
+  "targetRoles": [
+    "Chief Accountant",
+    "Hlavní účetní",
+    "Head Accountant",
+    "Senior Accountant",
+    "Finance Manager",
+    "Accounting Manager",
+    "Financial Controller",
+    "Accountant",
+    "Účetní"
+  ],
+  "links": []
+}

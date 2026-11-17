@@ -1,0 +1,32 @@
+{
+  "candidateName": "Tomás Ó Briain",
+  "currentRole": ["Electrician", "Qualified Electrician"],
+  "location": ["Galway, Ireland"],
+  "primaryCountry": "Ireland",
+  "experienceYears": { "value": 12, "tolerance": 0 },
+  "languages": [],
+  "skills": [
+    "Fault finding",
+    "Rewires",
+    "EV charger installation",
+    "Solar PV",
+    "Fire alarm systems"
+  ],
+  "skillsOptional": [
+    "Driving licence",
+    "Domestic electrical",
+    "Commercial electrical",
+    "Safe Electric"
+  ],
+  "targetRoles": [
+    "Electrician",
+    "Qualified Electrician",
+    "Commercial Electrician",
+    "Domestic Electrician",
+    "Maintenance Electrician",
+    "EV Charger Installer",
+    "Solar PV Installer",
+    "Electrical Contractor"
+  ],
+  "links": []
+}

@@ -1,0 +1,30 @@
+Arjun Venkataraman Iyer
+DevOps Engineer
+Amsterdam, Netherlands (moved from Pune, India in 2024; Dutch residence permit, highly skilled migrant)
+arjun.vi@example.com | +31 6 0000 0022 | github.com/example-arjun-vi | linkedin.com/in/example-arjun-vi
+
+EXPERIENCE
+
+DevOps Engineer - Grachtenbank Digital, Amsterdam                   Mar 2024 - Present
+- Run 40+ services on Azure Kubernetes Service; GitOps with Argo CD and Helm
+- Terraform modules for networking and identity; cut provisioning time from days to hours
+- On-call rotation; Prometheus and Grafana alerting
+
+Senior Systems Engineer - Deccan Infotech, Pune, India              Jul 2019 - Feb 2024
+- Migrated on-prem Jenkins pipelines to GitHub Actions for 60 repos
+- Ansible playbooks for 300 Linux servers; AWS EC2 and S3 cost reviews
+
+Systems Engineer - Deccan Infotech, Pune, India                     Aug 2016 - Jun 2019
+- Linux administration, Bash scripting, Nagios monitoring
+
+EDUCATION
+B.E. Computer Engineering, Savitribai Phule Pune University, 2016
+
+CERTIFICATIONS
+CKA (Certified Kubernetes Administrator), AZ-104 Azure Administrator, HashiCorp Terraform Associate
+
+SKILLS
+Kubernetes, Azure, AWS, Terraform, Helm, Argo CD, GitHub Actions, Jenkins, Ansible, Prometheus, Grafana, Linux, Bash, Python, Docker
+
+LANGUAGES
+English (fluent), Hindi, Tamil (native), Marathi, Dutch (A1)

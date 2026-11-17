@@ -1,0 +1,53 @@
+{
+  "note": "Synthetic CVs written for this benchmark (#634). Every person, contact detail, link and employer is invented; links use example handles and example domains. Never add a real person's CV here. See docs/adr-cv-autofill.md.",
+  "cases": [
+    { "id": "01-nl-frontend-developer", "split": "tuning", "tags": ["non-english", "dutch"] },
+    { "id": "02-es-data-analyst", "split": "tuning", "tags": ["non-english", "spanish"] },
+    {
+      "id": "03-tl-en-customer-support",
+      "split": "tuning",
+      "tags": ["non-english", "tagalog-english"]
+    },
+    { "id": "04-de-mechanical-engineer", "split": "tuning", "tags": ["non-english", "german"] },
+    { "id": "05-two-column-ux-designer", "split": "tuning", "tags": ["two-column"] },
+    { "id": "06-two-column-backend-developer", "split": "tuning", "tags": ["two-column"] },
+    { "id": "07-ocr-nurse", "split": "tuning", "tags": ["ocr-noise"] },
+    { "id": "08-career-change-teacher-to-developer", "split": "tuning", "tags": ["career-change"] },
+    {
+      "id": "09-career-change-chef-to-project-coordinator",
+      "split": "tuning",
+      "tags": ["career-change"]
+    },
+    { "id": "10-short-barista", "split": "tuning", "tags": ["very-short"] },
+    { "id": "11-senior-engineering-director", "split": "tuning", "tags": ["senior-many-roles"] },
+    { "id": "12-academic-researcher-long", "split": "tuning", "tags": ["long-academic"] },
+    { "id": "13-no-title-freelance-generalist", "split": "tuning", "tags": ["no-title"] },
+    { "id": "14-no-title-graduate", "split": "tuning", "tags": ["no-title"] },
+    { "id": "15-sales-manager-us", "split": "tuning", "tags": ["no-languages-listed"] },
+    {
+      "id": "16-nl-en-logistics-planner",
+      "split": "tuning",
+      "tags": ["non-english", "dutch-english"]
+    },
+    { "id": "17-es-mx-graphic-designer", "split": "tuning", "tags": ["non-english", "spanish"] },
+    {
+      "id": "18-nationality-trap-remote-writer",
+      "split": "tuning",
+      "tags": ["country-trap", "no-location"]
+    },
+    { "id": "19-cz-accountant", "split": "heldout", "tags": ["non-english", "czech"] },
+    { "id": "20-ocr-warehouse-lead", "split": "heldout", "tags": ["ocr-noise", "dutch"] },
+    { "id": "21-short-electrician", "split": "heldout", "tags": ["very-short"] },
+    { "id": "22-relocated-devops-engineer", "split": "heldout", "tags": ["country-trap"] },
+    {
+      "id": "23-tl-en-virtual-assistant",
+      "split": "heldout",
+      "tags": ["non-english", "tagalog-english"]
+    },
+    {
+      "id": "24-contact-only-school-leaver",
+      "split": "heldout",
+      "tags": ["very-short", "no-location", "no-experience"]
+    }
+  ]
+}

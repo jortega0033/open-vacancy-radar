@@ -1,0 +1,48 @@
+{
+  "candidateName": "Arjun Venkataraman Iyer",
+  "currentRole": ["DevOps Engineer"],
+  "location": ["Amsterdam, Netherlands"],
+  "primaryCountry": "Netherlands",
+  "experienceYears": { "value": 10, "tolerance": 1 },
+  "languages": ["English", "Hindi", "Tamil", "Marathi", "Dutch"],
+  "skills": [
+    "Kubernetes",
+    "Azure",
+    "AWS",
+    "Terraform",
+    "Helm",
+    "Argo CD",
+    "GitHub Actions",
+    "Jenkins",
+    "Ansible",
+    "Prometheus",
+    "Grafana",
+    "Linux",
+    "Bash",
+    "Python",
+    "Docker"
+  ],
+  "skillsOptional": [
+    "GitOps",
+    "AKS",
+    "Azure Kubernetes Service",
+    "Nagios",
+    "CKA",
+    "EC2",
+    "S3",
+    "CI/CD",
+    "On-call"
+  ],
+  "targetRoles": [
+    "DevOps Engineer",
+    "Senior DevOps Engineer",
+    "Site Reliability Engineer",
+    "SRE",
+    "Platform Engineer",
+    "Cloud Engineer",
+    "Kubernetes Engineer",
+    "Infrastructure Engineer",
+    "Cloud Infrastructure Engineer"
+  ],
+  "links": ["github.com/example-arjun-vi", "linkedin.com/in/example-arjun-vi"]
+}

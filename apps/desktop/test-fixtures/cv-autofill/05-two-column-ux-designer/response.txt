@@ -1,0 +1,15 @@
+{
+"candidateName": {"value": "Priya Nandakumar-Holt", "confidence": "high", "evidence": "PRIYA NANDAKUMAR-HOLT"},
+"currentRole": {"value": "Lead Product Designer", "confidence": "high", "evidence": "Lead Product Designer 2022 - Present"},
+"location": {"value": "London, United Kingdom", "confidence": "high", "evidence": "London, United Kingdom"},
+"primaryCountry": {"value": "United Kingdom", "confidence": "high", "evidence": "London, United Kingdom"},
+"experienceYears": {"value": 10, "confidence": "high", "evidence": "Junior UX Designer 2016 - 2018"},
+"languages": {"value": ["English", "Tamil"], "confidence": "high", "evidence": "English (native)"},
+"strongestSkills": {"value": ["Figma", "Design systems", "User research", "Usability testing", "Prototyping"], "confidence": "high", "evidence": "owns the design system in Figma"},
+"additionalSkills": {"value": ["ProtoPie", "Miro", "Accessibility", "Card sorting", "Tree testing"], "confidence": "high", "evidence": "ran card"},
+"targetRoles": {"value": ["Lead Product Designer", "Senior Product Designer", "UX Designer"], "confidence": "high", "evidence": "Lead Product Designer"},
+"consideredRoles": {"value": ["Design Systems Lead", "UX Researcher"], "confidence": "low", "evidence": "Runs usability studies every sprint"},
+"links": {"value": ["priyanh-example.design", "linkedin.com/in/example-priya-nh"], "confidence": "high", "evidence": "linkedin.com/in/example-priya-nh"},
+"summary": {"value": "Product designer leading mobile banking design, with agency and public sector UX experience.", "confidence": "high", "evidence": "Leads design for the mobile savings app."},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}
+}

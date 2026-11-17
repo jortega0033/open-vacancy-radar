@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Brandon T. Whitfield", "confidence": "high", "evidence": "BRANDON T. WHITFIELD"},
+"currentRole": {"value": "Regional Sales Manager", "confidence": "high", "evidence": "Regional Sales Manager, South Central | Corvana Software"},
+"location": {"value": "Austin, TX", "confidence": "high", "evidence": "Austin, TX 78701"},
+"primaryCountry": {"value": "United States", "confidence": "high", "evidence": "Authorized to work in the US (US citizen)."},
+"experienceYears": {"value": 13, "confidence": "high", "evidence": "Sales Development Representative | Lonestar Payroll, Dallas, TX | 2013 - 2015"},
+"languages": {"value": ["English"], "confidence": "low", "evidence": ""},
+"strongestSkills": {"value": ["Salesforce", "MEDDICC", "Gong", "Pipeline management", "Coaching", "Forecasting"], "confidence": "high", "evidence": "Rolled out MEDDICC qualification and Gong call reviews"},
+"additionalSkills": {"value": ["HubSpot", "Outreach", "Challenger Sale", "Negotiation", "Territory planning"], "confidence": "high", "evidence": "Salesforce, HubSpot, Gong, Outreach"},
+"targetRoles": {"value": ["Regional Sales Manager", "Sales Director", "Head of Sales"], "confidence": "high", "evidence": "REGIONAL SALES MANAGER, B2B SAAS"},
+"consideredRoles": {"value": ["Sales Enablement Manager"], "confidence": "low", "evidence": ""},
+"links": {"value": ["linkedin.com/in/example-brandon-whitfield"], "confidence": "high", "evidence": "linkedin.com/in/example-brandon-whitfield"},
+"summary": {"value": "B2B SaaS regional sales manager leading 15 sellers, with a track record of exceeding quota.", "confidence": "high", "evidence": "140% of quota in FY2025"},
+"workAuthorization": {"value": "Authorized to work in the US (US citizen)", "confidence": "high", "evidence": "Authorized to work in the US (US citizen)."}}

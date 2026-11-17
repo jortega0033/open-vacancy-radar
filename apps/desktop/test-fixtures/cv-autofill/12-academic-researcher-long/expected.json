@@ -1,0 +1,50 @@
+{
+  "candidateName": "Anneleen Wouters-Ibrahim",
+  "currentRole": [
+    "Postdoctoral Researcher",
+    "FWO Senior Postdoctoral Fellow",
+    "Postdoctoral Researcher (FWO senior postdoctoral fellow)"
+  ],
+  "location": ["Leuven, Belgium", "3000 Leuven, Belgium"],
+  "primaryCountry": "Belgium",
+  "experienceYears": { "value": 11, "tolerance": 2 },
+  "languages": ["Dutch", "English", "French", "Arabic"],
+  "skills": [
+    "Single-cell RNA-seq",
+    "Flow cytometry",
+    "Organoid culture",
+    "CRISPR screening",
+    "Mouse models",
+    "Confocal microscopy",
+    "R",
+    "Seurat",
+    "DESeq2",
+    "Python",
+    "Bash",
+    "Grant writing",
+    "Scientific writing",
+    "Student supervision"
+  ],
+  "skillsOptional": [
+    "10x Genomics",
+    "Microbiology",
+    "Immunology",
+    "Teaching",
+    "Peer review",
+    "Transcriptomics",
+    "Antimicrobial resistance"
+  ],
+  "targetRoles": [
+    "Postdoctoral Researcher",
+    "Senior Scientist",
+    "Research Scientist",
+    "Assistant Professor",
+    "Principal Investigator",
+    "Scientist",
+    "Senior Research Scientist",
+    "Group Leader",
+    "Research Fellow",
+    "Microbiologist"
+  ],
+  "links": ["anneleenwi-example.org"]
+}

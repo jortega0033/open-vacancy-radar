@@ -1,0 +1,34 @@
+{
+  "candidateName": "Lucia Ferrer Castello",
+  "currentRole": ["Analista de Datos Senior", "Senior Data Analyst", "Analista de Datos"],
+  "location": ["Valencia, España", "Valencia, Spain"],
+  "primaryCountry": "Spain",
+  "experienceYears": { "value": 7, "tolerance": 1 },
+  "languages": ["Spanish", "Valencian", "English"],
+  "skills": [
+    "SQL",
+    "Python",
+    "pandas",
+    "scikit-learn",
+    "Power BI",
+    "BigQuery",
+    "Google Analytics",
+    "Excel",
+    "VBA",
+    "Talend",
+    "Tableau",
+    "SQL Server"
+  ],
+  "skillsOptional": ["A/B testing", "ETL", "Demand forecasting", "Statistics"],
+  "targetRoles": [
+    "Senior Data Analyst",
+    "Data Analyst",
+    "Analista de Datos Senior",
+    "Analista de Datos",
+    "Business Intelligence Analyst",
+    "BI Analyst",
+    "Product Analyst",
+    "Analytics Engineer"
+  ],
+  "links": ["luciaferrer-example.dev"]
+}

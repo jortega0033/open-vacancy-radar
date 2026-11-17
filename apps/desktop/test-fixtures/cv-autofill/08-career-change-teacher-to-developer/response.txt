@@ -1,0 +1,15 @@
+{
+"candidateName": {"value": "Elodie Vermeersch", "confidence": "high", "evidence": "Elodie Vermeersch"},
+"currentRole": {"value": "Junior Full-Stack Developer", "confidence": "high", "evidence": "Junior Full-Stack Developer (traineeship), Webatelier Gent"},
+"location": {"value": "Gent, België", "confidence": "high", "evidence": "Gent, België"},
+"primaryCountry": {"value": "Belgium", "confidence": "high", "evidence": "Gent, België"},
+"experienceYears": {"value": 10, "confidence": "low", "evidence": "Sep 2016 - Jun 2025"},
+"languages": {"value": ["Dutch", "English", "French"], "confidence": "high", "evidence": "Dutch (native), French (good), English (fluent)"},
+"strongestSkills": {"value": ["React", "TypeScript", "JavaScript", "Node.js", "Express", "PostgreSQL"], "confidence": "high", "evidence": "Build features in React and Express"},
+"additionalSkills": {"value": ["Prisma", "Jest", "Docker", "Next.js", "Supabase", "Firebase", "Git", "SQL"], "confidence": "high", "evidence": "PostgreSQL with Prisma"},
+"targetRoles": {"value": ["Junior Full-Stack Developer", "Junior Frontend Developer", "Junior Web Developer"], "confidence": "high", "evidence": "now a junior web developer"},
+"consideredRoles": {"value": ["EdTech Developer"], "confidence": "low", "evidence": "maths practice web app used by 300 pupils"},
+"links": {"value": ["github.com/example-elodiev", "elodiev-example.github.io"], "confidence": "high", "evidence": "github.com/example-elodiev"},
+"summary": {"value": "Former maths teacher who moved into web development through a full-stack bootcamp and now works as a junior full-stack developer.", "confidence": "high", "evidence": "Former secondary school maths teacher, now a junior web developer"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}
+}

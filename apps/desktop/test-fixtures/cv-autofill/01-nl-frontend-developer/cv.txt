@@ -1,0 +1,33 @@
+Curriculum Vitae
+
+Maartje van Doorn
+Utrecht, Nederland
+maartje.vandoorn@example.com | +31 6 0000 0001
+linkedin.com/in/example-maartje-vandoorn | github.com/example-mvdoorn
+
+Profiel
+Frontend developer met ruim tien jaar ervaring in webapplicaties voor de zorg en de overheid. Sterk in toegankelijkheid en design systems.
+
+Werkervaring
+Senior Frontend Developer, Zorgportaal BV, Utrecht
+maart 2021 - heden
+- Bouwt het patientenportaal in React en TypeScript voor 40 ziekenhuizen
+- Zet het design system op met Storybook en schrijft tests met Playwright
+
+Frontend Developer, Gemeentelijke Digitale Diensten, Amersfoort
+januari 2017 - februari 2021
+- Ontwikkelde formulieren in Vue.js en zorgde voor WCAG 2.1 AA toegankelijkheid
+- Werkte met GraphQL en Node.js voor de koppeling met backoffice systemen
+
+Junior Webdeveloper, Pixelwerk, Utrecht
+september 2015 - december 2016
+- HTML, CSS en JavaScript voor websites van klanten; eerste stappen met Sass
+
+Opleiding
+HBO-ICT, Hogeschool Utrecht, 2011 - 2015
+
+Talen
+Nederlands (moedertaal), Engels (vloeiend), Duits (basis)
+
+Vaardigheden
+React, TypeScript, Vue.js, JavaScript, HTML, CSS, Sass, Storybook, Playwright, GraphQL, Node.js, WCAG, Git

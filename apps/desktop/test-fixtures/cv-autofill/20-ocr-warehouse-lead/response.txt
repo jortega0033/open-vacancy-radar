@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Bogdan Petrescu-Vlasveld", "confidence": "high", "evidence": "Naam : Bogdan  Petrescu-Vlasveld"},
+"currentRole": {"value": "Teamleider Magazijn", "confidence": "high", "evidence": "Teamleider Magazijn , Maasvlakte Fulfilment B.V."},
+"location": {"value": "Rotterdam", "confidence": "high", "evidence": "Havenstraat 12 , 3011 Rotterdam"},
+"primaryCountry": {"value": "Netherlands", "confidence": "low", "evidence": "3011 Rotterdam"},
+"experienceYears": {"value": 15, "confidence": "high", "evidence": "2011 - 2014 Productiemedewerker"},
+"languages": {"value": ["Romanian", "Dutch", "English"], "confidence": "high", "evidence": "Nederlands (goed) , Roemeens (moedertaal) , Engels (redelijk)"},
+"strongestSkills": {"value": ["Team leadership", "WMS (Manhattan)", "Stock counts", "KPI reporting", "Reach truck"], "confidence": "high", "evidence": "aansturen van 25 orderpickers in 2 ploegen"},
+"additionalSkills": {"value": ["Excel", "VCA", "Forklift", "Cross-dock", "BHV", "EHBO"], "confidence": "high", "evidence": "VCA Basis , Heftruck certificaat"},
+"targetRoles": {"value": ["Warehouse Team Leader", "Warehouse Supervisor", "Shift Supervisor"], "confidence": "high", "evidence": "Teamleider Magazijn"},
+"consideredRoles": {"value": ["Logistics Coordinator"], "confidence": "low", "evidence": ""},
+"links": {"value": [], "confidence": "high", "evidence": ""},
+"summary": {"value": "Warehouse team leader in Rotterdam managing 25 order pickers, with forklift and reach truck background.", "confidence": "high", "evidence": "aansturen van 25 orderpickers"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

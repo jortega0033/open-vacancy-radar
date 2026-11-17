@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Hannelore Biesheuvel-Achterberg", "confidence": "high", "evidence": "Hannelore Biesheuvel-Achterberg"},
+"currentRole": {"value": "Director of Engineering", "confidence": "high", "evidence": "Director of Engineering, Payments Platform - Tulpstroom Fintech"},
+"location": {"value": "Amsterdam, the Netherlands", "confidence": "high", "evidence": "Amsterdam, the Netherlands"},
+"primaryCountry": {"value": "Netherlands", "confidence": "high", "evidence": "Amsterdam, the Netherlands"},
+"experienceYears": {"value": 24, "confidence": "high", "evidence": "Engineering leader with 24 years in software"},
+"languages": {"value": ["Dutch", "English", "German"], "confidence": "high", "evidence": "Dutch (native), English (full professional), German (good)"},
+"strongestSkills": {"value": ["Engineering management", "Organisation design", "Hiring", "OKRs", "SLOs", "Incident management", "AWS", "Kubernetes", "Microservices", "Java"], "confidence": "high", "evidence": "Introduced quarterly planning, SLOs and an incident review culture"},
+"additionalSkills": {"value": ["Budgeting", "Kotlin", "Go", "Elasticsearch", "Oracle", "PHP", "MySQL", "C++", "Spring"], "confidence": "high", "evidence": "Elasticsearch, Oracle, PHP, MySQL, C++"},
+"targetRoles": {"value": ["Director of Engineering", "VP of Engineering", "Head of Engineering"], "confidence": "high", "evidence": "Director of Engineering"},
+"consideredRoles": {"value": ["CTO"], "confidence": "low", "evidence": "managing teams of 20 to 140 engineers"},
+"links": {"value": ["linkedin.com/in/example-hannelore-ba"], "confidence": "high", "evidence": "linkedin.com/in/example-hannelore-ba"},
+"summary": {"value": "Engineering leader with 24 years in software and 12 years managing large teams in marketplaces, travel and fintech.", "confidence": "high", "evidence": "Engineering leader with 24 years in software"},
+"workAuthorization": {"value": "", "confidence": "low", "evidence": ""}}

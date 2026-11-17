@@ -1,0 +1,31 @@
+Elodie Vermeersch
+Gent, België | elodie.vermeersch@example.com | github.com/example-elodiev | elodiev-example.github.io
+
+ABOUT
+Former secondary school maths teacher, now a junior web developer. Completed a 6-month full-stack bootcamp in 2025 and built three production projects since.
+
+DEVELOPER EXPERIENCE
+Junior Full-Stack Developer (traineeship), Webatelier Gent
+Nov 2025 - present
+- Build features in React and Express for a booking platform; PostgreSQL with Prisma
+- Write unit tests with Jest; deploy with Docker on a VPS
+
+Full-Stack Web Development Bootcamp, Codeschool Gent programme, Gent
+May 2025 - Oct 2025
+- JavaScript, TypeScript, React, Node.js, Express, SQL, Git
+
+PROJECTS
+Toetsplanner: exam scheduling tool for schools (Next.js, Supabase)
+Wiskunde Oefenen: maths practice web app used by 300 pupils (React, Firebase)
+
+PREVIOUS CAREER
+Mathematics Teacher, Sint-Barbaracollege, Gent
+Sep 2016 - Jun 2025
+- Taught maths to students aged 14-18; coordinated the school's digital learning platform (Smartschool)
+
+EDUCATION
+Master of Science in Mathematics, Universiteit Gent, 2016
+Specific teacher training (SLO), 2016
+
+LANGUAGES
+Dutch (native), French (good), English (fluent)

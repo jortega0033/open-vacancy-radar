@@ -1,0 +1,22 @@
+Kwame Asante-Lindqvist
+Gothenburg, Sweden
+kwame.al@example.com | github.com/example-kwame-al
+
+Education
+MSc Data Science and AI, Chalmers University of Technology, 2024 - 2026
+Thesis: Forecasting tram delays with graph neural networks (PyTorch Geometric)
+BSc Mathematics, University of Ghana, 2019 - 2023
+
+Internships and work
+Summer 2025: data internship at Kustlinjen regional transport, Gothenburg. Cleaned GPS feeds with Python and pandas, built a delay dashboard in Streamlit.
+2023 - 2024: teaching assistant for Linear Algebra, University of Ghana.
+
+Projects
+- Kaggle: top 5% in a retail demand forecasting competition (LightGBM, feature engineering)
+- Open source: small fixes to a Python geospatial library (GeoPandas)
+
+Skills
+Python, pandas, NumPy, scikit-learn, PyTorch, PyTorch Geometric, LightGBM, SQL, Streamlit, Git, Docker, GeoPandas
+
+Languages
+English (fluent), Twi (native), Swedish (A2)

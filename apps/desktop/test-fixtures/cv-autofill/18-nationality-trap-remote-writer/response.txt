@@ -1,0 +1,13 @@
+{"candidateName": {"value": "Amara Liesel Okafor", "confidence": "high", "evidence": "Amara Liesel Okafor"},
+"currentRole": {"value": "Senior Technical Writer", "confidence": "high", "evidence": "Senior Technical Writer, Driftwood Cloud"},
+"location": {"value": "Remote", "confidence": "low", "evidence": "Technical Writer - remote"},
+"primaryCountry": {"value": "Germany", "confidence": "low", "evidence": "German (dual citizen)"},
+"experienceYears": {"value": 9, "confidence": "high", "evidence": "Support Engineer, Quillstack, 2017 - 2019"},
+"languages": {"value": ["English", "German", "Yoruba"], "confidence": "high", "evidence": "English (native), German (fluent), Yoruba (conversational)"},
+"strongestSkills": {"value": ["Technical writing", "API documentation", "OpenAPI", "Docusaurus", "Markdown"], "confidence": "high", "evidence": "Own the developer docs for 3 APIs"},
+"additionalSkills": {"value": ["MkDocs", "Git", "GitHub", "Confluence", "Python", "Information architecture", "Style guides"], "confidence": "high", "evidence": "Technical writing, API documentation, OpenAPI"},
+"targetRoles": {"value": ["Senior Technical Writer", "Documentation Engineer", "API Technical Writer"], "confidence": "high", "evidence": "Senior Technical Writer"},
+"consideredRoles": {"value": ["Developer Advocate"], "confidence": "low", "evidence": ""},
+"links": {"value": ["amaraokafor-example.com", "github.com/amara-okafor"], "confidence": "low", "evidence": ""},
+"summary": {"value": "Remote senior technical writer owning API developer documentation with a docs-as-code workflow.", "confidence": "high", "evidence": "Own the developer docs for 3 APIs"},
+"workAuthorization": {"value": "Nigerian and German dual citizen", "confidence": "low", "evidence": "Nationality: Nigerian and German (dual citizen)."}}
