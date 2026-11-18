@@ -132,11 +132,16 @@ function stripMarkdownLineMarkers(rawLine: string): string {
   return line.replace(/^(\*\*|__|\*|_)(.+)\1$/u, '$2').trim();
 }
 
-/** True for a line whose own markers say "heading": "## About us", "**About us**", "__About us__". */
+/**
+ * True for a line whose own markers say "heading": "## About us", "**About us**", "__About us__".
+ * A bullet is never one, whatever its emphasis: "- **Spanish**" under Requirements is a list item
+ * in bold, and reading it as a section heading would drop the context for it and every bullet after.
+ */
 function isMarkedUpHeadingLine(rawLine: string): boolean {
   const line = rawLine.trim();
   if (/^#{1,6}\s/u.test(line)) return true;
-  return /^(?:\*\*|__)(?:[^*_]|\*(?!\*)|_(?!_))+(?:\*\*|__)$/u.test(line.replace(/^\s*[-•]\s*/u, ''));
+  if (/^[-*•]\s/u.test(line)) return false;
+  return /^(?:\*\*|__)(?:[^*_]|\*(?!\*)|_(?!_))+(?:\*\*|__)$/u.test(line);
 }
 
 type Sentence = {

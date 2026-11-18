@@ -109,7 +109,7 @@ Strong TypeScript and modern frontend framework experience.`;
     const body = 'Requirements\n- Strong TypeScript';
     const unclear = 'Our team speaks German and English day to day.';
 
-    for (const sectionHeading of ['## Our stack', '### Life at Acme', '**Life at Acme**', '- **Life at Acme**']) {
+    for (const sectionHeading of ['## Our stack', '### Life at Acme', '**Life at Acme**', '__Life at Acme__']) {
       expect(detectLanguageRequirements(`${body}\n${sectionHeading}\n${unclear}`)).toEqual([]);
     }
 
@@ -119,6 +119,20 @@ Strong TypeScript and modern frontend framework experience.`;
       { language: 'English', obligation: 'mandatory', quote: expect.any(String) },
       { language: 'German', obligation: 'mandatory', quote: expect.any(String) },
     ]);
+  });
+
+  it('never reads a bold bullet as a heading, so bold list items keep their requirements context', () => {
+    // "- **Spanish**" is a list item in bold, not a section title. Treating it as a heading would
+    // drop the context for it and for every plain bullet after it.
+    expect(detectLanguageRequirements('Requirements\n- **Spanish**\n- German\n- 5 years')).toEqual([
+      { language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' },
+      { language: 'German', obligation: 'mandatory', quote: 'German' },
+    ]);
+    expect(detectLanguageRequirements('Nice to have\n* **Spanish**')).toEqual([
+      { language: 'Spanish', obligation: 'preferred', quote: 'Spanish' },
+    ]);
+    // A bold bullet whose words are a vocabulary heading still acts as that heading.
+    expect(detectLanguageRequirements('Requirements\n- Strong TypeScript\n- **About us**\nOur team speaks German and English day to day.')).toEqual([]);
   });
 
   it('still reads the words of a marked-up heading that states an obligation itself', () => {
