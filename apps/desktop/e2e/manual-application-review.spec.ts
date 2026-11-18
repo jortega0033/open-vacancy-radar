@@ -1,7 +1,14 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import { ensureLightTheme, launchApp } from './fixtures.js';
-import { APPLY_COMPANY, APPLY_ROLE, APPLY_VACANCY_URL, seedApplyWorkspace } from './apply-workspace-seed.js';
+import {
+  APPLY_COMPANY,
+  APPLY_CONTACT_EMAIL,
+  APPLY_LETTER_BODY,
+  APPLY_ROLE,
+  APPLY_VACANCY_URL,
+  seedApplyWorkspace,
+} from './apply-workspace-seed.js';
 
 /**
  * #657: from a selected Search result, Apply opens the Review & apply workspace in
@@ -62,6 +69,20 @@ test('Search opens the Review & apply workspace in place and reaches the employe
       await expect(documents.getByRole('button', { name: 'Open Cover letter' })).toBeVisible();
       await expect(documents.getByRole('button', { name: 'Save copy of Cover letter' })).toBeVisible();
       await expect(workspace.getByText('Second opinion (optional)')).toBeVisible();
+
+      // #660: the verified letter body and CV contact, one labelled Copy button each. A click puts
+      // exactly the prepared body on the real clipboard: paragraphs as in the PDF, no heading.
+      const copyGroup = workspace.getByRole('region', { name: 'Copy for the employer form' });
+      await expect(copyGroup.getByRole('button', { name: 'Copy cover letter text' })).toBeVisible();
+      await expect(copyGroup.getByRole('button', { name: 'Copy email' })).toBeVisible();
+      await expect(copyGroup.getByRole('button', { name: 'Copy phone' })).toHaveCount(0);
+      await expect(copyGroup.getByText(/not available to copy/)).toHaveCount(0);
+      await electronApp.evaluate(({ clipboard }) => clipboard.writeText(''));
+      await copyGroup.getByRole('button', { name: 'Copy cover letter text' }).click();
+      await expect(copyGroup.getByRole('status')).toHaveText('Copied');
+      await expect.poll(() => electronApp.evaluate(({ clipboard }) => clipboard.readText())).toBe(APPLY_LETTER_BODY);
+      await copyGroup.getByRole('button', { name: 'Copy email' }).click();
+      await expect.poll(() => electronApp.evaluate(({ clipboard }) => clipboard.readText())).toBe(APPLY_CONTACT_EMAIL);
 
       // A real click on Open reaches the system viewer (#565 kept: nothing swallows the click).
       await documents.getByRole('button', { name: 'Open Tailored CV' }).click();

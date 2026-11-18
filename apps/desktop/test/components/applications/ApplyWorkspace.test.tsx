@@ -86,7 +86,12 @@ function setup({ attempts = [], sequence, documents = [CV, LETTER], policyId = n
     ...pipeline,
   };
   (window as unknown as { applicationPipeline: unknown }).applicationPipeline = applicationPipeline;
-  return { workspace, getApplicationAttempt, applicationExecutor, applicationPipeline };
+  // #660: the copy-fields read is its own bridge; default to "nothing staged" so no copy row shows.
+  const applyCopyFields = {
+    get: vi.fn().mockResolvedValue({ ok: true, view: { letters: [], letterUnavailable: null, contact: null, contactUnavailable: null } }),
+  };
+  (window as unknown as { applyCopyFields: unknown }).applyCopyFields = applyCopyFields;
+  return { workspace, getApplicationAttempt, applicationExecutor, applicationPipeline, applyCopyFields };
 }
 
 function renderWorkspace(props: Partial<Parameters<typeof ApplyWorkspace>[0]> = {}) {
@@ -159,6 +164,26 @@ describe('ApplyWorkspace (#657)', () => {
     fireEvent.click(within(documents).getByRole('button', { name: 'Save copy of Cover letter' }));
     await waitFor(() => expect(applicationExecutor.saveArtifact).toHaveBeenCalledWith('letter-1'));
     expect(await within(documents).findByText('Saved a copy of the cover letter.')).toBeInTheDocument();
+  });
+
+  it('offers the copy group for the employer form in review, read for this attempt only (#660)', async () => {
+    const { applyCopyFields } = setup();
+    applyCopyFields.get.mockResolvedValue({
+      ok: true,
+      view: {
+        letters: [{ kind: 'cover_letter', text: 'Dear team,\n\nHello.', version: 1, artifactHash: 'h1' }],
+        letterUnavailable: null,
+        contact: { name: 'Dana Doe', email: 'dana@example.test', phone: '', location: '', links: [], version: 1, artifactHash: 'h2' },
+        contactUnavailable: null,
+      },
+    });
+    renderWorkspace();
+    await screen.findByText('Ready to review');
+    const group = await screen.findByRole('region', { name: 'Copy for the employer form' });
+    expect(within(group).getByRole('button', { name: 'Copy cover letter text' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'Copy email' })).toBeInTheDocument();
+    expect(within(group).queryByRole('button', { name: 'Copy phone' })).not.toBeInTheDocument();
+    expect(applyCopyFields.get).toHaveBeenCalledWith('attempt-1');
   });
 
   it('runs Approve package, Open the employer form and I submitted it from the same workspace', async () => {

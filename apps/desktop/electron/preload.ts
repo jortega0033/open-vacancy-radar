@@ -35,6 +35,7 @@ import {
 } from './blind-apply-parse.js';
 import type { ApplicationBriefBridge } from './application-brief.js';
 import { parseCritiqueResult, type ApplicationCritiqueBridge } from './application-critique-types.js';
+import { parseApplyCopyResult, type ApplyCopyBridge } from './apply-copy-types.js';
 import { parseInterviewContextResult, type InterviewContextBridge } from './interview-context-types.js';
 import { parseActionsResult, parseOverviewResult, type ApplicationActionsBridge } from './application-actions-types.js';
 import { parseBriefResult, parseCommitAssessment, parseOkResult, parsePrepareAssessment } from './application-brief-parse.js';
@@ -2341,6 +2342,19 @@ const interviewContextApi: InterviewContextBridge = {
 };
 
 contextBridge.exposeInMainWorld('interviewContext', interviewContextApi);
+
+/**
+ * #660. The staged letter body and CV contact fields the person retypes into an employer form. One
+ * read-only call; every result is REBUILT from known fields (`parseApplyCopyResult`, fail closed).
+ * The argument is an attempt id: never a path, a hash or text. Nothing here writes or starts a model.
+ */
+const applyCopyApi: ApplyCopyBridge = {
+  async get(attemptId) {
+    return parseApplyCopyResult(await ipcRenderer.invoke('apply-copy-fields:get', { attemptId }));
+  },
+};
+
+contextBridge.exposeInMainWorld('applyCopyFields', applyCopyApi);
 
 /**
  * #692. The fifteenth namespace: local due actions on an application. Every result is REBUILT from known
