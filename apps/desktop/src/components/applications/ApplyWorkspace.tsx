@@ -5,6 +5,7 @@ import type { SelectedVacancy } from '../letters/types.js';
 import { ErrorBanner, WarningBanner } from '../shell/index.js';
 import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationCritiquePanel } from './ApplicationCritiquePanel.js';
+import { ApplyCopyFields } from './ApplyCopyFields.js';
 import { ApplicationReviewSession } from './ApplicationReviewSession.js';
 import { PipelineLimitNotice, TechnicalDetails, useRecordPipelineLimit } from './apply-review-parts.js';
 import {
@@ -698,6 +699,8 @@ export function ApplyWorkspace({
               {documentNote}
             </p>
           </section>
+
+          <ApplyCopyFields attemptId={attempt.id} reloadKey={attempt.updatedAt} />
 
           <details
             className="rounded-box border border-base-300 px-3 py-2"

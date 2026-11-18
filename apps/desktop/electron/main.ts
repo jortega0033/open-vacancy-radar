@@ -64,6 +64,7 @@ import type { ApplicationQueueEvent } from './application-queue-types.js';
 import { ApplicationDataResetGate } from './application-data-reset-gate.js';
 import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
 import { createApplicationCritiqueHandlers } from './application-critique-ipc.js';
+import { createApplyCopyHandlers } from './apply-copy-ipc.js';
 import { createInterviewContextHandlers } from './interview-context-ipc.js';
 import { createApplicationActionsHandlers } from './application-actions-ipc.js';
 import { cancelAllFollowUps } from './follow-up-runs.js';
@@ -2559,6 +2560,13 @@ guardedIpc.handle('interview-context:get', (_event, input: unknown) => interview
 guardedIpc.handle('interview-context:state-documents', (_event, input: unknown) => interviewContextHandlers['interview-context:state-documents']!(input));
 guardedIpc.handle('interview-context:save-round', (_event, input: unknown) => interviewContextHandlers['interview-context:save-round']!(input));
 guardedIpc.handle('interview-context:delete-round', (_event, input: unknown) => interviewContextHandlers['interview-context:delete-round']!(input));
+
+/**
+ * #660: the staged letter body and CV contact fields the person retypes into an employer form.
+ * One read-only channel; every value is pinned to a verified staged document version.
+ */
+const applyCopyHandlers = createApplyCopyHandlers(async () => ({ db: await ensureWorkspaceDb() }));
+guardedIpc.handle('apply-copy-fields:get', (_event, input: unknown) => applyCopyHandlers['apply-copy-fields:get']!(input));
 
 /**
  * #692: local due actions on the Applications rows. Local reads and writes only (no model, no request,

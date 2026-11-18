@@ -436,6 +436,9 @@ declare global {
      * statement about them) and the interview rounds they recorded. Takes ids, a version and the
      * person's own words; never a draft, file or path. */
     interviewContext: import('../electron/interview-context-types.js').InterviewContextBridge;
+    /** #660. The staged letter body and CV contact fields for the employer form, read-only and pinned
+     * to a verified staged document version. Takes an attempt id; never text, a hash or a path. */
+    applyCopyFields: import('../electron/apply-copy-types.js').ApplyCopyBridge;
     /** #692. The fifteenth namespace: local due actions on an application (create, edit, reschedule,
      * complete, dismiss, stop suggesting). Takes ids, a version and what the person typed; local only. */
     applicationActions: import('../electron/application-actions-types.js').ApplicationActionsBridge;
