@@ -204,6 +204,18 @@ describe('getApplyCopyFields', () => {
     ]);
   });
 
+  it('still reports an unavailable letter when another letter kind verified', async () => {
+    const attemptId = makeAttempt();
+    const cover = stageFile(attemptId, 'cover_letter_pdf', 'cover-letter.pdf', 'cover pdf');
+    const motivation = stageFile(attemptId, 'cover_letter_pdf', 'motivation-letter.pdf', 'motivation pdf');
+    recordDraft(attemptId, 'cover_letter', letterContent('Cover body.'), cover.hash);
+    recordDraft(attemptId, 'motivation_letter', letterContent('Motivation body.'), motivation.hash);
+    unlinkSync(motivation.path);
+    const view = await getApplyCopyFields(db, attemptId);
+    expect(view.letters.map((entry) => entry.kind)).toEqual(['cover_letter']);
+    expect(view.letterUnavailable).toBe('file_missing');
+  });
+
   it('never falls back to the live CV source when the CV draft fails verification', async () => {
     const attemptId = makeAttempt();
     const cv = stageFile(attemptId, 'cv_pdf', 'resume.pdf', 'cv pdf bytes');

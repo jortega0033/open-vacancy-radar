@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkspaceDb } from '../electron/workspace/client.js';
 import * as workspace from '../electron/workspace/repository.js';
+import { recordPreparedDraft } from '../electron/workspace/application-critique-store.js';
 
 /**
  * A synthetic workspace for the Review & apply workspace (#657): one saved search report with one
@@ -13,6 +15,13 @@ export const APPLY_VACANCY_KEY = 'manual-review-vacancy';
 export const APPLY_VACANCY_URL = 'https://example.invalid/jobs/manual-review-vacancy';
 export const APPLY_COMPANY = 'Northstar Product Engineering';
 export const APPLY_ROLE = 'Senior Frontend Product Engineer';
+/** #660: the prepared letter body and CV contact the staged PDFs were rendered from (synthetic). */
+export const APPLY_LETTER_BODY = 'Dear Northstar team,\n\nI would like to apply for the frontend role.\n\nKind regards,\nAlex Example';
+export const APPLY_CONTACT_EMAIL = 'alex@example.invalid';
+
+const CV_BYTES = '%PDF-1.4 synthetic tailored CV';
+const LETTER_BYTES = '%PDF-1.4 synthetic cover letter';
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 export function applyWorkspaceReport() {
   return {
@@ -97,8 +106,8 @@ export async function seedApplyWorkspace(prefix: string): Promise<SeededApplyWor
   const letterPath = join(userDataDir, 'Northstar-Frontend-Letter.pdf');
   await mkdir(reportDirectory, { recursive: true });
   await writeFile(join(reportDirectory, 'latest.json'), JSON.stringify(applyWorkspaceReport()), 'utf8');
-  await writeFile(cvPath, '%PDF-1.4', 'utf8');
-  await writeFile(letterPath, '%PDF-1.4', 'utf8');
+  await writeFile(cvPath, CV_BYTES, 'utf8');
+  await writeFile(letterPath, LETTER_BYTES, 'utf8');
 
   let attemptId: string;
   const seeded = createWorkspaceDb(userDataDir);
@@ -128,8 +137,8 @@ export async function seedApplyWorkspace(prefix: string): Promise<SeededApplyWor
       kind: 'cv_pdf',
       fileName: 'Northstar-Frontend-CV.pdf',
       mimeType: 'application/pdf',
-      byteSize: 128,
-      contentHash: 'artifact-content-hash',
+      byteSize: Buffer.byteLength(CV_BYTES),
+      contentHash: sha256(CV_BYTES),
       storagePath: cvPath,
     });
     workspace.createApplicationArtifact(seeded.db, {
@@ -137,9 +146,41 @@ export async function seedApplyWorkspace(prefix: string): Promise<SeededApplyWor
       kind: 'cover_letter_pdf',
       fileName: 'Northstar-Frontend-Letter.pdf',
       mimeType: 'application/pdf',
-      byteSize: 128,
-      contentHash: 'letter-content-hash',
+      byteSize: Buffer.byteLength(LETTER_BYTES),
+      contentHash: sha256(LETTER_BYTES),
       storagePath: letterPath,
+    });
+    // #660: the #690 drafts the staged files were rendered from, hash-bound to them, so the copy
+    // fields on the Apply page are offered (a draft-less package would show "not available").
+    const draftBase = {
+      attemptId: attempt.id,
+      origin: 'prepared' as const,
+      jdHash: 'jd-content-hash',
+      sourceCvHash: 'source-cv-content-hash',
+      now: new Date('2026-09-12T00:00:00.000Z'),
+    };
+    recordPreparedDraft(seeded.db, {
+      ...draftBase,
+      kind: 'cv',
+      artifactHash: sha256(CV_BYTES),
+      content: {
+        type: 'cv',
+        basis: 'tailored',
+        resume: {
+          contact: { name: 'Alex Example', title: 'Frontend Engineer', location: 'Utrecht', email: APPLY_CONTACT_EMAIL, phone: '', links: [] },
+          summary: 'Senior frontend product engineer.',
+          experience: [],
+          projects: [],
+          skills: [],
+          education: [],
+        },
+      },
+    });
+    recordPreparedDraft(seeded.db, {
+      ...draftBase,
+      kind: 'cover_letter',
+      artifactHash: sha256(LETTER_BYTES),
+      content: { type: 'letter', title: 'Cover Letter', body: APPLY_LETTER_BODY, authored: 'user', factIds: [], companyClaims: [] },
     });
   } finally {
     seeded.close();

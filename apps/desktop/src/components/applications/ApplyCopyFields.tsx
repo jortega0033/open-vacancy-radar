@@ -41,7 +41,8 @@ function contactRows(contact: ApplyCopyContact) {
     <CopyRow key={key} label={label} value={contact[key]} buttonLabel={`Copy ${label.toLowerCase()}`} />
   ));
   const links = contact.links.map((link, index) => (
-    <CopyRow key={`link-${link}`} label={contact.links.length > 1 ? `Link ${index + 1}` : 'Link'} value={link} buttonLabel={contact.links.length > 1 ? `Copy link ${index + 1}` : 'Copy link'} />
+    // Keyed by position: the same link may appear twice, and the order is fixed for a given view.
+    <CopyRow key={`link-${index}`} label={contact.links.length > 1 ? `Link ${index + 1}` : 'Link'} value={link} buttonLabel={contact.links.length > 1 ? `Copy link ${index + 1}` : 'Copy link'} />
   ));
   return [...fields, ...links];
 }

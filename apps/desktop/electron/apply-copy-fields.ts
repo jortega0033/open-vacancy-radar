@@ -57,19 +57,24 @@ export async function getApplyCopyFields(db: WorkspaceDb, attemptId: string): Pr
   const letters: ApplyCopyView['letters'] = [];
   let letterUnavailable: ApplyCopyUnavailable | null = null;
   if (artifacts.some((row) => row.kind === 'cover_letter_pdf')) {
-    letterUnavailable = 'no_draft';
+    // A current letter draft that fails verification is reported even when another letter kind
+    // verified, so a missing motivation letter is never silently dropped next to a cover letter.
+    let failed: ApplyCopyUnavailable | null = null;
     for (const draft of drafts) {
       if (draft.content.type !== 'letter' || (draft.kind !== 'cover_letter' && draft.kind !== 'motivation_letter')) continue;
       const verdict = await verifyDraft(draft, artifacts);
       if (!verdict.ok) {
-        letterUnavailable = verdict.reason;
+        failed ??= verdict.reason;
         continue;
       }
       const text = normalizeLetterBody(draft.content.body);
-      if (text.length === 0 || text.length > APPLY_COPY_LIMITS.letterChars) continue;
+      if (text.length === 0 || text.length > APPLY_COPY_LIMITS.letterChars) {
+        failed ??= 'changed';
+        continue;
+      }
       letters.push({ kind: draft.kind, text, version: draft.version, artifactHash: draft.artifactHash });
     }
-    if (letters.length > 0) letterUnavailable = null;
+    letterUnavailable = failed ?? (letters.length === 0 ? 'no_draft' : null);
   }
 
   let contact: ApplyCopyView['contact'] = null;
