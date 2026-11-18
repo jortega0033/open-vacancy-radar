@@ -112,6 +112,32 @@ Strong TypeScript and modern frontend framework experience.`;
     ).toEqual([{ language: 'Spanish', obligation: 'preferred', quote: 'Spanish' }]);
   });
 
+  /**
+   * Scraped descriptions often keep their markdown. A heading written as "## About us" or
+   * "**About us**" is the same section break as the plain one, and a requirements heading written
+   * the same way opens the same context. Before this, "## about us" matched no heading rule at all,
+   * so a plain "Requirements" context leaked straight past it (#713, follow-up to the first fix).
+   */
+  it('reads markdown-styled headings like plain ones, so a requirements context cannot leak past "## About us"', () => {
+    const tail = 'Our team speaks German and English day to day.';
+
+    expect(detectLanguageRequirements(`Requirements\n- Strong TypeScript\n## About us\n${tail}`)).toEqual([]);
+    expect(detectLanguageRequirements(`Requirements\n- Strong TypeScript\n**About us**\n${tail}`)).toEqual([]);
+    expect(detectLanguageRequirements(`Requirements\n- Strong TypeScript\n# About us #\n${tail}`)).toEqual([]);
+    expect(detectLanguageRequirements(`## Requirements\n- Strong TypeScript\n## About us\n${tail}`)).toEqual([]);
+
+    // The same marker handling opens a context: a markdown requirements heading reads its bullets.
+    expect(detectLanguageRequirements('## Requirements\n- Spanish')).toEqual([
+      { language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' },
+    ]);
+    expect(detectLanguageRequirements('### Nice to have\n* Spanish')).toEqual([
+      { language: 'Spanish', obligation: 'preferred', quote: 'Spanish' },
+    ]);
+    expect(detectLanguageRequirements('- **Requirements**\n- Spanish')).toEqual([
+      { language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' },
+    ]);
+  });
+
   it('never lets a section-break heading create context of its own', () => {
     // The reset only ends a context. On its own, "Responsibilities" leaves a bare bullet unreported,
     // exactly as it did before #713.

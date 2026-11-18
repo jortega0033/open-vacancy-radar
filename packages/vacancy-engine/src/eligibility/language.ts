@@ -118,10 +118,24 @@ const PREFERENCE_HEADING =
 const SECTION_BREAK_HEADING =
   /^(?:about (?:us|the (?:company|team|role|job|position))|who we are|our (?:team|company|story|culture|mission|values)|benefits|benefits(?: and | & )perks|perks(?:(?: and | & )benefits)?|what we offer|we offer|compensation(?:(?: and | & )benefits)?|salary(?:(?: and | & )benefits)?|how to apply|application(?: process)?|apply(?: now)?|interview process|hiring process|equal opportunity(?: employer)?|diversity(?:(?: and | & )inclusion)?|location|about this role|the role|responsibilities|what you(?:'|’)?ll do|what you will do|your role|the job)\s*:?$/u;
 
+/**
+ * Markdown survives into many scraped descriptions. A heading written as "## About us",
+ * "**Requirements**" or "- **Nice to have**" has to be read as the same heading as its plain-text
+ * form, otherwise the heading rules above see "## about us" and match nothing: a requirements
+ * context then leaks straight past a markdown "About us" into whatever follows it (issue #713).
+ * Only the line's own markers are removed; the words are untouched.
+ */
+function stripMarkdownLineMarkers(rawLine: string): string {
+  // A bullet `*` needs a following space, so the opening `**` of a bold heading is left alone.
+  const unprefixed = rawLine.replace(/^\s*(?:#{1,6}\s*|[-•]\s*|\*\s+)+/u, '').trim();
+  const line = /^#{1,6}\s/u.test(rawLine.trim()) ? unprefixed.replace(/\s+#+$/u, '') : unprefixed;
+  return line.replace(/^(\*\*|__|\*|_)(.+)\1$/u, '$2').trim();
+}
+
 function sentencesOf(text: string): string[] {
   const out: string[] = [];
   for (const rawLine of plainText(text).split('\n')) {
-    const line = rawLine.replace(/^\s*[-*•]\s*/u, '').trim();
+    const line = stripMarkdownLineMarkers(rawLine);
     if (line.length === 0) continue;
     for (const sentence of line.split(/(?<=[.!?;])\s+|\s+•\s+/u)) {
       const trimmed = sentence.trim();

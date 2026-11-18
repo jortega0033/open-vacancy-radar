@@ -32,7 +32,7 @@ Evidence date: 2026-10-30, against `master` at `d31a4b88` (after #693 merged in 
 > Nothing outside these appears in the diff: L01, L02, L03, L04, L05, every non-language case, the option-B columns,
 > retrieval, pre-classification, the unsupported-family section and the invariances are byte-identical.
 >
-> Of the `path:line` citations below, only the two into `language.ts` moved (137 → 156 and 145 → 164); they were
+> Of the `path:line` citations below, only the two into `language.ts` moved (137 → 170 and 145 → 178); they were
 > re-pointed so they resolve against current `master`. Every other citation is still the `d31a4b88` line.
 
 ## Decision (ADR)
@@ -483,8 +483,8 @@ Nothing in #412, #634 or #686 is modified by this PR.
   eligibility `no` — a fabricated eligibility mismatch. `detectLanguageRequirements` now ends an inherited requirement or
   preference context at a closed vocabulary of unrelated section headings ("About us", "Benefits", "How to apply", …), which
   is why L06 answers `unknown`. A heading absent from that vocabulary keeps the old behaviour, so the list can only ever
-  remove invented requirements. The detector is `packages/vacancy-engine/src/eligibility/language.ts:156` (heading state at
-  `packages/vacancy-engine/src/eligibility/language.ts:164`), with regression cases in
+  remove invented requirements. The detector is `packages/vacancy-engine/src/eligibility/language.ts:170` (heading state at
+  `packages/vacancy-engine/src/eligibility/language.ts:178`), with regression cases in
   `packages/vacancy-engine/test/eligibility/language.test.ts`.
   - **Known limitation, left open on purpose: L03.** An unclear sentence that follows a requirements list with *no* heading
     of any kind in between still inherits "mandatory", so L03 still answers `no` and still caps at 45. The section-break rule
@@ -495,7 +495,7 @@ Nothing in #412, #634 or #686 is modified by this PR.
   "engineer in test" is not read as QA. This is a small deterministic fix within frontend scope, with F08 and N02 as regression
   cases.
 - **Maintenance note.** A follow-up moves lines this memo cites. #713 already did (`language.ts:137`/`145` became
-  `156`/`164`); #714 will, for example `relevance.ts:67`. When that happens, update the `path:line` citations here and the
+  `170`/`178`); #714 will, for example `relevance.ts:67`. When that happens, update the `path:line` citations here and the
   `ANCHORS` table in `apps/desktop/test/role-scope-research/doc-references.test.ts` in the same PR. That test fails on
   purpose when an anchor moves.
 - **Not filed:**
