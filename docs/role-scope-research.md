@@ -22,7 +22,7 @@ Evidence date: 2026-10-30, against `master` at `d31a4b88` (after #693 merged in 
 >   profile and still holds there.
 > - **Counts L06 feeds**: relevant-below-threshold 6 → 5, P1 discordant pairs 5 → 4 (`L06>N02` gone, the other four
 >   unchanged), language-capped rows 3 → 2, and the pairwise-excluding-capped denominators that follow from one fewer
->   excluded row (P1 80 → 84 pairs, 77 → 81 concordant; P0 7 → 8 and 7 → 8).
+>   excluded row (P1 80 → 84 pairs and 77 → 81 concordant; P0 7 → 8 pairs and 7 → 8 concordant).
 > - **Ranking position**: L06 rises from rank 24 to rank 9 in P1 and from rank 10 to rank 7 in P0, which shifts the rows
 >   between those positions down by one. Top-k quality is unchanged (10/10 relevant at k=10; 19 + 1 at k=20).
 > - **`usage.currentEvaluatorCalls` 258 → 257**: an artefact of the harness, not of production. `scorerSummary` calls the
@@ -494,9 +494,10 @@ Nothing in #412, #634 or #686 is modified by this PR.
 - **#714: frontend vocabulary and test-role boundary** (F08, N02). The title rule and concept list have no Vue/Nuxt/Svelte, and
   "engineer in test" is not read as QA. This is a small deterministic fix within frontend scope, with F08 and N02 as regression
   cases.
-- **Maintenance note for both.** They will move lines this memo cites (for example `relevance.ts:67`, `language.ts:156`). When
-  they do, update the `path:line` citations here and the `ANCHORS` table in
-  `apps/desktop/test/role-scope-research/doc-references.test.ts` in the same PR. That test fails on purpose when an anchor moves.
+- **Maintenance note.** A follow-up moves lines this memo cites. #713 already did (`language.ts:137`/`145` became
+  `156`/`164`); #714 will, for example `relevance.ts:67`. When that happens, update the `path:line` citations here and the
+  `ANCHORS` table in `apps/desktop/test/role-scope-research/doc-references.test.ts` in the same PR. That test fails on
+  purpose when an anchor moves.
 - **Not filed:**
   - backend or any other family support (no-go, §8)
   - an AI comparator (#412 owns it)
