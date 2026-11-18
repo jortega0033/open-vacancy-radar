@@ -99,6 +99,39 @@ Strong TypeScript and modern frontend framework experience.`;
     ).toEqual([]);
   });
 
+  /**
+   * Issue #713, third pass. Reading markdown headings as plain ones closes the vocabulary cases
+   * ("## About us"), but a posting is free to title its sections anything: "## Our stack",
+   * "**Life at Acme**". Those are in no vocabulary and would still carry a Requirements context
+   * into whatever follows, which is the original defect with different words in the heading.
+   */
+  it('ends an inherited heading at a marked-up heading of any wording', () => {
+    const body = 'Requirements\n- Strong TypeScript';
+    const unclear = 'Our team speaks German and English day to day.';
+
+    for (const sectionHeading of ['## Our stack', '### Life at Acme', '**Life at Acme**', '- **Life at Acme**']) {
+      expect(detectLanguageRequirements(`${body}\n${sectionHeading}\n${unclear}`)).toEqual([]);
+    }
+
+    // The markup is the signal, so a line with no markup is left alone: this is not a "short line"
+    // heuristic, and the plain-text layout rule (L03, below) is untouched by it.
+    expect(detectLanguageRequirements(`${body}\nOur stack\n${unclear}`)).toEqual([
+      { language: 'English', obligation: 'mandatory', quote: expect.any(String) },
+      { language: 'German', obligation: 'mandatory', quote: expect.any(String) },
+    ]);
+  });
+
+  it('still reads the words of a marked-up heading that states an obligation itself', () => {
+    // Ending the context must not swallow the heading's own sentence: a requirement written as a
+    // heading is still a requirement.
+    expect(detectLanguageRequirements('Requirements\n- Strong TypeScript\n## Fluent German is required')).toEqual([
+      { language: 'German', obligation: 'mandatory', quote: expect.stringContaining('required') },
+    ]);
+    expect(detectLanguageRequirements('Requirements\n- Strong TypeScript\n**German is a plus**')).toEqual([
+      { language: 'German', obligation: 'preferred', quote: expect.stringContaining('plus') },
+    ]);
+  });
+
   it('still reads a bare language bullet through its own heading after a section break', () => {
     // The reset ends a heading's reach; it must not stop a later heading from starting one.
     expect(

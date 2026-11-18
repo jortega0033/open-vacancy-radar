@@ -132,14 +132,28 @@ function stripMarkdownLineMarkers(rawLine: string): string {
   return line.replace(/^(\*\*|__|\*|_)(.+)\1$/u, '$2').trim();
 }
 
-function sentencesOf(text: string): string[] {
-  const out: string[] = [];
+/** True for a line whose own markers say "heading": "## About us", "**About us**", "__About us__". */
+function isMarkedUpHeadingLine(rawLine: string): boolean {
+  const line = rawLine.trim();
+  if (/^#{1,6}\s/u.test(line)) return true;
+  return /^(?:\*\*|__)(?:[^*_]|\*(?!\*)|_(?!_))+(?:\*\*|__)$/u.test(line.replace(/^\s*[-•]\s*/u, ''));
+}
+
+type Sentence = {
+  text: string;
+  /** Whether the line this came from was marked up as a heading, whatever its wording. */
+  markedUpHeading: boolean;
+};
+
+function sentencesOf(text: string): Sentence[] {
+  const out: Sentence[] = [];
   for (const rawLine of plainText(text).split('\n')) {
     const line = stripMarkdownLineMarkers(rawLine);
     if (line.length === 0) continue;
+    const markedUpHeading = isMarkedUpHeadingLine(rawLine);
     for (const sentence of line.split(/(?<=[.!?;])\s+|\s+•\s+/u)) {
       const trimmed = sentence.trim();
-      if (trimmed.length > 0) out.push(trimmed);
+      if (trimmed.length > 0) out.push({ text: trimmed, markedUpHeading });
     }
   }
   return out;
@@ -172,7 +186,7 @@ export function detectLanguageRequirements(text: string | null | undefined): Lan
   const found = new Map<string, LanguageRequirement>();
   let heading: LanguageObligation | null = null;
 
-  for (const sentence of sentencesOf(text)) {
+  for (const { text: sentence, markedUpHeading } of sentencesOf(text)) {
     const normalized = normalizeForMatching(sentence);
     if (REQUIREMENT_HEADING.test(normalized)) {
       heading = 'mandatory';
@@ -186,6 +200,13 @@ export function detectLanguageRequirements(text: string | null | undefined): Lan
       // An unrelated section ends the previous heading's reach; it does not start a new one.
       heading = null;
       continue;
+    }
+    if (markedUpHeading) {
+      // A heading whose wording is in no vocabulary ("## Our stack", "**Life at Acme**") ends the
+      // reach too: its own markup says it starts a new section, which is a structural fact and not
+      // the "short line without a full stop" guess #713 ruled out. No `continue`, so a heading that
+      // states an obligation itself ("## Fluent German is required") is still read below.
+      heading = null;
     }
 
     const languages = LANGUAGE_PATTERNS.filter(({ pattern }) => pattern.test(normalized)).map(
