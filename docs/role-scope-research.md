@@ -30,8 +30,10 @@ Evidence date: 2026-10-30, against `master` at `d31a4b88` (after #693 merged in 
 >   (`apps/desktop/test/role-scope-research/evaluate.ts:242`), and that list lost L06.
 >
 > Nothing outside these appears in the diff: L01, L02, L03, L04, L05, every non-language case, the option-B columns,
-> retrieval, pre-classification, the unsupported-family section and the invariances are byte-identical. `path:line` citations below were re-pointed at
-> the post-#713 line numbers, so they resolve against current `master` rather than `d31a4b88`.
+> retrieval, pre-classification, the unsupported-family section and the invariances are byte-identical.
+>
+> Of the `path:line` citations below, only the two into `language.ts` moved (137 → 156 and 145 → 164); they were
+> re-pointed so they resolve against current `master`. Every other citation is still the `d31a4b88` line.
 
 ## Decision (ADR)
 
@@ -209,7 +211,7 @@ in-process call per (case, profile). No network, model, provider, file I/O, cach
 | S02 | Frontend Engineer ("Join our team.") | 68 | 96 | 35 | one line | same |
 | L01 | Senior Frontend Engineer + "Fluent German is required." | 45 | 96 | 82 | mandatory-language cap | **Correct eligibility gate**, not a role error |
 | L03 | same body + unclear "Our team speaks German…" after the Requirements list | 45 | 96 | 82 | cap from an inherited Requirements heading | Debatable: the author reads no obligation |
-| L06 | same sentence under a later "About us" heading | 45 | 96 | 82 | cap: the heading context does not reset at "About us" | **Language-detection defect** (§10), invents an eligibility "no". **Fixed by #713: now 90, no cap, and no longer in this table.** |
+| L06 | same sentence under a later "About us" heading | 45 | 96 | 82 | cap: the heading context does not reset at "About us" | **Language-detection defect** (§10), invents an eligibility "no". **Fixed by #713: now 90 and uncapped; kept here as the pre-fix record.** |
 
 **Correct frontend controls.** F01–F07, F09–F11, L02, L04, L05, E01–E03, R01, R03 and D01 score 78–98 (L06 joined them at 90 after #713). That covers
 UI Developer (82), Client-side (78), Web Engineer (88), Frontend-Entwickler (88) and Frontend ontwikkelaar (84). The hard negatives
