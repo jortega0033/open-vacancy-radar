@@ -105,14 +105,60 @@ const REQUIREMENT_HEADING =
 const PREFERENCE_HEADING =
   /^(?:nice to have|nice[- ]to[- ]haves|preferred(?: qualifications)?|bonus(?: points)?|good to have|desirable|pluses|extra credit)\s*:?$/u;
 
-function sentencesOf(text: string): string[] {
-  const out: string[] = [];
+/**
+ * Headings that end an inherited requirement/preference context without starting one of their own
+ * (issue #713). Without this, a bare language mention under a later "About us" section inherits the
+ * "mandatory" state from a Requirements list several screens above it, and an unclear sentence that
+ * states no obligation at all is turned into an eligibility "no".
+ *
+ * This list is deliberately a closed vocabulary of the unrelated sections postings actually use,
+ * not a general "short line without a full stop is a heading" rule. A heading absent from it simply
+ * keeps today's behaviour, so extending the list can only ever remove invented requirements.
+ */
+const SECTION_BREAK_HEADING =
+  /^(?:about (?:us|the (?:company|team|role|job|position))|who we are|our (?:team|company|story|culture|mission|values)|benefits|benefits(?: and | & )perks|perks(?:(?: and | & )benefits)?|what we offer|we offer|compensation(?:(?: and | & )benefits)?|salary(?:(?: and | & )benefits)?|how to apply|application(?: process)?|apply(?: now)?|interview process|hiring process|equal opportunity(?: employer)?|diversity(?:(?: and | & )inclusion)?|location|about this role|the role|responsibilities|what you(?:'|’)?ll do|what you will do|your role|the job)\s*:?$/u;
+
+/**
+ * Markdown survives into many scraped descriptions. A heading written as "## About us",
+ * "**Requirements**" or "- **Nice to have**" has to be read as the same heading as its plain-text
+ * form, otherwise the heading rules above see "## about us" and match nothing: a requirements
+ * context then leaks straight past a markdown "About us" into whatever follows it (issue #713).
+ * Only the line's own markers are removed; the words are untouched.
+ */
+function stripMarkdownLineMarkers(rawLine: string): string {
+  // A bullet `*` needs a following space, so the opening `**` of a bold heading is left alone.
+  const unprefixed = rawLine.replace(/^\s*(?:#{1,6}\s*|[-•]\s*|\*\s+)+/u, '').trim();
+  const line = /^#{1,6}\s/u.test(rawLine.trim()) ? unprefixed.replace(/\s+#+$/u, '') : unprefixed;
+  return line.replace(/^(\*\*|__|\*|_)(.+)\1$/u, '$2').trim();
+}
+
+/**
+ * True for a line whose own markers say "heading": "## About us", "**About us**", "__About us__".
+ * A bullet is never one, whatever its emphasis: "- **Spanish**" under Requirements is a list item
+ * in bold, and reading it as a section heading would drop the context for it and every bullet after.
+ */
+function isMarkedUpHeadingLine(rawLine: string): boolean {
+  const line = rawLine.trim();
+  if (/^#{1,6}\s/u.test(line)) return true;
+  if (/^[-*•]\s/u.test(line)) return false;
+  return /^(?:\*\*|__)(?:[^*_]|\*(?!\*)|_(?!_))+(?:\*\*|__)$/u.test(line);
+}
+
+type Sentence = {
+  text: string;
+  /** Whether the line this came from was marked up as a heading, whatever its wording. */
+  markedUpHeading: boolean;
+};
+
+function sentencesOf(text: string): Sentence[] {
+  const out: Sentence[] = [];
   for (const rawLine of plainText(text).split('\n')) {
-    const line = rawLine.replace(/^\s*[-*•]\s*/u, '').trim();
+    const line = stripMarkdownLineMarkers(rawLine);
     if (line.length === 0) continue;
+    const markedUpHeading = isMarkedUpHeadingLine(rawLine);
     for (const sentence of line.split(/(?<=[.!?;])\s+|\s+•\s+/u)) {
       const trimmed = sentence.trim();
-      if (trimmed.length > 0) out.push(trimmed);
+      if (trimmed.length > 0) out.push({ text: trimmed, markedUpHeading });
     }
   }
   return out;
@@ -133,13 +179,19 @@ function quoteOf(sentence: string): string {
  * above it produces nothing at all. That is the deliberate direction to fail in: inventing a
  * mandatory requirement out of an incidental mention would gate a vacancy on something nobody
  * asked for, while missing one leaves the vacancy exactly where it already was, reviewable.
+ *
+ * Known limitation (#713, corpus case L03): heading context still reaches an unclear sentence that
+ * follows a requirements list directly, with no heading of any kind in between -- "Requirements /
+ * ... / Our team speaks German and English day to day." is read as mandatory German. That is the
+ * posting's own layout speaking, and narrowing it means dropping heading inheritance altogether,
+ * which is the behaviour that reads a bare "- Spanish" bullet correctly. Left as is on purpose.
  */
 export function detectLanguageRequirements(text: string | null | undefined): LanguageRequirement[] {
   if (!text) return [];
   const found = new Map<string, LanguageRequirement>();
   let heading: LanguageObligation | null = null;
 
-  for (const sentence of sentencesOf(text)) {
+  for (const { text: sentence, markedUpHeading } of sentencesOf(text)) {
     const normalized = normalizeForMatching(sentence);
     if (REQUIREMENT_HEADING.test(normalized)) {
       heading = 'mandatory';
@@ -148,6 +200,18 @@ export function detectLanguageRequirements(text: string | null | undefined): Lan
     if (PREFERENCE_HEADING.test(normalized)) {
       heading = 'preferred';
       continue;
+    }
+    if (SECTION_BREAK_HEADING.test(normalized)) {
+      // An unrelated section ends the previous heading's reach; it does not start a new one.
+      heading = null;
+      continue;
+    }
+    if (markedUpHeading) {
+      // A heading whose wording is in no vocabulary ("## Our stack", "**Life at Acme**") ends the
+      // reach too: its own markup says it starts a new section, which is a structural fact and not
+      // the "short line without a full stop" guess #713 ruled out. No `continue`, so a heading that
+      // states an obligation itself ("## Fluent German is required") is still read below.
+      heading = null;
     }
 
     const languages = LANGUAGE_PATTERNS.filter(({ pattern }) => pattern.test(normalized)).map(

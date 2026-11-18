@@ -74,6 +74,151 @@ describe('detectLanguageRequirements', () => {
     ]);
   });
 
+  /**
+   * Issue #713. The corpus body these mirror is `apps/desktop/test/role-scope-research/fixtures.ts`
+   * (cases L05 and L06): the same unclear sentence, which states no obligation at all, before any
+   * heading and then under a later "About us" heading. Both have to stay unreported, otherwise the
+   * candidate gets an eligibility "no" and a 45 score cap for a requirement nobody wrote down.
+   */
+  it('does not carry a requirements heading past an unrelated section heading', () => {
+    const body = `Responsibilities
+Build and maintain accessible web applications in TypeScript.
+Requirements
+Strong TypeScript and modern frontend framework experience.`;
+
+    // L05: the unclear sentence before any heading has never been reported.
+    expect(
+      detectLanguageRequirements(`Our team speaks German and English day to day.\n${body}`),
+    ).toEqual([]);
+
+    // L06: the same sentence under a later "About us" heading must not inherit "Requirements".
+    expect(
+      detectLanguageRequirements(
+        `${body}\nAbout us\nOur team speaks German and English day to day.`,
+      ),
+    ).toEqual([]);
+  });
+
+  /**
+   * Issue #713, third pass. Reading markdown headings as plain ones closes the vocabulary cases
+   * ("## About us"), but a posting is free to title its sections anything: "## Our stack",
+   * "**Life at Acme**". Those are in no vocabulary and would still carry a Requirements context
+   * into whatever follows, which is the original defect with different words in the heading.
+   */
+  it('ends an inherited heading at a marked-up heading of any wording', () => {
+    const body = 'Requirements\n- Strong TypeScript';
+    const unclear = 'Our team speaks German and English day to day.';
+
+    for (const sectionHeading of ['## Our stack', '### Life at Acme', '**Life at Acme**', '__Life at Acme__']) {
+      expect(detectLanguageRequirements(`${body}\n${sectionHeading}\n${unclear}`)).toEqual([]);
+    }
+
+    // The markup is the signal, so a line with no markup is left alone: this is not a "short line"
+    // heuristic, and the plain-text layout rule (L03, below) is untouched by it.
+    expect(detectLanguageRequirements(`${body}\nOur stack\n${unclear}`)).toEqual([
+      { language: 'English', obligation: 'mandatory', quote: expect.any(String) },
+      { language: 'German', obligation: 'mandatory', quote: expect.any(String) },
+    ]);
+  });
+
+  it('never reads a bold bullet as a heading, so bold list items keep their requirements context', () => {
+    // "- **Spanish**" is a list item in bold, not a section title. Treating it as a heading would
+    // drop the context for it and for every plain bullet after it.
+    expect(detectLanguageRequirements('Requirements\n- **Spanish**\n- German\n- 5 years')).toEqual([
+      { language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' },
+      { language: 'German', obligation: 'mandatory', quote: 'German' },
+    ]);
+    expect(detectLanguageRequirements('Nice to have\n* **Spanish**')).toEqual([
+      { language: 'Spanish', obligation: 'preferred', quote: 'Spanish' },
+    ]);
+    // A bold bullet whose words are a vocabulary heading still acts as that heading.
+    expect(detectLanguageRequirements('Requirements\n- Strong TypeScript\n- **About us**\nOur team speaks German and English day to day.')).toEqual([]);
+  });
+
+  it('still reads the words of a marked-up heading that states an obligation itself', () => {
+    // Ending the context must not swallow the heading's own sentence: a requirement written as a
+    // heading is still a requirement.
+    expect(detectLanguageRequirements('Requirements\n- Strong TypeScript\n## Fluent German is required')).toEqual([
+      { language: 'German', obligation: 'mandatory', quote: expect.stringContaining('required') },
+    ]);
+    expect(detectLanguageRequirements('Requirements\n- Strong TypeScript\n**German is a plus**')).toEqual([
+      { language: 'German', obligation: 'preferred', quote: expect.stringContaining('plus') },
+    ]);
+  });
+
+  it('still reads a bare language bullet through its own heading after a section break', () => {
+    // The reset ends a heading's reach; it must not stop a later heading from starting one.
+    expect(
+      detectLanguageRequirements(`Requirements\n- Spanish\nBenefits\nA learning budget.`),
+    ).toEqual([{ language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' }]);
+
+    expect(
+      detectLanguageRequirements(
+        `Requirements\n- 5 years of experience\nAbout us\nWe are remote.\nNice to have\n- Spanish`,
+      ),
+    ).toEqual([{ language: 'Spanish', obligation: 'preferred', quote: 'Spanish' }]);
+  });
+
+  /**
+   * Scraped descriptions often keep their markdown. A heading written as "## About us" or
+   * "**About us**" is the same section break as the plain one, and a requirements heading written
+   * the same way opens the same context. Before this, "## about us" matched no heading rule at all,
+   * so a plain "Requirements" context leaked straight past it (#713, follow-up to the first fix).
+   */
+  it('reads markdown-styled headings like plain ones, so a requirements context cannot leak past "## About us"', () => {
+    const tail = 'Our team speaks German and English day to day.';
+
+    expect(detectLanguageRequirements(`Requirements\n- Strong TypeScript\n## About us\n${tail}`)).toEqual([]);
+    expect(detectLanguageRequirements(`Requirements\n- Strong TypeScript\n**About us**\n${tail}`)).toEqual([]);
+    expect(detectLanguageRequirements(`Requirements\n- Strong TypeScript\n# About us #\n${tail}`)).toEqual([]);
+    expect(detectLanguageRequirements(`## Requirements\n- Strong TypeScript\n## About us\n${tail}`)).toEqual([]);
+
+    // The same marker handling opens a context: a markdown requirements heading reads its bullets.
+    expect(detectLanguageRequirements('## Requirements\n- Spanish')).toEqual([
+      { language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' },
+    ]);
+    expect(detectLanguageRequirements('### Nice to have\n* Spanish')).toEqual([
+      { language: 'Spanish', obligation: 'preferred', quote: 'Spanish' },
+    ]);
+    expect(detectLanguageRequirements('- **Requirements**\n- Spanish')).toEqual([
+      { language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' },
+    ]);
+  });
+
+  it('never lets a section-break heading create context of its own', () => {
+    // The reset only ends a context. On its own, "Responsibilities" leaves a bare bullet unreported,
+    // exactly as it did before #713.
+    expect(detectLanguageRequirements('Responsibilities\n- Spanish\n- Ship features')).toEqual([]);
+    expect(detectLanguageRequirements('About us\n- Spanish')).toEqual([]);
+  });
+
+  it('keeps an in-sentence obligation marker working inside an unrelated section', () => {
+    // Only bare mentions depend on heading context; a stated obligation is read wherever it is.
+    expect(
+      detectLanguageRequirements(`About us\nWe are a small team and fluent German is required.`),
+    ).toEqual([
+      { language: 'German', obligation: 'mandatory', quote: expect.stringContaining('required') },
+    ]);
+  });
+
+  /**
+   * Issue #713 decided not to narrow this. With no heading of any kind between the requirements
+   * list and the sentence, the posting's own layout puts the sentence in the requirements section,
+   * and removing that reading means dropping heading inheritance, which the bullet test above pins.
+   * Documented as a known limitation on `detectLanguageRequirements`; revisit with fresh evidence.
+   */
+  it('still inherits a requirements heading for a sentence with no intervening heading (L03)', () => {
+    expect(
+      detectLanguageRequirements(
+        `Requirements\nStrong TypeScript experience.\nOur team speaks German and English day to day.`,
+      ),
+    ).toEqual([
+      // Vocabulary order, not posting order: `LANGUAGE_TERMS` is alphabetical.
+      { language: 'English', obligation: 'mandatory', quote: expect.any(String) },
+      { language: 'German', obligation: 'mandatory', quote: expect.any(String) },
+    ]);
+  });
+
   it('never invents a requirement from an incidental mention', () => {
     expect(
       detectLanguageRequirements('Our team is spread across France, and we love French food.'),

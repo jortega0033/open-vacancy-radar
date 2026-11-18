@@ -5,6 +5,36 @@ Evidence date: 2026-10-30, against `master` at `d31a4b88` (after #693 merged in 
 `docs/research/role-scope/694-evaluation.json`, which the test byte-compares. Source citations are
 `path:line` at that commit.
 
+> **Update 2026-11-18 (#713 landed).** The language-detection defect this memo recorded in §10 is fixed: heading
+> context no longer reaches past an unrelated section heading, so **L06 now scores 90 and answers `unknown`**, as the
+> fixture author expected. The committed evaluation JSON was regenerated and now reflects the fixed code; §5 numbers
+> below are the **2026-10-30 pre-#713 results** and are kept as the record this decision was made on, each affected
+> figure marked inline. L03 is unchanged on purpose; see §10.
+>
+> The regenerated JSON was diffed field by field against its previous form. **Every difference is L06 or a figure L06
+> feeds**; with L06's entries removed from both, the two files are equal except for the aggregates below. In full:
+>
+> - **L06's own row**, frontend profile: 45 → 90, `below_threshold` → `at_or_above_threshold`, `unmetMandatoryLanguages`
+>   `["German"]` → `[]`, eligibility `no` → `unknown`, `eligibilityAsExpected` false → true.
+> - **L06's own row, backend-research profile**: 45 → 88. L06 is graded `not_relevant` for that profile, so it joins that
+>   profile's not-relevant-at-or-above-70 list (19 → 20 entries). This is the same cap lifting, seen from the research
+>   profile; it is not a second behaviour change, and §5.1's "no not-relevant case reaches 70" is about the frontend
+>   profile and still holds there.
+> - **Counts L06 feeds**: relevant-below-threshold 6 → 5, P1 discordant pairs 5 → 4 (`L06>N02` gone, the other four
+>   unchanged), language-capped rows 3 → 2, and the pairwise-excluding-capped denominators that follow from one fewer
+>   excluded row (P1 80 → 84 pairs and 77 → 81 concordant; P0 7 → 8 pairs and 7 → 8 concordant).
+> - **Ranking position**: L06 rises from rank 24 to rank 9 in P1 and from rank 10 to rank 7 in P0, which shifts the rows
+>   between those positions down by one. Top-k quality is unchanged (10/10 relevant at k=10; 19 + 1 at k=20).
+> - **`usage.currentEvaluatorCalls` 258 → 257**: an artefact of the harness, not of production. `scorerSummary` calls the
+>   scorer one extra time per relevant-below-threshold row to label its cause
+>   (`apps/desktop/test/role-scope-research/evaluate.ts:242`), and that list lost L06.
+>
+> Nothing outside these appears in the diff: L01, L02, L03, L04, L05, every non-language case, the option-B columns,
+> retrieval, pre-classification, the unsupported-family section and the invariances are byte-identical.
+>
+> Of the `path:line` citations below, only the two into `language.ts` moved (137 → 189 and 145 → 197); they were
+> re-pointed so they resolve against current `master`. Every other citation is still the `d31a4b88` line.
+
 ## Decision (ADR)
 
 **Status:** Accepted for this delivery. The user chose "keep frontend focus" on 2026-10-28, and this research
@@ -31,7 +61,7 @@ never to decide what a good role is. So a backend or data target gets a frontend
   - A person whose targets are not frontend still gets a frontend-shaped ordering. The product already states
     "frontend-only" (`README.md:25`), and the score breakdown's reasons already name frontend evidence. §7.2 is the contract any
     future change to target-role input must keep.
-  - Two gaps found here stay open until their own small fixes land: #713 and #714 (§10).
+  - Two gaps found here stayed open after this research: #713 (fixed 2026-11-18, except its L03 limitation) and #714 (§10).
 - Reversible: option B is a self-contained research module with versioned explanations. If the conditions in §8 are ever met, it can be revisited without undoing anything shipped.
 
 ## What is in this PR
@@ -167,7 +197,7 @@ in-process call per (case, profile). No network, model, provider, file I/O, cach
 
 | Fixture grade | Current: at/above 70 | Current: below 70 | Option B: match | adjacent | mismatch | uncertain |
 |---|---|---|---|---|---|---|
-| relevant (25) | 19 | **6**: F08, S01, S02, L01, L03, L06 | 25 | 0 | 0 | 0 |
+| relevant (25) | 19 *(now 20)* | **6**: F08, S01, S02, L01, L03, L06 *(pre-#713; now 5 — L06 scores 90)* | 25 | 0 | 0 | 0 |
 | adjacent (3) | 2: M01, M03 | 1: M04 | 0 | 2 | 0 | 1: M04 |
 | not_relevant (17) | 0 | 17 | **3**: N02, N03, N04 | 0 | 14 | 0 |
 | unlabelled (1) | S03 = 41 | | | | | S03 |
@@ -181,9 +211,9 @@ in-process call per (case, profile). No network, model, provider, file I/O, cach
 | S02 | Frontend Engineer ("Join our team.") | 68 | 96 | 35 | one line | same |
 | L01 | Senior Frontend Engineer + "Fluent German is required." | 45 | 96 | 82 | mandatory-language cap | **Correct eligibility gate**, not a role error |
 | L03 | same body + unclear "Our team speaks German…" after the Requirements list | 45 | 96 | 82 | cap from an inherited Requirements heading | Debatable: the author reads no obligation |
-| L06 | same sentence under a later "About us" heading | 45 | 96 | 82 | cap: the heading context does not reset at "About us" | **Language-detection defect** (§10), invents an eligibility "no" |
+| L06 | same sentence under a later "About us" heading | 45 | 96 | 82 | cap: the heading context does not reset at "About us" | **Language-detection defect** (§10), invents an eligibility "no". **Fixed by #713: now 90 and uncapped; kept here as the pre-fix record.** |
 
-**Correct frontend controls.** F01–F07, F09–F11, L02, L04, L05, E01–E03, R01, R03 and D01 score 78–98. That covers
+**Correct frontend controls.** F01–F07, F09–F11, L02, L04, L05, E01–E03, R01, R03 and D01 score 78–98 (L06 joined them at 90 after #713). That covers
 UI Developer (82), Client-side (78), Web Engineer (88), Frontend-Entwickler (88) and Frontend ontwikkelaar (84). The hard negatives
 N01 (29), N03 manager (28) and N04 Unity (38) are correctly low. **No not-relevant case reaches 70.** The one misleading
 case is N02 "Senior UI Engineer in Test" at 69, read as frontend (role fit 96) because the QA title rule does not cover
@@ -235,10 +265,12 @@ well as from the scorer's QA rule (#714).
 |---|---|---|---|---|
 | Current evaluator | 86 | 1 | 5 | F08>N02, S02>N02, L01>N02, L03>N02, L06>N02. Tied: S01=N02 |
 | Current, excluding the 3 language-capped rows | 77 of 80 | 1 | 2 | F08>N02, S02>N02 |
+| *Current, post-#713 (L06 no longer capped)* | *87* | *1* | *4* | *F08>N02, S02>N02, L01>N02, L03>N02. Excluding the 2 capped rows: 81 of 84, 2 discordant* |
 | Option B | 74 | **18** | 0 | ties between the six low-confidence relevant cases (F11, S01, S02, L04, R01, R03) and N02/N03/N04 |
 
 - **Top-k.** Both put 10/10 relevant in the top 10. In the top 20, both have 19 relevant and 1 not-relevant (current: N02 at rank 19; B: N03).
-- **Every current discordance involves N02.** The language-capped pairs are eligibility, not role order.
+  *Post-#713: unchanged in kind — still 10/10 and 19 + 1 — but L06 rises from rank 24 to rank 9, which moves N02 from rank 19 to rank 20.*
+- **Every current discordance involves N02.** The language-capped pairs are eligibility, not role order. #713 removed one of them (L06>N02) by removing the invented cap; the remaining four are unchanged.
 - **B's ties are not wins.** B avoids discordance only by tying uncertain relevant cases with confident-looking wrong matches.
 
 **P0 (frontend literal).** 11 retrieved, 10 pairs, all concordant for both. The literal plan's problem is retrieval, not order.
@@ -272,9 +304,9 @@ backend support. It is a reason for the product to state the boundary (§7.2).
 |---|---|---|---|---|---|
 | L01 | "Fluent German is required." | mandatory | no | 45 | no ✓ |
 | L02 | "German is a plus." | preferred | unknown | none | unknown ✓ |
-| L03 | unclear line after the Requirements list | mandatory (inherited heading) | no | 45 | unknown ✗ |
+| L03 | unclear line after the Requirements list | mandatory (inherited heading) | no | 45 | unknown ✗ *(unchanged by #713, on purpose — §10)* |
 | L05 | same line before any heading | none | unknown | none | unknown ✓ |
-| L06 | same line under a later "About us" heading | mandatory (heading not reset) | no | 45 | unknown ✗ |
+| L06 | same line under a later "About us" heading | ~~mandatory (heading not reset)~~ → **none** | ~~no~~ → **unknown** | ~~45~~ → **none** | unknown ✓ *(was ✗ before #713)* |
 | L04 | "Vloeiend Nederlands is vereist." (Dutch wording) | not detected (markers are English) | unknown | none | unknown, recorded as a detection limit |
 
 **Work country** (candidate country: Netherlands). E01 "United States only" gives `no`, E02 "fully remote" gives `unknown`, E03
@@ -307,7 +339,7 @@ research or in option B produces a legal or work-eligibility claim.
 
 | | Calls in one evaluation run | Network | Model | Tokens / cost |
 |---|---|---|---|---|
-| Current evaluator | 258 direct calls + 319 rows through the pipeline step | 0 | 0 | not applicable |
+| Current evaluator | 258 direct calls + 319 rows through the pipeline step *(post-#713: 257 direct calls; see the update note)* | 0 | 0 | not applicable |
 | Option B | 415 | 0 | 0 | not applicable |
 
 The outcome negative control (§5.7) accounts for 184 of the pipeline rows (46 cases × 2 profiles × clean and noised runs) and
@@ -446,16 +478,35 @@ Nothing in #412, #634 or #686 is modified by this PR.
 
 ## 10. Follow-ups (small, evidence-backed, outside the current queue)
 
-- **#713: language heading context leaks past unrelated headings** (L06, and arguably L03). An unclear language sentence under a later
-  "About us" heading is read as mandatory. It caps the score at 45 and reports eligibility `no`. That fabricates an eligibility
-  mismatch. The detector is `packages/vacancy-engine/src/eligibility/language.ts:137` (heading state at
-  `packages/vacancy-engine/src/eligibility/language.ts:145`).
+- **#713: language heading context leaks past unrelated headings** (L06, and arguably L03). ✅ **Fixed on 2026-11-18.**
+  An unclear language sentence under a later "About us" heading was read as mandatory, capping the score at 45 and reporting
+  eligibility `no` — a fabricated eligibility mismatch. `detectLanguageRequirements` now ends an inherited requirement or
+  preference context at a closed vocabulary of unrelated section headings ("About us", "Benefits", "How to apply", …), which
+  is why L06 answers `unknown`. A heading absent from that vocabulary keeps the old behaviour, so the list can only ever
+  remove invented requirements. The detector is `packages/vacancy-engine/src/eligibility/language.ts:189` (heading state at
+  `packages/vacancy-engine/src/eligibility/language.ts:197`), with regression cases in
+  `packages/vacancy-engine/test/eligibility/language.test.ts`.
+  - **Marked-up headings, found while reviewing the fix.** Descriptions reach the detector as markdown as well as HTML, and
+    `plainText` only unwraps the HTML, so "## About us" and "**About us**" arrived with their markup attached and no heading
+    rule matched them: the same leak survived untouched in any markdown posting. Markdown markers are now stripped per line,
+    so a marked-up heading reads as its plain form. On top of that, a marked-up heading of **any** wording ends an inherited
+    context, because a posting is free to title a section "## Our stack" or "**Life at Acme**", which no vocabulary can
+    enumerate. The markup is a structural signal, not the "short line without a full stop" guess this fix set out to avoid,
+    and the heading's own words are still read, so "## Fluent German is required" is still found. A bullet is never read as
+    such a heading, whatever its emphasis: "- **Spanish**" under Requirements is a bold list item, and it and the bullets
+    after it keep their context. A line with no markup is untouched, which is what leaves L03 exactly as it was.
+  - **Known limitation, left open on purpose: L03.** An unclear sentence that follows a requirements list with *no* heading
+    of any kind in between still inherits "mandatory", so L03 still answers `no` and still caps at 45. The section-break rule
+    cannot reach it: there is no section break to find. Narrowing it means dropping heading inheritance altogether, which is
+    the behaviour that reads a bare "- Spanish" bullet under "Requirements" correctly, and that trade needs its own evidence.
+    Recorded on `detectLanguageRequirements` and pinned by a test so the reading cannot change silently.
 - **#714: frontend vocabulary and test-role boundary** (F08, N02). The title rule and concept list have no Vue/Nuxt/Svelte, and
   "engineer in test" is not read as QA. This is a small deterministic fix within frontend scope, with F08 and N02 as regression
   cases.
-- **Maintenance note for both.** They will move lines this memo cites (for example `relevance.ts:67`, `language.ts:137`). When
-  they do, update the `path:line` citations here and the `ANCHORS` table in
-  `apps/desktop/test/role-scope-research/doc-references.test.ts` in the same PR. That test fails on purpose when an anchor moves.
+- **Maintenance note.** A follow-up moves lines this memo cites. #713 already did (`language.ts:137`/`145` became
+  `189`/`197`); #714 will, for example `relevance.ts:67`. When that happens, update the `path:line` citations here and the
+  `ANCHORS` table in `apps/desktop/test/role-scope-research/doc-references.test.ts` in the same PR. That test fails on
+  purpose when an anchor moves.
 - **Not filed:**
   - backend or any other family support (no-go, §8)
   - an AI comparator (#412 owns it)
