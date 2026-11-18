@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
  * than leaving the memo pointing at nothing.
  *
  * Maintenance: the anchors below are production line numbers at the memo's base commit. A later change that moves a
- * cited line (follow-ups #713 and #714 will, e.g. relevance.ts:67 and language.ts:137) must update the `path:line`
+ * cited line (#713 did, moving language.ts:137/145 to 158/166; #714 will, e.g. relevance.ts:67) must update the `path:line`
  * citation in docs/role-scope-research.md and the matching ANCHORS entry here in the same PR. This is expected
  * upkeep, not a sign the research is wrong.
  */
@@ -44,8 +44,8 @@ const ANCHORS: readonly [string, string][] = [
   ['packages/vacancy-engine/src/candidate/search-plan.ts:244', 'export function approveSearchPlanDraft'],
   ['packages/vacancy-engine/src/candidate/search-plan.ts:268', 'export function addSearchPlanSuggestions'],
   ['packages/vacancy-engine/src/candidate/search-plan.ts:322', 'export function captureSearchPlanSnapshot'],
-  ['packages/vacancy-engine/src/eligibility/language.ts:137', 'export function detectLanguageRequirements'],
-  ['packages/vacancy-engine/src/eligibility/language.ts:145', "heading = 'mandatory'"],
+  ['packages/vacancy-engine/src/eligibility/language.ts:158', 'export function detectLanguageRequirements'],
+  ['packages/vacancy-engine/src/eligibility/language.ts:166', "heading = 'mandatory'"],
   ['apps/desktop/electron/vacancy-scan-query.ts:135', 'export function scheduledScanQueryFromProfile'],
   ['apps/desktop/src/components/search/SearchPage.tsx:1055', 'currentProfileScanQuery'],
   ['apps/desktop/src/components/search/results.ts:723', 'export function sortSearchResultIndex'],

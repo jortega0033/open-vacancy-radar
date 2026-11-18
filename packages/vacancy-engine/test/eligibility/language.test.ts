@@ -74,6 +74,80 @@ describe('detectLanguageRequirements', () => {
     ]);
   });
 
+  /**
+   * Issue #713. The corpus body these mirror is `apps/desktop/test/role-scope-research/fixtures.ts`
+   * (cases L05 and L06): the same unclear sentence, which states no obligation at all, before any
+   * heading and then under a later "About us" heading. Both have to stay unreported, otherwise the
+   * candidate gets an eligibility "no" and a 45 score cap for a requirement nobody wrote down.
+   */
+  it('does not carry a requirements heading past an unrelated section heading', () => {
+    const body = `Responsibilities
+Build and maintain accessible web applications in TypeScript.
+Requirements
+Strong TypeScript and modern frontend framework experience.`;
+
+    // L05: the unclear sentence before any heading has never been reported.
+    expect(
+      detectLanguageRequirements(`Our team speaks German and English day to day.\n${body}`),
+    ).toEqual([]);
+
+    // L06: the same sentence under a later "About us" heading must not inherit "Requirements".
+    expect(
+      detectLanguageRequirements(
+        `${body}\nAbout us\nOur team speaks German and English day to day.`,
+      ),
+    ).toEqual([]);
+  });
+
+  it('still reads a bare language bullet through its own heading after a section break', () => {
+    // The reset ends a heading's reach; it must not stop a later heading from starting one.
+    expect(
+      detectLanguageRequirements(`Requirements\n- Spanish\nBenefits\nA learning budget.`),
+    ).toEqual([{ language: 'Spanish', obligation: 'mandatory', quote: 'Spanish' }]);
+
+    expect(
+      detectLanguageRequirements(
+        `Requirements\n- 5 years of experience\nAbout us\nWe are remote.\nNice to have\n- Spanish`,
+      ),
+    ).toEqual([{ language: 'Spanish', obligation: 'preferred', quote: 'Spanish' }]);
+  });
+
+  it('reads markdown headings the same way as plain ones, in both directions', () => {
+    expect(
+      detectLanguageRequirements(`## Requirements\n- Dutch\n## About us\nOur team speaks German daily.`),
+    ).toEqual([{ language: 'Dutch', obligation: 'mandatory', quote: 'Dutch' }]);
+    expect(
+      detectLanguageRequirements(`### Nice to have\n- Spanish\n### Benefits\nFree German classes.`),
+    ).toEqual([{ language: 'Spanish', obligation: 'preferred', quote: 'Spanish' }]);
+  });
+
+  it('keeps an in-sentence obligation marker working inside an unrelated section', () => {
+    // Only bare mentions depend on heading context; a stated obligation is read wherever it is.
+    expect(
+      detectLanguageRequirements(`About us\nWe are a small team and fluent German is required.`),
+    ).toEqual([
+      { language: 'German', obligation: 'mandatory', quote: expect.stringContaining('required') },
+    ]);
+  });
+
+  /**
+   * Issue #713 decided not to narrow this. With no heading of any kind between the requirements
+   * list and the sentence, the posting's own layout puts the sentence in the requirements section,
+   * and removing that reading means dropping heading inheritance, which the bullet test above pins.
+   * Documented as a known limitation on `detectLanguageRequirements`; revisit with fresh evidence.
+   */
+  it('still inherits a requirements heading for a sentence with no intervening heading (L03)', () => {
+    expect(
+      detectLanguageRequirements(
+        `Requirements\nStrong TypeScript experience.\nOur team speaks German and English day to day.`,
+      ),
+    ).toEqual([
+      // Vocabulary order, not posting order: `LANGUAGE_TERMS` is alphabetical.
+      { language: 'English', obligation: 'mandatory', quote: expect.any(String) },
+      { language: 'German', obligation: 'mandatory', quote: expect.any(String) },
+    ]);
+  });
+
   it('never invents a requirement from an incidental mention', () => {
     expect(
       detectLanguageRequirements('Our team is spread across France, and we love French food.'),
