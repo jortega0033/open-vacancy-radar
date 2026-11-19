@@ -19,14 +19,23 @@ export interface CvTailoringReadiness {
   label: 'Yes' | 'Needs your review' | 'Not read yet';
   /** What is missing, in the user's terms. Empty when ready. */
   reasons: string[];
+  /**
+   * What a ready CV will still be missing in its tailored documents (#757). Not a blocker: a CV can
+   * genuinely list no skills, so the person decides, but it is never a silent "Yes" either, because
+   * tailoring leaves the Skills section out entirely when the profile has none.
+   */
+  warnings: string[];
 }
 
-export function cvTailoringReadiness(doc: Pick<CvDocumentRecord, 'source'>): CvTailoringReadiness {
+/** The one warning the readiness column shows for a ready CV whose profile lists no skills. */
+export const NO_SKILLS_READINESS_WARNING = 'no skills listed, so tailored CVs have no Skills section';
+
+export function cvTailoringReadiness(doc: Pick<CvDocumentRecord, 'source'> & { profile?: Pick<CvDocumentRecord['profile'], 'skills'> }): CvTailoringReadiness {
   if (!doc.source) {
-    return { state: 'not_read', label: 'Not read yet', reasons: ['the full CV has not been read into records yet'] };
+    return { state: 'not_read', label: 'Not read yet', reasons: ['the full CV has not been read into records yet'], warnings: [] };
   }
   const reasons = describeCvSourceGaps(doc.source);
-  return reasons.length > 0
-    ? { state: 'needs_review', label: 'Needs your review', reasons }
-    : { state: 'ready', label: 'Yes', reasons: [] };
+  if (reasons.length > 0) return { state: 'needs_review', label: 'Needs your review', reasons, warnings: [] };
+  const warnings = doc.profile && doc.profile.skills.length === 0 ? [NO_SKILLS_READINESS_WARNING] : [];
+  return { state: 'ready', label: 'Yes', reasons: [], warnings };
 }

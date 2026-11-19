@@ -1164,6 +1164,7 @@ export function approveCvEvidenceOverlay(
     // one by one, are composed. A draft sentence, or a fact id nobody approved, adds nothing.
     const { resume, blockers } = composeApprovedTailoredResume(doc.source, existing, currentSourceCvContentHash, doc.profile.skills, {
       projectSelection: existing.projectSelection,
+      languages: doc.profile.languages,
     });
     if (blockers.length > 0) {
       throw new Error(`this CV cannot be approved yet: ${blockers.join('; ')}`);

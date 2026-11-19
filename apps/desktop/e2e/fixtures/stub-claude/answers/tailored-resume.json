@@ -1,0 +1,29 @@
+{
+  "contact": {
+    "name": "Jordan Rivers",
+    "title": "Frontend Engineer",
+    "location": "Utrecht, Netherlands",
+    "email": "jordan.rivers@example.invalid",
+    "phone": "+31 6 1234 5678",
+    "links": []
+  },
+  "summary": "Frontend engineer who builds accessible React and TypeScript interfaces.",
+  "experience": [
+    {
+      "company": "Northwind Software",
+      "title": "Senior Frontend Engineer",
+      "dates": "2020 - 2025",
+      "engagement": "employment",
+      "client": "",
+      "bullets": [
+        "Built and maintained a React and TypeScript design system used across five product teams.",
+        "Led the migration from Webpack to Vite, cutting local build times by 70%."
+      ]
+    }
+  ],
+  "projects": [],
+  "skills": ["React", "TypeScript", "Accessibility"],
+  "education": [
+    { "institution": "Hogeschool Utrecht", "credential": "BSc Software Engineering", "dates": "2016 - 2020" }
+  ]
+}

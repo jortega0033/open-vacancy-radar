@@ -1,0 +1,58 @@
+#!/usr/bin/env node
+/**
+ * A deterministic stand-in for the `claude` CLI, for e2e runs only (#756/#757). It is never
+ * installed, never authenticated and never reaches a network: a spec puts this directory first on
+ * the launched app's PATH, and `providers/claude/detect.ts` then finds it exactly as it would find
+ * a real install.
+ *
+ * It speaks the two probes (`--version`, `auth status --json`) and the one session shape the
+ * adapter uses: `-p --input-format text --output-format stream-json`, prompt on stdin, newline
+ * delimited JSON on stdout. The answer is chosen from the prompt's own wording and read from
+ * `answers/`, so every reply is a fixture a reviewer can read, not generated text. A prompt this
+ * stub does not recognise fails loudly rather than answering something plausible.
+ */
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+const VERSION = '2.1.228 (Claude Code)';
+
+/** Prompt marker -> answer fixture. First match wins, so narrower markers come first. */
+const ROUTES = [
+  ['"targetRoles"', 'search-profile.json'],
+  ["complete CV into structured records", 'source-cv.json'],
+  ['Tailor one candidate CV for one vacancy', 'tailored-resume.json'],
+  ['Select the reviewed CV facts most relevant', 'letter-facts.json'],
+  ["You extract structured fields from one candidate's CV text", 'cv-profile.json'],
+];
+
+function emit(answer) {
+  const lines = [
+    { type: 'system', subtype: 'init', session_id: 'stub-session' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: answer }] } },
+    { type: 'result', subtype: 'success', is_error: false, session_id: 'stub-session' },
+  ];
+  process.stdout.write(`${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+}
+
+function main(prompt) {
+  const route = ROUTES.find(([marker]) => prompt.includes(marker));
+  if (!route) {
+    process.stderr.write('stub claude: unrecognised prompt\n');
+    process.exit(3);
+  }
+  emit(readFileSync(join(here, 'answers', route[1]), 'utf8').trim());
+}
+
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  process.stdout.write(`${VERSION}\n`);
+} else if (args[0] === 'auth') {
+  process.stdout.write('{"loggedIn":true}\n');
+} else {
+  const chunks = [];
+  process.stdin.on('data', (chunk) => chunks.push(chunk));
+  process.stdin.on('end', () => main(Buffer.concat(chunks).toString('utf8')));
+}

@@ -71,9 +71,14 @@ function sourceProjectToResumeEntry(project: CvSourceProjectEntry): ResumeProjec
  *
  * `skills` is passed in rather than read from the source: skills live on `CvProfile` (the reviewed
  * profile fields), and duplicating them into the source record would create two editable copies of
- * one list that could disagree.
+ * one list that could disagree. `languages` is passed in for the same reason (#757): the source
+ * record has no languages section, and the reviewed profile's field is the one the candidate sees.
  */
-export function tailoredResumeFromSource(source: CvSourceDocument, skills: readonly string[]): TailoredResume {
+export function tailoredResumeFromSource(
+  source: CvSourceDocument,
+  skills: readonly string[],
+  languages = '',
+): TailoredResume {
   return {
     contact: {
       name: source.contact.name,
@@ -88,6 +93,7 @@ export function tailoredResumeFromSource(source: CvSourceDocument, skills: reado
     projects: selectSourceProjects(source).map(sourceProjectToResumeEntry),
     skills: [...skills],
     education: source.education.map((entry) => ({ ...entry })),
+    ...(languages.trim().length > 0 ? { languages: languages.trim() } : {}),
   };
 }
 
@@ -305,7 +311,7 @@ export function composeApprovedTailoredResume(
     return true;
   });
 
-  const resume = tailoredResumeFromSource(source, skills);
+  const resume = tailoredResumeFromSource(source, skills, options.languages ?? '');
   // Rebuilt here rather than correlated back to `resume.experience`/`resume.projects` by array
   // position: `ResumeExperienceEntry`/`ResumeProjectEntry` carry no id of their own (that shape
   // predates #419), and zipping two independently-produced arrays by index is only as safe as the
@@ -370,6 +376,8 @@ export interface ComposeApprovedOptions {
   /** The candidate's approved project selection. `undefined` skips the check; `null` means none
    * has been approved. */
   projectSelection?: CvProjectSelection | null;
+  /** The reviewed profile's languages line, carried into the composed resume verbatim (#757). */
+  languages?: string;
 }
 
 /** Whole-word, case-insensitive: "Acme" is mentioned by "at Acme Corp" but not by "Acmeology". */

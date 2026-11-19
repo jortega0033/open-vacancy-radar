@@ -16,6 +16,12 @@ export const MAIN_ENTRY = fileURLToPath(new URL('../dist-electron/main.js', impo
 export interface LaunchAppOptions {
   appId?: string;
   vacancyEngineDataRoot?: string;
+  /**
+   * Extra environment for the launched app, merged last. Used by the Welcome-to-Apply spec to put
+   * `e2e/fixtures/stub-claude` first on PATH, so the provider adapter finds a deterministic stand-in
+   * for the `claude` CLI exactly where it would find a real install.
+   */
+  extraEnv?: Record<string, string>;
 }
 
 export function launchApp(
@@ -28,6 +34,7 @@ export function launchApp(
     ...(options.vacancyEngineDataRoot
       ? { OVR_E2E_VACANCY_ENGINE_DATA_ROOT: options.vacancyEngineDataRoot }
       : {}),
+    ...options.extraEnv,
   };
   return electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`, '--disable-gpu'],

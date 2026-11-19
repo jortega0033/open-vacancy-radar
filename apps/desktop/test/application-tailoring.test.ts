@@ -74,6 +74,43 @@ describe('application CV tailoring', () => {
     expect(result.dropped.join('\n')).toMatch(/rewritten bullet/);
   });
 
+  it('keeps the reviewed Skills and carries the reviewed Languages line into the tailored CV verbatim (#757)', async () => {
+    const generate = vi.fn().mockResolvedValue({
+      ok: true,
+      text: JSON.stringify({
+        contact: cv.source!.contact,
+        summary: cv.source!.summary,
+        experience: cv.source!.experience,
+        projects: [],
+        // The model is never asked for languages; anything it volunteers is ignored.
+        languages: 'Klingon (fluent)',
+        skills: ['React', 'TypeScript'],
+        education: cv.source!.education,
+      }),
+    });
+
+    const result = await generateApplicationTailoredResume(attempt, cv, generate);
+
+    expect(result.resume.skills).toEqual(['React', 'TypeScript']);
+    expect(result.resume.languages).toBe('English');
+    expect(result.dropped).toEqual([]);
+  });
+
+  it('leaves Languages out when the reviewed profile has none, rather than inventing a section', async () => {
+    const generate = vi.fn().mockResolvedValue({
+      ok: true,
+      text: JSON.stringify({
+        contact: cv.source!.contact, summary: cv.source!.summary, experience: cv.source!.experience,
+        projects: [], skills: ['React'], education: cv.source!.education,
+      }),
+    });
+    const withoutLanguages = { ...cv, profile: { ...cv.profile, languages: '' } };
+
+    const result = await generateApplicationTailoredResume(attempt, withoutLanguages, generate);
+
+    expect(result.resume.languages).toBeUndefined();
+  });
+
   it('rejects valid JSON that omits the required resume structure', async () => {
     await expect(generateApplicationTailoredResume(attempt, cv, async () => ({ ok: true, text: '{}' }))).rejects.toThrow(
       /omitted required CV sections/i,

@@ -4,6 +4,8 @@ import {
   attemptListStatus,
   classifyReviewEntry,
   hasUsefulManualDocuments,
+  isCvPreparedWithoutSkills,
+  isCvReviewRequired,
   isDocumentsReadyDetail,
   isLetterMissing,
   isSendInProgress,
@@ -139,5 +141,27 @@ describe('next ready application', () => {
     ];
     expect(nextReadyAttempt(rows, 'current')?.id).toBe('newer');
     expect(nextReadyAttempt([rows[0]!], 'current')).toBeNull();
+  });
+});
+
+describe('CV review and skills gaps (#756, #757)', () => {
+  it('recognises a tailoring stop that only needs the CV source reviewed', () => {
+    expect(
+      isCvReviewRequired(
+        'Automatic CV tailoring stopped: this CV has no reviewed source record. Review the CV source before automatic tailoring, or use the original CV.',
+      ),
+    ).toBe(true);
+    expect(isCvReviewRequired('Automatic CV tailoring stopped: provider unavailable')).toBe(false);
+    expect(isCvReviewRequired(DOCS_READY)).toBe(false);
+  });
+
+  it('recognises a package whose CV was prepared without skills', () => {
+    expect(isCvPreparedWithoutSkills('CV tailored. Your CV was prepared without any skills. Cover letter blocker: x.')).toBe(true);
+    expect(
+      isCvPreparedWithoutSkills(
+        'CV tailored for this vacancy from the reviewed source. Your CV profile has no skills, so tailoring cannot match this vacancy. Add skills to your CV. Your application documents are ready.',
+      ),
+    ).toBe(true);
+    expect(isCvPreparedWithoutSkills(DOCS_READY)).toBe(false);
   });
 });
