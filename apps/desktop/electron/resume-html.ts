@@ -117,6 +117,12 @@ function skillsSection(resume: TailoredResume): string {
   return `<section><h2>Skills</h2><p class="skills">${resume.skills.map(escapeHtml).join(', ')}</p></section>`;
 }
 
+function languagesSection(resume: TailoredResume): string {
+  const languages = resume.languages?.trim() ?? '';
+  if (languages.length === 0) return '';
+  return `<section><h2>Languages</h2><p class="skills">${escapeHtml(languages)}</p></section>`;
+}
+
 function summarySection(resume: TailoredResume): string {
   if (resume.summary.trim().length === 0) return '';
   return `<section><p class="summary">${escapeHtml(resume.summary)}</p></section>`;
@@ -164,6 +170,7 @@ ${summarySection(resume)}
 ${experienceSection(resume)}
 ${projectsSection(resume)}
 ${skillsSection(resume)}
+${languagesSection(resume)}
 ${educationSection(resume)}
 </body></html>`;
 }

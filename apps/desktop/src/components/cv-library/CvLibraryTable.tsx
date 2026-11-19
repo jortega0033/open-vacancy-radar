@@ -97,7 +97,20 @@ export function CvLibraryTable({
                   {parseStatus.label}
                 </td>
                 <td className="ovr-responsive-table__cell whitespace-nowrap text-sm" data-label="Ready for tailoring">
-                  {readiness.state === 'ready' ? (
+                  {readiness.state === 'ready' && readiness.warnings.length > 0 ? (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-success">{readiness.label}</span>
+                      <span className="text-xs text-warning">({readiness.warnings.join('; ')})</span>
+                      <button
+                        type="button"
+                        className="link text-xs"
+                        onClick={() => onEdit(doc)}
+                        aria-label={`Add skills to ${doc.name}`}
+                      >
+                        Add skills
+                      </button>
+                    </span>
+                  ) : readiness.state === 'ready' ? (
                     <span className="text-success">{readiness.label}</span>
                   ) : (
                     <span className="flex flex-wrap items-center gap-1.5">

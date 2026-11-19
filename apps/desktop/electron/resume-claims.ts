@@ -18,7 +18,7 @@ export interface ResumeClaim {
   text: string;
 }
 
-export const RESUME_SECTION_HEADINGS = ['Experience', 'Projects', 'Skills', 'Education'] as const;
+export const RESUME_SECTION_HEADINGS = ['Experience', 'Projects', 'Skills', 'Languages', 'Education'] as const;
 
 export function resumeClaims(resume: TailoredResume): ResumeClaim[] {
   const claims: ResumeClaim[] = [];
@@ -65,6 +65,11 @@ export function resumeClaims(resume: TailoredResume): ResumeClaim[] {
   if (resume.skills.length > 0) {
     heading('Skills');
     for (const skill of resume.skills) add('skill', skill);
+  }
+
+  if ((resume.languages ?? '').trim().length > 0) {
+    heading('Languages');
+    add('languages', resume.languages!.trim());
   }
 
   if (resume.education.length > 0) {

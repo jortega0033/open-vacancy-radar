@@ -6,11 +6,14 @@ import { ErrorBanner, WarningBanner } from '../shell/index.js';
 import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationCritiquePanel } from './ApplicationCritiquePanel.js';
 import { ApplicationReviewSession } from './ApplicationReviewSession.js';
+import { CvReviewRequiredNotice, useCvReviewDrawer } from './CvReviewRecovery.js';
 import { PipelineLimitNotice, TechnicalDetails, useRecordPipelineLimit } from './apply-review-parts.js';
 import {
   attemptListStatus,
   classifyReviewEntry,
   describePreparationBlocker,
+  isCvPreparedWithoutSkills,
+  isCvReviewRequired,
   isLetterMissing,
   isSendInProgress,
   isTailoringStopped,
@@ -486,6 +489,15 @@ export function ApplyWorkspace({
     }
   }, [attemptId, phase, restartInPlace]);
 
+  // #756: the review drawer over this page, for a tailoring stop that only needs the CV reviewed.
+  // The application stays selected underneath; a saved review restarts tailoring in place.
+  const recoveryRef = useRef(handleTailoringRecovery);
+  recoveryRef.current = handleTailoringRecovery;
+  const cvReview = useCvReviewDrawer({
+    sourceCvId: attempt?.sourceCvId ?? null,
+    onReviewed: () => void recoveryRef.current('retry'),
+  });
+
   /** Runs preparation again after the blocker was addressed. Also retries a missing letter. */
   const handleResume = useCallback(async () => {
     if (phase.phase !== 'preparation_blocked' && phase.phase !== 'manual' && phase.phase !== 'finished') return;
@@ -634,6 +646,12 @@ export function ApplyWorkspace({
 
       {phase.phase === 'manual' && attempt && (
         <div className="mt-5 space-y-5">
+          {isCvPreparedWithoutSkills(attempt.checkpointDetail) && (
+            <WarningBanner aria-label="Your CV lists no skills">
+              Your CV lists no skills, so this CV has no Skills section and is not tailored to the vacancy. Add skills
+              to your CV under CV, then prepare this application again.
+            </WarningBanner>
+          )}
           <section aria-labelledby={`${headingId}-documents`}>
             <h3 id={`${headingId}-documents`} className="ovr-eyebrow">
               Your documents
@@ -778,7 +796,21 @@ export function ApplyWorkspace({
         </div>
       )}
 
-      {phase.phase === 'tailoring_blocked' && (
+      {phase.phase === 'tailoring_blocked' && isCvReviewRequired(phase.message) && (
+        <div className="mt-5 space-y-4">
+          <WarningBanner>Your CV has not been reviewed yet, so it could not be tailored.</WarningBanner>
+          <CvReviewRequiredNotice
+            busy={busy}
+            loading={cvReview.loading}
+            error={cvReview.error}
+            onReview={() => void cvReview.open()}
+            onUseOriginal={() => void handleTailoringRecovery('original')}
+          />
+          {cvReview.drawer}
+        </div>
+      )}
+
+      {phase.phase === 'tailoring_blocked' && !isCvReviewRequired(phase.message) && (
         <div className="mt-5 space-y-4">
           {limit ? <PipelineLimitNotice info={limit} /> : <WarningBanner>We could not tailor your CV for this job.</WarningBanner>}
           <TechnicalDetails text={phase.message.replace(TAILORING_STOPPED_PREFIX, '').trim()} label="Details" />
@@ -961,9 +993,12 @@ function workspaceStatusLine(phase: Phase, attempt: ApplicationAttemptRecord | n
     case 'manual':
       if (phase.opened) return `Employer form opened. Submit it on ${attempt?.company ?? 'the employer'}'s site, then come back.`;
       if (phase.approved) return 'Package approved. Open the employer form next.';
+      if (attempt && isCvPreparedWithoutSkills(attempt.checkpointDetail)) {
+        return `Your documents are ready, but your CV lists no skills. You apply on ${attempt.company}'s site.`;
+      }
       return `Your CV and letter are ready. You apply on ${attempt?.company ?? 'the employer'}'s site.`;
     case 'tailoring_blocked':
-      return 'Your CV could not be tailored yet.';
+      return isCvReviewRequired(phase.message) ? 'Your CV needs a review before it can be tailored.' : 'Your CV could not be tailored yet.';
     case 'preparation_blocked':
       return isPostingPreparationStopDetail(phase.message) ? 'Check the posting before you go on.' : 'Preparation stopped before your documents were ready.';
     case 'error':
