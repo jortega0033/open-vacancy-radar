@@ -1,0 +1,9 @@
+{
+  "title": "Frontend Engineer",
+  "years": "5 years",
+  "location": "Utrecht, Netherlands",
+  "languages": "English (native), Dutch (B2)",
+  "skills": ["React", "TypeScript", "Vite", "Accessibility", "Design Systems"],
+  "summary": "Frontend engineer who builds accessible React and TypeScript interfaces.",
+  "auth": ""
+}

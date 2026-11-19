@@ -106,6 +106,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile, onReviewSou
     if (!previewing || !overlay || !sourceCv || !currentHash) return null;
     return composeApprovedTailoredResume(sourceCv, overlay, currentHash, profile?.skills ?? [], {
       projectSelection: overlay.projectSelection,
+      languages: profile?.languages ?? '',
     });
   }, [previewing, overlay, sourceCv, currentHash, profile]);
 

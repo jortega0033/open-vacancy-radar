@@ -1,0 +1,20 @@
+Jordan Rivers
+Frontend Engineer
+Utrecht, Netherlands | jordan.rivers@example.invalid | +31 6 1234 5678
+
+Summary
+Frontend engineer who builds accessible React and TypeScript interfaces.
+
+Experience
+Senior Frontend Engineer, Northwind Software (2020 - 2025)
+- Built and maintained a React and TypeScript design system used across five product teams.
+- Led the migration from Webpack to Vite, cutting local build times by 70%.
+
+Education
+BSc Software Engineering, Hogeschool Utrecht (2016 - 2020)
+
+Skills
+React, TypeScript, Vite, Accessibility, Design Systems
+
+Languages
+English (native), Dutch (B2)

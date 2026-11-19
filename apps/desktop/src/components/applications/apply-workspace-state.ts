@@ -46,6 +46,24 @@ export function isSendInProgress(checkpoint: ApplicationAttemptCheckpoint): bool
  * matches on the same prefix). The raw reason after it is kept for a Details disclosure. */
 export const TAILORING_STOPPED_PREFIX = 'Automatic CV tailoring stopped:';
 
+/**
+ * The reason `application-tailoring.ts` throws for a CV whose source was never read and reviewed
+ * (#756). The default Welcome path saves a CV without one, so this is the first thing a new person
+ * hits at Apply; the review drawer fixes it, a retry with nothing changed never can.
+ */
+export const CV_REVIEW_REQUIRED_MARKER = 'no reviewed source record';
+
+/** True when a tailoring stop is only waiting on the CV's source review (#756). */
+export function isCvReviewRequired(detail: string): boolean {
+  return detail.includes(CV_REVIEW_REQUIRED_MARKER);
+}
+
+/** True when the pipeline prepared documents from a reviewed CV whose profile lists no skills
+ * (#521, #757): the package exists, but its CV has no Skills section and is not tailored. */
+export function isCvPreparedWithoutSkills(detail: string): boolean {
+  return detail.includes('Your CV was prepared without any skills.') || detail.includes('Your CV profile has no skills');
+}
+
 /** Phrases the pipeline writes when a manual (no-policy) package is useful to the person. */
 const MANUAL_DOCUMENTS_READY_PHRASES = [
   'Your application documents are ready.',

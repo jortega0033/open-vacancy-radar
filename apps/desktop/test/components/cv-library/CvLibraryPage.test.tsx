@@ -351,10 +351,10 @@ describe('CvLibraryPage', () => {
     expect(await within(dialog).findByText(/filled in from your cv: title/i)).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
     expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
-    // The source-CV review panel sitting above the form has a "Location" input of its own, so the
-    // profile field is the second of the two.
-    const [, profileLocation] = within(dialog).getAllByLabelText(/^location$/i);
-    expect(profileLocation).toHaveValue('Amsterdam, Netherlands');
+    // One Location (#757): with reviewed records on screen, the contact block's field is the only
+    // one, and the profile copy follows it on save.
+    expect(within(dialog).getAllByLabelText(/^location$/i)).toHaveLength(1);
+    expect(within(dialog).getByLabelText(/^location$/i)).toHaveValue('Amsterdam, Netherlands');
 
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
@@ -1248,6 +1248,126 @@ describe('CvLibraryPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /^delete/i }));
       expect(await screen.findByRole('alertdialog')).toHaveTextContent(/could not be listed/);
+    });
+  });
+
+  describe('Read my full CV completes the profile too (#757)', () => {
+    const SOURCE_ANSWER = JSON.stringify({
+      contact: { name: 'Jamie Rivera', title: 'Frontend Developer', location: 'Utrecht, Netherlands', email: 'jamie@example.invalid', phone: '', links: [] },
+      summary: 'Frontend developer who builds accessible React apps.',
+      experience: [
+        { company: 'Redwood Software', title: 'Frontend Developer', dates: 'Jan 2019 - Dec 2023', engagement: 'employment', client: '', bullets: ['Built the booking UI.'] },
+      ],
+      education: [{ institution: 'HU', credential: 'BSc', dates: '2015 - 2019' }],
+      projects: [],
+    });
+
+    function installTwoSessionBridge(): EmitEvent {
+      const emit = installAgentDockBridge();
+      const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+      (bridge.createSession as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ id: 'sess-source-1', provider: 'claude', cwd: '/x', prompt: '', status: 'starting', startedAt: '' })
+        .mockResolvedValueOnce({ id: 'sess-gaps-1', provider: 'claude', cwd: '/x', prompt: '', status: 'starting', startedAt: '' });
+      return emit;
+    }
+
+    async function openUnreviewedUpload(): Promise<{ dialog: HTMLElement; emit: EmitEvent; updateCvDocument: ReturnType<typeof vi.fn> }> {
+      const record = makeCv({
+        id: 'welcome-1',
+        name: 'Uploaded CV',
+        kind: 'uploaded',
+        text: 'Jamie Rivera. Frontend developer. SKILLS: React, TypeScript. LANGUAGES: Dutch (native), English (C1).',
+        source: null,
+      });
+      const updateCvDocument = vi.fn(async (_id: string, patch: Partial<CvDocumentRecord>) => ({ ...record, ...patch }) as CvDocumentRecord);
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]), updateCvDocument });
+      installCvBridge();
+      const emit = installTwoSessionBridge();
+      render(<CvLibraryPage />);
+      await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
+      const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+      return { dialog, emit, updateCvDocument };
+    }
+
+    it('fills title, location and summary from the records, then completes skills and languages with one AI pass', async () => {
+      const { dialog, emit, updateCvDocument } = await openUnreviewedUpload();
+      const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+
+      fireEvent.click(within(dialog).getByRole('button', { name: /read my full cv/i }));
+      await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+      emit('sess-source-1', { type: 'assistant.message', text: SOURCE_ANSWER });
+      emit('sess-source-1', { type: 'session.completed' });
+
+      // Records landed in the review panel, and the profile half followed from them.
+      expect(await within(dialog).findByText(/Redwood Software/)).toBeInTheDocument();
+      expect(within(dialog).getByLabelText(/^title$/i)).toHaveValue('Frontend Developer');
+      expect(within(dialog).getByLabelText(/summary/i)).toHaveValue('Frontend developer who builds accessible React apps.');
+      expect(within(dialog).getAllByLabelText(/^location$/i)).toHaveLength(1);
+
+      // The records have no skills section, so one gap-fill pass starts on its own.
+      await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(2));
+      emit('sess-gaps-1', {
+        type: 'assistant.message',
+        text: JSON.stringify({ title: 'Other', years: '', location: 'Elsewhere', languages: 'Dutch (native), English (C1)', skills: ['React', 'TypeScript'], summary: 'Other summary', auth: '' }),
+      });
+      emit('sess-gaps-1', { type: 'session.completed' });
+
+      await waitFor(() => expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript'));
+      expect(within(dialog).getByLabelText(/languages/i)).toHaveValue('Dutch (native), English (C1)');
+      // Gap fill never overwrites what the records supplied.
+      expect(within(dialog).getByLabelText(/^title$/i)).toHaveValue('Frontend Developer');
+      expect(within(dialog).queryByTestId('cv-drawer-skills-missing')).not.toBeInTheDocument();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: /confirm and save/i }));
+      await waitFor(() => expect(updateCvDocument).toHaveBeenCalledTimes(1));
+      const [, patch] = updateCvDocument.mock.calls[0]!;
+      expect(patch.profile).toMatchObject({
+        title: 'Frontend Developer',
+        location: 'Utrecht, Netherlands',
+        languages: 'Dutch (native), English (C1)',
+        skills: ['React', 'TypeScript'],
+        summary: 'Frontend developer who builds accessible React apps.',
+      });
+      expect(patch.source?.contact.location).toBe('Utrecht, Netherlands');
+    });
+
+    it('warns, without blocking Save, when the records are read but no skills were found', async () => {
+      const { dialog, emit, updateCvDocument } = await openUnreviewedUpload();
+      const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+
+      fireEvent.click(within(dialog).getByRole('button', { name: /read my full cv/i }));
+      await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+      emit('sess-source-1', { type: 'assistant.message', text: SOURCE_ANSWER });
+      emit('sess-source-1', { type: 'session.completed' });
+      await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(2));
+      emit('sess-gaps-1', {
+        type: 'assistant.message',
+        text: JSON.stringify({ title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' }),
+      });
+      emit('sess-gaps-1', { type: 'session.completed' });
+
+      expect(await within(dialog).findByText(/no skills found/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /confirm and save/i })).toBeEnabled();
+      fireEvent.click(within(dialog).getByRole('button', { name: /confirm and save/i }));
+      await waitFor(() => expect(updateCvDocument).toHaveBeenCalledTimes(1));
+    });
+
+    it('shows the standing no-skills warning on a reviewed CV whose profile lists none', async () => {
+      const record = makeCv({ id: 'reviewed-no-skills', name: 'Uploaded CV', kind: 'uploaded', source: makeSource() });
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+      await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+      // The readiness column says Yes, but never silently.
+      expect(screen.getByText(/no skills listed/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /add skills to uploaded cv/i })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
+      const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+      expect(within(dialog).getByTestId('cv-drawer-skills-missing')).toBeInTheDocument();
+      fireEvent.change(within(dialog).getByLabelText(/skills/i), { target: { value: 'React' } });
+      expect(within(dialog).queryByTestId('cv-drawer-skills-missing')).not.toBeInTheDocument();
     });
   });
 });

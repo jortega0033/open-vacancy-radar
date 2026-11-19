@@ -70,6 +70,15 @@ export interface TailoredResume {
   projects: ResumeProjectEntry[];
   skills: string[];
   education: ResumeEducationEntry[];
+  /**
+   * The candidate's spoken languages, exactly as the reviewed `CvProfile.languages` field states
+   * them (#757). Never part of the model's answer: `RESUME_JSON_SHAPE` deliberately has no
+   * languages key and `toTailoredResume` never reads one, so this is copied from the reviewed
+   * profile after validation, the way skills are restricted to the reviewed list. Optional so every
+   * stored draft and fixture written before the field existed stays a valid resume; absent and
+   * empty both mean "no Languages section".
+   */
+  languages?: string;
 }
 
 /** Field size budgets. Generous for a real resume, finite against a hostile or over-eager answer --
