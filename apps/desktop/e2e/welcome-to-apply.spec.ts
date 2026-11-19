@@ -89,7 +89,7 @@ async function runJourney(electronApp: ElectronApplication, userDataDir: string,
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] });
     }, cvPath);
 
-    // Welcome: upload, save, let "Fill from CV" read the search profile, save that too.
+    // Welcome (#764): pick the file (saved at once), let "Fill from CV" read it, one review Save lands on Search.
     const welcome = window.getByRole('dialog', { name: 'Welcome to Open Vacancy Radar' });
     await expect(welcome).toBeVisible({ timeout: 15_000 });
     // The checklist checks the AI tool once, on open, usually before the daemon has finished starting;
@@ -102,15 +102,12 @@ async function runJourney(electronApp: ElectronApplication, userDataDir: string,
     }
     await expect(runtimeItem).toHaveCount(0);
     await welcome.getByRole('button', { name: /^upload cv$/i }).click();
-    await welcome.getByRole('button', { name: /save to cv library/i }).click();
     const fill = window.getByRole('dialog', { name: 'Fill from CV' });
     await expect(fill).toBeVisible({ timeout: 15_000 });
     const saveProfile = fill.getByRole('button', { name: 'Save', exact: true });
     await waitForRead(fill, saveProfile, fill.getByRole('button', { name: 'Read CV', exact: true }));
     await saveProfile.click();
     await expect(fill).toHaveCount(0, { timeout: 30_000 });
-    await expect(welcome).toBeVisible();
-    await welcome.getByRole('button', { name: /^(Done|Skip for now)$/ }).click();
     await expect(welcome).toHaveCount(0);
 
     // Search > Apply, straight from Welcome. No visit to the CV page.

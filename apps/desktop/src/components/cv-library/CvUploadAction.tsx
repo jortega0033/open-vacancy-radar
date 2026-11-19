@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CvTranscriptionFlow } from '../cv/CvTranscriptionFlow.js';
 import { SaveCvToLibrary } from '../cv/SaveCvToLibrary.js';
 import { useCvPicker } from '../cv/useCvPicker.js';
+import { describeError } from '../cv/useAgentRun.js';
 import type { CvDocument } from '../cv/types.js';
 import type { SearchProfileFillOutcome } from './fill-search-profile-from-cv.js';
 
@@ -12,6 +13,10 @@ export interface CvUploadActionProps {
   isPrimary?: boolean;
   /** The welcome flow fills the profile itself through its reviewed drawer, so it turns this off. */
   fillSearchProfile?: boolean;
+  /** Welcome only (#764): picking the file is the decision, so save it straight away instead of
+   * showing "Loaded ... (N characters)" with a separate Save to CV library confirm. Off by default:
+   * the CV Library page keeps its explicit save step. */
+  saveOnPick?: boolean;
 }
 
 /**
@@ -25,16 +30,33 @@ export interface CvUploadActionProps {
  * thin composition of "pick" (this component) and "persist" (`SaveCvToLibrary`) rather than a
  * second `CvUpload`.
  */
-export function CvUploadAction({ onSaved, isPrimary = true, fillSearchProfile = true }: CvUploadActionProps) {
+export function CvUploadAction({ onSaved, isPrimary = true, fillSearchProfile = true, saveOnPick = false }: CvUploadActionProps) {
   const picker = useCvPicker();
   const [picked, setPicked] = useState<CvDocument | null>(null);
+  const [autoSaving, setAutoSaving] = useState(false);
+  const [autoSaveError, setAutoSaveError] = useState<string>();
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
 
   useEffect(() => {
     if (picker.state.phase !== 'done') return;
     const { result } = picker.state;
-    setPicked({ fileName: result.fileName, text: result.text, textSource: result.textSource });
+    const cv: CvDocument = { fileName: result.fileName, text: result.text, textSource: result.textSource };
     picker.reset();
-  }, [picker]);
+    if (!saveOnPick) {
+      setPicked(cv);
+      return;
+    }
+    // The same persist call `SaveCvToLibrary` makes. No search-profile auto-fill here: the only
+    // caller (Welcome) fills the profile through its reviewed drawer instead.
+    setAutoSaving(true);
+    setAutoSaveError(undefined);
+    void window.workspace
+      .createCvDocument({ name: cv.fileName, kind: 'uploaded', text: cv.text, textSource: cv.textSource })
+      .then((created) => onSavedRef.current(created.id))
+      .catch((err: unknown) => setAutoSaveError(describeError(err, 'could not save this CV to your library')))
+      .finally(() => setAutoSaving(false));
+  }, [picker, saveOnPick]);
 
   const handleSaved = useCallback(
     (id: string, outcome?: SearchProfileFillOutcome) => {
@@ -44,7 +66,7 @@ export function CvUploadAction({ onSaved, isPrimary = true, fillSearchProfile = 
     [onSaved],
   );
 
-  const isPicking = picker.state.phase === 'picking' || picker.state.phase === 'transcribing';
+  const isPicking = picker.state.phase === 'picking' || picker.state.phase === 'transcribing' || autoSaving;
   const buttonClass = isPrimary ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
 
   if (picked) {
@@ -66,12 +88,22 @@ export function CvUploadAction({ onSaved, isPrimary = true, fillSearchProfile = 
     <div className="flex flex-col items-start gap-2">
       <div className="flex items-center gap-2">
         <button className={buttonClass} type="button" onClick={() => void picker.pick()} disabled={isPicking}>
-          {picker.state.phase === 'picking' && (
+          {(picker.state.phase === 'picking' || autoSaving) && (
             <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />
           )}
           Upload CV
         </button>
       </div>
+      {autoSaving && (
+        <p className="text-xs text-base-content/70" role="status">
+          Saving your CV...
+        </p>
+      )}
+      {autoSaveError && (
+        <p className="text-sm text-error" role="alert">
+          {autoSaveError}
+        </p>
+      )}
       <CvTranscriptionFlow picker={picker} />
     </div>
   );

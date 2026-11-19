@@ -150,10 +150,11 @@ describe('first-launch welcome modal', () => {
     expect(within(checklist).getByText('Add a CV')).toBeInTheDocument();
     expect(within(checklist).getByText('Connect your AI tool')).toBeInTheDocument();
     expect(within(checklist).queryByText('Download the company list')).not.toBeInTheDocument();
-    expect(within(dialog).getByText('Two quick steps. Skip any and come back later.')).toBeInTheDocument();
-    await waitFor(() => expect(within(checklist).getAllByText('To do')).toHaveLength(2));
-    expect(within(checklist).getByRole('button', { name: 'Skip adding a CV' })).toBeInTheDocument();
-    expect(within(checklist).getByRole('button', { name: 'Skip connecting your AI tool' })).toBeInTheDocument();
+    expect(within(dialog).getByText('Add your CV to get started. You can also skip this and come back later.')).toBeInTheDocument();
+    await waitFor(() => expect(within(checklist).getByText('To do')).toBeInTheDocument());
+    await waitFor(() => expect(within(checklist).getByText('Optional')).toBeInTheDocument());
+    // One way out (#764): no per-item Skip buttons.
+    expect(within(dialog).getAllByRole('button', { name: /skip/i })).toHaveLength(1);
     expect(within(checklist).queryByRole('button', { name: 'Skip downloading the company list' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip for now' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /upload cv/i })).toBeInTheDocument();
@@ -294,7 +295,6 @@ describe('first-launch welcome modal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /upload cv/i }));
     await waitFor(() => expect(cv.selectAndRead).toHaveBeenCalledTimes(1));
-    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
     await waitFor(() => expect(createCvDocument).toHaveBeenCalledTimes(1));
 
     // The hand-off: the welcome dialog is gone and a differently-labelled one (Fill it in
@@ -312,40 +312,54 @@ describe('first-launch welcome modal', () => {
     await waitFor(() => expect(screen.getByLabelText('Current role')).toHaveValue('Senior Frontend Engineer'));
   });
 
-  it('saving the auto-started profile review returns to the checklist with the CV marked done, and Done then persists the flag', async () => {
+  it('with AI ready: file pick plus one review Save closes Welcome, persists the flag and lands on Search (#764)', async () => {
     const savedCv = makeCv({ id: 'cv-new', isDefault: true, text: 'Angular. TypeScript. 8 years.' });
     const workspace = installWorkspaceBridge({
       getSettings: vi.fn().mockResolvedValue(UNSEEN_SETTINGS),
       listCvDocuments: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([savedCv]),
       createCvDocument: vi.fn().mockResolvedValue(savedCv),
     });
-    const vacancyRadar = installVacancyRadarBridge();
+    // The fake profile store: what Save writes is what Search then reads.
+    let stored = { ...DEFAULT_CANDIDATE_PROFILE };
+    const vacancyRadar = installVacancyRadarBridge({
+      getStatus: vi.fn().mockResolvedValue({ ready: true }),
+      getSearchProfile: vi.fn(async () => stored),
+      saveSearchProfile: vi.fn(async (patch) => {
+        const { fieldSources: _sources, constraints, ...rest } = patch as Partial<typeof stored>;
+        stored = { ...stored, ...rest, constraints: { ...stored.constraints, ...constraints } };
+        return stored;
+      }),
+      runScan: vi.fn(),
+    });
     installCvBridge();
     const { emit } = installDrivableAgentDockBridge();
 
     render(<App />);
-    await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
-    fireEvent.click(screen.getByRole('button', { name: /upload cv/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
+    const welcome = await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
+    await waitFor(() => expect(within(welcome).queryByText('Connect your AI tool')).not.toBeInTheDocument());
 
-    await screen.findByRole('dialog', { name: 'Fill from CV' });
+    // Click 1 (plus the file pick): Upload CV. The CV is saved with no further confirm.
+    fireEvent.click(within(welcome).getByRole('button', { name: /upload cv/i }));
+    await waitFor(() => expect(workspace.createCvDocument).toHaveBeenCalledTimes(1));
+
+    const drawer = await screen.findByRole('dialog', { name: 'Fill from CV' });
     emit('sess-welcome-cv', { type: 'assistant.message', text: GOOD_PROFILE_RESPONSE });
     emit('sess-welcome-cv', { type: 'session.completed' });
-    await waitFor(() => expect(screen.getByLabelText('Current role')).toBeInTheDocument());
+    await waitFor(() => expect(within(drawer).getByLabelText('Current role')).toHaveValue('Senior Frontend Engineer'));
+    // Nothing was written to the profile before the review.
+    expect(vacancyRadar.saveSearchProfile).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    // Click 2: the one review Save.
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save' }));
 
-    await waitFor(() => expect(vacancyRadar.saveSearchProfile).toHaveBeenCalledTimes(1));
-    // Back on the checklist: the CV is done and the other two items are still on offer.
-    const checklist = await screen.findByRole('list', { name: 'Setup checklist' });
-    expect(within(checklist).getByText('CV saved to your library.')).toBeInTheDocument();
-    expect(within(checklist).queryByRole('button', { name: /upload cv/i })).not.toBeInTheDocument();
-    expect(workspace.updateSettings).not.toHaveBeenCalledWith({ welcomeSeen: true });
-
-    // A ready AI tool and a saved CV: everything is addressed, so the one exit reads Done.
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(vacancyRadar.saveSearchProfile).toHaveBeenCalledTimes(1);
     expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
+    // Search was already mounted under Welcome; its role button must reflect the profile just saved.
+    const roleButton = await screen.findByRole('button', { name: 'Search for Senior Frontend Engineer' });
+    await waitFor(() => expect(roleButton).toHaveFocus());
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Senior Frontend Engineer');
+    expect(vacancyRadar.runScan).not.toHaveBeenCalled();
   });
 
   it('cancelling out of the auto-started profile review returns to the checklist, since the CV is already saved', async () => {
@@ -362,7 +376,6 @@ describe('first-launch welcome modal', () => {
     render(<App />);
     await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
     fireEvent.click(screen.getByRole('button', { name: /upload cv/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
 
     const drawer = await screen.findByRole('dialog', { name: 'Fill from CV' });
     // Cancel is disabled while the auto-started run is still in flight (Stop is the way to
@@ -408,7 +421,6 @@ describe('Welcome CV step without a working AI tool (#767)', () => {
     render(<App />);
     await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
     fireEvent.click(screen.getByRole('button', { name: /upload cv/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
     return screen.findByRole('dialog', { name: 'Fill from CV' });
   }
 
@@ -453,13 +465,14 @@ describe('Welcome CV step without a working AI tool (#767)', () => {
     expect(agentDock.createSession).not.toHaveBeenCalled();
   });
 
-  it('Skip leaves the CV saved and returns to the checklist without an error', async () => {
-    const { vacancyRadar } = setUp([]);
+  it('Skip leaves the CV saved and finishes Welcome without an error or a profile write', async () => {
+    const { workspace, vacancyRadar } = setUp([]);
     const drawer = await uploadInWelcome();
 
     fireEvent.click(await within(drawer).findByRole('button', { name: 'Skip' }));
-    const checklist = await screen.findByRole('list', { name: 'Setup checklist' });
-    expect(within(checklist).getByText('CV saved to your library.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(workspace.createCvDocument).toHaveBeenCalledTimes(1);
+    expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
     expect(vacancyRadar.saveSearchProfile).not.toHaveBeenCalled();
   });
 
@@ -480,7 +493,6 @@ describe('Welcome CV step without a working AI tool (#767)', () => {
     // Codex is what would run, and it is ready, so the checklist does not ask to connect anything.
     await waitFor(() => expect(within(welcome).queryByText('Connect your AI tool')).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /upload cv/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
 
     await screen.findByRole('dialog', { name: 'Fill from CV' });
     await waitFor(() => expect(agentDock.createSession).toHaveBeenCalledTimes(1));
@@ -539,7 +551,7 @@ describe('first-launch checklist: AI runtime item', () => {
 
     // A ready tool needs nothing from the user, so the item goes away and the intro counts two steps.
     await waitFor(() => expect(within(dialog).queryByText('Connect your AI tool')).not.toBeInTheDocument());
-    expect(within(dialog).getByText('One quick step. Skip any and come back later.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Add your CV to get started. You can also skip this and come back later.')).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
   });
 
@@ -591,18 +603,15 @@ describe('first-launch checklist: AI runtime item', () => {
     await waitFor(() => expect(within(dialog).queryByText('Connect your AI tool')).not.toBeInTheDocument());
   });
 
-  it('skipping marks the item skipped without touching the provider list again', async () => {
+  it('the AI tool item is optional and has no Skip of its own: one way out of the dialog (#764)', async () => {
     const agentDock = installDrivableAgentDockBridge().agentDock;
     agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus({ installed: false })]);
 
     const { dialog } = await openWelcome();
     await waitFor(() => expect(within(dialog).getByText('Claude Code is not installed yet.')).toBeInTheDocument());
-    const callsBefore = (agentDock.listProviders as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Skip connecting your AI tool' }));
-
-    expect(within(dialog).getByText('Skipped')).toBeInTheDocument();
-    expect(agentDock.listProviders).toHaveBeenCalledTimes(callsBefore);
+    expect(within(dialog).getByText('Optional')).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('button', { name: /skip/i }).map((b) => b.textContent)).toEqual(['Skip for now']);
   });
 
   it('Set up closes the modal, persists the flag and opens that page', async () => {
@@ -705,15 +714,13 @@ describe('first-launch checklist: company list is automatic (#637)', () => {
     );
   });
 
-  it('skipping marks the CV skipped, and Done replaces Skip for now once every item is addressed', async () => {
+  it('shows exactly one skip action, and it reads Done once the CV is saved (#764)', async () => {
     installDrivableAgentDockBridge().agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus()]);
     const { dialog } = await openWelcome();
     await waitFor(() => expect(within(dialog).queryByText('Connect your AI tool')).not.toBeInTheDocument());
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Skip adding a CV' }));
-
-    expect(within(dialog).getAllByText('Skipped')).toHaveLength(1);
-    expect(within(dialog).getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('button', { name: /skip/i })).toHaveLength(1);
+    expect(within(dialog).getByRole('button', { name: 'Skip for now' })).toBeInTheDocument();
   });
 });
 
@@ -733,7 +740,6 @@ describe('first-launch checklist: search profile could not be loaded', () => {
       createCvDocument: vi.fn().mockResolvedValue(savedCv),
     });
     fireEvent.click(within(dialog).getByRole('button', { name: /upload cv/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
     return { workspace, dialog, getSearchProfile };
   }
 
@@ -806,7 +812,8 @@ describe('Finish setup (reopening the checklist, #539)', () => {
     const { dialog } = await openFinishSetup();
 
     const checklist = within(dialog).getByRole('list', { name: 'Setup checklist' });
-    await waitFor(() => expect(within(checklist).getAllByText('To do').length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(within(checklist).getByText('To do')).toBeInTheDocument());
+    await waitFor(() => expect(within(checklist).getByText('Optional')).toBeInTheDocument());
     expect(within(checklist).getByText('Add a CV')).toBeInTheDocument();
     expect(within(checklist).queryByText('Download the company list')).not.toBeInTheDocument();
     expect(workspace.updateSettings).not.toHaveBeenCalledWith({ welcomeSeen: true });
@@ -890,7 +897,6 @@ describe('Finish setup (reopening the checklist, #539)', () => {
     expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
 
     fireEvent.click(await within(dialog).findByRole('button', { name: /upload cv/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /save to cv library/i }));
     await screen.findByText(/Could not fill in what you are looking for automatically/);
     profileLoads.ok = true;
     fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));

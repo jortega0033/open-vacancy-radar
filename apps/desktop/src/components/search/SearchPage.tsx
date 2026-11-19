@@ -1374,6 +1374,9 @@ export function SearchPage({
     if (handoffId === undefined || !handoffRole) return;
     setFilters((current) => (current.query.trim() ? current : { ...current, query: handoffRole }));
     handoffFocusPendingRef.current = true;
+    // Search can already be mounted under Welcome, holding the profile from before Welcome's
+    // review Save (#764). Re-read it so the role buttons match what was just saved.
+    setProfileRevision((revision) => revision + 1);
   }, [handoffId, handoffRole, setFilters]);
 
   const handleBrowseAll = useCallback(() => {

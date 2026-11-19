@@ -48,16 +48,16 @@ type CvStep = 'invite' | 'loading-profile' | 'fill-profile';
 
 interface ChecklistItemProps {
   title: string;
-  /** Short state word shown at the right: "Done", "To do", "Skipped"... Never colour alone. */
+  /** Short state word shown at the right: "Done", "To do", "Optional"... Never colour alone. */
   status: string;
   done?: boolean;
   detail: ReactNode;
-  skipLabel: string;
-  onSkip?: () => void;
   children?: ReactNode;
 }
 
-function ChecklistItem({ title, status, done, detail, skipLabel, onSkip, children }: ChecklistItemProps) {
+/** No per-item Skip (#764): the footer's one exit covers every item, so the dialog never shows
+ * several competing ways out. */
+function ChecklistItem({ title, status, done, detail, children }: ChecklistItemProps) {
   return (
     <li className="border-b border-base-300 py-3 last:border-b-0">
       <div className="flex items-start justify-between gap-3">
@@ -67,29 +67,23 @@ function ChecklistItem({ title, status, done, detail, skipLabel, onSkip, childre
         </div>
         <span className={`badge badge-sm shrink-0 ${done ? 'badge-success badge-soft' : 'badge-outline'}`}>{status}</span>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        {children}
-        {onSkip && (
-          <button type="button" className="btn btn-ghost btn-xs" aria-label={skipLabel} onClick={onSkip}>
-            Skip
-          </button>
-        )}
-      </div>
+      {children && <div className="mt-2 flex flex-wrap items-center gap-2">{children}</div>}
     </li>
   );
 }
 
 /**
- * First-launch checklist: a CV and a working AI runtime.
- * Each item reads its own live status and can be done or skipped on its own; none gates another.
+ * First-launch checklist: one step, a CV, plus the AI tool's live status as an optional extra.
  *
- * Skippable by design: "Skip for now", the close button and the backdrop all dismiss it. The CV
- * upload is `CvUploadAction` unchanged -- the same pick (`window.cv.selectAndRead`) and persist
- * (`SaveCvToLibrary` -> `createCvDocument`) pair the CV Library page's own button uses. A successful
- * upload hands off into `FillProfileFromCvDrawer` with `autoStart` (the same reviewed, AI-assisted
- * fill Settings offers, still gated on the user pressing Save); closing that drawer, saved or not,
- * returns here, since the CV is already in the library either way. The company list is no longer a
- * step here: it downloads on its own at first launch (`useAutoCompanyList`).
+ * Skippable by design: one footer exit ("Skip for now"), the close button, Esc and the backdrop all
+ * dismiss it. The CV upload is `CvUploadAction` with `saveOnPick` (#764): picking a file saves it
+ * straight to the library -- the same `createCvDocument` the CV Library page uses -- with no extra
+ * "Save to CV library" confirm. It then hands off into `FillProfileFromCvDrawer` with `autoStart`,
+ * the same reviewed fill Settings offers, still gated on the user pressing Save. That Save is the
+ * one confirm: it closes Welcome and, with a target role saved, lands on Search. Cancel or X in the
+ * drawer returns here, since the CV is already in the library. Without a working AI tool the
+ * drawer never starts a read (#767) and offers setup, manual entry or skip instead.
+ * The company list is not a step: it downloads on its own at first launch (`useAutoCompanyList`).
  *
  * Completed work is never repeated: the CV item reads as done once saved.
  */
@@ -98,12 +92,9 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
   const [cvSaved, setCvSaved] = useState(false);
   const [profile, setProfile] = useState<CandidateProfile>();
   const [profileError, setProfileError] = useState<string>();
-  const [skipped, setSkipped] = useState({ cv: false, runtime: false });
 
   const cvCheck = useCvCheck();
   const { readiness: check, recheck: recheckRuntime } = useAiReadiness();
-
-  const skip = (key: keyof typeof skipped) => setSkipped((current) => ({ ...current, [key]: true }));
 
   useEffect(() => {
     if (step !== 'loading-profile') return;
@@ -138,7 +129,9 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
         // The same live status the checklist shows, so a tool it calls missing is never run (#767).
         aiReadiness={check}
         onOpenRuntime={onOpenRuntime}
-        onSkip={() => setStep('invite')}
+        // The CV is saved by now, so skipping the details or saving them both finish Welcome (#764).
+        onSkip={onClose}
+        onSaved={onClose}
       />
     );
   }
@@ -146,8 +139,6 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
   const cvDone = cvSaved || cvCheck === 'has-cv';
   const runtimeDone = check.kind === 'ready';
   const title = reopened ? 'Finish setup' : 'Welcome to Open Vacancy Radar';
-  const allAddressed =
-    (cvDone || skipped.cv) && (runtimeDone || skipped.runtime);
   const busy = step === 'loading-profile';
 
   const runtimeDetail = (() => {
@@ -179,14 +170,14 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
           <p className="text-sm">
             {reopened
               ? 'Pick up where you left off.'
-              : `${runtimeDone ? 'One quick step' : 'Two quick steps'}. Skip any and come back later.`}
+              : 'Add your CV to get started. You can also skip this and come back later.'}
           </p>
 
           <ul className="mt-2" aria-label="Setup checklist">
             <ChecklistItem
               title="Add a CV"
               status={
-                cvDone ? 'Done' : cvCheck === 'checking' ? 'Checking' : cvCheck === 'unavailable' ? 'Unknown' : skipped.cv ? 'Skipped' : 'To do'
+                cvDone ? 'Done' : cvCheck === 'checking' ? 'Checking' : cvCheck === 'unavailable' ? 'Unknown' : 'To do'
               }
               done={cvDone}
               detail={
@@ -196,11 +187,10 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
                   ? 'Could not check. You can still add one.'
                   : 'Used to rank jobs for you and fill in what you are looking for. Stays on this computer.'
               }
-              skipLabel="Skip adding a CV"
-              {...(!cvDone && !skipped.cv && !busy ? { onSkip: () => skip('cv') } : {})}
             >
               {!cvDone && (
                 <CvUploadAction
+                  saveOnPick
                   fillSearchProfile={false}
                   onSaved={() => {
                     setCvSaved(true);
@@ -238,11 +228,8 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
             {!runtimeDone && (
             <ChecklistItem
               title="Connect your AI tool"
-              status={runtimeDone ? 'Ready' : skipped.runtime ? 'Skipped' : check.kind === 'checking' ? 'Checking' : 'To do'}
-              done={runtimeDone}
+              status={check.kind === 'checking' ? 'Checking' : 'Optional'}
               detail={runtimeDetail}
-              skipLabel="Skip connecting your AI tool"
-              {...(!runtimeDone && !skipped.runtime ? { onSkip: () => skip('runtime') } : {})}
             >
               {!runtimeDone && (
                 <>
@@ -261,7 +248,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
 
         <div className="flex flex-wrap justify-end gap-2 border-t border-base-300 px-5 py-3.5">
           <button type="button" className="btn btn-outline btn-sm" onClick={onClose} disabled={busy}>
-            {reopened ? 'Close' : allAddressed ? 'Done' : 'Skip for now'}
+            {reopened ? 'Close' : cvDone ? 'Done' : 'Skip for now'}
           </button>
         </div>
       </div>
