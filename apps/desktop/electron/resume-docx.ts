@@ -111,6 +111,12 @@ function skillsParagraphs(resume: TailoredResume): Paragraph[] {
   return [headingParagraph('Skills'), new Paragraph({ text: resume.skills.join(', ') })];
 }
 
+function languagesParagraphs(resume: TailoredResume): Paragraph[] {
+  const languages = resume.languages?.trim() ?? '';
+  if (languages.length === 0) return [];
+  return [headingParagraph('Languages'), new Paragraph({ text: languages })];
+}
+
 function summaryParagraphs(resume: TailoredResume): Paragraph[] {
   if (resume.summary.trim().length === 0) return [];
   return [new Paragraph({ text: resume.summary, spacing: { after: 120 } })];
@@ -138,6 +144,7 @@ export async function renderResumeDocx(resume: TailoredResume): Promise<Buffer> 
           ...experienceParagraphs(resume),
           ...projectParagraphs(resume),
           ...skillsParagraphs(resume),
+          ...languagesParagraphs(resume),
           ...educationParagraphs(resume),
         ],
       },

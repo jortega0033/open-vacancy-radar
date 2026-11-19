@@ -34,7 +34,7 @@ import type { CvDocumentRecord } from './workspace/types.js';
 export function cvDocumentToTailoredResume(doc: CvDocumentRecord, candidate: { candidateName: string } | null): TailoredResume {
   const fallbackName = candidate?.candidateName.trim() ?? '';
   if (doc.source) {
-    const resume = tailoredResumeFromSource(doc.source, doc.profile.skills);
+    const resume = tailoredResumeFromSource(doc.source, doc.profile.skills, doc.profile.languages);
     return {
       ...resume,
       contact: {
@@ -60,6 +60,7 @@ export function cvDocumentToTailoredResume(doc: CvDocumentRecord, candidate: { c
     projects: [],
     skills: doc.profile.skills,
     education: [],
+    ...(doc.profile.languages.trim().length > 0 ? { languages: doc.profile.languages.trim() } : {}),
   };
 }
 

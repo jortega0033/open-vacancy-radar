@@ -1146,6 +1146,66 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(generateTailoredResume).toHaveBeenCalledTimes(2);
   });
 
+  it('Welcome-shaped CV: stops asking for the review, then keeps Skills and Languages after it is saved (#756, #757)', async () => {
+    // What Welcome > Upload CV > Save to CV library writes: text and file name, no reviewed source,
+    // an empty profile. The search-profile fill touches a different record entirely.
+    const welcomeCv = workspace.createCvDocument(db, {
+      name: 'jamie-cv.pdf',
+      kind: 'uploaded',
+      text: 'Jamie Rivera. Frontend developer. SKILLS: React, TypeScript. LANGUAGES: Dutch (native), English (C1).',
+    });
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY, cvId: welcomeCv.id });
+    expect(started.ok).toBe(true);
+
+    const first = await pipeline.runNextApplicationAttempt(deps);
+    expect(first.result?.outcome).toBe('needs_user');
+    const stopped = workspace.getApplicationAttempt(db, started.attemptId!);
+    expect(stopped.checkpointDetail.startsWith('Automatic CV tailoring stopped:')).toBe(true);
+    expect(stopped.checkpointDetail).toContain('no reviewed source record');
+    // No session was spent on a CV that cannot be tailored yet.
+    expect(generateTailoredResume).not.toHaveBeenCalled();
+
+    // The review drawer's Save: reviewed records plus the completed profile, skills and languages included.
+    workspace.updateCvDocument(db, welcomeCv.id, {
+      source: { ...SOURCE_CV, contact: { ...SOURCE_CV.contact, title: 'Frontend Developer' } },
+      profile: {
+        title: 'Frontend Developer',
+        years: '5',
+        location: 'Amsterdam',
+        languages: 'Dutch (native), English (C1)',
+        skills: ['React', 'TypeScript'],
+        summary: SOURCE_CV.summary,
+        auth: '',
+      },
+    });
+    generateTailoredResume.mockResolvedValueOnce({
+      ok: true,
+      text: JSON.stringify({
+        contact: SOURCE_CV.contact,
+        summary: SOURCE_CV.summary,
+        experience: SOURCE_CV.experience,
+        projects: [],
+        skills: ['TypeScript', 'React'],
+        education: [],
+      }),
+    });
+
+    const restarted = await pipeline.restartApplicationTailoring(deps, started.attemptId!, 'ai');
+    expect(restarted.ok).toBe(true);
+    queueApplicationDocumentRenders();
+    const second = await pipeline.runNextApplicationAttempt(deps);
+    expect(second.result?.outcome).toBe('ready');
+
+    const cvHtml = loadedHtml.find((html) => html.includes('<h2>Skills</h2>'));
+    expect(cvHtml).toBeDefined();
+    expect(cvHtml).toContain('TypeScript, React');
+    expect(cvHtml).toContain('<h2>Languages</h2>');
+    expect(cvHtml).toContain('Dutch (native), English (C1)');
+    const detail = workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail;
+    expect(detail).not.toContain('without any skills');
+    expect(detail).not.toContain('no skills');
+  });
+
   it('keeps a usage-limit reason intact so the review dialog can show the limit notice (#546)', async () => {
     const limitMessage = "You've hit your session limit · resets 10:10pm (Europe/Amsterdam)";
     generateTailoredResume.mockResolvedValueOnce({ ok: false, text: '', error: limitMessage });
