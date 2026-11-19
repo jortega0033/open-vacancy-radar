@@ -165,7 +165,7 @@ async function runJourney(electronApp: ElectronApplication, userDataDir: string,
     // Headings are upper-cased by the template's CSS. Skills come back in the tailored order.
     const cvText = texts.find((text) => /SKILLS TypeScript, React, Playwright/iu.test(text));
     expect(cvText, `a tailored CV PDF with a Skills section among: ${texts.join(' || ')}`).toBeDefined();
-    expect(cvText).toMatch(new RegExp(`LANGUAGES ${FAKE_LANGUAGES.replace(/[()]/gu, '\\$&')}`, 'iu'));
+    expect(cvText).toMatch(new RegExp(`LANGUAGES ${FAKE_LANGUAGES.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}`, 'iu'));
     expect(cvText).toMatch(/EXPERIENCE Frontend Developer, Redwood Software/iu);
   } catch (error) {
     if (process.env.OVR_E2E_FAKE_CLAUDE_LOG) {

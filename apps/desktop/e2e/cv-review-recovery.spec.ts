@@ -155,7 +155,7 @@ test('Use my CV as it is renders a CV whose PDF keeps the Skills and Languages s
     }
     // The template upper-cases section headings with CSS, so the extracted text reads "SKILLS".
     const skillsPattern = new RegExp(`SKILLS ${RECOVERY_SKILLS.join(', ')}`, 'iu');
-    const languagesPattern = new RegExp(`LANGUAGES ${RECOVERY_LANGUAGES.replace(/[()]/gu, '\\$&')}`, 'iu');
+    const languagesPattern = new RegExp(`LANGUAGES ${RECOVERY_LANGUAGES.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}`, 'iu');
     const cvText = texts.find((text) => skillsPattern.test(text));
     expect(cvText, `a CV PDF with a Skills section among: ${texts.join(' || ')}`).toBeDefined();
     expect(cvText).toMatch(languagesPattern);
