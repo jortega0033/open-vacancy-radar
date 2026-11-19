@@ -37,6 +37,12 @@ export interface CvDrawerProps {
   onCancel: () => void;
   /** Rejecting shows the thrown error's message inline; resolving closes the drawer. */
   onSubmit: (payload: CvDrawerSubmitPayload) => Promise<void>;
+  /**
+   * Start "Read my full CV" as soon as the drawer opens, for an uploaded CV that has no reviewed
+   * source yet (#756). The read only fills the review panel; the person still confirms with Save.
+   * Nothing happens for a CV that already has a source or has no text to read.
+   */
+  autoReadSource?: boolean;
 }
 
 interface FormState {
@@ -123,7 +129,7 @@ const DERIVED_FIELD_LABELS: Partial<Record<keyof CvProfile, string>> = {
  * (self-contained submitting/error state, async `onSubmit`) rather than `SavedJobDrawer`'s plain
  * fixed panel: one of the two existing drawer conventions, not a third.
  */
-export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
+export function CvDrawer({ mode, record, onCancel, onSubmit, autoReadSource = false }: CvDrawerProps) {
   const [form, setForm] = useState<FormState>(() => toFormState(record));
   const [validationError, setValidationError] = useState<string>();
   const [error, setError] = useState<string>();
@@ -164,8 +170,13 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
    * fills empty fields and leaves the derived ones alone. */
   const parseGapsOnlyRef = useRef(false);
   const parseSucceeded = parseRun.status === 'completed' && !parseError;
+  const skillsEmpty = textToSkills(form.skillsText).length === 0;
   // A finished fill that still left Skills empty (#521): say so instead of leaving a silent blank.
-  const noSkillsFound = parseSucceeded && textToSkills(form.skillsText).length === 0;
+  const noSkillsFound = parseSucceeded && skillsEmpty;
+  // The same gap reached without a fill (#757): records were read, so Save would stamp a CV as
+  // ready for tailoring while every tailored document silently leaves out its Skills section. A
+  // warning, not a block: a CV can genuinely list no skills, and the person decides.
+  const skillsMissingForTailoring = source !== null && skillsEmpty && !parseRun.isBusy && !noSkillsFound;
 
   // A second, separate run for #274's full source-CV extraction. Deliberately not folded into the
   // one above: they answer different questions (seven summary fields vs. the whole document as
@@ -173,6 +184,10 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   // other's result while the user is part-way through a review.
   const sourceRun = useAgentRun({ chunkSeparator: '' });
   const sourceAppliedRef = useRef(false);
+  /** The form as of the latest render, for the source-read effect below, which must decide from the
+   * fields as they are when the read completes rather than re-running on every keystroke. */
+  const formRef = useRef(form);
+  formRef.current = form;
 
   // Mirrors how every other AI feature (Gap Analysis, Letters, ...) resolves which CLI to run
   // through (issue #400): the effective provider, not the raw persisted preference, so this still
@@ -216,6 +231,14 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   // Same "apply exactly once, never auto-save" rule as the profile parse above: the extracted
   // records land in the review panel for the candidate to correct and confirm, and only reach the
   // database when they press Save.
+  //
+  // The read also completes the profile half of the record (#757). Before, "Read my full CV" filled
+  // only the source records and left Title, Summary, Skills and Languages exactly as they were, so
+  // the default Welcome path produced a CV that said "ready" while every tailored document dropped
+  // its Skills and Languages sections. Now the same derivation "Fill in from my CV" uses lands the
+  // fields the records can supply, and one AI pass completes only what records cannot hold (skills,
+  // languages, work authorization) when any of them is still blank. Fields the person already
+  // typed are never overwritten.
   useEffect(() => {
     if (sourceRun.status !== 'completed' || sourceAppliedRef.current || !record) return;
     sourceAppliedRef.current = true;
@@ -224,12 +247,46 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
       // A re-extraction keeps the ids of roles it can match unambiguously. The rest get new ids and
       // are listed below for the candidate to check, never renumbered onto a saved role.
       const { experience, needsReview } = reconcileExperienceIds(record.source?.experience ?? [], extracted.experience);
-      setSource({ ...extracted, experience });
+      const next = { ...extracted, experience };
+      setSource(next);
       setUnmatchedRoles(record.source ? needsReview : []);
+
+      const derived = deriveCvProfileFromSource(next);
+      const current = formRef.current;
+      const filled = applyMissingProfileFields(current, derived);
+      setForm(filled);
+      const blank = (value: string) => value.trim().length === 0;
+      const landed = (Object.keys(derived) as (keyof CvProfile)[])
+        .filter((key) => key !== 'skills' && blank(current[key as keyof FormState] as string) && !blank(filled[key as keyof FormState] as string))
+        .map((key) => DERIVED_FIELD_LABELS[key])
+        .filter((label): label is string => label !== undefined);
+      setDerivedFields(landed.length > 0 ? landed : null);
+
+      const needsGapFill =
+        textToSkills(filled.skillsText).length === 0 || blank(filled.languages) || blank(filled.auth);
+      if (needsGapFill && !parseRun.isBusy) {
+        setParseError(undefined);
+        parseGapsOnlyRef.current = true;
+        parseAppliedRef.current = false;
+        void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
+      }
     } catch (err) {
       setSourceError(err instanceof Error ? err.message : 'could not read the AI response');
     }
+    // `parseRun`/`provider` are read at completion time only; listing them would re-run this on
+    // every render of the parse that this effect itself starts.
   }, [sourceRun.status, sourceRun.text, record]);
+
+  // #756: opened from Apply for a CV with no reviewed source, the read starts at once. The person
+  // still reviews the records and confirms with Save; only the click is saved.
+  const autoReadStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoReadSource || autoReadStartedRef.current || !record || !canParseWithAi || record.source) return;
+    autoReadStartedRef.current = true;
+    sourceAppliedRef.current = false;
+    void sourceRun.start(buildSourceCvPrompt(record.name, record.text), { provider });
+    // Deliberately once per drawer: see `autoReadStartedRef`.
+  }, [autoReadSource, record, canParseWithAi]);
 
   // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the close button) while
   // it's still running, otherwise the daemon session keeps running unobserved until it times out.
@@ -319,7 +376,9 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
       profile: {
         title: form.title.trim(),
         years: form.years.trim(),
-        location: form.location.trim(),
+        // One Location (#757): with reviewed records on screen, the contact block's location is the
+        // CV's stated one, and the profile copy follows it rather than being typed a second time.
+        location: source ? source.contact.location.trim() : form.location.trim(),
         languages: form.languages.trim(),
         skills: textToSkills(form.skillsText),
         summary: form.summary.trim(),
@@ -510,18 +569,20 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             </div>
 
             <div className="grid grid-cols-2 gap-2.5">
-              <label className="block">
-                <span className="mb-1.5 block ovr-eyebrow">
-                  Location
-                </span>
-                <input
-                  className="input w-full"
-                  value={form.location}
-                  onChange={(e) => set('location', e.target.value)}
-                  disabled={submitting}
-                  aria-label="Location"
-                />
-              </label>
+              {!source && (
+                <label className="block">
+                  <span className="mb-1.5 block ovr-eyebrow">
+                    Location
+                  </span>
+                  <input
+                    className="input w-full"
+                    value={form.location}
+                    onChange={(e) => set('location', e.target.value)}
+                    disabled={submitting}
+                    aria-label="Location"
+                  />
+                </label>
+              )}
               <label className="block">
                 <span className="mb-1.5 block ovr-eyebrow">
                   Languages
@@ -550,6 +611,11 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 aria-label="Skills"
               />
             </label>
+            {skillsMissingForTailoring && (
+              <p className="text-xs text-warning" role="status" data-testid="cv-drawer-skills-missing">
+                No skills listed. Tailored CVs will have no Skills section until you add them above.
+              </p>
+            )}
 
             <label className="block">
               <span className="mb-1.5 block ovr-eyebrow">

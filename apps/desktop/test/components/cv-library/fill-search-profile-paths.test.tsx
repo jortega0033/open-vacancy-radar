@@ -205,6 +205,23 @@ describe('CV paths that fill the empty search profile (#628)', () => {
     expect(await screen.findByText('What you are looking for filled in from the default CV')).toBeInTheDocument();
   });
 
+  it('the library page still saves only on the explicit Save to CV library click (Welcome-only saveOnPick, #764)', async () => {
+    const createCvDocument = vi.fn().mockResolvedValue(makeCv({ id: 'up', name: 'resume.pdf', kind: 'uploaded' }));
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([]), createCvDocument });
+    installProfile();
+    installCvAndAgentBridges(vi.fn().mockResolvedValue({ status: 'ok', fileName: 'resume.pdf', text: 'Text.' }));
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText(/no cv on file/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /^upload cv$/i }));
+
+    const saveButton = await screen.findByRole('button', { name: /save to cv library/i });
+    expect(screen.getByText(/Loaded/)).toBeInTheDocument();
+    expect(createCvDocument).not.toHaveBeenCalled();
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(createCvDocument).toHaveBeenCalledTimes(1));
+  });
+
   it('SaveCvToLibrary fills on its own and says so', async () => {
     installWorkspaceBridge({ createCvDocument: vi.fn().mockResolvedValue(makeCv()) });
     const save = installProfile();

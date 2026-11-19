@@ -7,6 +7,7 @@ import { Dialog } from '../shell/Dialog.js';
 import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { useSupportPrompt } from '../support/SupportPromptProvider.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
+import { CvReviewRequiredNotice, useCvReviewDrawer } from './CvReviewRecovery.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
 import { PostingVerificationNotice } from './PostingVerificationNotice.js';
 import { isPostingPreparationStopDetail } from './posting-verification-text.js';
@@ -15,6 +16,7 @@ import { WarningBanner } from '../shell/index.js';
 import {
   classifyReviewEntry,
   describePreparationBlocker,
+  isCvReviewRequired,
   isTailoringStopped,
   pipelineLimit,
   TAILORING_STOPPED_PREFIX,
@@ -409,6 +411,14 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     }
   }, [attempt.id, onClose, state]);
 
+  // #756: the CV review over this dialog, for a tailoring stop that only needs the review.
+  const recoveryRef = useRef(handleTailoringRecovery);
+  recoveryRef.current = handleTailoringRecovery;
+  const cvReview = useCvReviewDrawer({
+    sourceCvId: attempt.sourceCvId,
+    onReviewed: () => void recoveryRef.current('retry'),
+  });
+
   const handleResume = useCallback(async () => {
     if (state.phase !== 'preparation_blocked' || state.busy) return;
     setState({ ...state, busy: true });
@@ -553,7 +563,21 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
           />
         )}
 
-        {state.phase === 'tailoring_blocked' && (
+        {state.phase === 'tailoring_blocked' && isCvReviewRequired(state.message) && (
+          <div className="space-y-4">
+            <WarningBanner>Your CV has not been reviewed yet, so it could not be tailored.</WarningBanner>
+            <CvReviewRequiredNotice
+              busy={state.busy}
+              loading={cvReview.loading}
+              error={cvReview.error}
+              onReview={() => void cvReview.open()}
+              onUseOriginal={() => void handleTailoringRecovery('original')}
+            />
+            {cvReview.drawer}
+          </div>
+        )}
+
+        {state.phase === 'tailoring_blocked' && !isCvReviewRequired(state.message) && (
           <div className="space-y-4">
             {limit ? (
               <PipelineLimitNotice info={limit} />

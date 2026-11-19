@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
+import type { AiReadiness } from '../../use-ai-readiness.js';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { buildSearchProfileFromCvPrompt } from '../cv/profile-bridge-prompts.js';
 import { ProviderErrorNotice } from '../cv/ProviderErrorNotice.js';
@@ -152,13 +154,36 @@ export interface FillProfileFromCvDrawerProps {
    * later. Still never saves anything on its own -- autoStart shortens the path to the review form,
    * it does not shorten the review form itself. */
   autoStart?: boolean;
+  /** The caller's live read of the AI tool (#767). When given it is authoritative: a read runs
+   * through its provider, `autoStart` waits until it is `ready`, and a missing or signed-out tool
+   * never starts a session -- the drawer says why and offers setup, manual entry or skip instead.
+   * Omitted (Settings), the drawer resolves the provider itself and always offers Read CV. */
+  aiReadiness?: AiReadiness;
+  /** "Set up an AI tool" in the no-AI notice. Hidden when omitted. */
+  onOpenRuntime?: () => void;
+  /** "Skip" in the no-AI notice: leave without filling anything in. Hidden when omitted. */
+  onSkip?: () => void;
+  /** Called after a successful Save instead of `onClose`, so a caller can move on rather than
+   * just close the drawer (#764). Cancel and the X still call `onClose`. */
+  onSaved?: () => void;
 }
 
-export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }: FillProfileFromCvDrawerProps) {
+export function FillProfileFromCvDrawer({
+  profile,
+  onApply,
+  onClose,
+  autoStart,
+  aiReadiness,
+  onOpenRuntime,
+  onSkip,
+  onSaved,
+}: FillProfileFromCvDrawerProps) {
   const [documents, setDocuments] = useState<CvDocumentRecord[]>();
   const [listError, setListError] = useState<string>();
   const [selectedId, setSelectedId] = useState('');
   const [form, setForm] = useState<ReviewForm>();
+  /** Where the shown form came from, so its status line never claims a CV read that did not run. */
+  const [formOrigin, setFormOrigin] = useState<'cv' | 'manual'>('cv');
   const seedRef = useRef<ReviewSeed>();
   const [parseError, setParseError] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -169,7 +194,12 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   // as CvDrawer's parse run.
   const run = useAgentRun({ chunkSeparator: '' });
   const appliedRef = useRef(false);
-  const { provider } = useEffectiveProvider();
+  const { provider: resolvedProvider } = useEffectiveProvider();
+  const provider = aiReadiness && 'provider' in aiReadiness ? aiReadiness.provider : resolvedProvider;
+  // Only a caller-supplied status can block a read; without one, Settings behaves as before. Only a
+  // tool known to be missing or signed out, or a helper not answering yet, blocks it: an installed
+  // tool whose sign-in status could not be read ('unverified') still gets to try.
+  const aiReady = !aiReadiness || aiReadiness.kind === 'ready' || aiReadiness.kind === 'unverified';
 
   // Only CVs with extracted text can be read: a scanned PDF that produced nothing is listed nowhere
   // here rather than being offered and then failing with an empty answer.
@@ -199,6 +229,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
     try {
       const seed = extractedSeed(parseSearchProfileCvResponse(run.text), profile);
       seedRef.current = seed;
+      setFormOrigin('cv');
       setForm(seed.form);
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'could not read the AI response');
@@ -227,7 +258,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   const busy = run.isBusy || saving;
 
   function handleRead() {
-    if (!selected) return;
+    if (!selected || !aiReady) return;
     appliedRef.current = false;
     setParseError(undefined);
     setSaveError(undefined);
@@ -240,11 +271,25 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   // re-fire if the user changes `selectedId` afterward, or every dropdown change would restart a
   // real AI run autoStart was never asked to control.
   const autoStartedRef = useRef(false);
+  // With a caller-supplied status this also waits for `ready`: a missing or signed-out tool is
+  // known not to work, so no session is started for it (#767). If it becomes ready while the drawer
+  // is still open and nothing has been filled in yet, the read starts then.
   useEffect(() => {
-    if (!autoStart || autoStartedRef.current || !selected) return;
+    if (!autoStart || autoStartedRef.current || !selected || !aiReady || form) return;
     autoStartedRef.current = true;
     handleRead();
-  }, [autoStart, selected]);
+  }, [autoStart, selected, aiReady, form]);
+
+  /** Manual entry: the same review form, seeded from the profile as saved, with nothing marked as
+   * coming from the CV. Saving records only the fields the person actually changes as theirs. */
+  function handleFillManually() {
+    const seed: ReviewSeed = { form: toReviewForm({}, profile), cvKeys: new Set() };
+    seedRef.current = seed;
+    setParseError(undefined);
+    setSaveError(undefined);
+    setFormOrigin('manual');
+    setForm(seed.form);
+  }
 
   function set<K extends keyof ReviewForm>(key: K, value: string) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -279,7 +324,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
         }),
         fieldSources: sources,
       });
-      onClose();
+      (onSaved ?? onClose)();
     } catch (err) {
       setSaveError(describeError(err, 'could not save what you are looking for'));
     } finally {
@@ -354,15 +399,17 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </label>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-sm"
-                    onClick={handleRead}
-                    disabled={busy || !selected}
-                  >
-                    {run.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-                    Read CV
-                  </button>
+                  {aiReady && (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={handleRead}
+                      disabled={busy || !selected}
+                    >
+                      {run.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                      Read CV
+                    </button>
+                  )}
                   {hasParsedProfile && (
                     <button
                       type="button"
@@ -371,6 +418,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                       onClick={() => {
                         const seed = parsedCvSeed(selected!.profile, profile);
                         seedRef.current = seed;
+                        setFormOrigin('cv');
                         setForm(seed.form);
                       }}
                     >
@@ -382,8 +430,46 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                       Stop
                     </button>
                   )}
+                  {aiReady && !form && !run.isBusy && (runError || !autoStart) && (
+                    <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={handleFillManually}>
+                      Fill these in myself
+                    </button>
+                  )}
                 </div>
               </>
+            )}
+
+            {aiReadiness?.kind === 'checking' && !form && (
+              <p className="text-sm text-base-content/70" role="status">
+                <span className="loading loading-spinner loading-xs" aria-hidden="true" /> Checking your AI tool...
+              </p>
+            )}
+
+            {aiReadiness && !aiReady && aiReadiness.kind !== 'checking' && !form && (
+              <div className="rounded-box border border-base-300 bg-base-200/40 p-3 text-sm" role="status">
+                <p>
+                  {aiReadiness.kind === 'not-authenticated'
+                    ? `${PROVIDER_LABEL[aiReadiness.provider]} needs you to sign in, so your details can't be filled in automatically.`
+                    : aiReadiness.kind === 'unreachable'
+                    ? "The AI helper hasn't started yet, so your details can't be filled in automatically right now."
+                    : "No AI tool connected, so your details can't be filled in automatically."}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {onOpenRuntime && (
+                    <button type="button" className="btn btn-sm btn-outline" onClick={onOpenRuntime}>
+                      Set up an AI tool
+                    </button>
+                  )}
+                  <button type="button" className="btn btn-sm btn-outline" onClick={handleFillManually}>
+                    Fill these in myself
+                  </button>
+                  {onSkip && (
+                    <button type="button" className="btn btn-sm btn-ghost" onClick={onSkip}>
+                      Skip
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
 
             {limitFailure && <ProviderErrorNotice error={limitFailure} providerId={provider} onRetry={handleRead} />}
@@ -402,8 +488,8 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
 
             {form && (
               <>
-                <p className="text-xs text-success" role="status">
-                  Read from your CV: review and edit before saving.
+                <p className={`text-xs ${formOrigin === 'cv' ? 'text-success' : 'text-base-content/70'}`} role="status">
+                  {formOrigin === 'cv' ? 'Read from your CV: review and edit before saving.' : 'Fill in your details, then save.'}
                 </p>
 
                 <label className="block">

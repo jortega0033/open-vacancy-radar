@@ -50,6 +50,8 @@ export function renderResumePlainText(resume: TailoredResume): string {
 
   if (resume.skills.length > 0) blocks.push(`Skills\n${join(resume.skills, ', ')}`);
 
+  if ((resume.languages ?? '').trim().length > 0) blocks.push(`Languages\n${resume.languages!.trim()}`);
+
   if (resume.education.length > 0) {
     const lines = ['Education'];
     for (const entry of resume.education) {

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApplyWorkspace } from '../../../src/components/applications/ApplyWorkspace.js';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../../src/window.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
+import { installBridges } from '../../cv-bridges.js';
+import type { CvDocumentRecord } from '../../../src/window.js';
 import { resetProviderLimitsForTest } from '../../../src/provider-limits.js';
 
 const DOCS_READY =
@@ -245,6 +247,107 @@ describe('ApplyWorkspace (#657)', () => {
     // The restart stays in place: the same workspace goes back to preparing.
     expect(screen.getByTestId('apply-workspace')).toBeInTheDocument();
     resetProviderLimitsForTest();
+  });
+
+  describe('a CV that was never reviewed (#756)', () => {
+    const REVIEW_REQUIRED =
+      'Automatic CV tailoring stopped: this CV has no reviewed source record. Review the CV source before automatic tailoring, or use the original CV.';
+
+    function welcomeCv(): CvDocumentRecord {
+      return {
+        id: 'cv-welcome',
+        name: 'jamie-cv.pdf',
+        kind: 'uploaded',
+        targetRole: '',
+        text: 'Jamie Rivera. Frontend developer. SKILLS: React, TypeScript. LANGUAGES: Dutch, English.',
+        profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+        source: null,
+        textSource: 'text_layer',
+        isDefault: true,
+        uploadedAt: '2026-10-01T10:00:00.000Z',
+        updatedAt: '2026-10-01T10:00:00.000Z',
+      };
+    }
+
+    it('says the CV needs a review, offers Review this CV first, and never a futile Try again', async () => {
+      setup({ sequence: [makeAttempt({ checkpointDetail: REVIEW_REQUIRED, sourceCvId: 'cv-welcome' })] });
+      renderWorkspace();
+
+      expect(await screen.findByText('Your CV has not been reviewed yet, so it could not be tailored.')).toBeInTheDocument();
+      expect(screen.getByTestId('apply-workspace-status')).toHaveTextContent('Your CV needs a review before it can be tailored.');
+      expect(screen.getByRole('button', { name: 'Review this CV' })).toHaveClass('btn-primary');
+      expect(screen.getByRole('button', { name: 'Use my CV as it is' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+    });
+
+    it('opens the CV review over the page, keeps the application, and restarts tailoring after Save', async () => {
+      const record = welcomeCv();
+      const updateCvDocument = vi.fn(async (_id: string, patch: Partial<CvDocumentRecord>) => ({ ...record, ...patch }) as CvDocumentRecord);
+      const blocked = makeAttempt({ checkpointDetail: REVIEW_REQUIRED, sourceCvId: 'cv-welcome' });
+      const { applicationPipeline } = setup({ sequence: [blocked] });
+      const bridges = installBridges();
+      // `installBridges` installs a fresh workspace bridge; put this test's application reads back.
+      installWorkspaceBridge({
+        getApplicationAttempt: vi.fn().mockResolvedValue(blocked),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([]),
+        listCvDocuments: vi.fn().mockResolvedValue([record]),
+        updateCvDocument,
+      });
+      renderWorkspace();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Review this CV' }));
+      const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+      // The application stays on the page underneath the review.
+      expect(screen.getByRole('region', { name: 'Frontend Engineer at Acme Corp' })).toBeInTheDocument();
+      // The read starts on its own; the person still confirms.
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      bridges.emit('sess-cv-1', {
+        type: 'assistant.message',
+        text: JSON.stringify({
+          contact: { name: 'Jamie Rivera', title: 'Frontend Developer', location: 'Utrecht', email: 'jamie@example.invalid', phone: '', links: [] },
+          summary: 'Frontend developer.',
+          experience: [{ company: 'Redwood Software', title: 'Frontend Developer', dates: '2019 - 2023', engagement: 'employment', client: '', bullets: ['Built the UI.'] }],
+          education: [],
+          projects: [],
+        }),
+      });
+      bridges.emit('sess-cv-1', { type: 'session.completed' });
+      expect(await within(dialog).findByText(/Redwood Software/)).toBeInTheDocument();
+      // Nothing is saved or restarted until Save.
+      expect(updateCvDocument).not.toHaveBeenCalled();
+      expect(applicationPipeline.retryTailoring).not.toHaveBeenCalled();
+
+      fireEvent.change(within(dialog).getByLabelText(/skills/i), { target: { value: 'React, TypeScript' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /confirm and save/i }));
+
+      await waitFor(() => expect(updateCvDocument).toHaveBeenCalledWith('cv-welcome', expect.objectContaining({ source: expect.anything() })));
+      await waitFor(() => expect(applicationPipeline.retryTailoring).toHaveBeenCalledWith('attempt-1'));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /edit cv/i })).not.toBeInTheDocument());
+      expect(screen.getByTestId('apply-workspace')).toBeInTheDocument();
+    });
+
+    it('says so when the CV behind the application is gone from the library', async () => {
+      setup({ sequence: [makeAttempt({ checkpointDetail: REVIEW_REQUIRED, sourceCvId: 'cv-missing' })] });
+      renderWorkspace();
+      fireEvent.click(await screen.findByRole('button', { name: 'Review this CV' }));
+      expect(await screen.findByText(/no longer in your library/)).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('warns on a ready package whose CV lists no skills instead of calling it tailored (#757)', async () => {
+    setup({
+      sequence: [
+        makeAttempt({
+          checkpointDetail:
+            'CV tailored for this vacancy from the reviewed source. Your CV profile has no skills, so tailoring cannot match this vacancy. Add skills to your CV. Your application documents are ready. This employer site is not approved for automated submission, so apply on the site yourself and mark the attempt when you finish.',
+        }),
+      ],
+    });
+    renderWorkspace();
+    expect(await screen.findByRole('alert', { name: 'Your CV lists no skills' })).toBeInTheDocument();
+    expect(screen.getByTestId('apply-workspace-status')).toHaveTextContent('Your documents are ready, but your CV lists no skills.');
   });
 
   it('shows a preparation stop with no documents and its Resume action, never "documents are ready"', async () => {

@@ -128,6 +128,9 @@ export function validateGeneratedResume(parsed: TailoredResume, cv: CvDocumentRe
     dropped.push('summary rewrite was not an exact reviewed fact');
   }
 
+  // Languages are copied from the reviewed profile, never taken from the model (#757): the prompt
+  // does not ask for them, so a tailored CV keeps the candidate's own Languages line verbatim.
+  const languages = cv.profile.languages.trim();
   return {
     resume: {
       ...reconciled.resume,
@@ -135,6 +138,7 @@ export function validateGeneratedResume(parsed: TailoredResume, cv: CvDocumentRe
       summary,
       experience,
       skills,
+      ...(languages.length > 0 ? { languages } : {}),
     },
     dropped,
   };

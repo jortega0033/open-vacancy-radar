@@ -500,7 +500,7 @@ export interface VerifyContext {
 }
 
 export function sourceCvPlainText(cv: CvDocumentRecord): string {
-  return cv.source ? renderResumePlainText(tailoredResumeFromSource(cv.source, cv.profile.skills)) : '';
+  return cv.source ? renderResumePlainText(tailoredResumeFromSource(cv.source, cv.profile.skills, cv.profile.languages)) : '';
 }
 
 function supportCorpus(ctx: VerifyContext): string {
