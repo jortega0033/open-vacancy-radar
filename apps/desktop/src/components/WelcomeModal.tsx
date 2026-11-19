@@ -1,11 +1,11 @@
 import { X } from '@phosphor-icons/react';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { ProviderId } from '@agent-dock/shared';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { PROVIDER_LABEL } from '../provider-labels.js';
 import { Dialog } from './shell/Dialog.js';
 import { CvUploadAction } from './cv-library/CvUploadAction.js';
 import { FillProfileFromCvDrawer } from './settings/FillProfileFromCv.js';
+import { useAiReadiness } from '../use-ai-readiness.js';
 
 export interface WelcomeModalProps {
   /**
@@ -45,51 +45,6 @@ function useCvCheck() {
 }
 
 type CvStep = 'invite' | 'loading-profile' | 'fill-profile';
-
-type RuntimeCheck =
-  | { kind: 'checking' }
-  | { kind: 'ready'; provider: ProviderId }
-  | { kind: 'not-installed'; provider: ProviderId }
-  | { kind: 'not-authenticated'; provider: ProviderId }
-  | { kind: 'unreachable' };
-
-/** Live read of the default provider's status, re-run on demand and whenever the AI helper reports
- * ready (it is usually still starting when this modal first opens). */
-function useRuntimeCheck() {
-  const [check, setCheck] = useState<RuntimeCheck>({ kind: 'checking' });
-  const mounted = useRef(true);
-
-  const run = useCallback(async () => {
-    setCheck({ kind: 'checking' });
-    try {
-      const settings = await window.workspace.getSettings().catch(() => undefined);
-      const provider = settings?.defaultProvider ?? 'claude';
-      const providers = await window.agentDock.listProviders();
-      const status = providers.find((p) => p.id === provider);
-      let next: RuntimeCheck;
-      if (!status?.installed) next = { kind: 'not-installed', provider };
-      else if (status.authenticated !== 'authenticated') next = { kind: 'not-authenticated', provider };
-      else next = { kind: 'ready', provider };
-      if (mounted.current) setCheck(next);
-    } catch {
-      if (mounted.current) setCheck({ kind: 'unreachable' });
-    }
-  }, []);
-
-  useEffect(() => {
-    mounted.current = true;
-    void run();
-    const unsubscribe = window.agentDock.onDaemonStatus((status) => {
-      if (status.state === 'ready') void run();
-    });
-    return () => {
-      mounted.current = false;
-      unsubscribe();
-    };
-  }, [run]);
-
-  return { check, run };
-}
 
 interface ChecklistItemProps {
   title: string;
@@ -146,7 +101,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
   const [skipped, setSkipped] = useState({ cv: false, runtime: false });
 
   const cvCheck = useCvCheck();
-  const { check, run: recheckRuntime } = useRuntimeCheck();
+  const { readiness: check, recheck: recheckRuntime } = useAiReadiness();
 
   const skip = (key: keyof typeof skipped) => setSkipped((current) => ({ ...current, [key]: true }));
 
@@ -180,6 +135,10 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
         onApply={async (patch) => void (await window.vacancyRadar.saveSearchProfile(patch))}
         onClose={() => setStep('invite')}
         autoStart
+        // The same live status the checklist shows, so a tool it calls missing is never run (#767).
+        aiReadiness={check}
+        onOpenRuntime={onOpenRuntime}
+        onSkip={() => setStep('invite')}
       />
     );
   }

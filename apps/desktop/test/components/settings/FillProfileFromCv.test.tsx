@@ -400,6 +400,96 @@ describe('FillProfileFromCvDrawer', () => {
       expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
     });
   });
+
+  describe('caller-supplied AI readiness (#767)', () => {
+    it('waits while the status is still being checked, then starts once it is ready, through that provider', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
+      const props = { profile: USER_SET_PROFILE, onApply: vi.fn(), onClose: vi.fn(), autoStart: true };
+
+      const { rerender } = render(<FillProfileFromCvDrawer {...props} aiReadiness={{ kind: 'checking' }} />);
+      await screen.findByText(/Checking your AI tool/);
+      await screen.findByRole('option', { name: 'Frontend CV' });
+      expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
+
+      rerender(<FillProfileFromCvDrawer {...props} aiReadiness={{ kind: 'ready', provider: 'codex' }} />);
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]![0]).toMatchObject({ provider: 'codex' });
+    });
+
+    it('never starts a session for a missing tool, and offers setup, manual entry and skip', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
+      const onOpenRuntime = vi.fn();
+      const onSkip = vi.fn();
+
+      render(
+        <FillProfileFromCvDrawer
+          profile={USER_SET_PROFILE}
+          onApply={vi.fn()}
+          onClose={vi.fn()}
+          autoStart
+          aiReadiness={{ kind: 'not-installed', provider: 'claude' }}
+          onOpenRuntime={onOpenRuntime}
+          onSkip={onSkip}
+        />,
+      );
+
+      await screen.findByRole('option', { name: 'Frontend CV' });
+      expect(dialog().getByText("No AI tool connected, so your details can't be filled in automatically.")).toBeInTheDocument();
+      expect(dialog().queryByRole('button', { name: 'Read CV' })).not.toBeInTheDocument();
+      expect(dialog().queryByRole('alert')).not.toBeInTheDocument();
+      fireEvent.click(dialog().getByRole('button', { name: 'Set up an AI tool' }));
+      fireEvent.click(dialog().getByRole('button', { name: 'Skip' }));
+      expect(onOpenRuntime).toHaveBeenCalledTimes(1);
+      expect(onSkip).toHaveBeenCalledTimes(1);
+      expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
+    });
+
+    it('manual entry keeps the saved values and records only edited fields as the user\'s', async () => {
+      installBridges();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
+      const onApply = vi.fn().mockResolvedValue(undefined);
+      const onSaved = vi.fn();
+      const onClose = vi.fn();
+
+      render(
+        <FillProfileFromCvDrawer
+          profile={USER_SET_PROFILE}
+          onApply={onApply}
+          onClose={onClose}
+          onSaved={onSaved}
+          aiReadiness={{ kind: 'not-authenticated', provider: 'claude' }}
+        />,
+      );
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Fill these in myself' }));
+      expect(dialog().getByLabelText('Current role')).toHaveValue('Frontend Engineer');
+      fireEvent.change(dialog().getByLabelText('Location'), { target: { value: 'Lisbon' } });
+      fireEvent.click(dialog().getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+      expect(onClose).not.toHaveBeenCalled();
+      const patch = onApply.mock.calls[0]![0] as CandidateProfilePatch;
+      expect(patch.location).toBe('Lisbon');
+      expect(patch.currentRole).toBe('Frontend Engineer');
+      expect(patch.fieldSources?.location).toBe('user');
+      expect(Object.values(patch.fieldSources ?? {})).not.toContain('cv');
+    });
+
+    it('after a failed read, "fill the fields yourself" has a button behind it', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
+
+      render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} autoStart />);
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      bridges.emit('sess-cv-1', { type: 'session.failed', message: 'network dropped' });
+
+      fireEvent.click(await dialog().findByRole('button', { name: 'Fill these in myself' }));
+      expect(dialog().getByLabelText('Current role')).toBeEnabled();
+      expect(dialog().getByRole('button', { name: 'Save' })).toBeEnabled();
+    });
+  });
 });
 
 describe('FillProfileFromCv (the Settings entry point)', () => {
