@@ -16,6 +16,9 @@ export type AiReadiness =
   | { kind: 'ready'; provider: ProviderId }
   | { kind: 'not-installed'; provider: ProviderId }
   | { kind: 'not-authenticated'; provider: ProviderId }
+  /** Installed, but the CLI's sign-in status could not be read (e.g. Codex output this app does not
+   * recognise). Not known to be signed out, so an AI read is still allowed to try. */
+  | { kind: 'unverified'; provider: ProviderId }
   | { kind: 'unreachable' };
 
 /** Live read, re-run on demand and whenever the AI helper reports ready (it is often still
@@ -37,7 +40,8 @@ export function useAiReadiness(): { readiness: AiReadiness; recheck: () => Promi
       const status = providers.find((p) => p.id === provider);
       let next: AiReadiness;
       if (!status?.installed) next = { kind: 'not-installed', provider };
-      else if (status.authenticated !== 'authenticated') next = { kind: 'not-authenticated', provider };
+      else if (status.authenticated === 'unauthenticated') next = { kind: 'not-authenticated', provider };
+      else if (status.authenticated === 'unknown') next = { kind: 'unverified', provider };
       else next = { kind: 'ready', provider };
       if (mounted.current) setReadiness(next);
     } catch {

@@ -443,6 +443,19 @@ describe('Welcome CV step without a working AI tool (#767)', () => {
     expect(within(drawer).getByRole('button', { name: 'Skip' })).toBeInTheDocument();
   });
 
+  it('an installed tool whose sign-in status is unknown is not treated as signed out: the read still runs', async () => {
+    const { agentDock } = setUp([claudeStatus({ authenticated: 'unknown' })]);
+    render(<App />);
+    const welcome = await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
+    expect(await within(welcome).findByText('Could not confirm you are signed in to Claude Code.')).toBeInTheDocument();
+
+    fireEvent.click(within(welcome).getByRole('button', { name: /upload cv/i }));
+    const drawer = await screen.findByRole('dialog', { name: 'Fill from CV' });
+    await waitFor(() => expect(agentDock.createSession).toHaveBeenCalledTimes(1));
+    expect(within(drawer).queryByText(/needs you to sign in/)).not.toBeInTheDocument();
+    expect(within(drawer).queryByText(/No AI tool connected/)).not.toBeInTheDocument();
+  });
+
   it('Fill these in myself shows the editable fields and saves them as the user\'s own, with no AI session', async () => {
     const { vacancyRadar, agentDock } = setUp([]);
     const drawer = await uploadInWelcome();

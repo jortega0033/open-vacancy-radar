@@ -151,6 +151,8 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime, reopened 
         return `${PROVIDER_LABEL[check.provider]} is not installed yet.`;
       case 'not-authenticated':
         return `${PROVIDER_LABEL[check.provider]} needs you to sign in.`;
+      case 'unverified':
+        return `Could not confirm you are signed in to ${PROVIDER_LABEL[check.provider]}.`;
       case 'unreachable':
         return 'Still starting. Check again in a moment.';
     }

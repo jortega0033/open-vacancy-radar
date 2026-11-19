@@ -196,8 +196,10 @@ export function FillProfileFromCvDrawer({
   const appliedRef = useRef(false);
   const { provider: resolvedProvider } = useEffectiveProvider();
   const provider = aiReadiness && 'provider' in aiReadiness ? aiReadiness.provider : resolvedProvider;
-  // Only a caller-supplied status can block a read; without one, Settings behaves as before.
-  const aiReady = !aiReadiness || aiReadiness.kind === 'ready';
+  // Only a caller-supplied status can block a read; without one, Settings behaves as before. Only a
+  // tool known to be missing or signed out, or a helper not answering yet, blocks it: an installed
+  // tool whose sign-in status could not be read ('unverified') still gets to try.
+  const aiReady = !aiReadiness || aiReadiness.kind === 'ready' || aiReadiness.kind === 'unverified';
 
   // Only CVs with extracted text can be read: a scanned PDF that produced nothing is listed nowhere
   // here rather than being offered and then failing with an empty answer.
@@ -443,11 +445,13 @@ export function FillProfileFromCvDrawer({
               </p>
             )}
 
-            {aiReadiness && aiReadiness.kind !== 'ready' && aiReadiness.kind !== 'checking' && !form && (
+            {aiReadiness && !aiReady && aiReadiness.kind !== 'checking' && !form && (
               <div className="rounded-box border border-base-300 bg-base-200/40 p-3 text-sm" role="status">
                 <p>
                   {aiReadiness.kind === 'not-authenticated'
                     ? `${PROVIDER_LABEL[aiReadiness.provider]} needs you to sign in, so your details can't be filled in automatically.`
+                    : aiReadiness.kind === 'unreachable'
+                    ? "The AI helper hasn't started yet, so your details can't be filled in automatically right now."
                     : "No AI tool connected, so your details can't be filled in automatically."}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">

@@ -417,6 +417,21 @@ describe('FillProfileFromCvDrawer', () => {
       expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]![0]).toMatchObject({ provider: 'codex' });
     });
 
+    it('a helper that has not answered yet is called that, not "no AI tool", and the read starts once it is ready', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
+      const props = { profile: USER_SET_PROFILE, onApply: vi.fn(), onClose: vi.fn(), autoStart: true };
+
+      const { rerender } = render(<FillProfileFromCvDrawer {...props} aiReadiness={{ kind: 'unreachable' }} />);
+      await screen.findByRole('option', { name: 'Frontend CV' });
+      expect(dialog().getByText(/The AI helper hasn't started yet/)).toBeInTheDocument();
+      expect(dialog().queryByText(/No AI tool connected/)).not.toBeInTheDocument();
+      expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
+
+      rerender(<FillProfileFromCvDrawer {...props} aiReadiness={{ kind: 'ready', provider: 'claude' }} />);
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    });
+
     it('never starts a session for a missing tool, and offers setup, manual entry and skip', async () => {
       const bridges = installBridges();
       installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
